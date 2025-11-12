@@ -1,23 +1,54 @@
-# StaticFlow - 全栈 Rust 博客系统
+# StaticFlow - Local-First Dynamic Blog System
 
-一个基于 **Rust + WebAssembly** 的现代化博客系统，使用 Yew 前端框架和 Meilisearch 全文搜索引擎。本项目旨在探索 WASM 技术栈和 Meilisearch 搜索能力。
+> A local-first, automation-driven blog system built with full-stack Rust. Write in Obsidian, auto-sync with AI, serve dynamically - bridging the gap between static simplicity and dynamic flexibility.
 
-## 📋 项目概述
+**StaticFlow** 是一个以**本地创作为中心、自动化驱动**的现代博客系统。你可以继续使用 Obsidian 等工具在本地文件夹写 Markdown，本地服务自动检测文件变化，通过 AI 生成摘要和标签，实时同步到搜索引擎和数据库，最终通过 API 暴露给 WASM 前端 - 所有这些都基于全栈 Rust 实现。
 
-StaticFlow 是从静态博客演进而来的动态博客系统，**全栈使用 Rust 编写**：
-- **Frontend**: Yew (WebAssembly) - 编译为 WASM 在浏览器运行
-- **Backend**: Axum + Meilisearch + SQLite - 高性能后端服务
-- **CLI Tool**: Rust CLI - 本地内容管理工具
+**StaticFlow** is a local-first, automation-driven blog system built entirely in Rust. Continue writing in your local folder with Obsidian, let the local service auto-detect changes, generate summaries and tags via LLM, sync to search engine and database in real-time, and serve everything through APIs to a WASM frontend - all powered by the Rust ecosystem.
+
+## 📋 核心理念
+
+**写作自由 + 自动化 + 现代技术栈**
+
+传统博客要么是静态生成（每次修改需要重新构建），要么需要在线编辑器（失去本地工具的便利）。StaticFlow 采用第三条路：
+
+1. **本地优先创作**:
+   - 使用任何你喜欢的编辑器（Obsidian、Typora、VSCode）
+   - Markdown + 本地图片，完全掌控你的内容
+   - 无需任何在线操作
+
+2. **智能自动化**:
+   - 本地 CLI 工具监控文件夹变化
+   - AI 自动生成文章摘要、标签、分类
+   - 图片路径自动映射和转换
+   - 实时同步到 Meilisearch 搜索引擎
+
+3. **动态服务**:
+   - Axum 后端提供 RESTful API
+   - Yew WASM 前端提供极致性能
+   - Meilisearch 提供毫秒级全文搜索
+   - 支持内网穿透，随处访问
 
 ## ✨ 核心特性
 
+### 📝 本地创作体验
+- ✍️ 使用 Obsidian/Typora 等工具在本地书写
+- 🖼️ 图片直接放在本地文件夹
+- 📁 基于文件路径的自动索引
+- 🔄 文件变化自动检测和同步
+
+### 🤖 AI 驱动自动化
+- 🏷️ 自动生成文章标签
+- 📊 自动生成文章分类
+- 📄 自动生成文章摘要
+- 🎯 基于 LLM（本地或云端）
+
+### 🚀 现代技术栈
 - 🦀 **全栈 Rust**: 前后端共享代码，类型安全
-- ⚡ **WebAssembly**: 接近原生的性能体验
+- ⚡ **WebAssembly**: 接近原生的浏览器性能
 - 🔍 **Meilisearch**: 快速、相关性高的全文搜索
-- 📝 **Markdown 支持**: 实时渲染，样式可定制
-- 🎨 **响应式设计**: 移动端适配
-- 🔐 **安全设计**: 无需账号系统，基于签名认证
-- 🎵 **可扩展**: 支持音乐播放器等扩展功能
+- 🎨 **响应式设计**: 移动端和桌面端完美适配
+- 🔐 **安全设计**: 基于签名认证，无需账号系统
 
 ## 🏗️ 技术栈
 
@@ -199,12 +230,19 @@ RATE_LIMIT_PER_MINUTE=60
 ### CLI Tool `config.toml`
 ```toml
 [watch]
-content_dir = "/path/to/markdown/files"
-image_dir = "/path/to/images"
+# 本地 Markdown 文件目录（如 Obsidian vault）
+content_dir = "/Users/yourname/Documents/MyBlog"
+image_dir = "/Users/yourname/Documents/MyBlog/images"
 
 [backend]
 api_url = "http://localhost:3000/api"
 # 后续添加认证 token
+
+[ai]
+# AI 服务配置（用于生成摘要、标签、分类）
+provider = "openai"  # 或 "local" (ollama)
+api_key = "sk-xxx"
+model = "gpt-4o-mini"
 ```
 
 ## 🗺️ 开发路线图
@@ -263,18 +301,25 @@ api_url = "http://localhost:3000/api"
 - ✅ 所有页面使用 Mock 数据正常展示
 - ✅ 暗色/明亮主题切换正常
 
-### 🚧 Week 2: 后端服务 + 数据流打通（Day 8-14）
+### 🚧 Week 2: 后端服务 + 本地工具基础（Day 8-14）
 
 **Day 8-9: 后端基础框架**
 - [ ] Axum 项目初始化
 - [ ] Meilisearch 集成和配置
+  - 创建 articles 索引
+  - 配置搜索字段和排序
 - [ ] SQLite 数据库 schema 设计
+  - articles 表（id, title, content_path, summary, created_at, updated_at）
+  - tags 表
+  - categories 表
+  - images 表（filename, file_path）
 - [ ] 核心 API 实现（使用测试数据）
   - `GET /api/articles` - 文章列表
-  - `GET /api/articles/:id` - 文章详情
-  - `GET /api/search` - 搜索
+  - `GET /api/articles/:id` - 文章详情（实时 Markdown 渲染）
+  - `GET /api/search?q=keyword` - 搜索
   - `GET /api/tags` - 标签列表
   - `GET /api/categories` - 分类列表
+  - `GET /api/image/:base64_filename` - 图片服务
 
 **Day 10-11: 前后端集成**
 - [ ] 创建 `shared` crate（共享数据模型）
@@ -282,18 +327,70 @@ api_url = "http://localhost:3000/api"
 - [ ] 替换 Mock 数据为真实 API 调用
 - [ ] CORS 配置
 - [ ] 错误处理和 Loading 状态
+- [ ] Markdown 图片链接转换测试
+  - 本地相对路径 → HTTP API 路径
 
-**Day 12-13: CLI 工具（简化版）**
-- [ ] 文件监控（notify）
+**Day 12-13: CLI 工具核心功能**
+- [ ] CLI 项目初始化（clap 配置）
+- [ ] 文件监控实现（notify crate）
+  - 监控 `.md` 文件的创建、修改、删除
+  - 监控图片文件的变化
 - [ ] Markdown 文件解析
-- [ ] 简单的元数据提取（标题、日期、标签）
-- [ ] 同步到 Meilisearch 和 SQLite
+  - 提取 frontmatter（如果有）
+  - 基于文件路径生成文章 ID
+  - 提取图片引用
+- [ ] 图片路径映射
+  - 建立 filename → full_path 映射
+  - 存储到后端数据库
+- [ ] 基础同步到后端
+  - 调用后端 API 添加/更新文章
+  - 同步到 Meilisearch
 
-**Day 14: 测试和优化**
-- [ ] 端到端测试完整流程
-- [ ] WASM 体积优化
-- [ ] 性能优化
-- [ ] Bug 修复
+**Day 14: 测试完整流程**
+- [ ] 端到端测试
+  1. 在本地文件夹创建 Markdown 文件
+  2. CLI 工具检测并同步
+  3. 前端刷新后能看到新文章
+  4. 搜索功能正常工作
+- [ ] Bug 修复和优化
+
+**里程碑检查点：**
+- ✅ 本地文件 → 数据库 → 前端显示的完整流程打通
+- ✅ Meilisearch 搜索功能正常
+- ✅ 图片链接转换正确
+- ✅ 文件变化能实时同步
+
+### 🔮 Week 3+: AI 自动化和高级功能
+
+**AI 内容生成**
+- [ ] 集成 LLM API（OpenAI / 本地 Ollama）
+- [ ] 实现自动摘要生成
+  - 分析文章内容
+  - 生成 2-3 句的摘要
+- [ ] 实现自动标签生成
+  - 基于文章内容提取关键词
+  - 生成 3-5 个相关标签
+- [ ] 实现自动分类
+  - 基于内容判断文章类型
+  - 分配到合适的分类
+
+**安全和部署**
+- [ ] 请求签名机制
+  - 前端公钥加密
+  - 后端私钥验证
+- [ ] IP + 设备指纹限流
+- [ ] 图片处理和优化
+  - 缩略图生成
+  - 图片压缩
+- [ ] Docker Compose 部署
+- [ ] Rathole 内网穿透配置
+- [ ] Nginx 反向代理
+
+**扩展功能**
+- [ ] 音乐播放器界面
+- [ ] GitHub 评论集成
+- [ ] RSS 订阅支持
+- [ ] 文章统计（阅读量、字数）
 
 ### 🔮 Future (Week 3+)
 
