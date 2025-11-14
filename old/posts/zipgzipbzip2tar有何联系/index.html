@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>zip、gzip、bzip2、tar有何联系？ - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="zip、gzip、bzip2、tar有何联系？"><meta property="og:title" content="zip、gzip、bzip2、tar有何联系？" />
+<meta property="og:description" content="zip、gzip、bzip2、tar有何联系？" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-12-04T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-12-04T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="zip、gzip、bzip2、tar有何联系？"/>
+<meta name="twitter:description" content="zip、gzip、bzip2、tar有何联系？"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" /><link rel="prev" href="https://acking-you.github.io/posts/%E6%AF%94%E8%BE%83avl%E6%A0%91%E5%92%8C%E7%BA%A2%E9%BB%91%E6%A0%91%E7%9A%84%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82/" /><link rel="next" href="https://acking-you.github.io/posts/%E5%85%B3%E4%BA%8E%E6%9C%80%E5%B0%8F%E7%94%9F%E6%88%90%E6%A0%91%E7%9A%84%E4%B8%80%E5%88%87/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "zip、gzip、bzip2、tar有何联系？",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB\/"
+        },"genre": "posts","keywords": "zip、gzip、bzip2、tar有何联系？","wordcount":  1860 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB\/","datePublished": "2022-12-04T00:00:00+00:00","dateModified": "2022-12-04T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "zip、gzip、bzip2、tar有何联系？"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/385f4cc39feda8590ef42f86b38207ba.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/385f4cc39feda8590ef42f86b38207ba.png#pic_center, https://img-blog.csdnimg.cn/img_convert/385f4cc39feda8590ef42f86b38207ba.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/385f4cc39feda8590ef42f86b38207ba.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/385f4cc39feda8590ef42f86b38207ba.png#pic_center"
+        title="zip、gzip、bzip2、tar有何联系？" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">zip、gzip、bzip2、tar有何联系？</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/linux%E5%91%BD%E4%BB%A4/"><i class="far fa-folder fa-fw"></i>Linux命令</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-12-04">2022-12-04</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1860 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 4 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#归类">归类</a>
+      <ul>
+        <li><a href="#zip与unzip命令">zip与unzip命令</a></li>
+        <li><a href="#tar命令">tar命令</a></li>
+      </ul>
+    </li>
+    <li><a href="#使用方式">使用方式</a>
+      <ul>
+        <li><a href="#zip">zip</a></li>
+        <li><a href="#unzip">unzip</a></li>
+        <li><a href="#gzip">gzip</a></li>
+        <li><a href="#gunzip">gunzip</a></li>
+        <li><a href="#bzip2">bzip2</a></li>
+      </ul>
+    </li>
+    <li><a href="#bunzip2"><strong>bunzip2</strong></a>
+      <ul>
+        <li><a href="#tar">tar</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="归类">归类</h2>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/4beb6725e64a4e14b4c467ace84cbd37.png"
+        data-srcset="https://img-blog.csdnimg.cn/4beb6725e64a4e14b4c467ace84cbd37.png, https://img-blog.csdnimg.cn/4beb6725e64a4e14b4c467ace84cbd37.png 1.5x, https://img-blog.csdnimg.cn/4beb6725e64a4e14b4c467ace84cbd37.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/4beb6725e64a4e14b4c467ace84cbd37.png"
+        title="img" /></p>
+<p>我们把这几个命令归类为几种能力，一个是解压缩能力一个是打拆包能力。</p>
+<p>我这里打包的意思是不使用压缩算法对文件进行压缩，只是简单的把多个文件归档为一个文件。而拆包则是它的逆过程。</p>
+<p>压缩则是大家熟知的将文件以某种压缩算法对内容进行缩减，解压则是它的逆过程。</p>
+<h3 id="zip与unzip命令">zip与unzip命令</h3>
+<p>zip命令用于将文件压缩为 <code>.zip</code> 格式的文件，之所以将他定义为可打包拆包是因为他可以支持多文件的压缩，而其他的 <code>gzip</code> 和 <code>bzip2</code> 只能对单文件进行压缩，也就是说如果要压缩多文件，需要先经过打包过程变成单文件再压缩，<code>.zip</code> 格式的文件默认将打包和压缩放在一起了，而 <code>zip</code> 命令也不支持单独的打包再压缩。</p>
+<h3 id="tar命令">tar命令</h3>
+<p>不加入 <code>-z</code> 或 <code>-j</code> 参数，加入 <code>-c</code> 表示对文件或目录进行归档。</p>
+<p>所以tar命令是支持单独的归档功能的，具体的压缩算法可以通过参数指定可以是 <code>gzip</code> 也可以是 <code>bzip2</code> 或其他。</p>
+<h2 id="使用方式">使用方式</h2>
+<h3 id="zip">zip</h3>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">zip [-r] [压缩后文件名] [文件或目录]
+</code></pre></div><p><strong>命令描述</strong></p>
+<ul>
+<li><code>zip</code>命令用来对文件进行打包操作。zip是个使用广泛的压缩程序，文件经它压缩后会另外产生具有“.zip”扩展名的压缩文件。</li>
+</ul>
+<p><strong>选项</strong></p>
+<ul>
+<li>-r: 递归处理，将指定目录下的所有文件和子目录一并处理，用于压缩目录</li>
+<li>-x：压缩时排除符合条件的文件</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ zip a.zip a.txt <span class="c1">#压缩文件</span>
+  adding: a.txt <span class="o">(</span>stored 0%<span class="o">)</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+abc  a.txt  a.zip
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ touch abc/tmp.txt
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ zip -r abc.zip abc/ -x abc/tmp.txt <span class="c1">#压缩文件夹并忽略某些文件</span>
+  adding: abc/ <span class="o">(</span>stored 0%<span class="o">)</span>
+</code></pre></div><h3 id="unzip">unzip</h3>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">unzip [选项] 文件名
+</code></pre></div><p><strong>命令描述</strong></p>
+<p><code>unzip</code>命令用于解压缩由zip命令压缩的“.zip”压缩包。</p>
+<p><strong>选项</strong></p>
+<ul>
+<li>-n：解压缩时不要覆盖原有的文件；</li>
+<li>-o：不必先询问用户，unzip执行后覆盖原有的文件；</li>
+<li>-d &lt;目录&gt;：指定文件解压缩后所要存储的目录(不指定目录，默认解压到当前目录)</li>
+<li>可配合tar命令对 <code>tar.gz</code> 文件进行解压缩和拆包 <code>tar -zxvf 文件名</code></li>
+</ul>
+<p><strong>示例</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ unzip abc.zip -d ~ <span class="c1">#解压到指定目录</span>
+Archive:  abc.zip
+   creating: /home/ljb/abc/
+</code></pre></div><h3 id="gzip">gzip</h3>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">gzip [文件]
+</code></pre></div><p><strong>命令描述</strong></p>
+<p>经 <code>gzip</code> 压缩过后，其名称后面会多处 <code>.gz</code> 扩展名。</p>
+<p>注意：<code>gzip</code> 只能压缩文件，不能压缩文件夹，压缩后原文件会被删除。</p>
+<p><code>gzip</code>是在Linux系统中经常使用的一个对文件进行压缩和解压缩的命令，既方便又好用。gzip压缩常常用在http的网络请求中。</p>
+<p><strong>示例</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ touch b.txt
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+abc  abc.zip  a.txt  a.zip  b.txt
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ gzip b.txt <span class="c1">#压缩后生产b.txt.gz，原本的文件不见了</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+abc  abc.zip  a.txt  a.zip  b.txt.gz
+</code></pre></div><h3 id="gunzip">gunzip</h3>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">gunzip [文件]
+</code></pre></div><p><strong>命令描述</strong></p>
+<p><code>gunzip</code>命令用来解压缩 <code>xxx.gz</code> 文件。</p>
+<p><strong>示例</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+abc  abc.zip  a.txt  a.zip  b.txt.gz
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ gunzip b.txt.gz
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls <span class="c1">#解压缩成功，得到b.txt文件</span>
+abc  abc.zip  a.txt  a.zip  b.txt
+</code></pre></div><h3 id="bzip2">bzip2</h3>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">bzip2 [选项] [文件]
+</code></pre></div><p><strong>命令描述</strong></p>
+<ul>
+<li>bzip2命令用于压缩 <code>.bz2</code> 格式的压缩包，是gzip的升级版本，可以保留原文件。</li>
+<li>bzip2的压缩比比较高，可用于压缩较大文件。</li>
+<li>bzip2也是只对文件进行压缩，如果相对目录进行压缩的话，可以用其他命令打包成一个文件(如tar)。</li>
+</ul>
+<p><strong>选项</strong></p>
+<p>-k（keep）：保留原文件（不删除原文件）</p>
+<p><strong>示例</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="c1"># bzip2 压缩文件</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ touch c.txt
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ bzip2 -k c.txt
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+abc  abc.zip  a.txt  a.zip  b.txt  c.txt  c.txt.bz2
+
+<span class="c1"># 配合使用tar 命令，完成打包压缩（后面会讲tar命令的使用）</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ mkdir music
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ tar -jcvf music.tar.bz2 music/
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+abc  abc.zip  a.txt  a.zip  b.txt  c.txt  c.txt.bz2  music  music.tar.bz2
+</code></pre></div><h2 id="bunzip2"><strong>bunzip2</strong></h2>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">bunzip2 [选项] [文件]
+</code></pre></div><p><strong>命令描述</strong></p>
+<ul>
+<li>解压缩 <code>.bz2</code> 格式的压缩文件；</li>
+<li><code>gunzip</code> 的升级版，可以使用<code>-k</code>保留原文件；</li>
+<li>可以配合使用tar命令，完成解压缩解包： <code>tar -jxvf 文件名</code></li>
+</ul>
+<p><strong>选项</strong></p>
+<p>-k（keep）：保留原文件（不删除原文件）</p>
+<p><strong>示例</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="c1">#删除只剩下c.txt.bz2</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ rm -rf !<span class="o">(</span>c.txt.bz2<span class="o">)</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+c.txt.bz2
+<span class="c1">#解压bz2文件</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ bunzip2 c.txt.bz2
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+c.txt
+</code></pre></div><h3 id="tar">tar</h3>
+<p><strong>命令格式</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">tar [选项] [压缩后文件名] [目录]
+</code></pre></div><p><strong>命令描述</strong></p>
+<p>打包目录，将目录打包成一个文件，同时可以压缩，可以自由选择压缩算法。</p>
+<p>使用<code>tar</code>命令时，如果想要打包并压缩一个目录，可以有两种方法进行：</p>
+<ol>
+<li>先利用 <code>tar</code> 命令打包目录为一个文件，然后使用 <code>gzip</code> 或 <code>bzip2</code> 压缩。</li>
+<li>直接利用 <code>tar</code> 命令打包并压缩 (简单方便，推荐使用)。</li>
+</ol>
+<p>解压时也有两种方式：</p>
+<ol>
+<li>先使用 <code>gunzip</code> 或 <code>bunzip2</code> 解压缩，再使用 <code>tar</code> 解包.</li>
+<li>直接利用tar命令解压缩并解包 (简单方便，推荐使用)</li>
+</ol>
+<p><strong>选项</strong></p>
+<ul>
+<li>-c：打包</li>
+<li>-x：拆包</li>
+<li>-v：显示详细信息</li>
+<li>-f：指定文件名</li>
+</ul>
+<ul>
+<li>-z：表示使用 <code>gzip</code> 进行解压缩，压缩后的拓展名为 <code>.tar.gz</code>，这个拓展名在下载Linux相关安装包时很常见。</li>
+<li>-j：表示使用 <code>bzip2</code> 进行解压缩，压缩后拓展名为 <code>.tar.bz2</code>。</li>
+</ul>
+<p>一般来说，-vf 参数肯定会带上的，根据打包/拆包选择-c或-x，根据使用的压缩算法选择 -z 或 -j。</p>
+<p><strong>示例</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="c1"># 1、2为打包压缩的两种方法</span>
+<span class="c1"># 1. 使用 tar -cvf 打包，然后使用gzip压缩</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ mkdir movie
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell<span class="nv">$#</span> tar -cvf movie.tar movie/
+movie/
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie.tar
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ gzip movie.tar
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie.tar.gz
+
+<span class="c1"># 2. 使用 tar -zcvf 打包并压缩</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ tar -zcvf movie2.tar.gz movie
+movie/
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie2.tar.gz  movie.tar.gz
+
+<span class="c1"># 3、4为解压缩并解包的两种方法</span>
+
+<span class="c1"># 3. 先使用gunzip解压缩，然后 tar -xvf解包</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie2.tar.gz  movie.tar.gz
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ rm -rf movie
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie2.tar.gz  movie.tar.gz
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ gunzip movie.tar.gz
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie2.tar.gz  movie.tar
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ tar -xvf movie.tar
+movie/
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie2.tar.gz  movie.tar
+
+<span class="c1"># 4. 使用tar -zxvf 解压缩并解包</span>
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie2.tar.gz  movie.tar
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ rm -rf movie
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ tar -zxvf movie2.tar.gz
+movie/
+ljb@Wangzhe0cnmdUTF-8:/mnt/d/linux_shell$ ls
+movie  movie2.tar.gz  movie.tar
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/">zip、gzip、bzip2、tar有何联系？</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-12-04</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？" data-hashtags="zip、gzip、bzip2、tar有何联系？"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-hashtag="zip、gzip、bzip2、tar有何联系？"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？" data-image="https://img-blog.csdnimg.cn/img_convert/385f4cc39feda8590ef42f86b38207ba.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？" data-description="zip、gzip、bzip2、tar有何联系？"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？" data-description="zip、gzip、bzip2、tar有何联系？"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/zipgzipbzip2tar%E6%9C%89%E4%BD%95%E8%81%94%E7%B3%BB/" data-title="zip、gzip、bzip2、tar有何联系？"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E6%AF%94%E8%BE%83avl%E6%A0%91%E5%92%8C%E7%BA%A2%E9%BB%91%E6%A0%91%E7%9A%84%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82/" class="prev" rel="prev" title="比较AVL树和红黑树的性能差异"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E5%85%B3%E4%BA%8E%E6%9C%80%E5%B0%8F%E7%94%9F%E6%88%90%E6%A0%91%E7%9A%84%E4%B8%80%E5%88%87/" class="next" rel="next" title="关于最小生成树的一切">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

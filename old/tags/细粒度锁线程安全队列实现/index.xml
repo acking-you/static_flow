@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>细粒度锁线程安全队列实现 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/</link>
+        <description>细粒度锁线程安全队列实现 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sat, 20 Aug 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/" rel="self" type="application/rss+xml" /><item>
+    <title>细粒度锁线程安全队列实现</title>
+    <link>https://acking-you.github.io/posts/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/</link>
+    <pubDate>Sat, 20 Aug 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c644e86b92d93fcc4173c23ce127e625.png#pic_center" referrerpolicy="no-referrer">
+            </div>包含同步语义的简单实现 template &lt;typename T&gt; class ThreadSafeQueue { public: void Push(T new_value) { std::lock_guard&lt;std::mutex&gt; lk(m_mtx); m_queue.push(std::move(new_value)); m_cond.notify_one(); // 1 } void WaitAndPop(T &amp;value) // 2 { std::unique_lock&lt;std::mutex&gt; lk(m_mtx); m_cond.wait(lk, [this] { return !m_queue.empty(); }); value = std::move(m_queue.front()); m_queue.pop(); } std::shared_ptr&lt;T&gt; WaitAndPop() // 3 { std::unique_lock&lt;std::mutex&gt; lk(m_mtx); m_cond.wait(lk, [this] { return !m_queue.empty(); }); // 4 std::shared_ptr&lt;T&gt; res( std::make_shared&lt;T&gt;(std::move(m_queue.front()))); m_queue.pop(); return res; }]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>消息队列 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/</link>
+        <description>消息队列 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sat, 04 Jun 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" rel="self" type="application/rss+xml" /><item>
+    <title>消息队列</title>
+    <link>https://acking-you.github.io/posts/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/</link>
+    <pubDate>Sat, 04 Jun 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/7213ded01d686aab797968b2a6064358.png#pic_center" referrerpolicy="no-referrer">
+            </div>消息队列的应用场景 场景一：解耦 如上所述，如果记录用户行为的这个请求过程，和后台服务的记录过程直接耦合，将会产生很严重的后果，如果后台服务宕机]]></description>
+</item>
+</channel>
+</rss>

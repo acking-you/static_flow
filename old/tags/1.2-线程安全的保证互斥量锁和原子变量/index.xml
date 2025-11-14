@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>1.2-线程安全的保证——互斥量(锁)和原子变量 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/</link>
+        <description>1.2-线程安全的保证——互斥量(锁)和原子变量 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Wed, 02 Mar 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" rel="self" type="application/rss+xml" /><item>
+    <title>1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic</title>
+    <link>https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/</link>
+    <pubDate>Wed, 02 Mar 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center" referrerpolicy="no-referrer">
+            </div>资源竞争引发的线程安全问题 有如下的代码： #include&lt;thread&gt;#include&lt;iostream&gt;int globalVariable = 0; void task(){ for (int i = 0; i &lt; 1000000; ++i) { ++globalVariable; } } int main(){ std::thread th1(task); std::thread th2(task); th1.join(); th2.join(); std::cout&lt;&lt;globalVariable; } 我们开了两个线程，一共执行了两次 task ，按理来]]></description>
+</item>
+</channel>
+</rss>

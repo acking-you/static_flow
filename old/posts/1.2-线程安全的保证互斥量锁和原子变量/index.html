@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="1.2-线程安全的保证——互斥量(锁)和原子变量"><meta property="og:title" content="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic" />
+<meta property="og:description" content="1.2-线程安全的保证——互斥量(锁)和原子变量" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-03-02T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-03-02T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic"/>
+<meta name="twitter:description" content="1.2-线程安全的保证——互斥量(锁)和原子变量"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" /><link rel="prev" href="https://acking-you.github.io/posts/%E5%A2%9E%E9%87%8F%E5%85%83%E7%B4%A0%E4%B9%8B%E9%97%B4%E7%9A%84%E6%9C%80%E5%A4%A7%E5%B7%AE%E5%80%BC%E5%89%8D%E7%BC%80dp/" /><link rel="next" href="https://acking-you.github.io/posts/1.1-%E5%88%9B%E5%BB%BA%E7%BA%BF%E7%A8%8Bthread%E7%BA%BF%E7%A8%8B%E7%9A%84%E6%B1%87%E8%81%9Ajoin%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%88%86%E7%A6%BBdetach/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F\/"
+        },"genre": "posts","keywords": "1.2-线程安全的保证——互斥量(锁)和原子变量","wordcount":  2098 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F\/","datePublished": "2022-03-02T00:00:00+00:00","dateModified": "2022-03-02T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "1.2-线程安全的保证——互斥量(锁)和原子变量"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        title="1.2-线程安全的保证——互斥量(锁)和原子变量" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/c++%E5%A4%9A%E7%BA%BF%E7%A8%8B/"><i class="far fa-folder fa-fw"></i>C++多线程</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-03-02">2022-03-02</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 2098 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 5 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#资源竞争引发的线程安全问题">资源竞争引发的线程安全问题</a></li>
+    <li><a href="#如何解决资源竞争问题">如何解决资源竞争问题？</a>
+      <ul>
+        <li><a href="#法一加互斥锁mutex性能较低">法一：加互斥锁mutex（性能较低）</a></li>
+        <li><a href="#法二转用原子变量效率更高">法二：转用原子变量（效率更高）</a></li>
+      </ul>
+    </li>
+    <li><a href="#三个常用的互斥量装饰器">三个常用的互斥量装饰器</a>
+      <ul>
+        <li><a href="#stdlock_guard-c11">std::lock_guard (C++11)</a></li>
+        <li><a href="#stdunique_lock-c11">std::unique_lock (C++11)</a></li>
+        <li><a href="#stdscoped_lockc17">std::scoped_lock（C++17）</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="资源竞争引发的线程安全问题">资源竞争引发的线程安全问题</h2>
+<blockquote>
+<p>有如下的代码：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="kt">int</span> <span class="n">globalVariable</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+<span class="kt">void</span> <span class="nf">task</span><span class="p">(){</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">1000000</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="o">++</span><span class="n">globalVariable</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+
+    <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">globalVariable</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们开了两个线程，一共执行了两次 task ，按理来讲 <code>globalVariable</code> 变量应该被加到 2000000 。事实上，你可跑以上代码进行验证，肯定是达不到 2000000 的！</p>
+<p>这又是怎么一回事呢？</p>
+<ul>
+<li>资源竞争的产生：
+在多线程中，由于类似于并行的逻辑存在，我们可以想象一下，到 th1 调用 task 函数，且正在为 <code>globalVariable</code> 变量做加法操作的时候，可能此时 th2 也正在为它做加法操作，线程中也是存在对应的工作内存，不是直接更改原内存的值，而是经过 读取-&gt;执行-&gt;写入 的过程。故此时如果两个线程同时进行读取并写入，那么实际上 <code>globalVariable</code> 只加了1，而不是2。</li>
+</ul>
+<p>故由于资源竞争的存在，导致结果小于正确的结果！</p>
+<h2 id="如何解决资源竞争问题">如何解决资源竞争问题？</h2>
+<p>正如标题所示，如何解决资源竞争问题呢？</p>
+<p>我们经过前面的分析，可知，资源竞争问题是因为并行逻辑的存在，扰乱了原本需要的有序逻辑。怎么理解呢，当多个线程同时处理同一个变量时是不安全的，我们只要让同时只有一个线程去处理这个变量即可。</p>
+<p>上面所说的正是多线程的 <a href="https://baike.baidu.com/item/%E5%8E%9F%E5%AD%90%E6%93%8D%E4%BD%9C/1880992" target="_blank" rel="noopener noreffer">原子性</a>，执行一个操作的时候不会被其他的线程打断，或者说只能有一个线程在执行这个操作。而之前的代码中 <code>++globalVarible</code> 这句正需要这样的原子性操作！</p>
+<p>而C++里面也有两类方法去实现这样的效果。</p>
+<h3 id="法一加互斥锁mutex性能较低">法一：加互斥锁mutex（性能较低）</h3>
+<p>代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="n">globalVariable</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx</span><span class="p">;</span>
+<span class="kt">void</span> <span class="nf">task</span><span class="p">(){</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">1000000</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">mtx</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span> <span class="c1">//上锁
+</span><span class="c1"></span>        <span class="o">++</span><span class="n">globalVariable</span><span class="p">;</span>
+        <span class="n">mtx</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span><span class="c1">//解锁
+</span><span class="c1"></span>    <span class="p">}</span>
+<span class="p">}</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+
+    <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">globalVariable</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>这下终于可以正确的得到 2000000 这个结果了。</p>
+<p>我们来讲讲互斥量解锁和上锁的原理：</p>
+<p>lock()：形象的描述就是，当调用这个方法的时候，会去互斥量里面拿取这把锁，如果这个锁已经被其他线程持有，则阻塞，直到其他线程把这把锁释放，每个互斥量都是一把相同的锁。</p>
+<p>unlock()：字面意思，把我现在持有的锁给释放掉，这样就可以让其他因为没有拿到锁的线程停止阻塞，开始争抢这把锁，谁抢到了谁就能得到下一个CPU的时间片。</p>
+<p>最终的结果就是哪个线程先拿下这把锁，那么其他线程再运行到这块代码的位置就会被阻塞，这就使得被上锁的区域是具有原子性的！这样就保证了线程的安全。</p>
+<h3 id="法二转用原子变量效率更高">法二：转用原子变量（效率更高）</h3>
+<p>C++中可用模板类，把类型转为原子类型，原子变量的实现方式实际上和上锁的过程是类似，但可能由于不同编译器的实现方式，可能会调用计算机的硬件去优化这个加锁解锁的过程，所以效率会更高。</p>
+<p>如下代码：(这时就不需要加解锁了，变量本身就是线程安全的)</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">globalVariable</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="kt">void</span> <span class="nf">task</span><span class="p">(){</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">1000000</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="o">++</span><span class="n">globalVariable</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+
+    <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">globalVariable</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><h2 id="三个常用的互斥量装饰器">三个常用的互斥量装饰器</h2>
+<h3 id="stdlock_guard-c11">std::lock_guard (C++11)</h3>
+<blockquote>
+<p>这是一个最简单的互斥量装饰器，就是简单的利用C++构造函数和析构函数的RAII特性，在构造的时候上锁和析构的时候解锁，并不会维持传入的互斥器状态。</p>
+</blockquote>
+<p>故前面的代码我们可以改作：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="n">globalVariable</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx</span><span class="p">;</span>
+<span class="kt">void</span> <span class="nf">task</span><span class="p">(){</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">1000000</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">lock</span><span class="p">(</span><span class="n">mtx</span><span class="p">);</span>
+        <span class="o">++</span><span class="n">globalVariable</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">task</span><span class="p">);</span>
+
+    <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">globalVariable</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>std::lock_guard 还有第二个可选参数用于告知它此传入的互斥器已经被锁上，你无需再次上锁，这种主要用在上锁过程自己完成的情况下。例如很多情况我们为了防止产生死锁，需要调用 std::lock() 函数进行统一的上锁。</p>
+<h4 id="死锁的产生">死锁的产生</h4>
+<p>如下代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;mutex&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="n">globalVariable</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx1</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx2</span><span class="p">;</span>
+<span class="kt">void</span> <span class="nf">task1</span><span class="p">(){</span>
+    <span class="n">mtx1</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">10</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="s">&#34;test2&#34;</span><span class="o">&lt;&lt;</span><span class="sc">&#39;\n&#39;</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">mtx2</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+
+    <span class="n">mtx1</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
+    <span class="n">mtx2</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
+<span class="p">}</span>
+<span class="kt">void</span> <span class="nf">task2</span><span class="p">(){</span>
+    <span class="n">mtx2</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+    <span class="n">mtx1</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+
+    <span class="n">mtx2</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
+    <span class="n">mtx1</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
+<span class="p">}</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">task1</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">task2</span><span class="p">);</span>
+
+    <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">globalVariable</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>以上代码的运行结果大概率是由于死锁产生的程序阻塞。</p>
+<p>你想想一个过程：如果 <code>mtx1</code> 在 th1 线程先被上锁，而与此同时 <code>mtx2</code> 在 th2 线程被上锁，在 th1 线程运行完 for 循环代码后，遇到将 <code>mtx2</code>  上锁的代码后，由于此时 th2 线程正持有此锁，而 th1 也正持有 <code>mtx1</code> 这样的互相持有对方所需的锁的时候，将会发生死锁现象，即两个线程都被永远的阻塞了！</p>
+<h4 id="利用stdlock批量上锁防止死锁发生">利用std::lock批量上锁防止死锁发生</h4>
+<p>以上的死锁发生的原因就是因为上锁的顺序所导致的，我们可以采取多个线程上多个锁时采用相同的顺序，便可防止死锁的发生，当然也可以直接调用标准库提供的 std::lock 函数批量上锁，来防止上锁顺序导致的死锁！</p>
+<p>如下代码：（lock函数批量上锁是具有原子性的，不会被其他线程打断）</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;mutex&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx1</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx2</span><span class="p">;</span>
+<span class="kt">void</span> <span class="nf">task1</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">lock</span><span class="p">(</span><span class="n">mtx1</span><span class="p">,</span><span class="n">mtx2</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">_1</span><span class="p">(</span><span class="n">mtx1</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">adopt_lock</span><span class="p">);</span> <span class="c1">//adopt_lock代表一个标志，表示已经被上锁了，别再调用lock方法了
+</span><span class="c1"></span>    <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">_2</span><span class="p">(</span><span class="n">mtx2</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">adopt_lock</span><span class="p">);</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">5</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="s">&#34;test1</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="kt">void</span> <span class="nf">task2</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">lock</span><span class="p">(</span><span class="n">mtx1</span><span class="p">,</span><span class="n">mtx2</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">_1</span><span class="p">(</span><span class="n">mtx1</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">adopt_lock</span><span class="p">);</span> <span class="c1">//adopt_lock代表一个标志，表示已经被上锁了，别再调用lock方法了
+</span><span class="c1"></span>    <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">_2</span><span class="p">(</span><span class="n">mtx2</span><span class="p">,</span><span class="n">std</span><span class="o">::</span><span class="n">adopt_lock</span><span class="p">);</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">5</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="s">&#34;test2</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">task1</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">task2</span><span class="p">);</span>
+
+    <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+    <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div><p>代码执行结果：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/d38a2e8fc0dc47bf9a344932fd3df25d.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/d38a2e8fc0dc47bf9a344932fd3df25d.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/d38a2e8fc0dc47bf9a344932fd3df25d.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/d38a2e8fc0dc47bf9a344932fd3df25d.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/d38a2e8fc0dc47bf9a344932fd3df25d.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="执行结果" /></p>
+<h3 id="stdunique_lock-c11">std::unique_lock (C++11)</h3>
+<p>和 lock_guard 类似，也是用的 RAII 手法进行上锁和解锁。但它还会维持互斥量的状态，你可以通过传入第二个参数告诉它状态。且它是支持无参构造的。</p>
+<p><strong>注意</strong>：这三个装饰器只有 unique_lock <strong>含有移动构造函数</strong>，所以你可以写一个函数简化初始化过程。他们都没有复制构造器！</p>
+<p>如：</p>
+<p><code>std::unique_lock&lt;std::mutex&gt; lock(mtx2,std::defer_lock);</code></p>
+<p>传入的 defer_lock 表示上锁过程暂时不调用，将在后面由我自己上锁。统样也支持 adopt_lock 选项表示已经上了锁。</p>
+<h3 id="stdscoped_lockc17">std::scoped_lock（C++17）</h3>
+<p>这个装饰器，支持同时装饰多个互斥量，且也是通过 RAII 手法进行解锁和上锁过程。</p>
+<p>创建 <code>scoped_lock</code> 对象时，它试图取得给定互斥的所有权。控制离开创建 <code>scoped_lock</code> 对象的作用域时，析构 <code>scoped_lock</code> 并以逆序释放互斥。若给出数个互斥，则使用免死锁算法，如同以 <a href="https://www.apiref.com/cpp-zh/cpp/thread/lock.html" target="_blank" rel="noopener noreffer">std::lock</a> 。</p>
+<p><code>scoped_lock</code> 类不可复制。</p>
+<p>如下代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">std</span><span class="o">::</span><span class="n">scoped_lock</span> <span class="n">lock</span><span class="p">(</span><span class="n">e1</span><span class="p">.</span><span class="n">m</span><span class="p">,</span> <span class="n">e2</span><span class="p">.</span><span class="n">m</span><span class="p">);</span>
+
+<span class="c1">// 等价代码 1 （用 std::lock 和 std::lock_guard ）
+</span><span class="c1">// std::lock(e1.m, e2.m);
+</span><span class="c1">// std::lock_guard&lt;std::mutex&gt; lk1(e1.m, std::adopt_lock);
+</span><span class="c1">// std::lock_guard&lt;std::mutex&gt; lk2(e2.m, std::adopt_lock);
+</span><span class="c1"></span>
+<span class="c1">// 等价代码 2 （若需要 unique_lock ，例如对于条件变量）
+</span><span class="c1">// std::unique_lock&lt;std::mutex&gt; lk1(e1.m, std::defer_lock);
+</span><span class="c1">// std::unique_lock&lt;std::mutex&gt; lk2(e2.m, std::defer_lock);
+</span><span class="c1">// std::lock(lk1, lk2);
+</span></code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/">1.2-线程安全的保证——互斥量(锁)和原子变量</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-03-02</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic" data-hashtags="1.2-线程安全的保证——互斥量(锁)和原子变量"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-hashtag="1.2-线程安全的保证——互斥量(锁)和原子变量"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic" data-image="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic" data-description="1.2-线程安全的保证——互斥量(锁)和原子变量"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic" data-description="1.2-线程安全的保证——互斥量(锁)和原子变量"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/1.2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E4%BF%9D%E8%AF%81%E4%BA%92%E6%96%A5%E9%87%8F%E9%94%81%E5%92%8C%E5%8E%9F%E5%AD%90%E5%8F%98%E9%87%8F/" data-title="1.2-线程安全的保证——互斥量mutex(锁)和原子变量atomic"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E5%A2%9E%E9%87%8F%E5%85%83%E7%B4%A0%E4%B9%8B%E9%97%B4%E7%9A%84%E6%9C%80%E5%A4%A7%E5%B7%AE%E5%80%BC%E5%89%8D%E7%BC%80dp/" class="prev" rel="prev" title="增量元素之间的最大差值——前缀dp"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/1.1-%E5%88%9B%E5%BB%BA%E7%BA%BF%E7%A8%8Bthread%E7%BA%BF%E7%A8%8B%E7%9A%84%E6%B1%87%E8%81%9Ajoin%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%88%86%E7%A6%BBdetach/" class="next" rel="next" title="1.1-创建线程(thread)、线程的汇聚(join)、线程的分离(detach)">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

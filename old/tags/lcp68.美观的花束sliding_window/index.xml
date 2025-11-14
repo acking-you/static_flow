@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>LCP68.美观的花束——sliding_window - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/lcp68.%E7%BE%8E%E8%A7%82%E7%9A%84%E8%8A%B1%E6%9D%9Fsliding_window/</link>
+        <description>LCP68.美观的花束——sliding_window - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Fri, 07 Oct 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/lcp68.%E7%BE%8E%E8%A7%82%E7%9A%84%E8%8A%B1%E6%9D%9Fsliding_window/" rel="self" type="application/rss+xml" /><item>
+    <title>LCP68.美观的花束——sliding_window</title>
+    <link>https://acking-you.github.io/posts/lcp68.%E7%BE%8E%E8%A7%82%E7%9A%84%E8%8A%B1%E6%9D%9Fsliding_window/</link>
+    <pubDate>Fri, 07 Oct 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/lcp68.%E7%BE%8E%E8%A7%82%E7%9A%84%E8%8A%B1%E6%9D%9Fsliding_window/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c3d009d6542a44155b5847c3a9c76dcd.png#pic_center" referrerpolicy="no-referrer">
+            </div>class Solution { public: const int mod = 1e9+7; int beautifulBouquet(vector&lt;int&gt;&amp; flowers, int cnt) { int n = flowers.size(); int ret = 0; int left = 0,right = 0; unordered_map&lt;int,int&gt; count; int option = 1; while(right &lt;= n){ if(option == 1){ //right指针向右边滑动，更新窗口上限 if(right == n){ option = 2; continue ;]]></description>
+</item>
+</channel>
+</rss>

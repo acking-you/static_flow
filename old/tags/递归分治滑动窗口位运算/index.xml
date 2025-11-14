@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>递归分治、滑动窗口、位运算 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E9%80%92%E5%BD%92%E5%88%86%E6%B2%BB%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E4%BD%8D%E8%BF%90%E7%AE%97/</link>
+        <description>递归分治、滑动窗口、位运算 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Tue, 01 Feb 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E9%80%92%E5%BD%92%E5%88%86%E6%B2%BB%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E4%BD%8D%E8%BF%90%E7%AE%97/" rel="self" type="application/rss+xml" /><item>
+    <title>字符串类型滑动窗口或递归分治解被ban字符求最长子串</title>
+    <link>https://acking-you.github.io/posts/%E5%AD%97%E7%AC%A6%E4%B8%B2%E7%B1%BB%E5%9E%8B%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E6%88%96%E9%80%92%E5%BD%92%E5%88%86%E6%B2%BB%E8%A7%A3%E8%A2%ABban%E5%AD%97%E7%AC%A6%E6%B1%82%E6%9C%80%E9%95%BF%E5%AD%90%E4%B8%B2/</link>
+    <pubDate>Tue, 01 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%AD%97%E7%AC%A6%E4%B8%B2%E7%B1%BB%E5%9E%8B%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E6%88%96%E9%80%92%E5%BD%92%E5%88%86%E6%B2%BB%E8%A7%A3%E8%A2%ABban%E5%AD%97%E7%AC%A6%E6%B1%82%E6%9C%80%E9%95%BF%E5%AD%90%E4%B8%B2/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目一：至少有 K 个重复字符的最长子串 395. 至少有 K 个重复字符的最长子串 题目解析 有两种方法： 递归分治解决：该分治法的应用对象：解决那种不会去跨越任]]></description>
+</item>
+</channel>
+</rss>

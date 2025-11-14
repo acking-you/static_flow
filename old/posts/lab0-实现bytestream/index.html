@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>lab0-实现ByteStream - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="lab0-实现ByteStream"><meta property="og:title" content="lab0-实现ByteStream" />
+<meta property="og:description" content="lab0-实现ByteStream" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-04-13T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-04-13T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="lab0-实现ByteStream"/>
+<meta name="twitter:description" content="lab0-实现ByteStream"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" /><link rel="prev" href="https://acking-you.github.io/posts/lab1-%E5%AE%9E%E7%8E%B0streamreassembler/" /><link rel="next" href="https://acking-you.github.io/posts/%E5%A4%9A%E7%BA%BF%E7%A8%8B%E5%86%B2%E7%AA%81%E4%BA%86%E6%80%8E%E4%B9%88%E5%8A%9E/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "lab0-实现ByteStream",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/lab0-%E5%AE%9E%E7%8E%B0bytestream\/"
+        },"genre": "posts","keywords": "lab0-实现ByteStream","wordcount":  1189 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/lab0-%E5%AE%9E%E7%8E%B0bytestream\/","datePublished": "2023-04-13T00:00:00+00:00","dateModified": "2023-04-13T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "lab0-实现ByteStream"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        title="lab0-实现ByteStream" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">lab0-实现ByteStream</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/cs144/"><i class="far fa-folder fa-fw"></i>CS144</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-04-13">2023-04-13</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1189 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 3 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#cs144-lab0">CS144 lab0</a>
+      <ul>
+        <li><a href="#缓冲区实现">缓冲区实现</a></li>
+        <li><a href="#bytestream实现">ByteStream实现</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="cs144-lab0">CS144 lab0</h2>
+<p>lab0具体的相关事宜可以查看博客:https://kiprey.github.io/2021/11/cs144-lab0/</p>
+<p>完整项目代码: <a href="https://github.com/ACking-you/CS144-Computer-Networks" target="_blank" rel="noopener noreffer">CS144</a></p>
+<h3 id="缓冲区实现">缓冲区实现</h3>
+<h4 id="固定大小">固定大小</h4>
+<p>lab0要求实现的缓冲区就是固定大小的,具体要求是需要实现一个可读可写的缓冲区.我们先讲讲实现的逻辑,如下图:</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/a8b109594aaa4c1da8351f0e0dc86729.png"
+        data-srcset="https://img-blog.csdnimg.cn/a8b109594aaa4c1da8351f0e0dc86729.png, https://img-blog.csdnimg.cn/a8b109594aaa4c1da8351f0e0dc86729.png 1.5x, https://img-blog.csdnimg.cn/a8b109594aaa4c1da8351f0e0dc86729.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/a8b109594aaa4c1da8351f0e0dc86729.png"
+        title="img" /></p>
+<p>由于大小固定,我们通过模运算得到每次需要读取或写入的实际位置,而 <code>readIdx</code> 和 <code>writeIdx</code> 则一直+1即可,每次在需要读取的时候判断当前可读区域的大小,我们始终只需要通过 <code>readIdx</code> 和 <code>writeIdx</code> 的相对位置得到刻度区域的大小,而 <code>writeIdx</code> 永远是大于 <code>readIdx</code> ,只有实际读写的时候通过模运算获得需要读写的具体位置,这样就可以避免 <code>writeIdx</code> 在具体逻辑中可能在 <code>readIdx</code> 之后的情况,<code>readIdx</code> 和 <code>writeIdx</code> 是直接存入的取模的结果那么就需要特殊处理可读区域为空以及可写区域为空两种情况(因为这个时候都满足 <code>readIdx==writeIdx</code>).所以我们是通过一直自增,存取的时候再取模的方式完美的避开了无法判空和判满的情况,每次只要计算出可读区域的大小 <code>writeIdx - readIdx</code> ,可写区域的大小就确定了 (capacity-可读区域大小),然后我们就只管根据 <code>writeIdx</code> 或者 <code>readIdx</code> 模运算得到起始位置,然后一直+1再取模得到具体的值即可完成对应操作.</p>
+<p>并且这种方式实现的缓冲区, <code>writeIdx</code> 直接表示总共写入多少个字节,<code>readIdx</code> 表示总共读取多少个字节,正好就对应我们需要实现的 <code>bytes_written</code> 方法和 <code>bytes_read</code> 方法.</p>
+<h4 id="动态大小">动态大小</h4>
+<p>当缓冲区需要动态大小的时候,上述策略将变得毫无意义,因为每次扩容的时候需要重新拷贝之前的数据,所以我们需要改变复用内存的模运算策略.</p>
+<p>这种动态大小的缓冲区,一般都是在需要扩容的时候,把整体的可读区域重新迁移到最前面,再更新可写指针,这样我们就只需要拷贝部分数据了.</p>
+<p>具体的应用有很多,比如muduo网络库种或go标准库种的buffer都是这样实现的.</p>
+<p>我写的一个网络库 <a href="https://github.com/ACking-you/netpoll-cpp" target="_blank" rel="noopener noreffer">netpoll-cpp</a> 也有类似的实现:</p>
+<p><a href="https://github.com/ACking-you/netpoll-cpp/blob/master/netpoll/util/message_buffer.h" target="_blank" rel="noopener noreffer">netpoll-cpp/netpoll/util/message_buffer.h</a></p>
+<p><a href="https://github.com/ACking-you/netpoll-cpp/blob/master/netpoll/util/message_buffer.cc" target="_blank" rel="noopener noreffer">netpoll-cpp/netpoll/util/message_buffer.cc</a></p>
+<h3 id="bytestream实现">ByteStream实现</h3>
+<h4 id="声明">声明</h4>
+<p>前面对固定大小缓冲区的实现方式已经描述完毕,现在我们来看看需要实现的函数声明:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">class</span> <span class="nc">ByteStream</span>
+<span class="p">{</span>
+<span class="k">private</span><span class="o">:</span>
+
+   <span class="kt">bool</span>   <span class="n">_error</span><span class="p">{};</span>   <span class="c1">//!&lt; Flag indicating that the stream suffered an error.
+</span><span class="c1"></span>   <span class="kt">bool</span>   <span class="n">_eof</span><span class="p">{};</span>
+   <span class="n">size_t</span> <span class="n">_readIdx</span><span class="p">{};</span>
+   <span class="n">size_t</span> <span class="n">_writeIdx</span><span class="p">{};</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">char</span><span class="o">&gt;</span> <span class="n">_buffer</span><span class="p">;</span>
+
+<span class="k">public</span><span class="o">:</span>
+
+   <span class="k">explicit</span> <span class="n">ByteStream</span><span class="p">(</span><span class="n">size_t</span> <span class="n">capacity</span><span class="p">);</span>
+
+   <span class="n">size_t</span> <span class="nf">write</span><span class="p">(</span><span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="o">&amp;</span><span class="n">data</span><span class="p">);</span>
+
+   <span class="n">size_t</span> <span class="nf">remaining_capacity</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="kt">void</span> <span class="nf">end_input</span><span class="p">();</span>
+
+   <span class="c1">//! Indicate that the stream suffered an error.
+</span><span class="c1"></span>   <span class="kt">void</span> <span class="nf">set_error</span><span class="p">()</span> <span class="p">{</span> <span class="n">_error</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span> <span class="p">}</span>
+
+   <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">peek_output</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">len</span><span class="p">)</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="c1">//! Remove bytes from the buffer
+</span><span class="c1"></span>   <span class="kt">void</span> <span class="nf">pop_output</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">len</span><span class="p">);</span>
+
+   <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">read</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">len</span><span class="p">);</span>
+
+   <span class="c1">//! \returns `true` if the stream input has ended
+</span><span class="c1"></span>   <span class="kt">bool</span> <span class="nf">input_ended</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="c1">//! \returns `true` if the stream has suffered an error
+</span><span class="c1"></span>   <span class="kt">bool</span> <span class="nf">error</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">_error</span><span class="p">;</span> <span class="p">}</span>
+
+   <span class="c1">//! \returns the maximum amount that can currently be read from the stream
+</span><span class="c1"></span>   <span class="n">size_t</span> <span class="nf">buffer_size</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="c1">//! \returns `true` if the buffer is empty
+</span><span class="c1"></span>   <span class="kt">bool</span> <span class="nf">buffer_empty</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="c1">//! \returns `true` if the output has reached the ending
+</span><span class="c1"></span>   <span class="kt">bool</span> <span class="nf">eof</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="n">size_t</span> <span class="nf">bytes_written</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+   <span class="c1">//! Total number of bytes popped
+</span><span class="c1"></span>   <span class="n">size_t</span> <span class="nf">bytes_read</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+   <span class="c1">//!@}
+</span><span class="c1"></span><span class="p">};</span>
+</code></pre></div><h4 id="实现">实现</h4>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">ByteStream</span><span class="o">::</span><span class="n">ByteStream</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">capacity</span><span class="p">)</span> <span class="o">:</span> <span class="n">_buffer</span><span class="p">(</span><span class="n">capacity</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{}</span>
+
+<span class="n">size_t</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">write</span><span class="p">(</span><span class="k">const</span> <span class="n">string</span> <span class="o">&amp;</span><span class="n">data</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">buffer_size</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+   <span class="k">if</span> <span class="p">(</span><span class="n">input_ended</span><span class="p">())</span> <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+   <span class="n">size_t</span> <span class="n">canWrite</span>  <span class="o">=</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">-</span> <span class="n">buffer_size</span><span class="p">();</span>
+   <span class="n">size_t</span> <span class="n">realWrite</span> <span class="o">=</span> <span class="n">min</span><span class="p">(</span><span class="n">canWrite</span><span class="p">,</span> <span class="n">data</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+
+   <span class="k">for</span> <span class="p">(</span><span class="n">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">realWrite</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+   <span class="p">{</span>
+      <span class="n">_buffer</span><span class="p">[</span><span class="n">_writeIdx</span><span class="o">++</span> <span class="o">%</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">()]</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+   <span class="p">}</span>
+   <span class="k">return</span> <span class="n">realWrite</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//! \param[in] len bytes will be copied from the output side of the buffer
+</span><span class="c1"></span><span class="n">string</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">peek_output</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">len</span><span class="p">)</span> <span class="k">const</span>
+<span class="p">{</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">buffer_size</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+   <span class="n">size_t</span> <span class="n">canPeek</span> <span class="o">=</span> <span class="n">min</span><span class="p">(</span><span class="n">buffer_size</span><span class="p">(),</span> <span class="n">len</span><span class="p">);</span>
+   <span class="n">string</span> <span class="n">ret</span><span class="p">;</span>
+   <span class="k">for</span> <span class="p">(</span><span class="n">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">canPeek</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+   <span class="p">{</span>
+      <span class="n">ret</span> <span class="o">+=</span> <span class="n">_buffer</span><span class="p">[(</span><span class="n">_readIdx</span> <span class="o">+</span> <span class="n">i</span><span class="p">)</span> <span class="o">%</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">()];</span>
+   <span class="p">}</span>
+   <span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//! \param[in] len bytes will be removed from the output side of the buffer
+</span><span class="c1"></span><span class="kt">void</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">pop_output</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">len</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">buffer_size</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+   <span class="k">if</span> <span class="p">(</span><span class="n">len</span> <span class="o">&gt;</span> <span class="n">buffer_size</span><span class="p">())</span>
+   <span class="p">{</span>
+      <span class="n">set_error</span><span class="p">();</span>
+      <span class="k">return</span><span class="p">;</span>
+   <span class="p">}</span>
+   <span class="n">_readIdx</span> <span class="o">+=</span> <span class="n">len</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">read</span><span class="p">(</span><span class="k">const</span> <span class="n">size_t</span> <span class="n">len</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">buffer_size</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+   <span class="k">auto</span> <span class="n">ret</span> <span class="o">=</span> <span class="n">peek_output</span><span class="p">(</span><span class="n">len</span><span class="p">);</span>
+   <span class="n">pop_output</span><span class="p">(</span><span class="n">len</span><span class="p">);</span>
+   <span class="k">if</span> <span class="p">(</span><span class="n">_error</span><span class="p">)</span> <span class="k">return</span> <span class="p">{};</span>
+   <span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">end_input</span><span class="p">()</span> <span class="p">{</span> <span class="n">_eof</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span> <span class="p">}</span>
+
+<span class="kt">bool</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">input_ended</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">_eof</span><span class="p">;</span> <span class="p">}</span>
+
+<span class="n">size_t</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">buffer_size</span><span class="p">()</span> <span class="k">const</span>
+<span class="p">{</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">_writeIdx</span> <span class="o">&gt;=</span> <span class="n">_readIdx</span><span class="p">);</span>
+   <span class="k">return</span> <span class="n">_writeIdx</span> <span class="o">-</span> <span class="n">_readIdx</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">bool</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">buffer_empty</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">_writeIdx</span> <span class="o">==</span> <span class="n">_readIdx</span><span class="p">;</span> <span class="p">}</span>
+
+<span class="kt">bool</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">eof</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">_eof</span> <span class="o">&amp;&amp;</span> <span class="n">buffer_empty</span><span class="p">();</span> <span class="p">}</span>
+
+<span class="n">size_t</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">bytes_written</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">_writeIdx</span><span class="p">;</span> <span class="p">}</span>
+
+<span class="n">size_t</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">bytes_read</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">_readIdx</span><span class="p">;</span> <span class="p">}</span>
+
+<span class="n">size_t</span> <span class="n">ByteStream</span><span class="o">::</span><span class="n">remaining_capacity</span><span class="p">()</span> <span class="k">const</span>
+<span class="p">{</span>
+   <span class="k">return</span> <span class="n">_buffer</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">-</span> <span class="n">buffer_size</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/lab0-%E5%AE%9E%E7%8E%B0bytestream/">lab0-实现ByteStream</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-04-13</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream" data-hashtags="lab0-实现ByteStream"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-hashtag="lab0-实现ByteStream"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream" data-image="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream" data-description="lab0-实现ByteStream"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream" data-description="lab0-实现ByteStream"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/lab0-%E5%AE%9E%E7%8E%B0bytestream/" data-title="lab0-实现ByteStream"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/lab1-%E5%AE%9E%E7%8E%B0streamreassembler/" class="prev" rel="prev" title="lab1-实现StreamReassembler"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E5%A4%9A%E7%BA%BF%E7%A8%8B%E5%86%B2%E7%AA%81%E4%BA%86%E6%80%8E%E4%B9%88%E5%8A%9E/" class="next" rel="next" title="二、多线程冲突了怎么办">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

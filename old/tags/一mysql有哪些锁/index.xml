@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>一、MySQL有哪些锁 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E4%B8%80mysql%E6%9C%89%E5%93%AA%E4%BA%9B%E9%94%81/</link>
+        <description>一、MySQL有哪些锁 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 28 May 2023 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E4%B8%80mysql%E6%9C%89%E5%93%AA%E4%BA%9B%E9%94%81/" rel="self" type="application/rss+xml" /><item>
+    <title>一、MySQL有哪些锁</title>
+    <link>https://acking-you.github.io/posts/%E4%B8%80mysql%E6%9C%89%E5%93%AA%E4%BA%9B%E9%94%81/</link>
+    <pubDate>Sun, 28 May 2023 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E4%B8%80mysql%E6%9C%89%E5%93%AA%E4%BA%9B%E9%94%81/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center" referrerpolicy="no-referrer">
+            </div>MySQL 有哪些锁？ 在 MySQL 里，根据加锁的范围，可以分为全局锁、表级锁和行锁三类。 #全局锁 全局锁是怎么用的？ 要使用全局锁，则要执行这条命令： flusht]]></description>
+</item>
+</channel>
+</rss>

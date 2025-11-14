@@ -1,0 +1,55 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>JavaSE笔记 - 分类 - L_B__</title>
+        <link>https://acking-you.github.io/categories/javase%E7%AC%94%E8%AE%B0/</link>
+        <description>JavaSE笔记 - 分类 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/categories/javase%E7%AC%94%E8%AE%B0/" rel="self" type="application/rss+xml" /><item>
+    <title>Java I/O</title>
+    <link>https://acking-you.github.io/posts/java-io/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java-io/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java I/O 配套视频 注意：这块会涉及到操作系统和计算机组成原理相关内容。 I/O简而言之，就是输入输出，那么为什么会有I/O呢？其实I/O无时无刻都在]]></description>
+</item>
+<item>
+    <title>Java反射与注解</title>
+    <link>https://acking-you.github.io/posts/java%E5%8F%8D%E5%B0%84%E4%B8%8E%E6%B3%A8%E5%B0%84/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E5%8F%8D%E5%B0%84%E4%B8%8E%E6%B3%A8%E5%B0%84/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java反射和注解 配套视频 **注意：**本章节涉及到JVM相关底层原理，难度会有一些大。 反射就是把Java类中的各个成分映射成一个个的Jav]]></description>
+</item>
+<item>
+    <title>Java多线程</title>
+    <link>https://acking-you.github.io/posts/java%E5%A4%9A%E7%BA%BF%E7%A8%8B/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E5%A4%9A%E7%BA%BF%E7%A8%8B/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://s4.ax1x.com/2022/01/22/7hfFu8.png" referrerpolicy="no-referrer">
+            </div>Java多线程 配套视频 **注意：**本章节会涉及到 操作系统 相关知识。 在了解多线程之前，让我们回顾一下操作系统中提到的进程概念： 进程是程序执行]]></description>
+</item>
+<item>
+    <title>Java对象和多态</title>
+    <link>https://acking-you.github.io/posts/java%E9%9D%A2%E5%90%91%E5%AF%B9%E8%B1%A1/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E9%9D%A2%E5%90%91%E5%AF%B9%E8%B1%A1/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java对象和多态 （面向对象） 配套视频 面向对象基础 面向对象程序设计(Object Oriented Programming) 对象基于类创建，类相当于一个模板，对象就是根据模板创建出]]></description>
+</item>
+<item>
+    <title>Java异常处理机制</title>
+    <link>https://acking-you.github.io/posts/java%E5%BC%82%E5%B8%B8/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E5%BC%82%E5%B8%B8/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c3d009d6542a44155b5847c3a9c76dcd.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java异常机制 配套视频 在理想的情况下，我们的程序会按照我们的思路去运行，按理说是不会出现问题的，但是，代码实际编写后并不一定是完美的，可能]]></description>
+</item>
+<item>
+    <title>Java泛型与集合类</title>
+    <link>https://acking-you.github.io/posts/java%E6%B3%9B%E5%9E%8B%E4%B8%8E%E9%9B%86%E5%90%88%E7%B1%BB/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E6%B3%9B%E5%9E%8B%E4%B8%8E%E9%9B%86%E5%90%88%E7%B1%BB/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/7213ded01d686aab797968b2a6064358.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java泛型与集合类 配套视频 在前面我们学习了最重要的类和对象，了解了面向对象编程的思想，注意，非常重要，面向对象是必须要深入理解和掌握的内容]]></description>
+</item>
+</channel>
+</rss>

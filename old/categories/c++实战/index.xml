@@ -1,0 +1,71 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>C&#43;&#43;实战 - 分类 - L_B__</title>
+        <link>https://acking-you.github.io/categories/c&#43;&#43;%E5%AE%9E%E6%88%98/</link>
+        <description>C&#43;&#43;实战 - 分类 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Tue, 22 Feb 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/categories/c&#43;&#43;%E5%AE%9E%E6%88%98/" rel="self" type="application/rss+xml" /><item>
+    <title>bitset与埃氏筛</title>
+    <link>https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/</link>
+    <pubDate>Tue, 22 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center" referrerpolicy="no-referrer">
+            </div>bitset 介绍 std::bitset 是标准库中的一个存储 0/1 的大小不可变容器。严格来讲，它并不属于 STL。 bitset 并不属于 STL，而是一种标准库中的 &ldquo;Special Container&rdq]]></description>
+</item>
+<item>
+    <title>Hugo博客图形化写作工具</title>
+    <link>https://acking-you.github.io/posts/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/</link>
+    <pubDate>Sat, 12 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/5bc78a387fa03b5039b9bca28aea1b14.png#pic_center" referrerpolicy="no-referrer">
+            </div>软件使用 视频教程 项目介绍 项目所在地 温馨提示：如果本地还未搭建 hugo 博客，可以使用我的另一个 hugo 博客自动搭建工具 QtRun： 介绍：一个用纯 C++ 写的命令]]></description>
+</item>
+<item>
+    <title>自动化搭建博客工具</title>
+    <link>https://acking-you.github.io/posts/%E8%87%AA%E5%8A%A8%E5%8C%96%E6%90%AD%E5%BB%BA%E5%8D%9A%E5%AE%A2%E5%B7%A5%E5%85%B7/</link>
+    <pubDate>Sat, 12 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E8%87%AA%E5%8A%A8%E5%8C%96%E6%90%AD%E5%BB%BA%E5%8D%9A%E5%AE%A2%E5%B7%A5%E5%85%B7/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/cfdaf87ba57fa1099a94d87809378cbb.png#pic_center" referrerpolicy="no-referrer">
+            </div>软件使用 使用前请下载好git工具 视频教程 项目介绍 项目所在地 温馨提示：本地搭建完网站框架后，每次新建文章的写作体验较差，可以看看我的另一个 hugo 博]]></description>
+</item>
+<item>
+    <title>C&#43;&#43;图形化实现学生管理系统</title>
+    <link>https://acking-you.github.io/posts/c&#43;&#43;%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%AE%9E%E7%8E%B0%E5%AD%A6%E7%94%9F%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F/</link>
+    <pubDate>Sat, 05 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/c&#43;&#43;%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%AE%9E%E7%8E%B0%E5%AD%A6%E7%94%9F%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center" referrerpolicy="no-referrer">
+            </div>Qt学生管理系统 想查看源码或者直接下载软件安装包可以到下面的链接： 软件安装包大概在这个位置 GitHub地址：链接 Gitee地址(方便国内访问]]></description>
+</item>
+<item>
+    <title>C&#43;&#43;变参模板运用实战——实现PrintLn</title>
+    <link>https://acking-you.github.io/posts/c&#43;&#43;%E7%9A%84%E6%A8%A1%E6%9D%BF%E5%86%99println/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/c&#43;&#43;%E7%9A%84%E6%A8%A1%E6%9D%BF%E5%86%99println/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/bb7ebe55fc2444df854c0db5592faa34.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16" referrerpolicy="no-referrer">
+            </div>想要实现PrintLn，关键在于支持无限个参数的打印函数，所以我大致总结下C++能够如何去实现它！ 方式一：用初始化列表实现PrintLn()]]></description>
+</item>
+<item>
+    <title>Socket基本操作的C&#43;&#43;封装</title>
+    <link>https://acking-you.github.io/posts/socket%E5%9F%BA%E6%9C%AC%E6%93%8D%E4%BD%9Cc&#43;&#43;%E5%B0%81%E8%A3%85/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/socket%E5%9F%BA%E6%9C%AC%E6%93%8D%E4%BD%9Cc&#43;&#43;%E5%B0%81%E8%A3%85/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c3d009d6542a44155b5847c3a9c76dcd.png#pic_center" referrerpolicy="no-referrer">
+            </div>封装过程 接口类的实现(抽象类) _public_socket.h 该头文件用于包含所有该系统平台socket所需要依赖的库。 windows平台 #ifndef MY_TINY_STL__PUBLIC_SOCKET_H #define MY_TINY_STL__PUBLIC_SOCKET_H #include &lt;winsock2.h&gt;#pragma comment (lib, &#34;ws2_32.lib&#34;) //加载 ws2_32.dll #endif //MY_TINY_STL__PUBLIC_SOCKET_H]]></description>
+</item>
+<item>
+    <title>大数加减类的实现(C&#43;&#43;实现)✨</title>
+    <link>https://acking-you.github.io/posts/%E5%A4%A7%E6%95%B4%E6%95%B0%E5%8A%A0%E5%87%8F/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%A4%A7%E6%95%B4%E6%95%B0%E5%8A%A0%E5%87%8F/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/d01d5f8864d540fd9f68582d8f01d017.png?x-oss-process=image/watermark,type_ZHJvaWRzYW5zZmFsbGJhY2s,shadow_50,text_Q1NETiBAQ19ZQ0JYIFB5X1lZRFM=,size_20,color_FFFFFF,t_70,g_se,x_16" referrerpolicy="no-referrer">
+            </div>为什么需要大数加减类？ 对于计算机而言，基本的数据类型一般最多为64位数据表示范围，这个范围是有限的，没法无限的表示所有的数据，那么有没有一种]]></description>
+</item>
+<item>
+    <title>矩阵快速幂的C&#43;&#43;封装</title>
+    <link>https://acking-you.github.io/posts/%E7%9F%A9%E9%98%B5%E5%BF%AB%E9%80%9F%E5%B9%82%E7%9A%84c&#43;&#43;%E5%B0%81%E8%A3%85/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E7%9F%A9%E9%98%B5%E5%BF%AB%E9%80%9F%E5%B9%82%E7%9A%84c&#43;&#43;%E5%B0%81%E8%A3%85/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/687db1a327b1ff978e25faf116abe71a.png#pic_center" referrerpolicy="no-referrer">
+            </div>实现源码在线查看 如果对于类的设计已经非常清楚，只是进来想看看我的这个泛型模板源代码，那么直接点到下面这个链接进行查看： 源码链接 什么是矩阵快速]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>Dijkstra算法模板讲解 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="Dijkstra算法模板讲解"><meta property="og:title" content="Dijkstra算法模板讲解" />
+<meta property="og:description" content="Dijkstra算法模板讲解" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-02-07T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-02-07T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="Dijkstra算法模板讲解"/>
+<meta name="twitter:description" content="Dijkstra算法模板讲解"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" /><link rel="prev" href="https://acking-you.github.io/posts/c&#43;&#43;%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%AE%9E%E7%8E%B0%E5%AD%A6%E7%94%9F%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F/" /><link rel="next" href="https://acking-you.github.io/posts/bellmanford%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E8%AF%A6%E8%A7%A3/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "Dijkstra算法模板讲解",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3\/"
+        },"genre": "posts","keywords": "Dijkstra算法模板讲解","wordcount":  1998 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3\/","datePublished": "2022-02-07T00:00:00+00:00","dateModified": "2022-02-07T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "Dijkstra算法模板讲解"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center, https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"
+        title="Dijkstra算法模板讲解" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">Dijkstra算法模板讲解</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E7%AE%97%E6%B3%95%E6%9C%80%E7%9F%AD%E8%B7%AF%E9%97%AE%E9%A2%98/"><i class="far fa-folder fa-fw"></i>算法——最短路问题</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-02-07">2022-02-07</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1998 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 4 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#用到的基本数据表示">用到的基本数据表示</a></li>
+    <li><a href="#各个函数模块实现重在dijkstra函数">各个函数模块实现(重在Dijkstra函数)</a></li>
+  </ul>
+
+  <ul>
+    <li><a href="#蓝桥杯--文化之旅">蓝桥杯&ndash;文化之旅</a></li>
+    <li><a href="#解题过程">解题过程</a></li>
+    <li><a href="#汇总代码提交">汇总代码提交</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="也就5min先点开链接把dijkstra算法过程看一看否则肯定看不懂代码">(也就5min)先点开链接把Dijkstra算法过程看一看(否则肯定看不懂代码).</h1>
+<p><a href="https://www.bilibili.com/video/BV1zz4y1m7Nq" target="_blank" rel="noopener noreffer">视频详解Dijkstra算法过程</a></p>
+<blockquote>
+<p>此方法最短路径的适用范围：单源带权图，要是不带权完全可以用bfs。</p>
+</blockquote>
+<hr>
+<h1 id="详解代码实现过程请结合视频过程分析">详解代码实现过程(请结合视频过程分析)</h1>
+<h2 id="用到的基本数据表示">用到的基本数据表示</h2>
+<blockquote>
+<p>根据视频中讲解的实现原理，我们需要通过多个数组来实现该过程。</p>
+</blockquote>
+<ol>
+<li><code>dist[i]数组(下标表示第几个结点)</code>用于标记<code>起点S到i的最短距离</code>，初始值全为无穷大，这个值只要足够大就行。</li>
+<li><code>visit[i]数组(下标同上)</code>用于标记<code>每个已经得到最短距离的结点</code>，初始值全为<code>false</code>,表示该结点还未找到最短距离。</li>
+<li><code>path[i]数组(下标同上)</code>用于标记<code>每个已经得到最短距离的结点的前驱(最短路径中的上一个结点)</code>，初始值全为-1。</li>
+<li><code>Graph[i][j]</code>这是一个带权矩阵，<code>表示任意i结点到j结点间边的距离</code>,若两者间无边则初始为无穷大。</li>
+</ol>
+<hr>
+<h2 id="各个函数模块实现重在dijkstra函数">各个函数模块实现(重在Dijkstra函数)</h2>
+<ul>
+<li><strong>init()</strong></li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">void</span> <span class="nf">init</span><span class="p">()</span><span class="c1">//在读入数据之前初始化图
+</span><span class="c1"></span><span class="p">{</span><span class="c1">//Graph和dist在读取数据之前都初始化为INF，path初始化为-1
+</span><span class="c1"></span>    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+        <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">INF</span><span class="p">;</span>
+        <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">){</span>
+            <span class="n">Graph</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">INF</span><span class="p">;</span><span class="c1">//INF为自定义的较大的值
+</span><span class="c1"></span>        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="n">memset</span><span class="p">(</span><span class="n">visit</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="k">sizeof</span><span class="p">(</span><span class="n">visit</span><span class="p">));</span><span class="c1">//起初，没有一个结点被标记
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><ul>
+<li><strong>FIndMin()</strong></li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">int</span> <span class="nf">FindMin</span><span class="p">()</span><span class="c1">//找出未被visit标记的结点中最小的距离结点,并返回该结点
+</span><span class="c1"></span><span class="p">{</span>
+    <span class="kt">int</span> <span class="n">minV</span> <span class="o">=</span> <span class="n">S</span><span class="p">;</span><span class="c1">//初始为S，如果未被更新则路径更新过程结束
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">minDist</span> <span class="o">=</span> <span class="n">INF</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">visit</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">minDist</span><span class="p">){</span><span class="c1">//没有被标记&amp;&amp;距离最小
+</span><span class="c1"></span>            <span class="n">minV</span> <span class="o">=</span> <span class="n">i</span><span class="p">;</span>
+            <span class="n">minDist</span> <span class="o">=</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+        <span class="p">}</span>
+    <span class="p">}</span><span class="c1">//返回没有被标记的最小结点
+</span><span class="c1"></span>    <span class="k">return</span> <span class="n">minV</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><ul>
+<li><strong>Dijkstra()</strong></li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">void</span> <span class="nf">Dijkstra</span><span class="p">()</span>
+<span class="p">{</span><span class="c1">//S表示起点，T表示终点
+</span><span class="c1"></span>    <span class="n">dist</span><span class="p">[</span><span class="n">S</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span><span class="c1">//起点到自己的距离设为0
+</span><span class="c1"></span>    <span class="n">visit</span><span class="p">[</span><span class="n">S</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span><span class="c1">//将起点标记
+</span><span class="c1"></span>    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+    <span class="c1">//更新与起点S相连的结点的距离值
+</span><span class="c1"></span>        <span class="kt">int</span> <span class="n">t</span> <span class="o">=</span> <span class="n">Graph</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">S</span><span class="p">];</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">t</span> <span class="o">&lt;</span> <span class="n">INF</span><span class="p">){</span>
+			<span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">t</span><span class="p">;</span>
+			<span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">S</span><span class="p">;</span>
+		<span class="p">}</span>      
+    <span class="p">}</span>
+<span class="c1">//要么无法到达，要么就是找到到达终点的最小值，否则一直循环。
+</span><span class="c1"></span>    <span class="k">while</span><span class="p">(</span><span class="mi">1</span><span class="p">){</span>
+    <span class="c1">//得到未被标记的最小结点，将其标记
+</span><span class="c1"></span>        <span class="kt">int</span> <span class="n">v</span> <span class="o">=</span> <span class="n">FindMin</span><span class="p">();</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">v</span><span class="o">==</span><span class="n">S</span><span class="p">)</span><span class="c1">//如果未被更新，则无需再更新了，要么全被标记，要么就是剩下的无法到达
+</span><span class="c1"></span>            <span class="k">return</span><span class="p">;</span>
+        <span class="n">visit</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span><span class="c1">//将该结点标记
+</span><span class="c1"></span>        <span class="k">if</span><span class="p">(</span><span class="n">visit</span><span class="p">[</span><span class="n">T</span><span class="p">])</span><span class="k">return</span><span class="p">;</span><span class="c1">//一旦T被标记，则说明到达终点的最小值已经找到
+</span><span class="c1"></span>        <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="c1">//这个结合视频的更新过程想想就懂了
+</span><span class="c1"></span>            <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">visit</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">&amp;&amp;</span><span class="n">Graph</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="o">!=</span><span class="n">INF</span><span class="p">){</span><span class="c1">//没被标记&amp;&amp;两者之间存在边
+</span><span class="c1"></span>                <span class="k">if</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">+</span> <span class="n">Graph</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]){</span>
+                    <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">dist</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">+</span> <span class="n">Graph</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">];</span>
+                    <span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><hr>
+<h1 id="以题代讲--具体实现">以题代讲&ndash;具体实现</h1>
+<h2 id="蓝桥杯--文化之旅">蓝桥杯&ndash;文化之旅</h2>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/20210619204805798.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70"
+        data-srcset="https://img-blog.csdnimg.cn/20210619204805798.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70, https://img-blog.csdnimg.cn/20210619204805798.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70 1.5x, https://img-blog.csdnimg.cn/20210619204805798.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/20210619204805798.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70"
+        title="在这里插入图片描述" /></p>
+<blockquote>
+<p>看完题目，唯一的区别在于还需要额外判断文化是否排斥，这个在函数中多添加一个判断条件就行。</p>
+</blockquote>
+<h2 id="解题过程">解题过程</h2>
+<blockquote>
+<p>我们按照上述的过程三步走试试：</p>
+</blockquote>
+<ul>
+<li><strong>初始化过程</strong>(我比较习惯用vector容器所以就没有单独写init函数了)</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//vector容器的初始化方法--vector&lt;类型&gt;变量名(长度,初始值);
+</span><span class="c1"></span><span class="k">const</span> <span class="kt">int</span> <span class="n">size</span> <span class="o">=</span> <span class="mi">505</span><span class="p">;</span><span class="c1">//用于初始化一个size长度的数组
+</span><span class="c1"></span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="n">path</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="n">dist</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">INT_MAX</span><span class="p">);</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="n">visit</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="nb">false</span><span class="p">);</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="o">&gt;</span><span class="n">Graphics</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">INT_MAX</span><span class="p">));</span>
+<span class="c1">//下面两个是本题新加的属性，我们建立所属文化以及文化关系数组来存储。
+</span><span class="c1"></span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="n">cultures</span><span class="p">(</span><span class="n">size</span><span class="p">);</span>
+<span class="kt">bool</span> <span class="n">cultureLinks</span><span class="p">[</span><span class="n">size</span><span class="p">][</span><span class="n">size</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="nb">false</span><span class="p">};</span>
+</code></pre></div><ul>
+<li><strong>找最小结点的函数</strong>FindMin()</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">int</span> <span class="nf">FindMin</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="kt">int</span> <span class="n">minV</span> <span class="o">=</span> <span class="n">S</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">minDist</span> <span class="o">=</span> <span class="n">INT_MAX</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">visit</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">minDist</span><span class="p">){</span>
+            <span class="n">minV</span> <span class="o">=</span> <span class="n">i</span><span class="p">;</span>
+            <span class="n">minDist</span> <span class="o">=</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">minV</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><ul>
+<li><strong>Dijkstra()</strong> 函数</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">void</span> <span class="nf">Dijkstra</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">dist</span><span class="p">[</span><span class="n">S</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">visit</span><span class="p">[</span><span class="n">S</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="kt">int</span> <span class="n">t</span> <span class="o">=</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">S</span><span class="p">][</span><span class="n">i</span><span class="p">];</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">t</span> <span class="o">&lt;</span> <span class="n">INT_MAX</span><span class="o">&amp;&amp;!</span><span class="n">cultureLinks</span><span class="p">[</span><span class="n">cultures</span><span class="p">[</span><span class="n">i</span><span class="p">]][</span><span class="n">cultures</span><span class="p">[</span><span class="n">S</span><span class="p">]]){</span>
+           <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">t</span><span class="p">;</span> <span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">S</span><span class="p">;}</span>
+    <span class="p">}</span>
+    <span class="k">while</span><span class="p">(</span><span class="mi">1</span><span class="p">){</span>
+        <span class="kt">int</span> <span class="n">v</span> <span class="o">=</span> <span class="n">FindMin</span><span class="p">();</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">v</span><span class="o">==</span><span class="n">S</span><span class="p">)</span> <span class="k">return</span><span class="p">;</span>
+        <span class="n">visit</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span><span class="c1">//将此次最小路径结点标记
+</span><span class="c1"></span>        <span class="c1">//一旦T终点被标记则说明答案已经出现
+</span><span class="c1"></span>        <span class="k">if</span><span class="p">(</span><span class="n">visit</span><span class="p">[</span><span class="n">T</span><span class="p">])</span><span class="k">return</span><span class="p">;</span>
+        <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+            <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">visit</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">&amp;&amp;</span><span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="o">!=</span><span class="n">INT_MAX</span><span class="o">&amp;&amp;!</span><span class="n">cultureLinks</span><span class="p">[</span><span class="n">cultures</span><span class="p">[</span><span class="n">i</span><span class="p">]][</span><span class="n">cultures</span><span class="p">[</span><span class="n">v</span><span class="p">]]){</span><span class="c1">//只有结点未被标记 &amp;&amp; 文化不会排斥 &amp;&amp; 路径长度不是无穷大
+</span><span class="c1"></span>                <span class="k">if</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">+</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]){</span>
+                    <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">dist</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">+</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">];</span>
+                    <span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><ul>
+<li><strong>main函数测试接口</strong></li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+<span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">N</span><span class="o">&gt;&gt;</span><span class="n">K</span><span class="o">&gt;&gt;</span><span class="n">M</span><span class="o">&gt;&gt;</span><span class="n">S</span><span class="o">&gt;&gt;</span><span class="n">T</span><span class="p">;</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">N</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+    <span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">cultures</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">K</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">j</span><span class="o">&lt;=</span><span class="n">K</span><span class="p">;</span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
+        <span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">cultureLinks</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">];</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">M</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="kt">int</span> <span class="n">u</span><span class="p">,</span><span class="n">v</span><span class="p">,</span><span class="n">d</span><span class="p">;</span><span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">u</span><span class="o">&gt;&gt;</span><span class="n">v</span><span class="o">&gt;&gt;</span><span class="n">d</span><span class="p">;</span><span class="c1">//无向图
+</span><span class="c1"></span>        <span class="n">Graphics</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">]</span> <span class="o">=</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">u</span><span class="p">]</span> <span class="o">=</span> <span class="n">d</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="n">Dijkstra</span><span class="p">();</span>
+<span class="k">if</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">T</span><span class="p">]</span><span class="o">!=</span><span class="n">INT_MAX</span><span class="p">)</span>
+    <span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">dist</span><span class="p">[</span><span class="n">T</span><span class="p">];</span>
+<span class="k">else</span>
+    <span class="n">cout</span><span class="o">&lt;&lt;-</span><span class="mi">1</span><span class="p">;</span>
+<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><h2 id="汇总代码提交">汇总代码提交</h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;bits/stdc++.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">std</span><span class="p">;</span>
+<span class="k">const</span> <span class="kt">int</span> <span class="n">size</span> <span class="o">=</span> <span class="mi">505</span><span class="p">;</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="n">path</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="n">dist</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">INT_MAX</span><span class="p">);</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="n">visit</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="nb">false</span><span class="p">);</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="o">&gt;</span><span class="n">Graphics</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">(</span><span class="n">size</span><span class="p">,</span><span class="n">INT_MAX</span><span class="p">));</span>
+<span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="n">cultures</span><span class="p">(</span><span class="n">size</span><span class="p">);</span>
+<span class="kt">bool</span> <span class="n">cultureLinks</span><span class="p">[</span><span class="n">size</span><span class="p">][</span><span class="n">size</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="nb">false</span><span class="p">};</span>
+<span class="kt">int</span> <span class="n">N</span><span class="p">,</span><span class="n">K</span><span class="p">,</span><span class="n">M</span><span class="p">,</span><span class="n">S</span><span class="p">,</span><span class="n">T</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">FindMin</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="kt">int</span> <span class="n">minV</span> <span class="o">=</span> <span class="n">S</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">minDist</span> <span class="o">=</span> <span class="n">INT_MAX</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">visit</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">minDist</span><span class="p">){</span>
+            <span class="n">minV</span> <span class="o">=</span> <span class="n">i</span><span class="p">;</span>
+            <span class="n">minDist</span> <span class="o">=</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">minV</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="nf">Dijkstra</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">dist</span><span class="p">[</span><span class="n">S</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">visit</span><span class="p">[</span><span class="n">S</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="kt">int</span> <span class="n">t</span> <span class="o">=</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">S</span><span class="p">][</span><span class="n">i</span><span class="p">];</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">t</span> <span class="o">&lt;</span> <span class="n">INT_MAX</span><span class="o">&amp;&amp;!</span><span class="n">cultureLinks</span><span class="p">[</span><span class="n">cultures</span><span class="p">[</span><span class="n">i</span><span class="p">]][</span><span class="n">cultures</span><span class="p">[</span><span class="n">S</span><span class="p">]]){</span>
+           <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">t</span><span class="p">;</span> <span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">S</span><span class="p">;}</span>
+    <span class="p">}</span>
+    <span class="k">while</span><span class="p">(</span><span class="mi">1</span><span class="p">){</span>
+        <span class="kt">int</span> <span class="n">v</span> <span class="o">=</span> <span class="n">FindMin</span><span class="p">();</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">v</span><span class="o">==</span><span class="n">S</span><span class="p">)</span> <span class="k">return</span><span class="p">;</span>
+        <span class="n">visit</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span><span class="c1">//将此次最小路径结点标记
+</span><span class="c1"></span>        <span class="c1">//一旦T终点被标记则说明答案已经出现
+</span><span class="c1"></span>        <span class="k">if</span><span class="p">(</span><span class="n">visit</span><span class="p">[</span><span class="n">T</span><span class="p">])</span><span class="k">return</span><span class="p">;</span>
+        <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">){</span>
+            <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">visit</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">&amp;&amp;</span><span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="o">!=</span><span class="n">INT_MAX</span><span class="o">&amp;&amp;!</span><span class="n">cultureLinks</span><span class="p">[</span><span class="n">cultures</span><span class="p">[</span><span class="n">i</span><span class="p">]][</span><span class="n">cultures</span><span class="p">[</span><span class="n">v</span><span class="p">]]){</span><span class="c1">//只有结点未被标记 &amp;&amp; 文化不会排斥 &amp;&amp; 路径长度不是无穷大
+</span><span class="c1"></span>                <span class="k">if</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">+</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]){</span>
+                    <span class="n">dist</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">dist</span><span class="p">[</span><span class="n">v</span><span class="p">]</span> <span class="o">+</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">i</span><span class="p">];</span>
+                    <span class="n">path</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+<span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">N</span><span class="o">&gt;&gt;</span><span class="n">K</span><span class="o">&gt;&gt;</span><span class="n">M</span><span class="o">&gt;&gt;</span><span class="n">S</span><span class="o">&gt;&gt;</span><span class="n">T</span><span class="p">;</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">N</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+    <span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">cultures</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">K</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">j</span><span class="o">&lt;=</span><span class="n">K</span><span class="p">;</span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
+        <span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">cultureLinks</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">];</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">M</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>
+        <span class="kt">int</span> <span class="n">u</span><span class="p">,</span><span class="n">v</span><span class="p">,</span><span class="n">d</span><span class="p">;</span><span class="n">cin</span><span class="o">&gt;&gt;</span><span class="n">u</span><span class="o">&gt;&gt;</span><span class="n">v</span><span class="o">&gt;&gt;</span><span class="n">d</span><span class="p">;</span><span class="c1">//无向图
+</span><span class="c1"></span>        <span class="n">Graphics</span><span class="p">[</span><span class="n">u</span><span class="p">][</span><span class="n">v</span><span class="p">]</span> <span class="o">=</span> <span class="n">Graphics</span><span class="p">[</span><span class="n">v</span><span class="p">][</span><span class="n">u</span><span class="p">]</span> <span class="o">=</span> <span class="n">d</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="n">Dijkstra</span><span class="p">();</span>
+<span class="k">if</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">T</span><span class="p">]</span><span class="o">!=</span><span class="n">INT_MAX</span><span class="p">)</span>
+    <span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">dist</span><span class="p">[</span><span class="n">T</span><span class="p">];</span>
+<span class="k">else</span>
+    <span class="n">cout</span><span class="o">&lt;&lt;-</span><span class="mi">1</span><span class="p">;</span>
+<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/">Dijkstra算法模板讲解</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-02-07</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解" data-hashtags="Dijkstra算法模板讲解"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-hashtag="Dijkstra算法模板讲解"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解" data-image="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解" data-description="Dijkstra算法模板讲解"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解" data-description="Dijkstra算法模板讲解"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/dijkstra%E7%AE%97%E6%B3%95%E6%A8%A1%E6%9D%BF%E8%AE%B2%E8%A7%A3/" data-title="Dijkstra算法模板讲解"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/c&#43;&#43;%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%AE%9E%E7%8E%B0%E5%AD%A6%E7%94%9F%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F/" class="prev" rel="prev" title="C&#43;&#43;图形化实现学生管理系统"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/bellmanford%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E8%AF%A6%E8%A7%A3/" class="next" rel="next" title="BellmanFord和SPFA算法详解">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

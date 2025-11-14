@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>实现实时qq好友搜索框 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="实现实时qq好友搜索框"><meta property="og:title" content="实现实时qq好友搜索框" />
+<meta property="og:description" content="实现实时qq好友搜索框" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-04-24T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-04-24T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="实现实时qq好友搜索框"/>
+<meta name="twitter:description" content="实现实时qq好友搜索框"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" /><link rel="prev" href="https://acking-you.github.io/posts/1.3-%E9%94%81%E9%87%8A%E6%94%BE%E7%9A%84%E5%8F%A6%E4%B8%80%E7%A7%8D%E5%A7%BF%E5%8A%BF-%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8Fcondition_variable-%E4%BF%A1%E5%8F%B7%E9%87%8Fsemaphore/" /><link rel="next" href="https://acking-you.github.io/posts/%E4%B8%80go%E8%AF%AD%E8%A8%80%E4%B8%8A%E6%89%8B-%E9%9D%92%E8%AE%AD%E8%90%A5%E7%AC%94%E8%AE%B0/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "实现实时qq好友搜索框",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86\/"
+        },"genre": "posts","keywords": "实现实时qq好友搜索框","wordcount":  2978 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86\/","datePublished": "2022-04-24T00:00:00+00:00","dateModified": "2022-04-24T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "实现实时qq好友搜索框"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center, https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center"
+        title="实现实时qq好友搜索框" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">实现实时qq好友搜索框</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/bug%E6%97%A5%E8%AE%B0c++%E5%AE%9E%E7%8E%B0qqui%E7%AF%87/"><i class="far fa-folder fa-fw"></i>(bug日记)C++实现QQ——UI篇</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-04-24">2022-04-24</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 2978 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 6 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#项目背景">项目背景</a></li>
+    <li><a href="#实时qq好友搜索框实现思路">实时QQ好友搜索框实现思路</a>
+      <ul>
+        <li><a href="#具体思路">具体思路</a></li>
+      </ul>
+    </li>
+    <li><a href="#实践">实践</a>
+      <ul>
+        <li><a href="#实践一通过保存一份拷贝扑街bug">实践一：通过保存一份拷贝(扑街bug)</a></li>
+        <li><a href="#实践二通过前后端分离智能指针完美解决">实践二：通过前后端分离+智能指针完美解决</a></li>
+      </ul>
+    </li>
+    <li><a href="#附录">附录</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="项目背景">项目背景</h2>
+<p>想要用纯C++实现一个QQ，包括客户端的ui和通信，以及服务端的数据收发通信。</p>
+<p><strong>客户端</strong>：使用C++的Qt框架实现UI（正在进行），使用自己手写的网络框架进行通信（还未开始），以及手写的bencode编码进本地序列化（已经完成）。</p>
+<p><strong>服务端</strong>：使用自己造好的网络框架进行数据的收发和通信（还未开始）。</p>
+<p><strong>本篇进度</strong>：已经实现了登录界面和基本的主界面，本次是想拓展一个实时的搜索框，结果碰到了坑，然后在此写下记录。</p>
+<p>目前UI实现情况如下图：</p>
+<blockquote>
+<p>登录界面：</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/63bd72e215da4cb8a3660f64175bb058.gif"
+        data-srcset="https://img-blog.csdnimg.cn/63bd72e215da4cb8a3660f64175bb058.gif, https://img-blog.csdnimg.cn/63bd72e215da4cb8a3660f64175bb058.gif 1.5x, https://img-blog.csdnimg.cn/63bd72e215da4cb8a3660f64175bb058.gif 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/63bd72e215da4cb8a3660f64175bb058.gif"
+        title="登录界面" /></p>
+<blockquote>
+<p>主界面：</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/30906168548f49e4bc2e130f9b2db885.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQytH,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/30906168548f49e4bc2e130f9b2db885.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQytH%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/30906168548f49e4bc2e130f9b2db885.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQytH%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/30906168548f49e4bc2e130f9b2db885.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQytH%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/30906168548f49e4bc2e130f9b2db885.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQytH,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="主界面" /></p>
+<h2 id="实时qq好友搜索框实现思路">实时QQ好友搜索框实现思路</h2>
+<p>实现目标：当用户在搜索框输入名字的时候，会实时将当前列表内的包含该名字的好友给列举出来。</p>
+<p>实现方式：通过连接信号 <code>QLineEdit::textChanged</code> 来对应用户按钮的存储控件中的槽函数。</p>
+<h3 id="具体思路">具体思路</h3>
+<p>由于我是通过 <code>QListWidget</code> 存下多个自己重写的 <code>QPushButton</code> 来实现好友列表，故想要进行列表中的删除和增加就是对 <code>QListWidget</code> 增加或删除 <code>QListWidgetItem</code> 。由于 <code>QListWidget</code> 只提供了 <code>QListWidget::addItem</code> 方法进行添加，而这个方法并不能保证在具体哪一行插入，只会在列表的尾部进行添加，所以我通过这样一个方法实现实时的列表搜索项：<strong>清空再重新创建符合条件的 <code>QPushButton</code></strong>。</p>
+<h2 id="实践">实践</h2>
+<h3 id="实践一通过保存一份拷贝扑街bug">实践一：通过保存一份拷贝(扑街bug)</h3>
+<p>根据这个思路，我很快想到，需要<strong>保存好搜索前的所有列表项</strong>，然后再通过用户输入的文字筛选，将符合条件的列表项添加进去。</p>
+<p>这样很快就出现了问题：由于<strong>清空列表会导致列表项里面的所有内存都被析构</strong>！所以如果你去按照这样一个思路去实现，我们需要在每次调用 <code>addUserBtn</code> 添加用户按钮的时候存下一份拷贝，然后你把列表清空后内存析构也一直能用这一份拷贝再生成新的拷贝按钮来添加到列表中去，这样问题应该就解决了。</p>
+<p>然后我马不停蹄的马上写好了代码，跑起来准备测试，立马出现新的问题：每次输入时确实会显示对应的用户按钮是没错，但图片都没了，甚至很多按钮是空的？？？</p>
+<p>经过注意排查，发现是我写拷贝构造函数的时候把很多 <code>QString</code> 成员转了右值用了移动构造，所以每次发送拷贝时，实际上资源已经转移了。。。</p>
+<p>改好这个bug，又继续测试，然后果不其然，又出现了新的问题：用户输入的时候会有符合条件的项被创建没错，且都有对应的数据，但是随着继续输入创建的对象是越来越多了？？？</p>
+<p>又经过仔细排查，发现是因为每次 <code>addUserBtn</code> 的时候都会把对应的数据添加一份拷贝到缓存，但是如果是用户在输入框立马输入信息进行查询时，调用了这个add函数，那么就会不断的添加重复的信息到缓存中去！！！</p>
+<p>此时很多人可能会想着用 <code>set</code> 替代 <code>list</code> 做缓存，但是我就此发现了我这个实现思路就很有问题：</p>
+<p>一、每次重新添加控件需要把整个信息全拷贝一遍，如果数据多了会是一个很耗时的工作！</p>
+<p>二、我发现了罪恶之源：<code>QListWidget</code> 把控件的生命周期牢牢把握！！！要不是每次删除控件都得把立马的东西析构才能让这个控件不显示，才不会出现这等问题！也才不会需要重复不断的创建对象！</p>
+<h3 id="实践二通过前后端分离智能指针完美解决">实践二：通过前后端分离+智能指针完美解决</h3>
+<p>这次推倒重来，前面的试探也并非是在做无用功，至少通过前面的实践发现，既然我们没法把 <code>Button</code> 的生命周期拿在手里（每次还是需要重新new出新的Button），但我们至少把 <code>Button</code> 里数据的生命周期拿在手里啊，我们利用<strong>数据和界面分离的思想</strong>，将数据以一个智能指针的方式保存在 <code>Button</code> 内部，这样一来按钮被析构，数据也不一定就会被析构，只有当智能指针的引用计数为0的时候才被析构。</p>
+<p>所以回到前面的实践一，这次我们还是以一个缓存存下原本的数据，但是这次我们存储的不是 <code>Button</code> 对象，而是 <code>Button</code> 对象中的智能指针数据，所以只要缓存还存在，那么 <code>Button</code> 里面的数据就还是可以复用的！所以每次 new 出新的 Button 去显示的代价是很小的 ，因为指针的copy几乎是没有代价的。。。</p>
+<p>而且如果用set存储指针的话，直接通过判断地址就能清楚是否是相同的数据了！这样的存储性能会比直接存下数据要高很多。</p>
+<p>像这样<strong>把数据和界面分离开的思路，我觉得就和web端的前后端分离的思路是一模一样，所以我愿意称之为桌面端的前后端分离</strong>。</p>
+<h2 id="附录">附录</h2>
+<p>最后我贴上我具体实现的代码：</p>
+<p>能看懂的应该会有收获，看不懂以后总会看得懂😁</p>
+<blockquote>
+<p>UserButton.h</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">class</span> <span class="nc">UserButton</span> <span class="o">:</span><span class="k">public</span> <span class="n">QPushButton</span><span class="p">{</span>
+    <span class="n">Q_OBJECT</span>
+
+<span class="k">private</span><span class="o">:</span>
+    <span class="n">UserButton</span><span class="p">(</span><span class="n">QWidget</span><span class="o">*</span><span class="n">parent</span><span class="p">);</span>
+<span class="k">public</span><span class="o">:</span>
+    
+    <span class="c1">//按钮的类型
+</span><span class="c1"></span>    <span class="k">enum</span> <span class="k">class</span> <span class="nc">Type</span><span class="p">{</span>
+        <span class="n">Meg_Btn</span><span class="p">,</span>
+        <span class="n">User_Btn</span>
+    <span class="p">};</span>
+
+    <span class="c1">//存储按钮数据的类型
+</span><span class="c1"></span>    <span class="k">struct</span> <span class="nc">ButtonInfo</span><span class="p">{</span>
+        <span class="kt">int</span> <span class="n">_unread</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="kt">int</span> <span class="n">_hide</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="kt">int</span> <span class="n">_uid</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="n">State</span> <span class="n">_state</span> <span class="o">=</span> <span class="n">State</span><span class="o">::</span><span class="n">OffLine</span><span class="p">;</span>
+        <span class="n">Type</span> <span class="n">_type</span> <span class="o">=</span> <span class="n">Type</span><span class="o">::</span><span class="n">Meg_Btn</span><span class="p">;</span>
+        <span class="n">QString</span> <span class="n">_iconPath</span><span class="p">;</span>
+        <span class="n">QString</span> <span class="n">_name</span><span class="p">;</span>
+        <span class="n">QString</span> <span class="n">_text</span><span class="p">;</span>
+        <span class="k">static</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ButtonInfo</span><span class="o">&gt;</span> <span class="n">getDefaultButtonInfo</span><span class="p">(</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span><span class="n">name</span><span class="p">,</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span><span class="n">text</span><span class="p">,</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span><span class="n">iconPath</span><span class="p">);</span>
+    <span class="p">};</span>
+    <span class="k">using</span> <span class="n">shared_info</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ButtonInfo</span><span class="o">&gt;</span><span class="p">;</span>
+
+    <span class="c1">//根据外界数据创建按钮
+</span><span class="c1"></span>    <span class="k">static</span> <span class="n">UserButton</span><span class="o">*</span> <span class="nf">fromButtonInfo</span><span class="p">(</span><span class="n">shared_info</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">info</span><span class="p">,</span><span class="n">QWidget</span><span class="o">*</span> <span class="n">parent</span><span class="o">=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="cm">/**
+</span><span class="cm">     * 持久化成功返回存储的路径，否则返回空optional
+</span><span class="cm">     * @param imageSrc
+</span><span class="cm">     * @param name
+</span><span class="cm">     * @return
+</span><span class="cm">     */</span>
+   <span class="k">static</span> <span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">QString</span><span class="o">&gt;</span> <span class="n">StorageIcon</span><span class="p">(</span><span class="n">QByteArray</span> <span class="k">const</span><span class="o">&amp;</span><span class="n">imageSrc</span><span class="p">,</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">name</span><span class="p">);</span>
+
+   
+    <span class="o">~</span><span class="n">UserButton</span><span class="p">()</span> <span class="k">override</span><span class="p">;</span>
+
+<span class="k">protected</span><span class="o">:</span>
+    <span class="kt">void</span> <span class="n">paintEvent</span><span class="p">(</span><span class="n">QPaintEvent</span> <span class="o">*</span><span class="p">)</span> <span class="k">override</span><span class="p">;</span>
+
+    
+<span class="k">public</span><span class="o">:</span>
+    <span class="c1">//画出Message按钮
+</span><span class="c1"></span>    <span class="kt">void</span> <span class="n">PainMessageBtn</span><span class="p">();</span>
+	<span class="c1">//画出User按钮
+</span><span class="c1"></span>    <span class="kt">void</span> <span class="nf">PainUserBtn</span><span class="p">();</span>
+
+    <span class="n">QRect</span> <span class="nf">adjustSize</span><span class="p">(</span><span class="n">QString</span><span class="o">&amp;</span><span class="n">dest</span><span class="p">);</span>
+
+    <span class="c1">//一大堆getter和setter
+</span><span class="c1"></span>    <span class="n">QString</span> <span class="nf">getName</span><span class="p">();</span>
+    
+    <span class="kt">void</span> <span class="nf">setName</span><span class="p">(</span><span class="n">QString</span> <span class="n">name</span><span class="p">);</span>
+
+    <span class="kt">int</span> <span class="nf">getNumUnread</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+    <span class="kt">void</span> <span class="nf">setNumUnread</span><span class="p">(</span><span class="kt">int</span> <span class="n">numUnread</span><span class="p">);</span>
+
+    <span class="n">State</span> <span class="nf">getMState</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+    <span class="kt">void</span> <span class="nf">setMState</span><span class="p">(</span><span class="n">State</span> <span class="n">mState</span><span class="p">);</span>
+
+    <span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">getMIconPath</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+    <span class="kt">void</span> <span class="nf">setMIconPath</span><span class="p">(</span><span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">mIconPath</span><span class="p">);</span>
+
+    <span class="n">Type</span> <span class="nf">getMType</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+
+    <span class="kt">void</span> <span class="nf">setMType</span><span class="p">(</span><span class="n">Type</span> <span class="n">mType</span><span class="p">);</span>
+
+    <span class="kt">void</span> <span class="nf">setHideMsgStyle</span><span class="p">(</span><span class="kt">bool</span> <span class="n">isHide</span><span class="p">);</span>
+
+    <span class="kt">int</span> <span class="nf">getMisHide</span><span class="p">();</span>
+    
+    <span class="kt">int</span> <span class="nf">getUid</span><span class="p">()</span> <span class="k">const</span><span class="p">;</span>
+    
+    <span class="kt">void</span> <span class="nf">setUid</span><span class="p">(</span><span class="kt">int</span> <span class="n">uid</span><span class="p">);</span>
+
+    <span class="kt">void</span> <span class="nf">setContent</span><span class="p">(</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">text</span><span class="p">);</span>
+
+    <span class="n">QString</span> <span class="nf">getContent</span><span class="p">();</span>
+
+    <span class="n">shared_info</span> <span class="nf">getSharedInfo</span><span class="p">();</span>
+<span class="k">public</span> <span class="nl">slots</span><span class="p">:</span>
+    <span class="c1">//用于外界实时更新消息框的显示内容的槽函数
+</span><span class="c1"></span>    <span class="kt">void</span> <span class="n">updateContent</span><span class="p">(</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">text</span><span class="p">);</span>
+
+
+<span class="k">private</span><span class="o">:</span>
+    <span class="c1">//数据
+</span><span class="c1"></span>    <span class="n">shared_info</span> <span class="n">m_info_</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div><blockquote>
+<p>UserButton.cpp</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//
+</span><span class="c1">// Created by Alone on 2022-4-18.
+</span><span class="c1">//
+</span><span class="c1"></span>
+<span class="cp">#include</span> <span class="cpf">&#34;UserButton.h&#34;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;QFile&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;QByteArray&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;utility&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;QDir&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;config_path.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;QPainter&gt;</span><span class="cp">
+</span><span class="cp"></span>
+
+
+<span class="c1">//方便进行测试的信shared_info快速创建
+</span><span class="c1"></span><span class="n">UserButton</span><span class="o">::</span><span class="n">shared_info</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">ButtonInfo</span><span class="o">::</span><span class="n">getDefaultButtonInfo</span><span class="p">(</span><span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">name</span><span class="p">,</span>
+                                                                                     <span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">text</span><span class="p">,</span>
+                                                                                     <span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">iconPath</span><span class="p">)</span> <span class="p">{</span>
+
+    <span class="k">auto</span><span class="o">*</span> <span class="n">src</span> <span class="o">=</span> <span class="k">new</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">ButtonInfo</span><span class="p">;</span>
+    <span class="n">src</span><span class="o">-&gt;</span><span class="n">_name</span> <span class="o">=</span> <span class="n">name</span><span class="p">;</span>
+    <span class="n">src</span><span class="o">-&gt;</span><span class="n">_text</span> <span class="o">=</span> <span class="n">text</span><span class="p">;</span>
+    <span class="n">src</span><span class="o">-&gt;</span><span class="n">_iconPath</span> <span class="o">=</span> <span class="n">iconPath</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">UserButton</span><span class="o">::</span><span class="n">ButtonInfo</span><span class="o">&gt;</span><span class="p">(</span><span class="n">src</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="c1">//qss样式
+</span><span class="c1"></span><span class="kr">inline</span> <span class="n">QString</span> <span class="nf">My_StyleSheet</span><span class="p">(</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">icon_path</span><span class="p">){</span>
+        <span class="k">return</span>
+        <span class="n">QString</span><span class="p">(</span><span class="n">R</span><span class="s">&#34;(</span>
+<span class="n">QPushButton</span><span class="p">{</span>
+<span class="nl">border</span><span class="p">:</span><span class="n">none</span><span class="p">;</span>
+    <span class="nl">image</span><span class="p">:</span> <span class="n">url</span><span class="p">(</span><span class="o">%</span><span class="mi">1</span><span class="p">);</span>
+    <span class="n">image</span><span class="o">-</span><span class="nl">position</span><span class="p">:</span><span class="n">left</span><span class="p">;</span>
+    <span class="n">min</span><span class="o">-</span><span class="nl">width</span><span class="p">:</span><span class="mi">120</span><span class="n">px</span><span class="p">;</span>
+    <span class="n">padding</span><span class="o">-</span><span class="nl">top</span><span class="p">:</span><span class="mi">7</span><span class="n">px</span><span class="p">;</span>
+    <span class="n">padding</span><span class="o">-</span><span class="nl">left</span><span class="p">:</span><span class="mi">10</span><span class="n">px</span><span class="p">;</span>
+    <span class="n">padding</span><span class="o">-</span><span class="nl">bottom</span><span class="p">:</span><span class="mi">7</span><span class="n">px</span><span class="p">;</span>
+    <span class="nl">background</span><span class="p">:</span><span class="n">rgb</span><span class="p">(</span><span class="mi">248</span><span class="p">,</span> <span class="mi">249</span><span class="p">,</span> <span class="mi">249</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="nl">QPushButton</span><span class="p">:</span><span class="n">hover</span><span class="p">{</span>
+<span class="nl">border</span><span class="p">:</span><span class="n">none</span><span class="p">;</span>
+ <span class="nl">background</span><span class="p">:</span><span class="n">rgb</span><span class="p">(</span><span class="mi">242</span><span class="p">,</span> <span class="mi">242</span><span class="p">,</span> <span class="mi">242</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="nl">QPushButton</span><span class="p">:</span><span class="n">checked</span><span class="p">{</span>
+<span class="nl">border</span><span class="p">:</span><span class="n">none</span><span class="p">;</span>
+<span class="nl">background</span><span class="p">:</span><span class="n">rgb</span><span class="p">(</span><span class="mi">235</span><span class="p">,</span> <span class="mi">235</span><span class="p">,</span> <span class="mi">235</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="p">)</span><span class="s">&#34;).arg(icon_path);</span>
+<span class="p">}</span>
+
+<span class="n">UserButton</span><span class="o">::</span><span class="n">UserButton</span><span class="p">(</span><span class="n">QWidget</span> <span class="o">*</span><span class="n">parent</span><span class="p">)</span><span class="o">:</span> <span class="n">QPushButton</span><span class="p">(</span><span class="n">parent</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">setCheckable</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+    <span class="n">setAutoExclusive</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">UserButton</span><span class="o">::~</span><span class="n">UserButton</span><span class="p">()</span> <span class="p">{</span>
+
+<span class="p">}</span>
+
+<span class="n">UserButton</span><span class="o">*</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">fromButtonInfo</span><span class="p">(</span><span class="n">shared_info</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">info</span><span class="p">,</span><span class="n">QWidget</span><span class="o">*</span> <span class="n">parent</span><span class="p">){</span>
+    <span class="k">auto</span><span class="o">*</span> <span class="n">btn</span> <span class="o">=</span> <span class="k">new</span> <span class="n">UserButton</span><span class="p">(</span><span class="n">parent</span><span class="p">);</span>
+    <span class="n">btn</span><span class="o">-&gt;</span><span class="n">m_info_</span> <span class="o">=</span> <span class="n">info</span><span class="p">;</span>
+    <span class="n">btn</span><span class="o">-&gt;</span><span class="n">setStyleSheet</span><span class="p">(</span><span class="n">My_StyleSheet</span><span class="p">(</span><span class="n">btn</span><span class="o">-&gt;</span><span class="n">getMIconPath</span><span class="p">()));</span>
+    <span class="k">return</span> <span class="n">btn</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//调整内容显示
+</span><span class="c1"></span><span class="n">QRect</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">adjustSize</span><span class="p">(</span><span class="n">QString</span> <span class="o">&amp;</span><span class="n">dest</span><span class="p">){</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+    <span class="c1">// 三档调节
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">num_width</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">span</span> <span class="o">=</span> <span class="mi">13</span><span class="p">;</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span><span class="o">&lt;</span><span class="mi">10</span><span class="p">){</span>
+        <span class="n">dest</span> <span class="o">=</span> <span class="n">QString</span><span class="o">::</span><span class="n">number</span><span class="p">(</span><span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span><span class="p">);</span>
+        <span class="n">num_width</span> <span class="o">=</span> <span class="n">span</span><span class="p">;</span>
+    <span class="p">}</span><span class="k">else</span> <span class="nf">if</span><span class="p">(</span><span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span><span class="o">&lt;</span><span class="mi">99</span><span class="p">){</span>
+        <span class="n">dest</span> <span class="o">=</span> <span class="n">QString</span><span class="o">::</span><span class="n">number</span><span class="p">(</span><span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span><span class="p">);</span>
+        <span class="n">num_width</span> <span class="o">=</span> <span class="n">span</span><span class="o">*</span><span class="mi">2</span><span class="p">;</span>
+    <span class="p">}</span><span class="k">else</span><span class="p">{</span>
+        <span class="n">dest</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;99+&#34;</span><span class="p">);</span>
+        <span class="n">num_width</span> <span class="o">=</span> <span class="n">span</span><span class="o">*</span><span class="mi">3</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="p">{</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="n">num_width</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">height</span><span class="p">()</span><span class="o">/</span><span class="mi">2</span><span class="o">+</span><span class="mi">5</span><span class="p">,</span><span class="n">num_width</span><span class="p">,</span><span class="mi">13</span><span class="p">};</span>
+<span class="p">}</span>
+
+<span class="c1">//根据不同的按钮进行不同的绘制
+</span><span class="c1"></span><span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">paintEvent</span><span class="p">(</span><span class="n">QPaintEvent</span> <span class="o">*</span><span class="n">e</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">QPushButton</span><span class="o">::</span><span class="n">paintEvent</span><span class="p">(</span><span class="n">e</span><span class="p">);</span>
+    <span class="k">switch</span> <span class="p">(</span><span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_type</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">case</span> <span class="n">Type</span><span class="o">::</span><span class="nl">User_Btn</span><span class="p">:</span>
+            <span class="n">PainUserBtn</span><span class="p">();</span>
+            <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="n">Type</span><span class="o">::</span><span class="nl">Meg_Btn</span><span class="p">:</span>
+            <span class="n">PainMessageBtn</span><span class="p">();</span>
+            <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+
+<span class="c1">//持久化二进制数据到本地(主要是图片)
+</span><span class="c1"></span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">QString</span><span class="o">&gt;</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">StorageIcon</span><span class="p">(</span><span class="n">QByteArray</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">imageSrc</span><span class="p">,</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">name</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">QString</span> <span class="n">base_path</span> <span class="o">=</span> <span class="n">QDir</span><span class="o">::</span><span class="n">homePath</span><span class="p">()</span><span class="o">+</span><span class="n">DirName_Base</span><span class="p">;</span>
+    <span class="n">QString</span> <span class="n">user_icon_path</span> <span class="o">=</span> <span class="n">base_path</span> <span class="o">+</span><span class="n">DirName_Icon</span><span class="p">;</span>
+    <span class="c1">//如果两级文件夹不存在，则先创建文件夹
+</span><span class="c1"></span>    <span class="n">QDir</span> <span class="nf">dir</span><span class="p">(</span><span class="n">base_path</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">dir</span><span class="p">.</span><span class="n">exists</span><span class="p">()){</span>
+        <span class="n">qDebug</span><span class="p">()</span><span class="o">&lt;&lt;</span><span class="s">&#34;base_dir not exists,being created&#34;</span><span class="p">;</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">dir</span><span class="p">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">base_path</span><span class="p">)</span> <span class="p">)</span>
+            <span class="k">return</span> <span class="p">{};</span>
+    <span class="p">}</span>
+    <span class="n">dir</span><span class="p">.</span><span class="n">setPath</span><span class="p">(</span><span class="n">user_icon_path</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">dir</span><span class="p">.</span><span class="n">exists</span><span class="p">()</span> <span class="p">)</span> <span class="p">{</span>
+        <span class="n">qDebug</span><span class="p">()</span><span class="o">&lt;&lt;</span><span class="s">&#34;icon_dir not exists,being created&#34;</span><span class="p">;</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">dir</span><span class="p">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">user_icon_path</span><span class="p">))</span>
+            <span class="k">return</span> <span class="p">{};</span>
+    <span class="p">}</span>
+    <span class="c1">//开始写入本地持久化
+</span><span class="c1"></span>    <span class="n">QString</span> <span class="n">user_icon</span> <span class="o">=</span> <span class="n">user_icon_path</span><span class="o">+</span><span class="s">&#34;/&#34;</span><span class="o">+</span><span class="n">name</span><span class="p">;</span>
+    <span class="n">qDebug</span><span class="p">()</span><span class="o">&lt;&lt;</span><span class="n">user_icon</span><span class="p">;</span>
+    <span class="n">QFile</span> <span class="nf">file</span><span class="p">(</span><span class="n">user_icon</span><span class="p">);</span>
+    <span class="n">file</span><span class="p">.</span><span class="n">open</span><span class="p">(</span><span class="n">QIODevice</span><span class="o">::</span><span class="n">WriteOnly</span><span class="p">);</span>
+    <span class="n">file</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="n">imageSrc</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">user_icon</span><span class="p">;</span>
+<span class="p">}</span>
+
+
+<span class="n">QString</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getName</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_name</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setName</span><span class="p">(</span><span class="n">QString</span> <span class="n">name</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_name</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">name</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getNumUnread</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setNumUnread</span><span class="p">(</span><span class="kt">int</span> <span class="n">numUnread</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span> <span class="o">=</span> <span class="n">numUnread</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">State</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getMState</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_state</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setMState</span><span class="p">(</span><span class="n">State</span> <span class="n">mState</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_state</span> <span class="o">=</span> <span class="n">mState</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">UserButton</span><span class="o">::</span><span class="n">getMIconPath</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_iconPath</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setMIconPath</span><span class="p">(</span><span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">mIconPath</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_iconPath</span> <span class="o">=</span> <span class="n">mIconPath</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">UserButton</span><span class="o">::</span><span class="n">Type</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getMType</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_type</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setMType</span><span class="p">(</span><span class="n">UserButton</span><span class="o">::</span><span class="n">Type</span> <span class="n">mType</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_type</span> <span class="o">=</span> <span class="n">mType</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setHideMsgStyle</span><span class="p">(</span><span class="kt">bool</span> <span class="n">isHide</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_hide</span> <span class="o">=</span> <span class="n">isHide</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getUid</span><span class="p">()</span> <span class="k">const</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_uid</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setUid</span><span class="p">(</span><span class="kt">int</span> <span class="n">uid</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span> <span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_uid</span> <span class="o">=</span> <span class="n">uid</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">setContent</span><span class="p">(</span><span class="k">const</span> <span class="n">QString</span> <span class="o">&amp;</span><span class="n">text</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_text</span> <span class="o">=</span> <span class="n">text</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">QString</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getContent</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_text</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getMisHide</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">assert</span><span class="p">(</span><span class="n">m_info_</span><span class="o">!=</span><span class="k">nullptr</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_hide</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">UserButton</span><span class="o">::</span><span class="n">shared_info</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">getSharedInfo</span><span class="p">()</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="n">m_info_</span><span class="p">;</span>
+<span class="p">}</span>
+
+
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">PainMessageBtn</span><span class="p">()</span> <span class="p">{</span>
+
+    <span class="n">QPainter</span> <span class="nf">painter</span><span class="p">(</span><span class="k">this</span><span class="p">);</span>
+    <span class="n">painter</span><span class="p">.</span><span class="n">setRenderHints</span><span class="p">(</span><span class="n">QPainter</span><span class="o">::</span><span class="n">Antialiasing</span> <span class="o">|</span> <span class="n">QPainter</span><span class="o">::</span><span class="n">SmoothPixmapTransform</span><span class="p">);</span><span class="c1">//消锯齿
+</span><span class="c1"></span>    <span class="n">QRect</span> <span class="nf">pos_round</span><span class="p">(</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">25</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">height</span><span class="p">()</span><span class="o">/</span><span class="mi">2</span><span class="o">+</span><span class="mi">5</span><span class="p">,</span><span class="mi">12</span><span class="p">,</span><span class="mi">12</span><span class="p">);</span>
+    <span class="n">QRect</span> <span class="nf">pos_time</span><span class="p">(</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">50</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">height</span><span class="p">()</span><span class="o">/</span><span class="mi">2</span><span class="o">-</span><span class="mi">15</span><span class="p">,</span><span class="mi">40</span><span class="p">,</span><span class="mi">10</span><span class="p">);</span>
+    <span class="n">QRect</span> <span class="nf">pos_name</span><span class="p">(</span><span class="mi">65</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="n">pos_time</span><span class="p">.</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span><span class="mi">28</span><span class="p">);</span>
+    <span class="n">QRect</span> <span class="nf">pos_content</span><span class="p">(</span><span class="mi">65</span><span class="p">,</span><span class="mi">28</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="n">pos_time</span><span class="p">.</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span><span class="mi">15</span><span class="p">);</span>
+    <span class="n">QColor</span> <span class="nf">color_time</span><span class="p">(</span><span class="mi">134</span><span class="p">,</span> <span class="mi">139</span><span class="p">,</span> <span class="mi">152</span><span class="p">);</span>
+    <span class="n">QFont</span> <span class="nf">font_time</span><span class="p">(</span><span class="s">&#34;微软雅黑&#34;</span><span class="p">,</span> <span class="mi">9</span><span class="p">);</span>
+    <span class="n">QString</span> <span class="n">time_cur</span> <span class="o">=</span> <span class="n">QDateTime</span><span class="o">::</span><span class="n">currentDateTime</span><span class="p">().</span><span class="n">toString</span><span class="p">(</span><span class="s">&#34;hh:mm&#34;</span><span class="p">);</span>
+
+    <span class="n">QString</span> <span class="n">m_name</span> <span class="o">=</span> <span class="n">getName</span><span class="p">();</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">m_name</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">()){</span>
+        <span class="c1">//画名字
+</span><span class="c1"></span>        <span class="kt">int</span> <span class="n">max_size</span> <span class="o">=</span> <span class="mi">6</span><span class="p">;</span>
+        <span class="n">QPen</span> <span class="n">pen</span><span class="p">;</span>
+        <span class="n">pen</span><span class="p">.</span><span class="n">setColor</span><span class="p">(</span><span class="n">QColor</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">26</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">pen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setFont</span><span class="p">(</span><span class="n">QFont</span><span class="p">(</span><span class="s">&#34;微软雅黑&#34;</span><span class="p">,</span><span class="mi">14</span><span class="p">));</span>
+        <span class="n">QString</span> <span class="n">name</span><span class="p">;</span>
+        <span class="n">name</span><span class="p">.</span><span class="n">reserve</span><span class="p">(</span><span class="n">max_size</span><span class="p">);</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">m_name</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="o">&gt;</span><span class="n">max_size</span><span class="p">){</span>
+            <span class="n">std</span><span class="o">::</span><span class="n">copy</span><span class="p">(</span><span class="n">m_name</span><span class="p">.</span><span class="n">begin</span><span class="p">(),</span> <span class="n">m_name</span><span class="p">.</span><span class="n">begin</span><span class="p">()</span><span class="o">+</span><span class="n">max_size</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">back_inserter</span><span class="p">(</span><span class="n">name</span><span class="p">));</span>
+            <span class="n">name</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;...&#34;</span><span class="p">);</span>
+        <span class="p">}</span><span class="k">else</span><span class="p">{</span>
+            <span class="n">name</span> <span class="o">=</span> <span class="n">m_name</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawText</span><span class="p">(</span><span class="n">pos_name</span><span class="p">,</span><span class="n">name</span><span class="p">,</span><span class="n">QTextOption</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">AlignLeft</span><span class="p">));</span>
+
+        <span class="c1">//画内容
+</span><span class="c1"></span>        <span class="n">max_size</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+        <span class="n">pen</span><span class="p">.</span><span class="n">setColor</span><span class="p">(</span><span class="n">QColor</span><span class="p">(</span><span class="mi">164</span><span class="p">,</span> <span class="mi">176</span><span class="p">,</span> <span class="mi">190</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">pen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setFont</span><span class="p">(</span><span class="n">QFont</span><span class="p">(</span><span class="s">&#34;微软雅黑&#34;</span><span class="p">,</span><span class="mi">10</span><span class="p">));</span>
+        <span class="n">QString</span> <span class="n">content</span><span class="p">;</span>
+        <span class="n">content</span><span class="p">.</span><span class="n">reserve</span><span class="p">(</span><span class="n">max_size</span><span class="p">);</span>
+        <span class="n">QString</span> <span class="n">m_Content</span> <span class="o">=</span> <span class="n">getContent</span><span class="p">();</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">m_Content</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="o">&gt;</span><span class="n">max_size</span><span class="p">){</span>
+            <span class="n">std</span><span class="o">::</span><span class="n">copy</span><span class="p">(</span><span class="n">m_Content</span><span class="p">.</span><span class="n">begin</span><span class="p">(),</span> <span class="n">m_Content</span><span class="p">.</span><span class="n">begin</span><span class="p">()</span><span class="o">+</span><span class="n">max_size</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">back_inserter</span><span class="p">(</span><span class="n">content</span><span class="p">));</span>
+            <span class="n">content</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;...&#34;</span><span class="p">);</span>
+        <span class="p">}</span><span class="k">else</span><span class="p">{</span>
+            <span class="n">content</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">m_Content</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawText</span><span class="p">(</span><span class="n">pos_content</span><span class="p">,</span><span class="n">content</span><span class="p">,</span><span class="n">QTextOption</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">AlignLeft</span> <span class="o">|</span> <span class="n">Qt</span><span class="o">::</span><span class="n">AlignVCenter</span><span class="p">));</span>
+    <span class="p">}</span>
+
+    <span class="c1">//画右边的提示消息，以及对应颜色提示小球
+</span><span class="c1"></span>    <span class="n">State</span> <span class="n">m_state</span> <span class="o">=</span> <span class="n">getMState</span><span class="p">();</span>
+    <span class="kt">int</span> <span class="n">m_isHide</span> <span class="o">=</span> <span class="n">getMisHide</span><span class="p">();</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="n">m_state</span> <span class="o">==</span> <span class="n">State</span><span class="o">::</span><span class="n">MegTip</span><span class="p">){</span>
+        <span class="c1">//TODO 注意根据未读消息的多少调整区域的大小
+</span><span class="c1"></span>        <span class="n">QString</span> <span class="n">text_unreadNum</span><span class="p">;</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_unread</span><span class="o">&gt;</span><span class="mi">0</span><span class="p">){</span>
+            <span class="n">pos_round</span> <span class="o">=</span> <span class="n">adjustSize</span><span class="p">(</span><span class="n">text_unreadNum</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="n">QColor</span> <span class="nf">color_tmp</span><span class="p">(</span><span class="mi">246</span><span class="p">,</span> <span class="mi">75</span><span class="p">,</span> <span class="mi">49</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setBrush</span><span class="p">(</span><span class="n">QBrush</span><span class="p">(</span><span class="n">color_tmp</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">NoPen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawRoundedRect</span><span class="p">(</span><span class="n">pos_round</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">6</span><span class="p">);</span>
+
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">text_unreadNum</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">()){</span>
+            <span class="c1">//画未读信息数目
+</span><span class="c1"></span>            <span class="n">QPen</span> <span class="nf">pen</span><span class="p">(</span><span class="n">QColor</span><span class="p">(</span><span class="mi">255</span><span class="p">,</span><span class="mi">255</span><span class="p">,</span><span class="mi">255</span><span class="p">));</span>
+            <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">pen</span><span class="p">);</span>
+            <span class="n">painter</span><span class="p">.</span><span class="n">setFont</span><span class="p">(</span><span class="n">QFont</span><span class="p">(</span><span class="s">&#34;微软雅黑&#34;</span><span class="p">,</span><span class="mi">8</span><span class="p">,</span><span class="mi">550</span><span class="p">));</span>
+            <span class="n">painter</span><span class="p">.</span><span class="n">drawText</span><span class="p">(</span><span class="n">pos_round</span><span class="p">,</span><span class="n">text_unreadNum</span><span class="p">,</span><span class="n">QTextOption</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">AlignHCenter</span> <span class="o">|</span> <span class="n">Qt</span><span class="o">::</span><span class="n">AlignVCenter</span><span class="p">));</span>
+        <span class="p">}</span>
+    <span class="p">}</span><span class="k">else</span> <span class="nf">if</span><span class="p">(</span><span class="n">m_state</span> <span class="o">==</span> <span class="n">State</span><span class="o">::</span><span class="n">OffLine</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">m_isHide</span><span class="p">){</span>
+        <span class="n">QColor</span> <span class="n">color_tmp</span><span class="p">(</span><span class="mi">186</span><span class="p">,</span> <span class="mi">183</span><span class="p">,</span> <span class="mi">180</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setBrush</span><span class="p">(</span><span class="n">QBrush</span><span class="p">(</span><span class="n">color_tmp</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">NoPen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawRoundedRect</span><span class="p">(</span><span class="n">pos_round</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">6</span><span class="p">);</span>
+    <span class="p">}</span><span class="k">else</span> <span class="nf">if</span><span class="p">(</span><span class="n">m_state</span> <span class="o">==</span> <span class="n">State</span><span class="o">::</span><span class="n">OnLine</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">m_isHide</span><span class="p">){</span>
+        <span class="n">QColor</span> <span class="n">color_tmp</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">209</span><span class="p">,</span> <span class="mi">102</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setBrush</span><span class="p">(</span><span class="n">QBrush</span><span class="p">(</span><span class="n">color_tmp</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">NoPen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawRoundedRect</span><span class="p">(</span><span class="n">pos_round</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">6</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="c1">//画时间
+</span><span class="c1"></span>    <span class="n">QPen</span> <span class="nf">pen</span><span class="p">(</span><span class="n">color_time</span><span class="p">);</span>
+    <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">pen</span><span class="p">);</span>
+    <span class="n">QTextOption</span> <span class="nf">option</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">AlignRight</span> <span class="o">|</span> <span class="n">Qt</span><span class="o">::</span><span class="n">AlignVCenter</span><span class="p">);</span>
+    <span class="n">option</span><span class="p">.</span><span class="n">setWrapMode</span><span class="p">(</span><span class="n">QTextOption</span><span class="o">::</span><span class="n">WrapAtWordBoundaryOrAnywhere</span><span class="p">);</span>
+    <span class="n">painter</span><span class="p">.</span><span class="n">setFont</span><span class="p">(</span><span class="n">font_time</span><span class="p">);</span>
+    <span class="n">painter</span><span class="p">.</span><span class="n">drawText</span><span class="p">(</span><span class="n">pos_time</span><span class="p">,</span><span class="n">time_cur</span><span class="p">,</span><span class="n">option</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">PainUserBtn</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">QPainter</span> <span class="nf">painter</span><span class="p">(</span><span class="k">this</span><span class="p">);</span>
+    <span class="n">painter</span><span class="p">.</span><span class="n">setRenderHints</span><span class="p">(</span><span class="n">QPainter</span><span class="o">::</span><span class="n">Antialiasing</span> <span class="o">|</span> <span class="n">QPainter</span><span class="o">::</span><span class="n">SmoothPixmapTransform</span><span class="p">);</span><span class="c1">//消锯齿
+</span><span class="c1"></span>    <span class="n">QRect</span> <span class="nf">pos_round</span><span class="p">(</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">25</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">height</span><span class="p">()</span><span class="o">/</span><span class="mi">2</span><span class="o">+</span><span class="mi">5</span><span class="p">,</span><span class="mi">12</span><span class="p">,</span><span class="mi">12</span><span class="p">);</span>
+    <span class="n">QRect</span> <span class="nf">pos_name</span><span class="p">(</span><span class="mi">65</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="k">this</span><span class="o">-&gt;</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="n">pos_round</span><span class="p">.</span><span class="n">width</span><span class="p">()</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span><span class="mi">50</span><span class="p">);</span>
+    <span class="n">QFont</span> <span class="nf">font_time</span><span class="p">(</span><span class="s">&#34;微软雅黑&#34;</span><span class="p">,</span> <span class="mi">9</span><span class="p">);</span>
+
+    <span class="n">QString</span> <span class="n">m_name</span> <span class="o">=</span> <span class="n">getName</span><span class="p">();</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">m_name</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">()){</span>
+        <span class="c1">//画名字
+</span><span class="c1"></span>        <span class="kt">int</span> <span class="n">max_size</span> <span class="o">=</span> <span class="mi">6</span><span class="p">;</span>
+        <span class="n">QPen</span> <span class="n">pen</span><span class="p">;</span>
+        <span class="n">pen</span><span class="p">.</span><span class="n">setColor</span><span class="p">(</span><span class="n">QColor</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">26</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">pen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setFont</span><span class="p">(</span><span class="n">QFont</span><span class="p">(</span><span class="s">&#34;微软雅黑&#34;</span><span class="p">,</span><span class="mi">14</span><span class="p">));</span>
+        <span class="n">QString</span> <span class="n">name</span><span class="p">;</span>
+        <span class="n">name</span><span class="p">.</span><span class="n">reserve</span><span class="p">(</span><span class="n">max_size</span><span class="p">);</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">m_name</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="o">&gt;</span><span class="n">max_size</span><span class="p">){</span>
+            <span class="n">std</span><span class="o">::</span><span class="n">copy</span><span class="p">(</span><span class="n">m_name</span><span class="p">.</span><span class="n">begin</span><span class="p">(),</span> <span class="n">m_name</span><span class="p">.</span><span class="n">begin</span><span class="p">()</span><span class="o">+</span><span class="n">max_size</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">back_inserter</span><span class="p">(</span><span class="n">name</span><span class="p">));</span>
+            <span class="n">name</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;...&#34;</span><span class="p">);</span>
+        <span class="p">}</span><span class="k">else</span><span class="p">{</span>
+            <span class="n">name</span> <span class="o">=</span> <span class="n">m_name</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawText</span><span class="p">(</span><span class="n">pos_name</span><span class="p">,</span><span class="n">name</span><span class="p">,</span><span class="n">QTextOption</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">AlignLeft</span> <span class="o">|</span> <span class="n">Qt</span><span class="o">::</span><span class="n">AlignVCenter</span><span class="p">));</span>
+    <span class="p">}</span>
+
+    <span class="n">State</span> <span class="n">m_state</span> <span class="o">=</span> <span class="n">getMState</span><span class="p">();</span>
+    <span class="c1">//好友列表中不需要画时间
+</span><span class="c1"></span>    <span class="k">if</span><span class="p">(</span><span class="n">m_state</span> <span class="o">==</span> <span class="n">State</span><span class="o">::</span><span class="n">OffLine</span><span class="p">){</span>
+        <span class="n">QColor</span> <span class="nf">color_tmp</span><span class="p">(</span><span class="mi">186</span><span class="p">,</span> <span class="mi">183</span><span class="p">,</span> <span class="mi">180</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setBrush</span><span class="p">(</span><span class="n">QBrush</span><span class="p">(</span><span class="n">color_tmp</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">NoPen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawRoundedRect</span><span class="p">(</span><span class="n">pos_round</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">6</span><span class="p">);</span>
+    <span class="p">}</span><span class="k">else</span> <span class="nf">if</span><span class="p">(</span><span class="n">m_state</span> <span class="o">==</span> <span class="n">State</span><span class="o">::</span><span class="n">OnLine</span><span class="p">){</span>
+        <span class="n">QColor</span> <span class="n">color_tmp</span><span class="p">(</span><span class="mi">75</span><span class="p">,</span> <span class="mi">209</span><span class="p">,</span> <span class="mi">102</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setBrush</span><span class="p">(</span><span class="n">QBrush</span><span class="p">(</span><span class="n">color_tmp</span><span class="p">));</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">setPen</span><span class="p">(</span><span class="n">Qt</span><span class="o">::</span><span class="n">NoPen</span><span class="p">);</span>
+        <span class="n">painter</span><span class="p">.</span><span class="n">drawRoundedRect</span><span class="p">(</span><span class="n">pos_round</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">6</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="n">UserButton</span><span class="o">::</span><span class="n">updateContent</span><span class="p">(</span><span class="n">QString</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">text</span><span class="p">){</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">m_info_</span><span class="p">){</span>
+        <span class="n">m_info_</span><span class="o">-&gt;</span><span class="n">_text</span> <span class="o">=</span> <span class="n">text</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/">实现实时qq好友搜索框</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-04-24</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框" data-hashtags="实现实时qq好友搜索框"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-hashtag="实现实时qq好友搜索框"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框" data-image="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框" data-description="实现实时qq好友搜索框"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框" data-description="实现实时qq好友搜索框"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" data-title="实现实时qq好友搜索框"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/1.3-%E9%94%81%E9%87%8A%E6%94%BE%E7%9A%84%E5%8F%A6%E4%B8%80%E7%A7%8D%E5%A7%BF%E5%8A%BF-%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8Fcondition_variable-%E4%BF%A1%E5%8F%B7%E9%87%8Fsemaphore/" class="prev" rel="prev" title="1.3-多线程控制的另一种姿势-条件变量(condition_variable), 信号量(semaphore)"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E4%B8%80go%E8%AF%AD%E8%A8%80%E4%B8%8A%E6%89%8B-%E9%9D%92%E8%AE%AD%E8%90%A5%E7%AC%94%E8%AE%B0/" class="next" rel="next" title="Go语言上手（一） | 青训营笔记">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

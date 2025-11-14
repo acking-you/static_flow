@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>Linux源码 - 分类 - L_B__</title>
+        <link>https://acking-you.github.io/categories/linux%E6%BA%90%E7%A0%81/</link>
+        <description>Linux源码 - 分类 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sat, 27 May 2023 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/categories/linux%E6%BA%90%E7%A0%81/" rel="self" type="application/rss+xml" /><item>
+    <title>[内核源码]epoll实现原理</title>
+    <link>https://acking-you.github.io/posts/%E5%86%85%E6%A0%B8%E6%BA%90%E7%A0%81epoll%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86/</link>
+    <pubDate>Sat, 27 May 2023 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%86%85%E6%A0%B8%E6%BA%90%E7%A0%81epoll%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/687db1a327b1ff978e25faf116abe71a.png#pic_center" referrerpolicy="no-referrer">
+            </div>文章主要对 tcp 通信进行 epoll 源码走读。 引发我对 epoll 源码感兴趣的原因在于知乎上的一个提问，ET和LT模式在源码中到底怎么实现的 Linux 源码：Linux 5.7 版本]]></description>
+</item>
+</channel>
+</rss>

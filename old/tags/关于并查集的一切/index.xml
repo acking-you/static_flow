@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>关于并查集的一切 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E5%85%B3%E4%BA%8E%E5%B9%B6%E6%9F%A5%E9%9B%86%E7%9A%84%E4%B8%80%E5%88%87/</link>
+        <description>关于并查集的一切 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Mon, 19 Dec 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E5%85%B3%E4%BA%8E%E5%B9%B6%E6%9F%A5%E9%9B%86%E7%9A%84%E4%B8%80%E5%88%87/" rel="self" type="application/rss+xml" /><item>
+    <title>关于并查集的一切</title>
+    <link>https://acking-you.github.io/posts/%E5%85%B3%E4%BA%8E%E5%B9%B6%E6%9F%A5%E9%9B%86%E7%9A%84%E4%B8%80%E5%88%87/</link>
+    <pubDate>Mon, 19 Dec 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%85%B3%E4%BA%8E%E5%B9%B6%E6%9F%A5%E9%9B%86%E7%9A%84%E4%B8%80%E5%88%87/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center" referrerpolicy="no-referrer">
+            </div>并查集初识 如果给你一些顶点，并且告诉你每个顶点的连接关系，你如何才能快速的找出两个顶点是否具有连通性呢？如「图 5. 连通性问题」，该图给出了顶点]]></description>
+</item>
+</channel>
+</rss>

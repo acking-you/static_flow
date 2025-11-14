@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>二、可重复读隔离级别完全解决幻读了吗 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E4%BA%8C%E5%8F%AF%E9%87%8D%E5%A4%8D%E8%AF%BB%E9%9A%94%E7%A6%BB%E7%BA%A7%E5%88%AB%E5%AE%8C%E5%85%A8%E8%A7%A3%E5%86%B3%E5%B9%BB%E8%AF%BB%E4%BA%86%E5%90%97/</link>
+        <description>二、可重复读隔离级别完全解决幻读了吗 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 28 May 2023 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E4%BA%8C%E5%8F%AF%E9%87%8D%E5%A4%8D%E8%AF%BB%E9%9A%94%E7%A6%BB%E7%BA%A7%E5%88%AB%E5%AE%8C%E5%85%A8%E8%A7%A3%E5%86%B3%E5%B9%BB%E8%AF%BB%E4%BA%86%E5%90%97/" rel="self" type="application/rss+xml" /><item>
+    <title>二、可重复读隔离级别完全解决幻读了吗</title>
+    <link>https://acking-you.github.io/posts/%E4%BA%8C%E5%8F%AF%E9%87%8D%E5%A4%8D%E8%AF%BB%E9%9A%94%E7%A6%BB%E7%BA%A7%E5%88%AB%E5%AE%8C%E5%85%A8%E8%A7%A3%E5%86%B3%E5%B9%BB%E8%AF%BB%E4%BA%86%E5%90%97/</link>
+    <pubDate>Sun, 28 May 2023 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E4%BA%8C%E5%8F%AF%E9%87%8D%E5%A4%8D%E8%AF%BB%E9%9A%94%E7%A6%BB%E7%BA%A7%E5%88%AB%E5%AE%8C%E5%85%A8%E8%A7%A3%E5%86%B3%E5%B9%BB%E8%AF%BB%E4%BA%86%E5%90%97/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/7213ded01d686aab797968b2a6064358.png#pic_center" referrerpolicy="no-referrer">
+            </div>MySQL 可重复读隔离级别，完全解决幻读了吗？ 在上一篇文章中提到，MySQL InnoDB 引擎的默认隔离级别虽然是「可重复读」，但是它很大程度上避免幻读现象（并]]></description>
+</item>
+</channel>
+</rss>

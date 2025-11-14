@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>leetcode每日一题-检测正方形 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98-%E6%A3%80%E6%B5%8B%E6%AD%A3%E6%96%B9%E5%BD%A2/</link>
+        <description>leetcode每日一题-检测正方形 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Thu, 27 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98-%E6%A3%80%E6%B5%8B%E6%AD%A3%E6%96%B9%E5%BD%A2/" rel="self" type="application/rss+xml" /><item>
+    <title>leetcode每日一题-检测正方形</title>
+    <link>https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98-%E6%A3%80%E6%B5%8B%E6%AD%A3%E6%96%B9%E5%BD%A2/</link>
+    <pubDate>Thu, 27 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98-%E6%A3%80%E6%B5%8B%E6%AD%A3%E6%96%B9%E5%BD%A2/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目 题目链接 题目解析 注意此题为计算几何类型的题目，我认为这类问题最重要的就是把这个几何图形用好用的方法去表示出来。 三个重点： 点的表示：我们通]]></description>
+</item>
+</channel>
+</rss>

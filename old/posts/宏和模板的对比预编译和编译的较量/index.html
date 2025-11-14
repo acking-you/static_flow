@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>宏和模板的对比——预编译和编译的较量 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="宏和模板的对比——预编译和编译的较量"><meta property="og:title" content="宏和模板的对比——预编译和编译的较量" />
+<meta property="og:description" content="宏和模板的对比——预编译和编译的较量" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-03-05T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-03-05T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="宏和模板的对比——预编译和编译的较量"/>
+<meta name="twitter:description" content="宏和模板的对比——预编译和编译的较量"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" /><link rel="prev" href="https://acking-you.github.io/posts/1.1-%E5%88%9B%E5%BB%BA%E7%BA%BF%E7%A8%8Bthread%E7%BA%BF%E7%A8%8B%E7%9A%84%E6%B1%87%E8%81%9Ajoin%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%88%86%E7%A6%BBdetach/" /><link rel="next" href="https://acking-you.github.io/posts/%E9%98%85%E8%AF%BBredis%E6%BA%90%E7%A0%81%E5%AE%9E%E7%8E%B0%E8%B7%B3%E8%A1%A8/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "宏和模板的对比——预编译和编译的较量",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F\/"
+        },"genre": "posts","keywords": "宏和模板的对比——预编译和编译的较量","wordcount":  2868 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F\/","datePublished": "2022-03-05T00:00:00+00:00","dateModified": "2022-03-05T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "宏和模板的对比——预编译和编译的较量"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        title="宏和模板的对比——预编译和编译的较量" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">宏和模板的对比——预编译和编译的较量</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/c++%E5%BA%95%E5%B1%82%E5%8E%9F%E7%90%86/"><i class="far fa-folder fa-fw"></i>C++底层原理</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-03-05">2022-03-05</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 2868 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 6 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#从预编译的角度对比宏定义和模板">从预编译的角度对比宏定义和模板</a>
+      <ul>
+        <li><a href="#来测测宏定义">来测测宏定义</a></li>
+        <li><a href="#宏定义的害处">宏定义的害处</a></li>
+        <li><a href="#模板是否会进行预处理操作">模板是否会进行预处理操作？</a></li>
+      </ul>
+    </li>
+    <li><a href="#善用编译期的模板">善用编译期的模板</a>
+      <ul>
+        <li><a href="#为什么大多数模板库声明和定义都放在一起">为什么大多数模板库声明和定义都放在一起？</a></li>
+        <li><a href="#一些简单且常用的模板技术">一些简单且常用的模板技术</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><blockquote>
+<p>本文默认你已经拥有基本的gcc编译选项知识，如果没有，可以看看这篇文章 <a href="https://blog.csdn.net/m0_50945504/article/details/121721569" target="_blank" rel="noopener noreffer">程序的编译过程gcc版</a>。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/a801d8fb10ae457b91ced043c8b6b7ca.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/a801d8fb10ae457b91ced043c8b6b7ca.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/a801d8fb10ae457b91ced043c8b6b7ca.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/a801d8fb10ae457b91ced043c8b6b7ca.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/a801d8fb10ae457b91ced043c8b6b7ca.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="https://img-blog.csdnimg.cn/a801d8fb10ae457b91ced043c8b6b7ca.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16" /></p>
+<h2 id="从预编译的角度对比宏定义和模板">从预编译的角度对比宏定义和模板</h2>
+<h3 id="来测测宏定义">来测测宏定义</h3>
+<p>大家都知道，宏定义仅仅只作用于文本的替换，在预编译的时候，把用到宏定义的部分替换为真正的文本而已，缺点就是不会做类型检查，只要语法能过编译就行。</p>
+<p>我们定义一个宏来求两者之间的最大值，为了防止预编译的代码太过冗长不易看懂，没有用 <code>include</code> 去包含其他函数库的声明。</p>
+<p>代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#define MAX_VALUE(_1,_2) ((_1&gt;_2)?_1:_2)
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">MAX_VALUE</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>经过 <code>gcc -E</code> 命令后得到预处理后的代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp"># 0 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"># 0 &#34;&lt;built-in&gt;&#34;
+</span><span class="cp"># 0 &#34;&lt;command-line&gt;&#34;
+</span><span class="cp"># 1 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"># 10 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"></span><span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="p">((</span><span class="mi">1</span><span class="o">&gt;</span><span class="mi">2</span><span class="p">)</span><span class="o">?</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div><p>观察以上代码，我们发现，确实是直接的文本替换，前面的宏定义代码都不见了，只有，传入的替换文本了。</p>
+<h3 id="宏定义的害处">宏定义的害处</h3>
+<blockquote>
+<p>如果我们把下面这段代码传入到宏定义中：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#define MAX_VALUE(_1,_2) ((_1&gt;_2)?_1:_2)
+</span><span class="cp"></span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">MAX_VALUE</span><span class="p">(</span><span class="s">&#34;abdcdf&#34;</span><span class="p">,</span><span class="s">&#34;fdf&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>很明显，这个代码是可以过编译的，但我们肯定不想直接的如下的方式进行字符串的比较，这样的比较毫无意义，只不过是比较的地址而已。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp"># 0 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"># 0 &#34;&lt;built-in&gt;&#34;
+</span><span class="cp"># 0 &#34;&lt;command-line&gt;&#34;
+</span><span class="cp"># 1 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"># 10 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"></span><span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="p">((</span><span class="s">&#34;abdcdf&#34;</span><span class="o">&gt;</span><span class="s">&#34;fdf&#34;</span><span class="p">)</span><span class="o">?</span><span class="s">&#34;abdcdf&#34;</span><span class="o">:</span><span class="s">&#34;fdf&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div><p>故宏定义的最大危害，就是没法对类型进行检查！这就导致无法灵活的进行优化和调整一些直接文本替换带来的副作用。</p>
+<h3 id="模板是否会进行预处理操作">模板是否会进行预处理操作？</h3>
+<blockquote>
+<p>源代码：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="n">T</span> <span class="n">MAX_VALUE</span><span class="p">(</span><span class="n">T</span> <span class="n">_1</span><span class="p">,</span> <span class="n">T</span> <span class="n">_2</span><span class="p">){</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">_1</span><span class="o">&lt;</span><span class="n">_2</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_2</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">_1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">MAX_VALUE</span><span class="p">(</span><span class="s">&#34;abdcdf&#34;</span><span class="p">,</span><span class="s">&#34;fdf&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>预处理后：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp"># 0 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"># 0 &#34;&lt;built-in&gt;&#34;
+</span><span class="cp"># 0 &#34;&lt;command-line&gt;&#34;
+</span><span class="cp"># 1 &#34;.\\test_template.cpp&#34;
+</span><span class="cp"></span>
+
+<span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="n">T</span> <span class="n">MAX_VALUE</span><span class="p">(</span><span class="n">T</span> <span class="n">_1</span><span class="p">,</span> <span class="n">T</span> <span class="n">_2</span><span class="p">){</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">_1</span><span class="o">&lt;</span><span class="n">_2</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_2</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">_1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">MAX_VALUE</span><span class="p">(</span><span class="s">&#34;abdcdf&#34;</span><span class="p">,</span><span class="s">&#34;fdf&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+
+</code></pre></div><p>我们发现模板并不会在预处理时被展开，它甚至不会和预处理的调用部分形成任何联系！</p>
+<p>看来模板的展开处理过程是发生在后续的编译过程中，由于本人不清楚如何反汇编和反编译过程，故没有亲身实践。</p>
+<p>但从我的日常使用体验和大佬们总结的经验看来，模板也和宏定义的展开类似，就是简单的文本替换，但可以利用编译时期的语法检查和类型判断（type_traits技术），所以能够对不同情况的展开进行不同的处理。</p>
+<p>比如上面的代码利用偏特化进行优化：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;cstring&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="kt">int</span> <span class="n">MAX_VALUE</span><span class="p">(</span><span class="n">T</span> <span class="n">_1</span><span class="p">,</span> <span class="n">T</span> <span class="n">_2</span><span class="p">){</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">_1</span><span class="o">&lt;</span><span class="n">_2</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_2</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">_1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">using</span> <span class="n">type</span> <span class="o">=</span> <span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="p">;</span>
+<span class="k">template</span><span class="o">&lt;&gt;</span>
+<span class="kt">int</span> <span class="n">MAX_VALUE</span><span class="o">&lt;</span><span class="n">type</span><span class="o">&gt;</span><span class="p">(</span><span class="n">type</span> <span class="n">_1</span><span class="p">,</span> <span class="n">type</span> <span class="n">_2</span><span class="p">){</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;调用偏特化&#34;</span><span class="p">;</span>
+    <span class="k">return</span> <span class="nf">strcmp</span><span class="p">(</span><span class="n">_1</span><span class="p">,</span> <span class="n">_2</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">MAX_VALUE</span><span class="p">(</span><span class="s">&#34;abdcdf&#34;</span><span class="p">,</span><span class="s">&#34;fdf&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><h2 id="善用编译期的模板">善用编译期的模板</h2>
+<h3 id="为什么大多数模板库声明和定义都放在一起">为什么大多数模板库声明和定义都放在一起？</h3>
+<h4 id="声明和定义分开处理的原因">声明和定义分开处理的原因</h4>
+<p>我们清楚，声明和定义中，声明可以有无数份，但定义在一个项目里只能存在一份！所以我们在多文件项目的过程中，需要 <code>include&lt;xxx.h&gt;</code> 得到对应的声明，最后再把对应的实现 <code>xxx.c</code>  编译完后，再通过链接过程让声明能够连接到对应的定义来进行使用。所以在通常情况下我们都是在 <code>.h</code> 文件里面进行声明，再写一个 <code>.c</code> 文件实现定义，把声明和定义进行分开，这样无论你在其他的 <code>.c</code> 文件里使用多少个 <code>include</code> 操作，整个项目都只存在一份定义而已。故这种情况下，用 <code>include</code> 把多份相同的声明放在一个main函数里运行也是没问题的。</p>
+<p>话说回来，那为什么一般不会去直接把定义和声明写在一起呢？</p>
+<p>很明显，定义和声明分开，无论我们怎么 <code>include</code> 都不会因为重复定义而产生错误，而如果我们写在一个被 <code>include</code> 的文件里面，则整个项目中，每次 <code>include</code> 都会多产生一次定义！</p>
+<h4 id="为什么模板要把声明和定义写在一起">为什么模板要把声明和定义写在一起？</h4>
+<p>那既然如此，为什么写模板的时候声明和定义写在一个文件里面呢？？？</p>
+<p>我们前面已经清楚了，预编译命令 <code>include</code> 就仅仅把里面的代码拷贝到使用它的文件里去，如果我们把模板的定义和声明分开，画风大概会像下面这样：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//test.h
+</span><span class="c1"></span>
+<span class="cp">#ifndef TEST_TEMPLATE_TEST_H
+</span><span class="cp">#define TEST_TEMPLATE_TEST_H
+</span><span class="cp"></span>
+<span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="kt">void</span> <span class="n">print</span><span class="p">(</span><span class="n">T</span> <span class="n">val</span><span class="p">);</span>
+
+<span class="cp">#endif </span><span class="c1">//TEST_TEMPLATE_TEST_H
+</span><span class="c1"></span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//test.cpp
+</span><span class="c1"></span>
+<span class="cp">#include</span> <span class="cpf">&#34;test.h&#34;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="kt">void</span> <span class="n">print</span><span class="p">(</span><span class="n">T</span> <span class="n">val</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="n">val</span><span class="p">;</span>
+<span class="p">}</span>
+
+</code></pre></div><p>不出我所料，很快就报错，内容如下：</p>
+<pre><code>undefined reference to `void print&lt;int&gt;(int)'
+</code></pre><p>就是链接时找不到对应的函数定义，原因是模板只会在调用的时候实例化展开代码，如果 <code>.h</code> 只存在模板的声明，那么被include后调用，只会被实例化为以下内容：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">void</span> <span class="nf">print</span><span class="p">([</span><span class="err">实例化的类型名</span><span class="p">]</span> <span class="n">val</span><span class="p">);</span>
+</code></pre></div><p>因为对应的.cpp文件里面，不会有任何的变更，也就是不会有对应的定义产生。</p>
+<p>所以想要把声明和定义分文件且实现模板的实例化展开，几乎是不可能的（我目前不清楚有哪种方式可以（似乎在末尾再include定义的文件就可以但。。和直接include没区别））</p>
+<p>所以在写模板的时候，我们需要让使用到它的人（include调用者）把声明和定义一块给它，而防止找不到实例化展开的定义。</p>
+<h4 id="如何防止模板类的重复定义">如何防止模板类的重复定义？</h4>
+<p>以上描述了，为什么模板声明和定义需要写在同一个文件里，但问题又出现了，如何预防一个项目中产生多个定义呢？</p>
+<p>简单预防：</p>
+<p>通过预处理的宏定义控制导入导出的代码，但这样只能够保证一个 <code>.c文件</code> 中不会出现两次 <code>include</code> 相同代码段。而无法保证其他 <code>.c文件</code> <code>include</code> 后再次产生定义！</p>
+<p>如下代码，我写了一个ttt.h文件，导出一个 print 函数的声明和定义（直接定义就包含声明）。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//ttt.h
+</span><span class="c1"></span>
+<span class="cp">#ifndef TEST_TEMPLATE_TTT_H
+</span><span class="cp">#define TEST_TEMPLATE_TTT_H
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">void</span> <span class="nf">print</span><span class="p">(){</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="s">&#34;hhhh&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+
+<span class="cp">#endif </span><span class="c1">//TEST_TEMPLATE_TTT_H
+</span><span class="c1"></span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//test.cpp
+</span><span class="c1"></span>
+<span class="cp">#include</span> <span class="cpf">&#34;ttt.h&#34;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span></code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//main.cpp
+</span><span class="c1"></span>
+<span class="cp">#include</span> <span class="cpf">&#34;ttt.h&#34;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">print</span><span class="p">();</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>运行main函数时，很快就发生了重复定义的报错！</p>
+<p>因为我们在test.cpp文件里面也 <code>include“ttt.h&quot;</code> 这将导致重复定义跨文件的重复定义是简单的宏定义没法避免的！</p>
+<p>但我们又发现我们导入多次 <code>&lt;iostream&gt;</code> 标准库却不会出现这个问题，这是为什么呢？</p>
+<blockquote>
+<p>我试着点进 iostream 里面观察观察，发现写的全是声明。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/b5a022934af34225878b6d4fd2d15d4b.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/b5a022934af34225878b6d4fd2d15d4b.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/b5a022934af34225878b6d4fd2d15d4b.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/b5a022934af34225878b6d4fd2d15d4b.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/b5a022934af34225878b6d4fd2d15d4b.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="https://img-blog.csdnimg.cn/b5a022934af34225878b6d4fd2d15d4b.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16" /></p>
+<blockquote>
+<p>再进入到更深层的include瞧一瞧看看：</p>
+</blockquote>
+<p>好家伙，&lt;bits/c++config.h&gt; 是两千多行的宏定义！</p>
+<p><code>&lt;ostream&gt;</code> 和 <code>&lt;istream&gt;</code> 也都只是大量的类型定义和各种类的声明而已，还有我看不懂的各种模板语法的运用，追溯到 <code>&lt;ios_base.h&gt;</code> 才终于发现各种类和方法的实现，但看起来都很短，还有各种模板技术的运用，感觉还有很多实现没有放在这个库里面。最后总之就是虽然标准库用的模板，但它用各种技术避免了声明和定义放在一个文件里面。。。或者说让文件导入的时候不会重复的去导入了。</p>
+<p>以我目前的水平，看标准库就等于是看天书。。。</p>
+<p>大概这就是C++劝退的原因之一吧，模板库为了防止重复定义，使得可读性变得极差，反正我是完全看不懂。。。</p>
+<p>相对而言，Java的源代码直接就能简单上手看懂，而且比读文档还清晰，只能说C++的痛。。。</p>
+<h3 id="一些简单且常用的模板技术">一些简单且常用的模板技术</h3>
+<h4 id="template--函数声明将模板提前实例化一份">template + 函数声明将模板提前实例化一份</h4>
+<p>由于我们template定义后，只有调用它的时候，才会实例化展开一份代码，但我们也能让编译器先为我们实例化一份代码，这个我也是最近才清楚有这个用法，以前从碰到过。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="kt">int</span> <span class="n">MAX_VALUE</span><span class="p">(</span><span class="n">T</span> <span class="n">_1</span><span class="p">,</span> <span class="n">T</span> <span class="n">_2</span><span class="p">){</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">_1</span><span class="o">&lt;</span><span class="n">_2</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_2</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">_1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">using</span> <span class="n">type</span> <span class="o">=</span> <span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="p">;</span>
+<span class="k">template</span> <span class="kt">int</span> <span class="nf">MAX_VALUE</span><span class="p">(</span><span class="n">type</span> <span class="n">_1</span><span class="p">,</span> <span class="n">type</span> <span class="n">_2</span><span class="p">);</span>
+</code></pre></div><h4 id="type_traits类型萃取技术">type_traits（类型萃取技术）</h4>
+<p>type_traits是编译期就去确定具体的类型，而如何确定的呢，这个只需要用到模板的特化展开进行特定的标记即可。</p>
+<p>比如写一个无符号整型的编译期类型判断工具可以像下面这样写：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/b8be6f51e4d94c0b9503855a3ea6f653.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_18,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/b8be6f51e4d94c0b9503855a3ea6f653.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_18%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/b8be6f51e4d94c0b9503855a3ea6f653.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_18%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/b8be6f51e4d94c0b9503855a3ea6f653.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_18%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/b8be6f51e4d94c0b9503855a3ea6f653.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_18,color_FFFFFF,t_70,g_se,x_16"
+        title="https://img-blog.csdnimg.cn/b8be6f51e4d94c0b9503855a3ea6f653.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_18,color_FFFFFF,t_70,g_se,x_16" /></p>
+<p>原理就是利用的模板的实例化展开，再加上特定的偏特化，来对类内变量的值进行一个区分，便可实现类型的判断了。</p>
+<h4 id="type_traits--static_assert的运用">type_traits + static_assert()的运用</h4>
+<blockquote>
+<p>我们都知道C语言有个assert()宏，用于DEBUG模式下的断言（不清楚的可以看看我的 <a href="https://blog.csdn.net/m0_50945504/article/details/122018959?ops_request_misc=%257B%2522request%255Fid%2522%253A%2522164647422616780366568988%2522%252C%2522scm%2522%253A%252220140713.130102334.pc%255Fblog.%2522%257D&amp;request_id=164647422616780366568988&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~blog~first_rank_ecpm_v1~rank_v31_ecpm-1-122018959.nonecase&amp;utm_term=assert&amp;spm=1018.2226.3001.4450" target="_blank" rel="noopener noreffer">assert源码解析</a>），而C++也有static_assert()进行断言，这个断言比assert宏要强大很多。</p>
+</blockquote>
+<h5 id="assert和static_assert的对比">assert和static_assert的对比</h5>
+<p>共同点：</p>
+<p>都是用于断言，满足条件则正常运行，否则抛出错误信息。</p>
+<p>不同点：</p>
+<p>assert是在运行时且为DEBUG模式，出错后调用函数来进行报错退出处理。</p>
+<p>static_assert()则是在程序编译时，在编译时进行判断，再抛出相应信息。</p>
+<h5 id="type_tarits的运用">type_tarits的运用</h5>
+<blockquote>
+<p>如下图：</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/a11769f00d264c9ab7f4f6ff4b2d01d5.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/a11769f00d264c9ab7f4f6ff4b2d01d5.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/a11769f00d264c9ab7f4f6ff4b2d01d5.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/a11769f00d264c9ab7f4f6ff4b2d01d5.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/a11769f00d264c9ab7f4f6ff4b2d01d5.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="https://img-blog.csdnimg.cn/a11769f00d264c9ab7f4f6ff4b2d01d5.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16" /></p>
+<p>通过type_trait可以实现只接受float类型和int类型。</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/">宏和模板的对比——预编译和编译的较量</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-03-05</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量" data-hashtags="宏和模板的对比——预编译和编译的较量"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-hashtag="宏和模板的对比——预编译和编译的较量"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量" data-image="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量" data-description="宏和模板的对比——预编译和编译的较量"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量" data-description="宏和模板的对比——预编译和编译的较量"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" data-title="宏和模板的对比——预编译和编译的较量"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/1.1-%E5%88%9B%E5%BB%BA%E7%BA%BF%E7%A8%8Bthread%E7%BA%BF%E7%A8%8B%E7%9A%84%E6%B1%87%E8%81%9Ajoin%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%88%86%E7%A6%BBdetach/" class="prev" rel="prev" title="1.1-创建线程(thread)、线程的汇聚(join)、线程的分离(detach)"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E9%98%85%E8%AF%BBredis%E6%BA%90%E7%A0%81%E5%AE%9E%E7%8E%B0%E8%B7%B3%E8%A1%A8/" class="next" rel="next" title="通过阅读Redis源码简单实现跳表">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

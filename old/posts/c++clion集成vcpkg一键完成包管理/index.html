@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="[C&#43;&#43;]CLion集成vcpkg一键完成包管理"><meta property="og:title" content="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例" />
+<meta property="og:description" content="[C&#43;&#43;]CLion集成vcpkg一键完成包管理" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-06-22T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-06-22T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例"/>
+<meta name="twitter:description" content="[C&#43;&#43;]CLion集成vcpkg一键完成包管理"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" /><link rel="prev" href="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "[C++]CLion集成vcpkg一键完成包管理——以使用imgui为例",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/c\u002b\u002bclion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86\/"
+        },"genre": "posts","keywords": "[C\u002b\u002b]CLion集成vcpkg一键完成包管理","wordcount":  1877 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/c\u002b\u002bclion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86\/","datePublished": "2023-06-22T00:00:00+00:00","dateModified": "2023-06-22T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "[C++]CLion集成vcpkg一键完成包管理"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center, https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center"
+        title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E5%BC%80%E5%8F%91%E7%8E%AF%E5%A2%83%E9%85%8D%E7%BD%AE/"><i class="far fa-folder fa-fw"></i>开发环境配置</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-06-22">2023-06-22</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1877 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 4 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#下载并集成vcpkg">下载并集成vcpkg</a></li>
+    <li><a href="#引入第三方库">引入第三方库</a></li>
+    <li><a href="#集成cmake运行项目">集成cmake运行项目</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="下载并集成vcpkg">下载并集成vcpkg</h2>
+<p>首先，请确保 CLion 版本高于 2023.1。</p>
+<p>按两下 shift 搜索 <code>vcpkg</code> ，并点击可进入 CLion 对 vcpkg 的支持模块。</p>
+<p>如下图：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/b8eb4824e2a24b86a648b12446cad108.png"
+        data-srcset="https://img-blog.csdnimg.cn/b8eb4824e2a24b86a648b12446cad108.png, https://img-blog.csdnimg.cn/b8eb4824e2a24b86a648b12446cad108.png 1.5x, https://img-blog.csdnimg.cn/b8eb4824e2a24b86a648b12446cad108.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/b8eb4824e2a24b86a648b12446cad108.png"
+        title="img" /></p>
+<p>CLion对vcpkg的操作模块如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/14cf48c1a4bf46cab68a7046f8db94e6.png"
+        data-srcset="https://img-blog.csdnimg.cn/14cf48c1a4bf46cab68a7046f8db94e6.png, https://img-blog.csdnimg.cn/14cf48c1a4bf46cab68a7046f8db94e6.png 1.5x, https://img-blog.csdnimg.cn/14cf48c1a4bf46cab68a7046f8db94e6.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/14cf48c1a4bf46cab68a7046f8db94e6.png"
+        title="img" /></p>
+<p>上图中，由于我已经完成vcpkg的下载与集成，可以看到我已经安装的各种库。</p>
+<p>如果你第一次来使用这个功能，那么可能需要点击左上角的四个按钮完成相应操作。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/cfb6163a2dfb42fe8015bf7999c82258.png"
+        data-srcset="https://img-blog.csdnimg.cn/cfb6163a2dfb42fe8015bf7999c82258.png, https://img-blog.csdnimg.cn/cfb6163a2dfb42fe8015bf7999c82258.png 1.5x, https://img-blog.csdnimg.cn/cfb6163a2dfb42fe8015bf7999c82258.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/cfb6163a2dfb42fe8015bf7999c82258.png"
+        title="img" /></p>
+<p>由于你目前还没有创建vcpkg的集成，所以需要先点击那个加号。</p>
+<p>会出现下列选项：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/6cf95017f1564cc9961f0bc32ea0e4e2.png"
+        data-srcset="https://img-blog.csdnimg.cn/6cf95017f1564cc9961f0bc32ea0e4e2.png, https://img-blog.csdnimg.cn/6cf95017f1564cc9961f0bc32ea0e4e2.png 1.5x, https://img-blog.csdnimg.cn/6cf95017f1564cc9961f0bc32ea0e4e2.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/6cf95017f1564cc9961f0bc32ea0e4e2.png"
+        title="img" /></p>
+<p>上述图片中已经注释的很清楚了。</p>
+<p>主要需要配置的是两类：</p>
+<p>vcpkg的下载：</p>
+<ol>
+<li>如果你本地之前没有下载好vcpkg，那么可以填写url来帮你下载和初始化，但是需要注意，下载的文件夹需要是一个不存在的文件夹。</li>
+<li>如果你本地之前现在过vcpkg，你想要手动指定它，那么只需要在 <code>Directory</code> 中指定已经下载好的vcpkg的目录即可，而上述url将无效。</li>
+</ol>
+<p>将vcpkg集成到cmake项目：</p>
+<p>这里就比较简单了，点击集成到你目前CLion中已经存在的cmake运行的配置项即可。</p>
+<p>有关CLion中cmake的运行配置项是什么，可以查看我B站的视频讲解：https://www.bilibili.com/video/BV18R4y127UV</p>
+<p>完成这两步，你的vcpkg算是已经集成到了你的cmake项目。</p>
+<p>其他三个按键，比如第二个编辑按键其实就是重新编辑每个集成的 <code>vcpkg</code> 的这几个参数罢了。</p>
+<h2 id="引入第三方库">引入第三方库</h2>
+<p>我们已经集成好了vcpkg，那么我们以一个较为复杂的第三方库引入来跑跑看？</p>
+<p>就决定是你了 Imgui ！</p>
+<p>我们直接到目前已经集成的vcpkg中搜索该库：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/6d5c2538b7f24a1da7dc12ede9ccc109.png"
+        data-srcset="https://img-blog.csdnimg.cn/6d5c2538b7f24a1da7dc12ede9ccc109.png, https://img-blog.csdnimg.cn/6d5c2538b7f24a1da7dc12ede9ccc109.png 1.5x, https://img-blog.csdnimg.cn/6d5c2538b7f24a1da7dc12ede9ccc109.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/6d5c2538b7f24a1da7dc12ede9ccc109.png"
+        title="img" /></p>
+<p>如上图所示，我们有两种方式去编译安装该库：</p>
+<ol>
+<li>在项目根目录下提供 <code>vcpkg.json</code> 文件来描述需要依赖的库，在cmake执行后自动下载编译。</li>
+<li>手动选择需要编译的环境，然后手动点击install来进行安装。</li>
+</ol>
+<p>这两种方式在编译安装好后都会提示你如何引入该库，如下图我已经编译安装好imgui了：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/ee29b3fec2424e17a857627dad8282d5.png"
+        data-srcset="https://img-blog.csdnimg.cn/ee29b3fec2424e17a857627dad8282d5.png, https://img-blog.csdnimg.cn/ee29b3fec2424e17a857627dad8282d5.png 1.5x, https://img-blog.csdnimg.cn/ee29b3fec2424e17a857627dad8282d5.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/ee29b3fec2424e17a857627dad8282d5.png"
+        title="img" /></p>
+<p>你只需要把 main 替换为你的项目 target 即可完成库的引入。</p>
+<h2 id="集成cmake运行项目">集成cmake运行项目</h2>
+<p>现在你的项目虽然引入了 imgui ，但是你会发现你还是无法把官方的例子跑起来，因为官方的例子还依赖图形渲染引擎（这方面我也不是很懂）。</p>
+<p>这里有作者对不同渲染引擎的例子如何跑起来的描述：https://github.com/ocornut/imgui/blob/c206a193737811193a0b48ef2d35fe028fa0996e/examples/README.txt#L160</p>
+<p>介于我本机使用的是win11系统，所以我选择跑的是 <code>example_win32_directx12</code> 这个例子，描述如下：</p>
+<pre><code>example_win32_directx12/
+    DirectX12 example, Windows only.
+    = main.cpp + imgui_impl_win32.cpp + imgui_impl_dx12.cpp
+    This is quite long and tedious, because: DirectX12.
+</code></pre><p>依照提示把 example 中的这三个 cpp 源文件以及对应头文件加入编译即可跑通该示例。</p>
+<p>对应文件url如下：</p>
+<ul>
+<li>
+<p>main.cpp：https://github.com/ocornut/imgui/blob/c206a193737811193a0b48ef2d35fe028fa0996e/examples/example_win32_directx12/main.cpp</p>
+</li>
+<li>
+<p>imgui_impl_win32.cpp：https://github.com/ocornut/imgui/blob/c206a193737811193a0b48ef2d35fe028fa0996e/examples/imgui_impl_win32.cpp</p>
+</li>
+<li>
+<p>imgui_impl_win32.h：https://github.com/ocornut/imgui/blob/c206a193737811193a0b48ef2d35fe028fa0996e/examples/imgui_impl_win32.h</p>
+</li>
+<li>
+<p>imgui_impl_dx12.cpp：https://github.com/ocornut/imgui/blob/c206a193737811193a0b48ef2d35fe028fa0996e/examples/imgui_impl_dx12.cpp</p>
+</li>
+<li>
+<p>imgui_impl_dx12.h：https://github.com/ocornut/imgui/blob/c206a193737811193a0b48ef2d35fe028fa0996e/examples/imgui_impl_dx12.h</p>
+</li>
+</ul>
+<p>如图所示项目目录以及cmake代码如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/7f583c7a491949b8a164c6250f342423.png"
+        data-srcset="https://img-blog.csdnimg.cn/7f583c7a491949b8a164c6250f342423.png, https://img-blog.csdnimg.cn/7f583c7a491949b8a164c6250f342423.png 1.5x, https://img-blog.csdnimg.cn/7f583c7a491949b8a164c6250f342423.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/7f583c7a491949b8a164c6250f342423.png"
+        title="img" /></p>
+<p>当我们兴高采烈的准备跑起整个示例项目的时候，我们得到了一个长达几十行的符号链接错误。。。</p>
+<p>很明显，肯定是有些使用到的库没有链接，进行相关检索以及推理判断，我终于找出还需要链接的两个库：d3d12 dxgi</p>
+<p>改为如下cmake，终于成功跑起来了！</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">cmake_minimum_required</span><span class="p">(</span><span class="s">VERSION</span> <span class="s">3.14</span><span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">project</span><span class="p">(</span><span class="s">imgui_example</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">set</span><span class="p">(</span><span class="s">CMAKE_CXX_STANDARD</span> <span class="s">17</span><span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">find_package</span><span class="p">(</span><span class="s">imgui</span> <span class="s">CONFIG</span> <span class="s">REQUIRED</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">add_executable</span><span class="p">(</span><span class="s">imgui_example</span> <span class="s">main.cpp</span> <span class="s">imgui_impl_dx12.cpp</span> <span class="s">imgui_impl_win32.cpp</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">target_link_libraries</span><span class="p">(</span><span class="o">${</span><span class="nv">PROJECT_NAME</span><span class="o">}</span> <span class="s">PRIVATE</span> <span class="s">imgui::imgui</span> <span class="s">d3d12</span> <span class="s">dxgi</span><span class="p">)</span><span class="err">
+</span></code></pre></div><p>示例跑起来的样子：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/82355af087184bbcbf13cc902a867f06.png"
+        data-srcset="https://img-blog.csdnimg.cn/82355af087184bbcbf13cc902a867f06.png, https://img-blog.csdnimg.cn/82355af087184bbcbf13cc902a867f06.png 1.5x, https://img-blog.csdnimg.cn/82355af087184bbcbf13cc902a867f06.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/82355af087184bbcbf13cc902a867f06.png"
+        title="img" /></p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/">[C&#43;&#43;]CLion集成vcpkg一键完成包管理</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-06-22</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例" data-hashtags="[C&#43;&#43;]CLion集成vcpkg一键完成包管理"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-hashtag="[C&#43;&#43;]CLion集成vcpkg一键完成包管理"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例" data-image="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例" data-description="[C&#43;&#43;]CLion集成vcpkg一键完成包管理"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例" data-description="[C&#43;&#43;]CLion集成vcpkg一键完成包管理"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" data-title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" class="prev" rel="prev" title="使用Rabin-Karp算法替代KMP"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

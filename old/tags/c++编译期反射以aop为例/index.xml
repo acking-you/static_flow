@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>C&#43;&#43;编译期反射——以AOP为例 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/c&#43;&#43;%E7%BC%96%E8%AF%91%E6%9C%9F%E5%8F%8D%E5%B0%84%E4%BB%A5aop%E4%B8%BA%E4%BE%8B/</link>
+        <description>C&#43;&#43;编译期反射——以AOP为例 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Fri, 25 Nov 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/c&#43;&#43;%E7%BC%96%E8%AF%91%E6%9C%9F%E5%8F%8D%E5%B0%84%E4%BB%A5aop%E4%B8%BA%E4%BE%8B/" rel="self" type="application/rss+xml" /><item>
+    <title>C&#43;&#43;编译期反射——以AOP为例</title>
+    <link>https://acking-you.github.io/posts/c&#43;&#43;%E7%BC%96%E8%AF%91%E6%9C%9F%E5%8F%8D%E5%B0%84%E4%BB%A5aop%E4%B8%BA%E4%BE%8B/</link>
+    <pubDate>Fri, 25 Nov 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/c&#43;&#43;%E7%BC%96%E8%AF%91%E6%9C%9F%E5%8F%8D%E5%B0%84%E4%BB%A5aop%E4%B8%BA%E4%BE%8B/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/7213ded01d686aab797968b2a6064358.png#pic_center" referrerpolicy="no-referrer">
+            </div>编译期反射实践 自古以来，C++就一直缺少一个编程语言的重要特性——反射，但如果熟悉C++元模板编程的同学，就知道以C++的风格，肯定是不会在]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>一文进入JavaWeb后端 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb%E5%90%8E%E7%AB%AF/</link>
+        <description>一文进入JavaWeb后端 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Fri, 13 May 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb%E5%90%8E%E7%AB%AF/" rel="self" type="application/rss+xml" /><item>
+    <title>一文进入JavaWeb后端</title>
+    <link>https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/</link>
+    <pubDate>Fri, 13 May 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center" referrerpolicy="no-referrer">
+            </div>前端基础 整个前端基础详细介绍看下面这个链接，这里直接讲里面的实践。 前端基础 css实践编写一个漂亮的登录界面 html文件 &lt;!DOCTYPE html&gt; &lt;html lang=&#34;en&#34;&gt; &lt;head&gt; &lt;meta charset=&#34;UTF-8&#34;&gt; &lt;meta http-equiv=&#34;X-UA-Compatible&#34; content=&#34;IE=edge&#34;&gt; &lt;meta]]></description>
+</item>
+</channel>
+</rss>

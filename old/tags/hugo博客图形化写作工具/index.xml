@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>Hugo博客图形化写作工具 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/</link>
+        <description>Hugo博客图形化写作工具 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sat, 12 Feb 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/" rel="self" type="application/rss+xml" /><item>
+    <title>Hugo博客图形化写作工具</title>
+    <link>https://acking-you.github.io/posts/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/</link>
+    <pubDate>Sat, 12 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/5bc78a387fa03b5039b9bca28aea1b14.png#pic_center" referrerpolicy="no-referrer">
+            </div>软件使用 视频教程 项目介绍 项目所在地 温馨提示：如果本地还未搭建 hugo 博客，可以使用我的另一个 hugo 博客自动搭建工具 QtRun： 介绍：一个用纯 C++ 写的命令]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><meta property="og:title" content="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" />
+<meta property="og:description" content="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-02-22T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-02-22T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"/>
+<meta name="twitter:description" content="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" /><link rel="prev" href="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" /><link rel="next" href="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0\/"
+        },"genre": "posts","keywords": "k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造","wordcount":  922 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0\/","datePublished": "2022-02-22T00:00:00+00:00","dateModified": "2022-02-22T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center, https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center"
+        title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E7%AE%97%E6%B3%95%E6%9C%80%E7%9F%AD%E8%B7%AF%E9%97%AE%E9%A2%98/"><i class="far fa-folder fa-fw"></i>算法——最短路问题</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-02-22">2022-02-22</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 922 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 2 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#题目">题目</a></li>
+    <li><a href="#bellmanford算法的动态规划解决效率一般">BellmanFord算法的动态规划解决(效率一般)</a></li>
+    <li><a href="#spfa算法改造成为经典bfs解决效率高">SPFA算法改造成为经典BFS解决(效率高)</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="题目">题目</h2>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/b22c17874dfa49f2a383d212ae5d6721.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70"
+        data-srcset="https://img-blog.csdnimg.cn/b22c17874dfa49f2a383d212ae5d6721.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70, https://img-blog.csdnimg.cn/b22c17874dfa49f2a383d212ae5d6721.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70 1.5x, https://img-blog.csdnimg.cn/b22c17874dfa49f2a383d212ae5d6721.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/b22c17874dfa49f2a383d212ae5d6721.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70"
+        title="https://img-blog.csdnimg.cn/b22c17874dfa49f2a383d212ae5d6721.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70" />
+<a href="https://leetcode-cn.com/problems/cheapest-flights-within-k-stops/" target="_blank" rel="noopener noreffer">oj平台</a></p>
+<h2 id="bellmanford算法的动态规划解决效率一般">BellmanFord算法的动态规划解决(效率一般)</h2>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/c1c05c697f85489d9a5574952a913ba8.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70"
+        data-srcset="https://img-blog.csdnimg.cn/c1c05c697f85489d9a5574952a913ba8.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70, https://img-blog.csdnimg.cn/c1c05c697f85489d9a5574952a913ba8.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70 1.5x, https://img-blog.csdnimg.cn/c1c05c697f85489d9a5574952a913ba8.png?x-oss-process=image/watermark%2ctype_ZmFuZ3poZW5naGVpdGk%2cshadow_10%2ctext_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0%2csize_16%2ccolor_FFFFFF%2ct_70 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/c1c05c697f85489d9a5574952a913ba8.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70"
+        title="https://img-blog.csdnimg.cn/c1c05c697f85489d9a5574952a913ba8.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L20wXzUwOTQ1NTA0,size_16,color_FFFFFF,t_70" /></p>
+<blockquote>
+<p>看到k站内，肯定会想到 <code>BellmanFord</code> 算法的动态规划解法，<strong>本来优化成按边遍历的动态规划可以不用计较多少次，但这里必须要计较用了多少次，所以我们要在同一次边的选择中，保证另一个边用的是上一次的结果</strong>，故通过二维数组进行dp即可写出，要压缩成一维数组也不难，毕竟用的仅仅只是上一行的结果，所以动态规划解决是非常简单的。</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">class</span> <span class="nc">Solution</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="kt">int</span> <span class="n">findCheapestPrice</span><span class="p">(</span><span class="kt">int</span> <span class="n">n</span><span class="p">,</span> <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;&amp;</span> <span class="n">flights</span><span class="p">,</span> <span class="kt">int</span> <span class="n">src</span><span class="p">,</span> <span class="kt">int</span> <span class="n">dst</span><span class="p">,</span> <span class="kt">int</span> <span class="n">k</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">const</span> <span class="kt">int</span> <span class="n">INF</span> <span class="o">=</span> <span class="mh">0x3f3f3f3f</span><span class="p">;</span>
+        <span class="c1">//用临时数组存储，这样改变了dist也不会改变temp,这样便达到了控制遍历次数的目的
+</span><span class="c1"></span>        <span class="kt">int</span><span class="o">*</span> <span class="n">dist</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">[</span><span class="n">n</span><span class="p">];</span>
+        <span class="n">memset</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span><span class="mh">0x3f</span><span class="p">,</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="o">*</span><span class="n">n</span><span class="p">);</span>
+        <span class="n">dist</span><span class="p">[</span><span class="n">src</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="kt">int</span> <span class="n">sz</span> <span class="o">=</span> <span class="n">flights</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+        <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;=</span><span class="n">k</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>
+            <span class="kt">int</span><span class="o">*</span> <span class="n">temp</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">[</span><span class="n">n</span><span class="p">];</span>
+            <span class="n">memcpy</span><span class="p">(</span><span class="n">temp</span><span class="p">,</span><span class="n">dist</span><span class="p">,</span><span class="n">n</span><span class="o">*</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">int</span><span class="p">));</span>
+            <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">j</span><span class="o">&lt;</span><span class="n">sz</span><span class="p">;</span><span class="n">j</span><span class="o">++</span><span class="p">){</span>
+                <span class="k">if</span><span class="p">(</span><span class="n">temp</span><span class="p">[</span><span class="n">flights</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="mi">0</span><span class="p">]]</span><span class="o">!=</span><span class="n">INF</span><span class="p">){</span>
+                    <span class="n">dist</span><span class="p">[</span><span class="n">flights</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="mi">1</span><span class="p">]]</span> <span class="o">=</span> <span class="n">min</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">flights</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="mi">1</span><span class="p">]],</span><span class="n">temp</span><span class="p">[</span><span class="n">flights</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="mi">0</span><span class="p">]]</span> <span class="o">+</span> <span class="n">flights</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="mi">2</span><span class="p">]);</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+            <span class="k">delete</span><span class="p">[]</span> <span class="n">temp</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">dist</span><span class="p">[</span><span class="n">dst</span><span class="p">]</span><span class="o">==</span><span class="n">INF</span><span class="o">?-</span><span class="mi">1</span><span class="o">:</span><span class="n">dist</span><span class="p">[</span><span class="n">dst</span><span class="p">];</span>
+    <span class="p">}</span> 
+<span class="p">};</span>
+</code></pre></div><h2 id="spfa算法改造成为经典bfs解决效率高">SPFA算法改造成为经典BFS解决(效率高)</h2>
+<blockquote>
+<p>为了效率，我建图时候用了链式前向星。</p>
+</blockquote>
+<blockquote>
+<p>这道题开始拿到的时候，我就再想这个SPFA类似于BFS，那肯定是可以控制次数的，然后就开始行动了，SPFA队列遍历的时候需要判断该结点是否存在于队列中，如果存在，则不能入队，使用的数据都是通过 <code>dist</code> 数组来更新，这样导致完全丧失了BFS的遍历次数信息，使得答案更新的很快是没错，但无法控制在一定的遍历次数范围内(因为可能你本次所用到的 <code>dist</code> 可能不是上一次的)。</p>
+</blockquote>
+<p>那么如何解决这个 BFS 遍历次数的限制问题呢？
+为了解决 <code>SPFA</code> 算法的这个问题我试了两种方式，只有最后有一种是可行的：</p>
+<ol>
+<li>(错误)利用同等长度的临时数组记录此次遍历后dist数组更新的结果，然后在遍历完的尾部利用该数组对 <code>dist</code> 数组进行更新。</li>
+</ol>
+<blockquote>
+<p>就像这样：
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/572225ca4b8e3551cf61b97828028f70.png"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/572225ca4b8e3551cf61b97828028f70.png, https://img-blog.csdnimg.cn/img_convert/572225ca4b8e3551cf61b97828028f70.png 1.5x, https://img-blog.csdnimg.cn/img_convert/572225ca4b8e3551cf61b97828028f70.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/572225ca4b8e3551cf61b97828028f70.png"
+        title="https://img-blog.csdnimg.cn/img_convert/572225ca4b8e3551cf61b97828028f70.png" />
+但很快会发现出现一个问题：一次遍历途中可能一个结点更新多次，那么这样就<strong>无法保证把所有k次中转内的情况都列举出来。</strong></p>
+</blockquote>
+<ol start="2">
+<li>(正确)利用队列的参数对dist进行更新，如何更新呢？队列中记录每个结点的<code>编号和到src的距离</code>,每次更新新的 <code>dist</code> 的时候直接<strong>用正在遍历的编号到src的距离替代直接使用dist数组(这样便防止了更新dist数组后影响后续更新)。</strong>
+如图：
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/4dfebff279913b2b0c8ad4bb1257c790.png"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/4dfebff279913b2b0c8ad4bb1257c790.png, https://img-blog.csdnimg.cn/img_convert/4dfebff279913b2b0c8ad4bb1257c790.png 1.5x, https://img-blog.csdnimg.cn/img_convert/4dfebff279913b2b0c8ad4bb1257c790.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/4dfebff279913b2b0c8ad4bb1257c790.png"
+        title="https://img-blog.csdnimg.cn/img_convert/4dfebff279913b2b0c8ad4bb1257c790.png" /></li>
+</ol>
+<blockquote>
+<p>解题代码：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">class</span> <span class="nc">Solution</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+<span class="c1">//用于建图的结构体
+</span><span class="c1"></span><span class="k">struct</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">to</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">len</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">next</span><span class="p">;</span>
+<span class="p">}</span><span class="n">edge</span><span class="p">[</span><span class="mi">5000</span><span class="p">];</span>
+    <span class="kt">int</span> <span class="nf">findCheapestPrice</span><span class="p">(</span><span class="kt">int</span> <span class="n">n</span><span class="p">,</span> <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;&amp;</span> <span class="n">flights</span><span class="p">,</span> <span class="kt">int</span> <span class="n">src</span><span class="p">,</span> <span class="kt">int</span> <span class="n">dst</span><span class="p">,</span> <span class="kt">int</span> <span class="n">k</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">const</span> <span class="kt">int</span> <span class="n">INF</span> <span class="o">=</span> <span class="mh">0x3f3f3f3f</span><span class="p">;</span>
+        <span class="n">memset</span><span class="p">(</span><span class="n">head</span><span class="p">,</span> <span class="mh">0xff</span><span class="p">,</span> <span class="k">sizeof</span> <span class="n">head</span><span class="p">);</span>
+        <span class="kt">int</span> <span class="n">dist</span><span class="p">[</span><span class="n">n</span><span class="p">];</span><span class="n">memset</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span><span class="mh">0x3f</span><span class="p">,</span><span class="k">sizeof</span> <span class="n">dist</span><span class="p">);</span>
+        <span class="n">dist</span><span class="p">[</span><span class="n">src</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="n">queue</span><span class="o">&lt;</span><span class="n">pair</span><span class="o">&lt;</span><span class="kt">int</span><span class="p">,</span><span class="kt">int</span><span class="o">&gt;&gt;</span><span class="n">Q</span><span class="p">;</span>
+        <span class="kt">int</span> <span class="n">sz</span> <span class="o">=</span> <span class="n">flights</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+        <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="n">sz</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>
+            <span class="n">add</span><span class="p">(</span><span class="n">flights</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span><span class="n">flights</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">1</span><span class="p">],</span><span class="n">flights</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">2</span><span class="p">]);</span>
+        <span class="p">}</span>
+        <span class="n">Q</span><span class="p">.</span><span class="n">push</span><span class="p">({</span><span class="n">src</span><span class="p">,</span><span class="n">dist</span><span class="p">[</span><span class="n">src</span><span class="p">]});</span>
+        <span class="kt">int</span> <span class="n">step</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="k">while</span><span class="p">(</span><span class="o">!</span><span class="n">Q</span><span class="p">.</span><span class="n">empty</span><span class="p">()){</span>
+            <span class="k">if</span><span class="p">(</span><span class="n">step</span><span class="o">&gt;</span><span class="n">k</span><span class="p">)</span>
+                <span class="k">break</span><span class="p">;</span>
+            <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="n">Q</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="n">i</span><span class="o">&gt;</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">--</span><span class="p">){</span>
+                <span class="k">auto</span> <span class="n">idx</span> <span class="o">=</span> <span class="n">move</span><span class="p">(</span><span class="n">Q</span><span class="p">.</span><span class="n">front</span><span class="p">());</span><span class="n">Q</span><span class="p">.</span><span class="n">pop</span><span class="p">();</span>
+                <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="n">head</span><span class="p">[</span><span class="n">idx</span><span class="p">.</span><span class="n">first</span><span class="p">];</span><span class="n">j</span><span class="o">!=-</span><span class="mi">1</span><span class="p">;</span><span class="n">j</span><span class="o">=</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">next</span><span class="p">){</span>
+                    <span class="k">if</span><span class="p">(</span><span class="n">idx</span><span class="p">.</span><span class="n">second</span><span class="o">+</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">len</span><span class="o">&lt;</span><span class="n">dist</span><span class="p">[</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">to</span><span class="p">]){</span>
+                    <span class="n">dist</span><span class="p">[</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">to</span><span class="p">]</span> <span class="o">=</span> <span class="n">idx</span><span class="p">.</span><span class="n">second</span><span class="o">+</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">len</span><span class="p">;</span>
+                            <span class="n">Q</span><span class="p">.</span><span class="n">push</span><span class="p">({</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">to</span><span class="p">,</span><span class="n">dist</span><span class="p">[</span><span class="n">edge</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">to</span><span class="p">]});</span>
+                    <span class="p">}</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+            <span class="n">step</span><span class="o">++</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">dist</span><span class="p">[</span><span class="n">dst</span><span class="p">]</span><span class="o">!=</span><span class="n">INF</span><span class="p">)</span><span class="k">return</span> <span class="n">dist</span><span class="p">[</span><span class="n">dst</span><span class="p">];</span>
+        <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="k">private</span><span class="o">:</span>
+<span class="c1">//用于链式前向星建图的函数和数据
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">tot</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">head</span><span class="p">[</span><span class="mi">100</span><span class="p">];</span>
+    <span class="kt">void</span> <span class="nf">add</span><span class="p">(</span><span class="kt">int</span> <span class="n">node</span><span class="p">,</span><span class="kt">int</span> <span class="n">to</span><span class="p">,</span><span class="kt">int</span> <span class="n">len</span><span class="p">){</span>
+        <span class="n">edge</span><span class="p">[</span><span class="n">tot</span><span class="p">].</span><span class="n">to</span> <span class="o">=</span> <span class="n">to</span><span class="p">;</span>
+        <span class="n">edge</span><span class="p">[</span><span class="n">tot</span><span class="p">].</span><span class="n">len</span> <span class="o">=</span> <span class="n">len</span><span class="p">;</span>
+        <span class="n">edge</span><span class="p">[</span><span class="n">tot</span><span class="p">].</span><span class="n">next</span> <span class="o">=</span> <span class="n">head</span><span class="p">[</span><span class="n">node</span><span class="p">];</span>
+        <span class="n">head</span><span class="p">[</span><span class="n">node</span><span class="p">]</span> <span class="o">=</span> <span class="n">tot</span><span class="p">;</span>
+        <span class="n">tot</span><span class="o">++</span><span class="p">;</span>
+    <span class="p">}</span>
+    
+<span class="p">};</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/">k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-02-22</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" data-hashtags="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-hashtag="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" data-image="https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" data-description="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造" data-description="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" data-title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" class="prev" rel="prev" title="TCP协议详解"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" class="next" rel="next" title="bitset与埃氏筛">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

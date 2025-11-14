@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>C&#43;&#43;高易用日志库实现 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="C&#43;&#43;高可用日志库实现"><meta property="og:title" content="C&#43;&#43;高易用日志库实现" />
+<meta property="og:description" content="C&#43;&#43;高可用日志库实现" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-09-05T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-09-05T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="C&#43;&#43;高易用日志库实现"/>
+<meta name="twitter:description" content="C&#43;&#43;高可用日志库实现"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" /><link rel="prev" href="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" /><link rel="next" href="https://acking-you.github.io/posts/lcp68.%E7%BE%8E%E8%A7%82%E7%9A%84%E8%8A%B1%E6%9D%9Fsliding_window/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "C++高易用日志库实现",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/c\u002b\u002b%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0\/"
+        },"genre": "posts","keywords": "C\u002b\u002b高易用日志库实现","wordcount":  1492 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/c\u002b\u002b%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0\/","datePublished": "2022-09-05T00:00:00+00:00","dateModified": "2022-09-05T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "C++高可用日志库实现"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/1d3bc0dca5a88ba6649ae7b1041e8cf5.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/1d3bc0dca5a88ba6649ae7b1041e8cf5.png#pic_center, https://img-blog.csdnimg.cn/img_convert/1d3bc0dca5a88ba6649ae7b1041e8cf5.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/1d3bc0dca5a88ba6649ae7b1041e8cf5.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/1d3bc0dca5a88ba6649ae7b1041e8cf5.png#pic_center"
+        title="C&#43;&#43;高可用日志库实现" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">C&#43;&#43;高易用日志库实现</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E4%B8%AA%E4%BA%BA%E9%A1%B9%E7%9B%AE/"><i class="far fa-folder fa-fw"></i>个人项目</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-09-05">2022-09-05</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1492 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 3 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#如何添加到项目中使用">如何添加到项目中使用</a>
+      <ul>
+        <li><a href="#cmake配置">CMake配置</a></li>
+        <li><a href="#库的编译">库的编译</a></li>
+      </ul>
+    </li>
+    <li><a href="#如何使用库">如何使用库</a>
+      <ul>
+        <li><a href="#如何配置">如何配置</a></li>
+        <li><a href="#精确控制输出等级">精确控制输出等级</a></li>
+        <li><a href="#日志输出介绍">日志输出介绍</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="使用教程">使用教程</h1>
+<h2 id="如何添加到项目中使用">如何添加到项目中使用</h2>
+<p>输入以下命令得到项目文件</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-Shell" data-lang="Shell">git clone https://github.com/ACking-you/my-logger.git
+</code></pre></div><p>项目目录如下：</p>
+<ul>
+<li>
+<p>dependencies：整个项目的外部依赖，以源码形式存在（比如fmt库）。</p>
+</li>
+<li>
+<p>lib：整个项目已经打包好的库文件，我打包的是动态库，如有静态库需要请自行编译。库的名称为logger和fmt。</p>
+</li>
+<li>
+<p>其余均为项目关键源码，就Logger.cpp和Logger.h两个。main.cc是项目运行测试代码。</p>
+</li>
+</ul>
+<h3 id="cmake配置">CMake配置</h3>
+<p>由于本人对 <code>cmake</code> 的 <code>install</code> 指令了解的并不深入，所以本库并不支持最后的 <code>make install</code> ，为了防止大伙编译库的长时间等待，我已经编译好了动态库版本，所以直接拿去用即可（当然不排除环境的不兼容，所以可能还是需要手动编译）。</p>
+<p><strong>如果你clone本项目和你的项目为同级目录</strong>，请在你的cmake文件中添加下面的代码，然后再链接这两个库便可得到本库的所有支持。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-CMake" data-lang="CMake"><span class="nb">include_directories</span><span class="p">(</span><span class="s">../my-logger</span><span class="p">)</span><span class="c">#具体为本项目的根目录，可用相对路径也可用绝对。此处是为了方便搜索头文件
+</span><span class="c"></span><span class="nb">link_directories</span><span class="p">(</span><span class="s">../my-logger/lib</span><span class="p">)</span><span class="c">#路径说明同上，该路径为链接库的目录
+</span><span class="c"></span><span class="err">
+</span><span class="err">....
+</span><span class="err">
+</span><span class="err"></span><span class="nb">target_link_libraries</span><span class="p">(</span><span class="o">${</span><span class="nv">CMAKE_PROJECT_NAME</span><span class="o">}</span> <span class="s">logger</span> <span class="s">fmt</span><span class="p">)</span><span class="c">#添加对应的链接库
+</span></code></pre></div><blockquote>
+<p>注意：如果你不需要使用fmt库中的高级功能，那么你可以不链接fmt库，如果需要使用其高级功能进行打印（比如支持打印std::map等标准库容器），那么请链接fmt库。</p>
+</blockquote>
+<h3 id="库的编译">库的编译</h3>
+<p>下面为logger库的编译命令：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-Shell" data-lang="Shell">mkdir build-logger
+<span class="nb">cd</span> build-logger
+cmake .. -DCMAKE_BUILD_TYPE<span class="o">=</span>Release -DBUILD_SHARED_LIBS<span class="o">=</span>ON
+make
+</code></pre></div><p>输入上面的命令后，会在 <code>build-logger</code> 文件夹中生成对应的动态库（不定义第二个变量时默认编译静态库）。建议把这个生成的动态库移动到这个项目 <code>lib</code> 目录中，方便在使用时只需添加之前的cmake代码。</p>
+<p>下面为fmt库的编译命令（由于该库较大，编译时间可能较久，我的电脑用了将近十分钟）：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-Shell" data-lang="Shell">mkdir build-fmt
+<span class="nb">cd</span> build-fmt
+cmake ../dependencies/fmt/ -DCMAKE_BUILD_TYPE<span class="o">=</span>Release -DBUILD_SHARED_LIBS<span class="o">=</span>ON
+</code></pre></div><p>同样会在 <code>build-fmt</code> 目录生成对应的动态库，建议同样放入该项目lib目录中，注意 fmt 库的动态库是由多个文件构成，这多个文件都需要被放在一起。</p>
+<h2 id="如何使用库">如何使用库</h2>
+<h3 id="如何配置">如何配置</h3>
+<blockquote>
+<p>如下，为整个日志的所有配置项目，当然你也可以不进行配置，也有对应的默认值</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="cp">#include</span><span class="cpf">&#34;Logger.h&#34;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+<span class="n">Config</span><span class="o">::</span><span class="n">Set</span><span class="p">({</span>
+                    <span class="p">.</span><span class="n">print_flag</span> <span class="o">=</span> <span class="n">LstdFlags</span> <span class="o">|</span>
+                                  <span class="n">lblog</span><span class="o">::</span><span class="n">LthreadId</span><span class="p">,</span> <span class="c1">//设置打印的内容，有日期、时间、文件名（长、短）、行号、线程id这些选项可选 （默认为LstdFlags包含Ldata | Ltime | Lshortname | Lline
+</span><span class="c1"></span>                    <span class="p">.</span><span class="n">output_prefix</span> <span class="o">=</span> <span class="s">&#34;my&#34;</span><span class="p">,</span>          <span class="c1">//设置输出日志的前缀名，默认为空
+</span><span class="c1"></span>                    <span class="p">.</span><span class="n">output_file</span> <span class="o">=</span> <span class="s">&#34;./log.txt&#34;</span><span class="p">,</span>     <span class="c1">//设置输出日志的文件，默认为空
+</span><span class="c1"></span>                    <span class="p">.</span><span class="n">is_console</span> <span class="o">=</span> <span class="nb">true</span>              <span class="c1">//设置是否输出到控制台，默认为true
+</span><span class="c1"></span>            <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><p>注意：如果需要调用此配置函数进行配置，需要在所有打印日志宏调用之前，且同一个进程请不要使用两次配置（因为整个配置是一个单例，配置的更改在同一个进程中会是非线程安全的行为）。</p>
+<h3 id="精确控制输出等级">精确控制输出等级</h3>
+<p>我们的库共提供以下五种宏来进行日志的打印：</p>
+<ul>
+<li>debug、info、warn、error、fatal</li>
+</ul>
+<p>使用debug进行日志输出的，在release模式下将不再进行输出。</p>
+<p>我们同样也可以通过手动定义对应的宏控制日志输出等级。</p>
+<p>如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="cp">#define LOG_LIMIT_WARN
+</span><span class="cp">#include</span> <span class="cpf">&#34;Logger.h&#34;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">debug</span><span class="p">(</span><span class="s">&#34;hhh&#34;</span><span class="p">);</span> <span class="c1">//无效
+</span><span class="c1"></span>    <span class="n">info</span><span class="p">(</span><span class="s">&#34;hhh&#34;</span><span class="p">);</span>  <span class="c1">//无效
+</span><span class="c1"></span>    <span class="n">warn</span><span class="p">(</span><span class="s">&#34;hhh&#34;</span><span class="p">);</span>  <span class="c1">//有效
+</span><span class="c1"></span>    <span class="n">error</span><span class="p">(</span><span class="s">&#34;hhh&#34;</span><span class="p">);</span> <span class="c1">//有效
+</span><span class="c1"></span>    <span class="n">fatal</span><span class="p">(</span><span class="s">&#34;hhh&#34;</span><span class="p">);</span> <span class="c1">//有效
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>同理也可以通过 <code>LOG_LIMIT_ERROR</code> 控制至少是error等级才输出日志。</p>
+<h3 id="日志输出介绍">日志输出介绍</h3>
+<p>前面介绍了基本的日志的控制，接下来介绍打印输出的功能，以debug和info为例：</p>
+<p>本日志的最终输出使用的是C++第三方库 fmt ，虽然在C++20中它已经入标准库了，但是距离我们真正的使用还需要一段时间，下面是简单输出方式，更多的输出方式可以查看fmt官方文档：</p>
+<p><a href="https://fmt.dev/latest/index.html" target="_blank" rel="noopener noreffer">fmt官方文档</a></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="cp">#include</span><span class="cpf">&#34;Logger.h&#34;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="n">debug</span><span class="p">(</span><span class="s">&#34;hello {}&#34;</span><span class="p">,</span><span class="s">&#34;world&#34;</span><span class="p">);</span>
+    <span class="n">info</span><span class="p">(</span><span class="s">&#34;world {}&#34;</span><span class="p">,</span><span class="s">&#34;hello&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>注意：<code>{}</code> 是支持所有的C++标准库容器的，包括vector和string等等容器的直接打印，如 <code>debug(&quot;{}&quot;,vector&lt;int&gt;{1,3,32,432,432});</code> 是可行的。但不要忘了链接 fmt 库。</p>
+</blockquote>
+<p>上面的默认输出效果如下：（控制台内是带颜色的，文件就没有颜色了）</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=YTdkMDViODc2ZjJhODk1NDVkNzE5YTg3NDc3MDcyNTBfV1JzUldsSGpzNkUwR0hteDNDaU1Eb1dSU24wM3p0M1FfVG9rZW46Ym94Y24xTGdPYkZ6VThiS0pXckxaZnN1YVJkXzE2NjI0Njk0NDk6MTY2MjQ3MzA0OV9WNA"
+        data-srcset="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=YTdkMDViODc2ZjJhODk1NDVkNzE5YTg3NDc3MDcyNTBfV1JzUldsSGpzNkUwR0hteDNDaU1Eb1dSU24wM3p0M1FfVG9rZW46Ym94Y24xTGdPYkZ6VThiS0pXckxaZnN1YVJkXzE2NjI0Njk0NDk6MTY2MjQ3MzA0OV9WNA, https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=YTdkMDViODc2ZjJhODk1NDVkNzE5YTg3NDc3MDcyNTBfV1JzUldsSGpzNkUwR0hteDNDaU1Eb1dSU24wM3p0M1FfVG9rZW46Ym94Y24xTGdPYkZ6VThiS0pXckxaZnN1YVJkXzE2NjI0Njk0NDk6MTY2MjQ3MzA0OV9WNA 1.5x, https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=YTdkMDViODc2ZjJhODk1NDVkNzE5YTg3NDc3MDcyNTBfV1JzUldsSGpzNkUwR0hteDNDaU1Eb1dSU24wM3p0M1FfVG9rZW46Ym94Y24xTGdPYkZ6VThiS0pXckxaZnN1YVJkXzE2NjI0Njk0NDk6MTY2MjQ3MzA0OV9WNA 2x"
+        data-sizes="auto"
+        alt="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=YTdkMDViODc2ZjJhODk1NDVkNzE5YTg3NDc3MDcyNTBfV1JzUldsSGpzNkUwR0hteDNDaU1Eb1dSU24wM3p0M1FfVG9rZW46Ym94Y24xTGdPYkZ6VThiS0pXckxaZnN1YVJkXzE2NjI0Njk0NDk6MTY2MjQ3MzA0OV9WNA"
+        title="img" /></p>
+<h1 id="整体架构">整体架构</h1>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/">C&#43;&#43;高易用日志库实现</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-09-05</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现" data-hashtags="C&#43;&#43;高易用日志库实现"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-hashtag="C&#43;&#43;高易用日志库实现"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现" data-image="https://img-blog.csdnimg.cn/img_convert/1d3bc0dca5a88ba6649ae7b1041e8cf5.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现" data-description="C&#43;&#43;高可用日志库实现"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现" data-description="C&#43;&#43;高可用日志库实现"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" data-title="C&#43;&#43;高易用日志库实现"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" class="prev" rel="prev" title="驾考软件实现文档"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/lcp68.%E7%BE%8E%E8%A7%82%E7%9A%84%E8%8A%B1%E6%9D%9Fsliding_window/" class="next" rel="next" title="LCP68.美观的花束——sliding_window">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

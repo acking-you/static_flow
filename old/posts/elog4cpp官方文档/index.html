@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>elog4cpp官方文档 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="elog4cpp官方文档"><meta property="og:title" content="elog4cpp官方文档" />
+<meta property="og:description" content="elog4cpp官方文档" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-02-13T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-02-13T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="elog4cpp官方文档"/>
+<meta name="twitter:description" content="elog4cpp官方文档"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" /><link rel="prev" href="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" /><link rel="next" href="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "elog4cpp官方文档",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3\/"
+        },"genre": "posts","keywords": "elog4cpp官方文档","wordcount":  4994 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3\/","datePublished": "2023-02-13T00:00:00+00:00","dateModified": "2023-02-13T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "elog4cpp官方文档"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center, https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center"
+        title="elog4cpp官方文档" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">elog4cpp官方文档</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E4%B8%AA%E4%BA%BA%E9%A1%B9%E7%9B%AE/"><i class="far fa-folder fa-fw"></i>个人项目</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-02-13">2023-02-13</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 4994 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 10 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#快速开始">快速开始</a>
+      <ul>
+        <li><a href="#要求">要求</a></li>
+        <li><a href="#安装与引入">安装与引入</a></li>
+        <li><a href="#开始使用">开始使用</a></li>
+      </ul>
+    </li>
+    <li><a href="#如何配置">如何配置</a>
+      <ul>
+        <li><a href="#全局配置">全局配置</a></li>
+        <li><a href="#局部配置">局部配置</a></li>
+      </ul>
+    </li>
+    <li><a href="#详细接口描述">详细接口描述</a>
+      <ul>
+        <li><a href="#formatter">Formatter</a></li>
+        <li><a href="#micros">Micros</a></li>
+        <li><a href="#其他杂项">其他杂项</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><p>代码仓库：https://github.com/ACking-you/elog4cpp</p>
+<p><code>elog4cpp</code> ：意味着这是一个使用上非常 <code>easy</code>，同时性能上也非常 <code>efficiency</code> c++ log 日志库。 支持c++11及以上，并且完全的跨平台。</p>
+<p>使用 <code>easy</code> 体现在：</p>
+<ul>
+<li>
+<p>api简单，你只需要关注一个 <code>elog::Log</code> 类，或者静态方法 <code>Log::&lt;LEVEL&gt;</code> ，又或是宏定义 <code>ELG_&lt;LEVEL&gt;</code>。</p>
+</li>
+<li>
+<p>格式化输出简单，因为格式化输出使用的 <a href="https://github.com/fmtlib/fmt" target="_blank" rel="noopener noreffer">fmt</a> 库。</p>
+</li>
+<li>
+<p>自定义格式化方式简单，支持自定义 <code>formatter</code>，而且已经预置四种 <code>formatter</code>，包括 defaultFormatter、colorfulFormatter、jsonFormatter、customFormatter。</p>
+</li>
+<li>
+<p>配置简单，支持通过 <code>json</code> 文件一键读取配置项。</p>
+</li>
+<li>
+<p>引入简单，支持 <code>cmake</code> 命令一键引入项目并使用。</p>
+</li>
+</ul>
+<p>性能 <code>efficiency</code> 体现在：</p>
+<ul>
+<li>同步输出一条日志的延迟只需 <code>180ns</code> ，异步只需 <code>120ns</code>，是 spdlog 至少4倍的性能。</li>
+</ul>
+<p>对于benchmark，可以参考<a href="https://github.com/ACking-you/elog4cpp/blob/master/tests/bench_start.cc" target="_blank" rel="noopener noreffer">tests/bench_start.cc</a></p>
+<h2 id="快速开始">快速开始</h2>
+<h3 id="要求">要求</h3>
+<ul>
+<li>C++11及以上，是跨全平台的</li>
+</ul>
+<h3 id="安装与引入">安装与引入</h3>
+<p>推荐用以下两种方式进行引入：</p>
+<ul>
+<li>
+<p>方法一：通过cmake中的 <code>FetchContent</code> 模块引入：</p>
+<ol>
+<li>在项目的cmake中添加下列代码进行引入，国内如果因为网络问题无法使用可以换这个gitee的镜像源：https://gitee.com/acking-you/elog4cpp.git
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">include</span><span class="p">(</span><span class="s">FetchContent</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">FetchContent_Declare</span><span class="p">(</span>
+        <span class="s">elog4cpp</span>
+        <span class="s">GIT_REPOSITORY</span> <span class="s">https://github.com/ACking-you/elog4cpp.git</span>
+        <span class="s">GIT_TAG</span> <span class="s">v2.2</span>
+        <span class="s">GIT_SHALLOW</span> <span class="s">TRUE</span><span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">FetchContent_MakeAvailable</span><span class="p">(</span><span class="s">elog4cpp</span><span class="p">)</span><span class="err">
+</span></code></pre></div></li>
+<li>在需要使用该库的目标中链接 <code>elog</code> 即可。
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">target</span>  <span class="s">elog</span><span class="p">)</span><span class="err">
+</span></code></pre></div></li>
+</ol>
+</li>
+<li>
+<p>方法二：手动下载源代码，然后通过cmake命令引入：</p>
+<ol>
+<li>
+<p>通过git命令下载项目源码</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git clone https://github.com/ACking-you/elog4cpp.git
+</code></pre></div></li>
+<li>
+<p>将该项目添加到子项目中：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">add_subdirectory</span><span class="p">(</span><span class="s">elog4cpp</span><span class="p">)</span><span class="err">
+</span></code></pre></div></li>
+<li>
+<p>在需要使用该库的目标中链接 <code>elog</code> 即可。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">target</span>  <span class="s">elog</span><span class="p">)</span><span class="err">
+</span></code></pre></div></li>
+</ol>
+</li>
+</ul>
+<h3 id="开始使用">开始使用</h3>
+<ul>
+<li>
+<p>在不经过任何配置的情况下，我们可以直接调用静态方法输出到终端，代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">trace</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">debug</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">info</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">warn</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">error</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">fatal</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>输出结果如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/15ddda1c5a184e61b54afa83b33dcaa2.png"
+        data-srcset="https://img-blog.csdnimg.cn/15ddda1c5a184e61b54afa83b33dcaa2.png, https://img-blog.csdnimg.cn/15ddda1c5a184e61b54afa83b33dcaa2.png 1.5x, https://img-blog.csdnimg.cn/15ddda1c5a184e61b54afa83b33dcaa2.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/15ddda1c5a184e61b54afa83b33dcaa2.png"
+        title="output" /></p>
+<p>通过上述例子，我们需要明白以下三点：</p>
+<ol>
+<li>本日志库的输出等级一共有 <code>trace</code> 、<code>debug</code> 、<code>info</code> 、<code>warn</code> 、<code>error</code> 、<code>fatal</code> 。</li>
+<li>默认的输出最低输出等级为 <code>debug</code> ，也就是 <code>trace</code> 等级并不输出。</li>
+<li>在进行 <code>fatal</code> 等级的输出时会抛出异常。</li>
+</ol>
+<blockquote>
+<p>实际上在 <code>error</code> 或 <code>fatal</code> 等级输出时，如果 <code>errno</code> 存在错误，那么会输出对应的错误，这在进行系统编程的时候很有用。</p>
+</blockquote>
+</li>
+</ul>
+<hr>
+<ul>
+<li>
+<p>前面的例子中，我们无法输出 <code>trace</code> 等级的日志，现在我们尝试着改变它的最低输出等级，然后将输出的内容增加更多的信息（比如文件名、行号、函数名等），并且将输出的内容以颜色高亮的形式输出。</p>
+<p>代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">GlobalConfig</span><span class="o">::</span><span class="n">Get</span><span class="p">()</span>
+        <span class="p">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">Levels</span><span class="o">::</span><span class="n">kTrace</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">setFormatter</span><span class="p">(</span><span class="n">formatter</span><span class="o">::</span><span class="n">colorfulFormatter</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">trace</span><span class="p">(</span><span class="n">loc</span><span class="o">::</span><span class="n">current</span><span class="p">(),</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">debug</span><span class="p">(</span><span class="n">loc</span><span class="o">::</span><span class="n">current</span><span class="p">(),</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">info</span><span class="p">(</span><span class="n">loc</span><span class="o">::</span><span class="n">current</span><span class="p">(),</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">warn</span><span class="p">(</span><span class="n">loc</span><span class="o">::</span><span class="n">current</span><span class="p">(),</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">Log</span><span class="o">::</span><span class="n">error</span><span class="p">(</span><span class="n">loc</span><span class="o">::</span><span class="n">current</span><span class="p">(),</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>输出效果如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/ba02536932f54116a73c74006b6587bf.png"
+        data-srcset="https://img-blog.csdnimg.cn/ba02536932f54116a73c74006b6587bf.png, https://img-blog.csdnimg.cn/ba02536932f54116a73c74006b6587bf.png 1.5x, https://img-blog.csdnimg.cn/ba02536932f54116a73c74006b6587bf.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/ba02536932f54116a73c74006b6587bf.png"
+        title="tupian" />
+从上面的示例代码中，我们发现，如果需要获得文件名等信息，需要在第一个参数中传入 <code>loc::current()</code> ，显然大多数时候我们会觉得这样使用起来会很麻烦，所以我们可以通过宏去解决这个问题，你可以像下面这样，在引入 <code>&lt;elog/logger.h&gt;</code> 之前定义 <code>ENABLE_ELG_LOG</code> 宏来使用更简短的宏定义 <code>ELG_&lt;LEVEL&gt;</code>。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#define ENABLE_ELG_LOG
+</span><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">GlobalConfig</span><span class="o">::</span><span class="n">Get</span><span class="p">()</span>
+        <span class="p">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">Levels</span><span class="o">::</span><span class="n">kTrace</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">setFormatter</span><span class="p">(</span><span class="n">formatter</span><span class="o">::</span><span class="n">colorfulFormatter</span><span class="p">);</span>
+    <span class="n">ELG_TRACE</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_DEBUG</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_INFO</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_WARN</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_ERROR</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>这个宏定义生成的代码与之前的示例中的代码等效。</p>
+</li>
+</ul>
+<hr>
+<ul>
+<li>
+<p>之前的例子都只是输出到控制台，我们现在把内容输出到文件中去。</p>
+<p>代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#define ENABLE_ELG_LOG
+</span><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">GlobalConfig</span><span class="o">::</span><span class="n">Get</span><span class="p">()</span>
+        <span class="p">.</span><span class="n">setFilepath</span><span class="p">(</span><span class="s">&#34;../log/&#34;</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">Levels</span><span class="o">::</span><span class="n">kTrace</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">setFormatter</span><span class="p">(</span><span class="n">formatter</span><span class="o">::</span><span class="n">colorfulFormatter</span><span class="p">);</span>
+    <span class="n">ELG_TRACE</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_DEBUG</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_INFO</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_WARN</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+    <span class="n">ELG_ERROR</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>上述代码的输出的结果既会输出到文件中也会输出到控制台中，<code>setFilepath(&quot;../log/&quot;)</code> 指定了输出文件的文件夹为上一层级的 <code>log</code> 文件夹。注意这里传递的文件路径只能是输出文件的文件夹路径，也就是说文件输出只支持滚动日志。如果参数换为 <code>&quot;../log&quot;</code> 则表示输出文件夹路径为上级目录，且输出文件的名字前面都带有 <code>log</code> 。输出文件夹的命名格式为：<code>.&lt;DATE TIME&gt;.&lt;USERNAME&gt;.&lt;PID&gt;.log</code> 。</p>
+<p>如果需要禁用输出到控制台，则只需要添加下列配置：<code>GlobalConfig::Get().enableConsole(false)</code> 。同理如果不需要输出到文件，则需要保持 <code>log_filepath</code> 的值为默认值 <code>nullptr</code> 即可。</p>
+</li>
+</ul>
+<p>经过以上三次实践，大家应该对本库的基本使用已经有所了解，接下来如果需要详细了解对应的使用方式，则可以以继续深入了解如下内容：</p>
+<ol>
+<li><a href="#%e5%a6%82%e4%bd%95%e9%85%8d%e7%bd%ae" rel="">如何配置</a></li>
+<li><a href="#%e8%af%a6%e7%bb%86%e6%8e%a5%e5%8f%a3%e6%8f%8f%e8%bf%b0" rel="">详细接口描述</a></li>
+</ol>
+<h2 id="如何配置">如何配置</h2>
+<p>所有的配置都基于 <code>Config</code> 类或者 <code>GlobalConfig</code> 类。请注意这两个类的关系，<code>Config</code> 类作为 <code>GlobalConfig</code> 的基类，<code>Config</code> 中含有一些输出的通用配置，一般用于局部配置，<code>GlobalConfig</code> 中含有一些特殊的一次性配置，一般作为全局单例用于全局配置。</p>
+<h3 id="全局配置">全局配置</h3>
+<p>如果没有设置局部配置，默认使用的都是全局配置。如果是使用静态方法或宏进行日志打印，那就只能使用通过全局配置进行配置。</p>
+<h4 id="配置方式">配置方式</h4>
+<p>所有的全局配置都是通过一个全局的单例 <code>GlobalConfig</code> 来进行配置，可以调用 <code>GlobalConfig::Get</code> 来获取该单例，共有以下两种方式对该单例进行配置：</p>
+<ol>
+<li>调用 <code>GlobalConfig</code> 的方法来配置，具体情况如下。
+特有的方法如下：</li>
+</ol>
+<ul>
+<li><code>GlobalConfig::setRollSize(int size)</code>：设置单个文件最大超过多大，就创建新的文件进行日志打印，以 mb 为基本单位。</li>
+<li><code>GlobalConfig::setFlushInterval(int flushInterval)</code>：设置每过多长时间进行一次刷新日志到磁盘，以秒为基本单位。</li>
+<li><code>GlobalConfig::setFilepath(const char* basedir)</code>：设置滚动日志的输出路径，注意传入的并不是单个文件路径，而是一个文件夹路径，本日志库只支持滚动日志。</li>
+<li><code>GlobalConfig::enableConsole(bool s)</code>：设置是否输出到控制台。</li>
+</ul>
+<p>继承自 <code>Config</code> 的方法如下：</p>
+<ul>
+<li>
+<p><code>Config::setFlag(Flags flag)</code>：设置 flags ，该 flags 可以用于更精细的控制日志输出的内容，对于Flags有以下枚举。</p>
+<ul>
+<li><code>kDate</code>：是否输出日期。</li>
+<li><code>kTime</code>：是否输出时间。</li>
+<li><code>kLongname</code>：是否输出长文件名。</li>
+<li><code>kShortname</code>：是否输出短文件名。</li>
+<li><code>kLine</code>：是否输出行号。</li>
+<li><code>kFuncName</code>：是否输出函数名。</li>
+<li><code>kThreadId</code>：是否输出线程id。</li>
+<li><code>kStdFlags</code>：代表 <code>kDate | kTime | kShortname | kLine | kFuncName</code> ，里面的或运算代表开启对应的功能。</li>
+</ul>
+</li>
+<li>
+<p><code>Config::setLevel(Levels level)</code>：设置最低的日志输出等级。</p>
+</li>
+<li>
+<p><code>Config::setName(const char* name)</code>：设置日志器的名字，会在输出的时候添加该内容。</p>
+</li>
+<li>
+<p><code>Config::setBefore(callback_t const&amp; cb)</code>：设置发生在格式化之前的回调函数。</p>
+</li>
+<li>
+<p><code>Config::setAfter(callback_t const&amp; cb)</code>：设置发生在格式化之后的回调函数。</p>
+</li>
+<li>
+<p><code>Config::setFormatter(formatter_t const&amp; formatter)</code>：设置格式化器，默认已经写好了如下格式化器：</p>
+<ul>
+<li><code>defaultFormatter</code> ：默认的格式化器。</li>
+<li><code>colorfulFormatter</code>：在默认格式化器的基础上，在控制台台的输出中带上颜色。</li>
+<li><code>jsonFormatter</code>：以json格式进行输出。</li>
+<li><code>customFromString(str) -&gt; formatter_t</code>：这是一个可以你传入的字符串获取自定义的格式化器，具体的是使用方式请查看后续的描述。</li>
+</ul>
+</li>
+</ul>
+<ol start="2">
+<li>
+<p>通过传入json配置文件来配置，具体情况如下。
+你除了调用对应的方法来进行配置以外，还可以通过外部的json文件进行配置，关键方法在于 <code>loadFromJSON</code> 和 <code>loadToJSON</code> ，分别用于从 json 文件中读取信息设置 <code>GlobalConfig</code> 的变量值和根据 <code>GlobalConfig</code> 变量值反过来生成对应的 json 文件。
+具体的 <code>json</code> 配置文件如下，所有的使用方式均在 <code>comments</code> 中有说明：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="p">{</span>
+  <span class="nt">&#34;comments&#34;</span><span class="p">:</span> <span class="p">[</span>
+    <span class="s2">&#34;下面的数值都是默认生成的注释，用于说明参数填写的注意事项&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;name:可选参数，默认不填则日志输出无name&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;roll_size:滚动日志的阈值，以mb为单位&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;flush_interval:日志后台刷盘的时间，以秒为单位&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;out_console:是否开启输出控制台，是bool值&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;out_file:是否开启输出日志文件，不开启请使用null值，开启请用一个文件夹目录&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;flag:用于开启日志对应输出的数据内容，有date,time,line,file,short_file,tid,func七种，可以通过+号来同时开启，当然也可直接使用default，它表示除tid以外的所有选项&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;level:用于规定全局的最低输出等级，有trace,debug,info,warn,error,fatal,默认使用debug&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;formatter:用于规定全局的日志格式化方式，有default,colorful,custom这三种，默认采取default，如果使用custom，则需要添加fmt_string&#34;</span><span class="p">,</span>
+    <span class="s2">&#34;fmt_string:仅当formatter选择custom后用于设定自定义的formatter，对应的数据表示如下：%T:time,%t:tid,%F:filepath,%f:func,%e:error info,%L:long levelText,%l:short levelText,%v:message ,%c color start %C color end&#34;</span>
+  <span class="p">],</span>
+  <span class="nt">&#34;elog&#34;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="nt">&#34;flag&#34;</span><span class="p">:</span> <span class="s2">&#34;default&#34;</span><span class="p">,</span>
+    <span class="nt">&#34;flush_interval&#34;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="nt">&#34;formatter&#34;</span><span class="p">:</span> <span class="s2">&#34;default&#34;</span><span class="p">,</span>
+    <span class="nt">&#34;level&#34;</span><span class="p">:</span> <span class="s2">&#34;debug&#34;</span><span class="p">,</span>
+    <span class="nt">&#34;out_console&#34;</span><span class="p">:</span> <span class="kc">true</span><span class="p">,</span>
+    <span class="nt">&#34;out_file&#34;</span><span class="p">:</span> <span class="s2">&#34;null&#34;</span><span class="p">,</span>
+    <span class="nt">&#34;roll_size&#34;</span><span class="p">:</span> <span class="mi">20</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></li>
+</ol>
+<h4 id="使用示例">使用示例</h4>
+<p>两个简单完整使用示例如下：</p>
+<ol>
+<li>
+<p>通过 <code>GlobalConfig</code> 的方法进行配置。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#define ENABLE_ELG_LOG
+</span><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="n">GlobalConfig</span><span class="o">::</span><span class="n">Get</span><span class="p">()</span>
+     <span class="p">.</span><span class="n">setRollSize</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setFlushInterval</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setFilepath</span><span class="p">(</span><span class="s">&#34;../log/&#34;</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">enableConsole</span><span class="p">(</span><span class="nb">true</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setFlag</span><span class="p">(</span><span class="n">kStdFlags</span> <span class="o">+</span> <span class="n">kThreadId</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">kTrace</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setName</span><span class="p">(</span><span class="s">&#34;elog&#34;</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setBefore</span><span class="p">([](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+         <span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;before&#34;</span><span class="p">);</span>
+     <span class="p">})</span>
+     <span class="p">.</span><span class="n">setAfter</span><span class="p">([](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+         <span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;after&#34;</span><span class="p">);</span>
+     <span class="p">})</span>
+     <span class="p">.</span><span class="n">setFormatter</span><span class="p">(</span><span class="n">formatter</span><span class="o">::</span><span class="n">customFromString</span><span class="p">(</span><span class="s">&#34;%c[%L][%T][tid:%t][name:%n][file:%F][func:%f]:%v%C&#34;</span><span class="p">));</span>
+	<span class="n">ELG_TRACE</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_DEBUG</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_INFO</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_WARN</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_ERROR</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>打印结果如下：
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/39e4711a3dd0428a903a4120710d31e2.png"
+        data-srcset="https://img-blog.csdnimg.cn/39e4711a3dd0428a903a4120710d31e2.png, https://img-blog.csdnimg.cn/39e4711a3dd0428a903a4120710d31e2.png 1.5x, https://img-blog.csdnimg.cn/39e4711a3dd0428a903a4120710d31e2.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/39e4711a3dd0428a903a4120710d31e2.png"
+        title="img2" /></p>
+</li>
+<li>
+<p>同理可以直接使用等效的 <code>json</code> 配置文件直接加载对应的配置项。
+配置项如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="p">{</span>
+  <span class="s">&#34;elog&#34;</span><span class="o">:</span> <span class="p">{</span>
+    <span class="s">&#34;flag&#34;</span><span class="o">:</span> <span class="s">&#34;default+tid&#34;</span><span class="p">,</span>
+    <span class="s">&#34;flush_interval&#34;</span><span class="o">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="s">&#34;name&#34;</span><span class="o">:</span> <span class="s">&#34;elog&#34;</span><span class="p">,</span>
+    <span class="s">&#34;formatter&#34;</span><span class="o">:</span> <span class="s">&#34;custom&#34;</span><span class="p">,</span>
+    <span class="s">&#34;fmt_string&#34;</span><span class="o">:</span> <span class="s">&#34;%c[%L][%T][tid:%t][name:%n][file:%F][func:%f]:%v%C&#34;</span><span class="p">,</span>
+    <span class="s">&#34;level&#34;</span><span class="o">:</span> <span class="s">&#34;trace&#34;</span><span class="p">,</span>
+    <span class="s">&#34;out_console&#34;</span><span class="o">:</span> <span class="nb">true</span><span class="p">,</span>
+    <span class="s">&#34;out_file&#34;</span><span class="o">:</span> <span class="s">&#34;../log/&#34;</span><span class="p">,</span>
+    <span class="s">&#34;roll_size&#34;</span><span class="o">:</span> <span class="mi">4</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#define ENABLE_ELG_LOG
+</span><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="n">GlobalConfig</span><span class="o">::</span><span class="n">Get</span><span class="p">()</span>
+     <span class="p">.</span><span class="n">loadFromJSON</span><span class="p">(</span><span class="s">&#34;../config.json&#34;</span><span class="p">)</span>
+     <span class="p">.</span><span class="n">setBefore</span><span class="p">([](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+         <span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;before&#34;</span><span class="p">);</span>
+     <span class="p">})</span>
+     <span class="p">.</span><span class="n">setAfter</span><span class="p">([](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+         <span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;after&#34;</span><span class="p">);</span>
+     <span class="p">});</span>
+	<span class="n">ELG_TRACE</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_DEBUG</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_INFO</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_WARN</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+	<span class="n">ELG_ERROR</span><span class="p">(</span><span class="s">&#34;hello elog4cpp&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></li>
+</ol>
+<h3 id="局部配置">局部配置</h3>
+<p>局部配置指的是可以通过单独创建一个类，来使用一个单独的 <code>Config</code> 配置。某些配置只提供了全局，具体有<code>roolSize</code> 、<code>flushInterval</code>、<code>outConsole</code>、<code>outFile</code>，因为后端负责输出的线程只能是一个单例，所以这些配置也只能配置一次。</p>
+<p>关于如何使用局部配置的步骤如下：</p>
+<ol>
+<li>创建 <code>Config</code> 结构体并初始化对应的配置。</li>
+<li>创建 <code>Log</code> 对象并传入当前 日志输出的等级以及 <code>Config</code> 指针参数。</li>
+<li>使用 <code>Log</code> 对象，调用它对应的 <code>println</code> 和 <code>printf</code> 方法进行打印。</li>
+</ol>
+<p>示例代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;elog/logger.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;memory&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;vector&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">elog</span><span class="p">;</span>
+
+<span class="kt">void</span> <span class="nf">config_global</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="n">GlobalConfig</span><span class="o">::</span><span class="n">Get</span><span class="p">()</span>
+		<span class="p">.</span><span class="n">loadFromJSON</span><span class="p">(</span><span class="s">&#34;../config.json&#34;</span><span class="p">)</span>
+		<span class="p">.</span><span class="n">setBefore</span><span class="p">([](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;before&#34;</span><span class="p">);</span>
+		<span class="p">})</span>
+		<span class="p">.</span><span class="n">setAfter</span><span class="p">([](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;after&#34;</span><span class="p">);</span>
+		<span class="p">});</span>
+<span class="p">}</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">Config</span><span class="o">&gt;</span> <span class="n">make_config</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="k">auto</span> <span class="n">config</span> <span class="o">=</span> <span class="n">make_unique</span><span class="o">&lt;</span><span class="n">Config</span><span class="o">&gt;</span><span class="p">();</span>
+	<span class="n">config</span><span class="o">-&gt;</span><span class="n">log_formatter</span> <span class="o">=</span> <span class="n">formatter</span><span class="o">::</span><span class="n">colorfulFormatter</span><span class="p">;</span>
+	<span class="n">config</span><span class="o">-&gt;</span><span class="n">log_name</span> <span class="o">=</span> <span class="s">&#34;local_config&#34;</span><span class="p">;</span>
+	<span class="n">config</span><span class="o">-&gt;</span><span class="n">log_level</span> <span class="o">=</span> <span class="n">kTrace</span><span class="p">;</span>
+	<span class="n">config</span><span class="o">-&gt;</span><span class="n">log_flag</span> <span class="o">=</span> <span class="n">kStdFlags</span> <span class="o">+</span> <span class="n">kThreadId</span><span class="p">;</span>
+	<span class="n">config</span><span class="o">-&gt;</span><span class="n">log_before</span> <span class="o">=</span> <span class="p">[](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;before&#34;</span><span class="p">);</span>
+	<span class="p">};</span>
+	<span class="n">config</span><span class="o">-&gt;</span><span class="n">log_after</span> <span class="o">=</span> <span class="p">[](</span><span class="n">output_buf_t</span><span class="o">&amp;</span> <span class="n">buf</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">buf</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="s">&#34;after&#34;</span><span class="p">);</span>
+	<span class="p">};</span>
+	<span class="k">return</span> <span class="n">config</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="n">config_global</span><span class="p">();</span>
+	<span class="c1">//创建Log对象，并设置对应的Config和level
+</span><span class="c1"></span>	<span class="k">auto</span> <span class="n">trace</span> <span class="o">=</span> <span class="n">Log</span><span class="p">(</span><span class="n">kTrace</span><span class="p">,</span> <span class="n">make_config</span><span class="p">());</span>
+	<span class="n">trace</span><span class="p">.</span><span class="n">printf</span><span class="p">(</span><span class="s">&#34;hello {}&#34;</span><span class="p">,</span> <span class="s">&#34;world&#34;</span><span class="p">);</span>
+	<span class="n">trace</span><span class="p">.</span><span class="n">println</span><span class="p">(</span><span class="s">&#34;hello &#34;</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">});</span>
+	<span class="c1">//改变日志输出等级
+</span><span class="c1"></span>	<span class="n">trace</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="n">kDebug</span><span class="p">);</span>
+	<span class="n">trace</span><span class="p">.</span><span class="n">printf</span><span class="p">(</span><span class="s">&#34;hello {}&#34;</span><span class="p">,</span> <span class="s">&#34;world&#34;</span><span class="p">);</span>
+	<span class="n">trace</span><span class="p">.</span><span class="n">println</span><span class="p">(</span><span class="s">&#34;hello &#34;</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">});</span>
+	<span class="c1">//移动构造到新对象
+</span><span class="c1"></span>	<span class="k">auto</span> <span class="n">info</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">trace</span><span class="p">);</span>
+	<span class="n">info</span><span class="p">.</span><span class="n">set_level</span><span class="p">(</span><span class="n">kInfo</span><span class="p">);</span>
+	<span class="n">info</span><span class="p">.</span><span class="n">printf</span><span class="p">(</span><span class="s">&#34;hello {}&#34;</span><span class="p">,</span> <span class="s">&#34;world&#34;</span><span class="p">);</span>
+	<span class="n">info</span><span class="p">.</span><span class="n">println</span><span class="p">(</span><span class="s">&#34;hello &#34;</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><p>观察上述源码，我们发现 <code>Log</code> 对象是不可复制的，它只能移动，而且每个 <code>Log</code> 对象也只能独占一份 <code>Config</code> ，所以是完全线程安全的。</p>
+<h2 id="详细接口描述">详细接口描述</h2>
+<h3 id="formatter">Formatter</h3>
+<h4 id="内置formatter">内置formatter</h4>
+<p>如果你看过前面的内容，那么对 <code>formatter</code> 的作用应该有了一定的了解，他是一个用于控制格式化输出的接口实现，本日志库内部已经实现的 <code>formatter</code> 有如下几种：</p>
+<ul>
+<li><code>defaultFormatter</code> ：这是默认的formatter，格式固定。</li>
+<li><code>jsonFormatter</code>：以json格式输出，格式固定。</li>
+<li><code>colorfulFormatter</code>：输出的格式与formatter相同，但输出到控制台的时候有颜色高亮。</li>
+<li><code>customFromString</code>：可以根据用户传入的字符串自定义输出格式。
+具体描述：
+<ul>
+<li>%T：表示整个日期时间，还包括时区。</li>
+<li>%t：表示线程id。</li>
+<li>%F：表示该条日志输出来自哪个文件。</li>
+<li>%f：表示该条日志输出来自哪个函数。</li>
+<li>%e：表示如果 <code>errno</code> 存在错误则表示该错误信息，否则表示空。</li>
+<li>%n：表示当前日志器的名字，如果不存在，则表示为空。</li>
+<li>%L：表示长的代表日志等级的字符串，比如 <code>TRACE</code> 。</li>
+<li>%l：表示短的代表日志等级的字符串，比如 <code>TRC</code> 。</li>
+<li>%v：表示日志输出的内容。</li>
+<li>%c和%C：表示颜色的开始与结束，只在支持 <code>\033</code> 的终端中有效。</li>
+</ul>
+</li>
+</ul>
+<h4 id="自定义formatter">自定义formatter</h4>
+<p>既然想要 <code>formatter</code> ，那么就必须清楚 <code>formatter</code> 在本日志库中到底被设计成了什么。实际上 <code>formatter</code> 在本日志库中只是一个简单的回调函数，函数签名如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">using</span> <span class="n">formatter_t</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="kt">void</span><span class="p">(</span><span class="n">Config</span><span class="o">*</span> <span class="n">config</span><span class="p">,</span> <span class="n">context</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">buffer_t</span><span class="o">&amp;</span><span class="n">buf</span><span class="p">,</span><span class="n">Appenders</span> <span class="n">apender_type</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span>
+</code></pre></div><p>各个参数的含义如下：</p>
+<ul>
+<li><code>config</code>：当前日志输出使用的配置。</li>
+<li><code>ctx</code>：当前日志输出的相关内容，包括需要输出的日志内容、日志等级和行号等等信息。</li>
+<li><code>buf</code>：当前日志最终格式化后需要输出到的 <code>buffer</code> 。</li>
+<li><code>appder_type</code>：这是一个枚举代表当前日志格式化输出的目的地，具体有 文件 或 控制台 两种。</li>
+</ul>
+<p>根据上述解释，如果想要实现一个自己的 <code>formatter</code> ，就可以通过 <code>config</code> 的配置信息和 <code>ctx</code> 的输出信息以及 <code>appender_type</code> 的目的地信息来定制化的格式化输出内容到 <code>buf</code> 中。</p>
+<p>有了上述理解，我们就能够通过观察原本已经实现的 <code>formatter</code> 来仿照的实现自己的 <code>formatter</code> 了，例如 <code>defaultFormatter</code> 的源码链接如下：<a href="https://github.com/ACking-you/elog4cpp/blob/master/src/formatter.cc" target="_blank" rel="noopener noreffer">src/formatter.cc</a></p>
+<h3 id="micros">Micros</h3>
+<h4 id="enable_elg_log">ENABLE_ELG_LOG</h4>
+<p>为了使得文件位置信息的输出不需要手动的添加 <code>loc::current()</code> 这一参数，本日志库提供了 <code>ELG_&lt;LEVEL&gt;</code> 来简化这一过程，所以如果需要文件位置信息可以将 <code>Log::&lt;Level&gt;</code> 替换为下面的宏：</p>
+<ul>
+<li>ELG_TRACE</li>
+<li>ELG_DEBUG</li>
+<li>ELG_INFO</li>
+<li>ELG_WARN</li>
+<li>ELG_ERROR</li>
+<li>ELG_FATAL</li>
+</ul>
+<blockquote>
+<p>注意：使用上述宏之前，需要在 <code>#include&lt;elog/logger.h&gt;</code> 之前定义 <code>ENABLE_ELG_LOG</code> 宏。</p>
+</blockquote>
+<h4 id="enable_elg_check">ENABLE_ELG_CHECK</h4>
+<p>通过定义 <code>ENABLE_ELG_CHECK</code> 宏，我们可以使用到如下的宏定义来更方便的检查值之间的关系：</p>
+<ul>
+<li>断言宏，不满足条件，则抛出异常。
+<ul>
+<li><code>ELG_CHECK_EQ(a,b)</code> 等价于 <code>ELG_ASSERT_IF(a == b)</code>.</li>
+<li><code>ELG_CHECK_NQ(a,b)</code> 等价于 <code>ELG_ASSERT_IF(a != b)</code>.</li>
+<li><code>ELG_CHECK_GE(a,b)</code> 等价于 <code>ELG_ASSERT_IF(a &gt; b)</code>.</li>
+<li><code>ELG_CHECK_GT(a,b)</code> 等价于 <code>ELG_ASSERT_IF(a &gt;= b)</code>.</li>
+<li><code>ELG_CHECK_LE(a,b)</code> 等价于 <code>ELG_ASSERT_IF(a &lt; b)</code>.</li>
+<li><code>ELG_CHECK_LT(a,b)</code> 等价于 <code>ELG_ASSERT_IF(a &lt;= b)</code>.</li>
+<li><code>ELG_CHECK_NOTNULL(a)</code> 等价于 <code>ELG_ASSERT_IF(a != nullptr)</code>.</li>
+</ul>
+</li>
+<li>判断断言，自定义打印。
+在传入判断条件后，会返回一个对象供你进行打印提示信息，可以选择不同的等级进行打印，如下面的例子是打印 <code>trace</code> 等级。
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">ELG_CHECK</span><span class="p">(</span><span class="mi">1</span> <span class="o">==</span> <span class="mi">2</span><span class="p">).</span><span class="n">trace</span><span class="p">(</span><span class="s">&#34;1 != 2!&#34;</span><span class="p">);</span>
+</code></pre></div></li>
+</ul>
+<h3 id="其他杂项">其他杂项</h3>
+<p>还有如下提供方便的函数：</p>
+<ul>
+<li><code>elog::Ptr</code>：用于将任意指针强制转化为 <code>void*</code> ，这是为了方便直接打印指针的值。</li>
+<li><code>elog::WaitForDone</code>：等待后台线程将日志信息刷入磁盘，这在某些时候很有用。</li>
+</ul>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/">elog4cpp官方文档</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-02-13</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档" data-hashtags="elog4cpp官方文档"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-hashtag="elog4cpp官方文档"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档" data-image="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档" data-description="elog4cpp官方文档"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档" data-description="elog4cpp官方文档"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" data-title="elog4cpp官方文档"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" class="prev" rel="prev" title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" class="next" rel="next" title="实现高性能时间轮用于踢出空闲连接">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

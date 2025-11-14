@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>bitset与埃氏筛 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="bitset与埃氏筛"><meta property="og:title" content="bitset与埃氏筛" />
+<meta property="og:description" content="bitset与埃氏筛" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-02-22T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-02-22T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="bitset与埃氏筛"/>
+<meta name="twitter:description" content="bitset与埃氏筛"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" /><link rel="prev" href="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" /><link rel="next" href="https://acking-you.github.io/posts/%E5%A2%9E%E9%87%8F%E5%85%83%E7%B4%A0%E4%B9%8B%E9%97%B4%E7%9A%84%E6%9C%80%E5%A4%A7%E5%B7%AE%E5%80%BC%E5%89%8D%E7%BC%80dp/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "bitset与埃氏筛",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B\/"
+        },"genre": "posts","keywords": "bitset与埃氏筛","wordcount":  2134 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B\/","datePublished": "2022-02-22T00:00:00+00:00","dateModified": "2022-02-22T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "bitset与埃氏筛"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center, https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center"
+        title="bitset与埃氏筛" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">bitset与埃氏筛</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/c++%E5%AE%9E%E6%88%98/"><i class="far fa-folder fa-fw"></i>C++实战</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-02-22">2022-02-22</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 2134 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 5 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#介绍">介绍</a></li>
+    <li><a href="#使用">使用<a href="">¶</a></a>
+      <ul>
+        <li><a href="#头文件">头文件<a href="">¶</a></a></li>
+        <li><a href="#指定大小">指定大小<a href="">¶</a></a></li>
+        <li><a href="#构造函数">构造函数<a href="">¶</a></a></li>
+        <li><a href="#运算符">运算符<a href="">¶</a></a></li>
+        <li><a href="#成员函数">成员函数<a href="">¶</a></a></li>
+      </ul>
+    </li>
+    <li><a href="#应用">应用<a href="">¶</a></a>
+      <ul>
+        <li><a href="#libreoj-β-round-2贪心只能过样例httpslojacproblem515httpsoi-wikiorglangcslbitsetlibreoj-round-2"><a href="https://loj.ac/problem/515">「LibreOJ β Round #2」贪心只能过样例</a><a href="https://oi-wiki.org/lang/csl/bitset/#libreoj-round-2">¶</a></a></li>
+        <li><a href="#与埃氏筛结合">与埃氏筛结合</a></li>
+        <li><a href="#埃氏筛速度测试">埃氏筛速度测试</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="bitset">bitset</h1>
+<h2 id="介绍">介绍</h2>
+<p><code>std::bitset</code> 是标准库中的一个存储 <code>0/1</code> 的大小不可变容器。严格来讲，它并不属于 STL。</p>
+<blockquote>
+<p><code>bitset</code> 并不属于 STL，而是一种标准库中的 &ldquo;Special Container&rdquo;。事实上，它作为一种容器，也并不满足 STL 容器的要求。说它是适配器，它也并不依赖于其它 STL 容器作为底层实现。——摘自《The C++ Standard Library 2nd Edition》</p>
+</blockquote>
+<p>由于内存地址是按字节即 <code>byte</code> 寻址，而非比特 <code>bit</code>，一个 <code>bool</code> 类型的变量，虽然只能表示 <code>0/1</code>, 但是也占了 1 byte 的内存。</p>
+<p><code>bitset</code> 就是通过固定的优化，使得一个字节的八个比特能分别储存 8 位的 <code>0/1</code>。</p>
+<p>对于一个 4 字节的 <code>int</code> 变量，在只存 <code>0/1</code> 的意义下，<code>bitset</code> 占用空间只是其 ，计算一些信息时，所需时间也是其 。</p>
+<p>在某些情况下通过 <code>bitset</code> 可以优化程序的运行效率。至于其优化的是复杂度还是常数，要看计算复杂度的角度。一般 <code>bitset</code> 的复杂度有以下几种记法：（设原复杂度为 ）</p>
+<ol>
+<li>$O(n)$，这种记法认为 <code>bitset</code> 完全没有优化复杂度。</li>
+<li>$O(n/32)$，这种记法不太严谨（复杂度中不应出现常数），但体现了 <code>bitset</code> 能将所需时间优化至 $1/32$。</li>
+<li>$O(n/w)$，其中 $w=32$（计算机的位数），这种记法较为普遍接受。</li>
+<li>$O(n/logw)$，其中 $w$ 为计算机一个整型变量的大小。</li>
+</ol>
+<p>当然，<code>vector</code> 的一个特化 <code>vector&lt;bool&gt;</code> 的储存方式同 <code>bitset</code> 一样，区别在于其支持动态开空间，<code>bitset</code> 则和我们一般的静态数组一样，是在编译时就开好了的。</p>
+<p>然而，<code>bitset</code> 有一些好用的库函数，不仅方便，而且有时可以避免使用 for 循环而没有实质的速度优化。因此，一般不使用 <code>vector&lt;bool&gt;</code>。</p>
+<h2 id="使用">使用<a href="" rel="">¶</a></h2>
+<h3 id="头文件">头文件<a href="" rel="">¶</a></h3>
+<p><code>#include &lt;bitset&gt;</code></p>
+<h3 id="指定大小">指定大小<a href="" rel="">¶</a></h3>
+<p><code>bitset&lt;1000&gt; bs;  // a bitset with 1000 bits </code></p>
+<h3 id="构造函数">构造函数<a href="" rel="">¶</a></h3>
+<ul>
+<li><code>bitset()</code>: 每一位都是 <code>false</code>。</li>
+<li><code>bitset(unsigned long val)</code>: 设为 <code>val</code> 的二进制形式。</li>
+<li><code>bitset(const string&amp; str)</code>: 设为 串 <code>str</code>。</li>
+</ul>
+<h3 id="运算符">运算符<a href="" rel="">¶</a></h3>
+<ul>
+<li><code>operator []</code>: 访问其特定的一位。</li>
+<li><code>operator ==/!=</code>: 比较两个 <code>bitset</code> 内容是否完全一样。</li>
+<li><code>operator &amp;/&amp;=/|/| =/^/^=/~</code>: 进行按位与/或/异或/取反操作。<strong><code>bitset</code> 只能与 <code>bitset</code> 进行位运算</strong>，若要和整型进行位运算，要先将整型转换为 <code>bitset</code>。</li>
+<li><code>operator &lt;&gt;/&lt;&lt;=/&gt;&gt;=</code>: 进行二进制左移/右移。</li>
+<li><code>operator &lt;&gt;</code>: 流运算符，这意味着你可以通过 <code>cin/cout</code> 进行输入输出。</li>
+</ul>
+<h3 id="成员函数">成员函数<a href="" rel="">¶</a></h3>
+<ul>
+<li><code>count()</code>: 返回 <code>true</code> 的数量。</li>
+<li><code>size()</code>: 返回 <code>bitset</code> 的大小。</li>
+<li><code>test(pos)</code>: 它和 <code>vector</code> 中的 <code>at()</code> 的作用是一样的，和 <code>[]</code> 运算符的区别就是越界检查。</li>
+<li><code>any()</code>: 若存在某一位是 <code>true</code> 则返回 <code>true</code>，否则返回 <code>false</code>。</li>
+<li><code>none()</code>: 若所有位都是 <code>false</code> 则返回 <code>true</code>，否则返回 <code>false</code>。</li>
+<li><code>all()</code>:<strong>C++11</strong>，若所有位都是 <code>true</code> 则返回 <code>true</code>，否则返回 <code>false</code>。</li>
+<li>
+<ol>
+<li><code>set()</code>: 将整个 <code>bitset</code> 设置成 <code>true</code>。</li>
+<li><code>set(pos, val = true)</code>: 将某一位设置成 <code>true</code>/<code>false</code>。</li>
+</ol>
+</li>
+<li>
+<ol>
+<li><code>reset()</code>: 将整个 <code>bitset</code> 设置成 <code>false</code>。</li>
+<li><code>reset(pos)</code>: 将某一位设置成 <code>false</code>。相当于 <code>set(pos, false)</code>。</li>
+</ol>
+</li>
+<li>
+<ol>
+<li><code>flip()</code>: 翻转每一位。（相当于异或一个全是 1 的 <code>bitset</code>）</li>
+<li><code>flip(pos)</code>: 翻转某一位。</li>
+</ol>
+</li>
+<li><code>to_string()</code>: 返回转换成的字符串表达。</li>
+<li><code>to_ulong()</code>: 返回转换成的 <code>unsigned long</code> 表达 (<code>long</code> 在 NT 及 32 位 POSIX 系统下与 <code>int</code> 一样，在 64 位 POSIX 下与 <code>long long</code> 一样）。</li>
+<li><code>to_ullong()</code>:<strong>C++11</strong>，返回转换成的 <code>unsigned long long</code> 表达。</li>
+</ul>
+<p>一些文档中没有的成员函数：</p>
+<ul>
+<li><code>_Find_first()</code>: 返回 <code>bitset</code> 第一个 <code>true</code> 的下标，若没有 <code>true</code> 则返回 <code>bitset</code> 的大小。</li>
+<li><code>_Find_next(pos)</code>: 返回 <code>pos</code> 后面（下标严格大于 <code>pos</code> 的位置）第一个 <code>true</code> 的下标，若 <code>pos</code> 后面没有 <code>true</code> 则返回 <code>bitset</code> 的大小。</li>
+</ul>
+<h2 id="应用">应用<a href="" rel="">¶</a></h2>
+<h3 id="libreoj-β-round-2贪心只能过样例httpslojacproblem515httpsoi-wikiorglangcslbitsetlibreoj-round-2"><a href="https://loj.ac/problem/515" target="_blank" rel="noopener noreffer">「LibreOJ β Round #2」贪心只能过样例</a><a href="https://oi-wiki.org/lang/csl/bitset/#libreoj-round-2" target="_blank" rel="noopener noreffer">¶</a></h3>
+<p>这题可以用 dp 做，转移方程很简单：</p>
+<p>表示前 个数的平方和能否为 ，那么 （或起来）。</p>
+<p>但如果直接做的话是 的，（看起来）过不了。</p>
+<p>发现可以用 <code>bitset</code> 优化，左移再或起来就好了：<a href="https://loj.ac/submission/395274" target="_blank" rel="noopener noreffer">std::bitset</a></p>
+<p>然后发现……被加了几个剪枝的暴力艹了：<a href="https://loj.ac/submission/395673" target="_blank" rel="noopener noreffer">加了几个剪枝的暴力</a></p>
+<p>然而，可以手写 <code>bitset</code>（只需要支持左移后或起来这一种操作）压 位（<code>unsigned long long</code>）来艹掉暴力：<a href="https://loj.ac/submission/395619" target="_blank" rel="noopener noreffer">手写 bitset</a></p>
+<h3 id="与埃氏筛结合">与埃氏筛结合</h3>
+<p>由于 <code>bitset</code> 快速的连续读写效率（前提是开O2优化），使得它非常适合用于与埃氏筛结合打质数表。</p>
+<p>使用的方式也很简单，只需要将埃氏筛中的布尔数组替换成 <code>bitset</code> 即可。</p>
+<blockquote>
+<p>参考代码</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">bitset</span><span class="o">&lt;</span><span class="n">N</span><span class="o">&gt;</span> <span class="n">vis</span><span class="p">;</span>
+
+<span class="kt">void</span> <span class="nf">Prime</span><span class="p">(</span><span class="kt">int</span> <span class="n">n</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">vis</span><span class="p">.</span><span class="n">set</span><span class="p">();</span>
+  <span class="n">vis</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">vis</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span> <span class="n">i</span> <span class="o">*</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">vis</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="p">{</span>
+      <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">j</span> <span class="o">+=</span> <span class="n">i</span><span class="p">)</span> <span class="n">vis</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><h3 id="埃氏筛速度测试">埃氏筛速度测试</h3>
+<blockquote>
+<p>测试代码如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span><span class="cpf">&lt;cstdio&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&#34;../BenchMark/Timer.h&#34;</span><span class="cp">
+</span><span class="cp"></span><span class="k">using</span> <span class="k">namespace</span> <span class="n">std</span><span class="p">;</span>
+<span class="cp">#define BIT_SET		</span><span class="c1">//通过是否定义BIT_SET宏来控制测试对象
+</span><span class="c1"></span>
+
+<span class="cp">#ifdef BIT_SET
+</span><span class="cp">#include</span><span class="cpf">&lt;bitset&gt;</span><span class="cp">
+</span><span class="cp"></span> <span class="n">bitset</span><span class="o">&lt;</span><span class="mi">100001000</span><span class="o">&gt;</span> <span class="n">vis</span><span class="p">;</span>
+<span class="cp">#else
+</span><span class="cp"></span><span class="kt">bool</span> <span class="n">vis</span><span class="p">[</span><span class="mi">100001000</span><span class="p">];</span>
+<span class="cp">#endif
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="n">n</span><span class="p">,</span> <span class="n">ans</span><span class="p">;</span>
+
+
+<span class="cp">#ifdef BIT_SET
+</span><span class="cp"></span><span class="kt">void</span> <span class="nf">Prime</span><span class="p">()</span> <span class="p">{</span>
+   <span class="n">vis</span><span class="p">.</span><span class="n">set</span><span class="p">();</span>
+  <span class="n">vis</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">vis</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span> <span class="n">i</span> <span class="o">*</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">vis</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="p">{</span>
+      <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">j</span> <span class="o">+=</span> <span class="n">i</span><span class="p">)</span> <span class="n">vis</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+<span class="cp">#else
+</span><span class="cp"></span><span class="kt">void</span> <span class="nf">GetPrimes</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">fill</span><span class="p">(</span><span class="n">vis</span><span class="p">,</span><span class="n">vis</span><span class="o">+</span><span class="mi">100001000</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
+    <span class="n">vis</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">vis</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span> <span class="n">i</span> <span class="o">*</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">vis</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="p">{</span>
+            <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">j</span> <span class="o">+=</span> <span class="n">i</span><span class="p">)</span> <span class="n">vis</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="cp">#endif
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="n">scanf</span><span class="p">(</span><span class="s">&#34;%d&#34;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">n</span><span class="p">);</span>
+    <span class="p">{</span>
+        <span class="n">ans</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="n">Timer</span> <span class="n">c</span><span class="p">;</span>
+        <span class="cp">#ifdef BIT_SET
+</span><span class="cp"></span>        <span class="n">Prime</span><span class="p">();</span>
+        <span class="cp">#else
+</span><span class="cp"></span>        <span class="n">GetPrimes</span><span class="p">();</span>
+        <span class="cp">#endif
+</span><span class="cp"></span>        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">vis</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+                <span class="n">ans</span><span class="o">++</span><span class="p">;</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;%d  &#34;</span><span class="p">,</span> <span class="n">ans</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>其中的计时器Timer是我封装的一个用于测试速度的类，利用的C++ RAII特性写的。</p>
+<p>代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//
+</span><span class="c1">// Created by Alone on 2022-1-31.
+</span><span class="c1">//
+</span><span class="c1"></span>
+<span class="cp">#ifndef BENCHMARK_TIMER_H
+</span><span class="cp">#define BENCHMARK_TIMER_H
+</span><span class="cp">#include</span> <span class="cpf">&lt;chrono&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="k">class</span> <span class="nc">Timer</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="n">Timer</span><span class="p">(){</span>
+         <span class="n">m_StartTimepoint</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">high_resolution_clock</span><span class="o">::</span><span class="n">now</span><span class="p">();</span>
+    <span class="p">}</span>
+    <span class="o">~</span><span class="n">Timer</span><span class="p">(){</span>
+        <span class="n">Stop</span><span class="p">();</span>
+    <span class="p">}</span>
+    <span class="kt">void</span> <span class="nf">Stop</span><span class="p">(){</span>
+        <span class="k">auto</span> <span class="n">endTimepoint</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">high_resolution_clock</span><span class="o">::</span><span class="n">now</span><span class="p">();</span>
+        <span class="k">auto</span> <span class="n">start</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">time_point_cast</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">microseconds</span><span class="o">&gt;</span><span class="p">(</span><span class="n">m_StartTimepoint</span><span class="p">).</span><span class="n">time_since_epoch</span><span class="p">().</span><span class="n">count</span><span class="p">();</span>
+        <span class="k">auto</span> <span class="n">end</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">time_point_cast</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">microseconds</span><span class="o">&gt;</span><span class="p">(</span><span class="n">endTimepoint</span><span class="p">).</span><span class="n">time_since_epoch</span><span class="p">().</span><span class="n">count</span><span class="p">();</span>
+        <span class="k">auto</span> <span class="n">duration</span> <span class="o">=</span> <span class="n">end</span><span class="o">-</span><span class="n">start</span><span class="p">;</span>  <span class="c1">//以微秒为单位
+</span><span class="c1"></span>        <span class="kt">double</span> <span class="n">ms</span> <span class="o">=</span> <span class="n">duration</span> <span class="o">*</span> <span class="mf">0.001</span><span class="p">;</span><span class="c1">//得到毫秒
+</span><span class="c1"></span>        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;%lld us (%lf ms)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span><span class="n">duration</span><span class="p">,</span><span class="n">ms</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="k">private</span><span class="o">:</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">time_point</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">high_resolution_clock</span><span class="o">&gt;</span><span class="n">m_StartTimepoint</span><span class="p">;</span>
+<span class="p">};</span>
+
+
+<span class="cp">#endif </span><span class="c1">//BENCHMARK_TIMER_H
+</span><span class="c1"></span>
+</code></pre></div><blockquote>
+<p>测试结果：</p>
+</blockquote>
+<p>测试中使用的环境为mingw，使用了 $o2$ 级别的优化，所以 <code>bitset</code> 明显会快很多！</p>
+<p>在 n==1e8 的情况下，轮番三次 <code>bool vs bitset</code> 结果如下：</p>
+<p>第一次：1351532 us (1351.532000 ms) vs 1171797 us (1171.797000 ms)</p>
+<p>第二次：1814639 us (1814.639000 ms) vs 1236894 us (1236.894000 ms)</p>
+<p>第三次：1812811 us (1812.811000 ms) vs 5761455  1188555 us (1188.555000 ms)</p>
+<blockquote>
+<p>难道以后都优先使用bitset？别高兴的太早！在我们默认的debug模式下bitset根本就完全不是bool数组的对手，随手一测，直接就是 2397002 us (2397.002000 ms) vs 8512716 us (8512.716000 ms) bitset大败！！！</p>
+</blockquote>
+<p>所以，在一般的算法题情况下，写质数筛还是用bool数组吧！因为算法题的oj不会给你开优化的！故原始bool数组是最好的选择！</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/">bitset与埃氏筛</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-02-22</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛" data-hashtags="bitset与埃氏筛"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-hashtag="bitset与埃氏筛"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛" data-image="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛" data-description="bitset与埃氏筛"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛" data-description="bitset与埃氏筛"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/bitset%E4%B8%8E%E5%9F%83%E6%B0%8F%E7%AD%9B/" data-title="bitset与埃氏筛"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" class="prev" rel="prev" title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E5%A2%9E%E9%87%8F%E5%85%83%E7%B4%A0%E4%B9%8B%E9%97%B4%E7%9A%84%E6%9C%80%E5%A4%A7%E5%B7%AE%E5%80%BC%E5%89%8D%E7%BC%80dp/" class="next" rel="next" title="增量元素之间的最大差值——前缀dp">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

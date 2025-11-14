@@ -1,0 +1,23 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>从零开始实现NIO高性能网络库 - 分类 - L_B__</title>
+        <link>https://acking-you.github.io/categories/%E4%BB%8E%E9%9B%B6%E5%BC%80%E5%A7%8B%E5%AE%9E%E7%8E%B0nio%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%BA%93/</link>
+        <description>从零开始实现NIO高性能网络库 - 分类 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Wed, 12 Apr 2023 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/categories/%E4%BB%8E%E9%9B%B6%E5%BC%80%E5%A7%8B%E5%AE%9E%E7%8E%B0nio%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%BA%93/" rel="self" type="application/rss+xml" /><item>
+    <title>TcpConnectionImpl如何高效且统一处理IO事件</title>
+    <link>https://acking-you.github.io/posts/tcpconnectionimpl%E5%A6%82%E4%BD%95%E9%AB%98%E6%95%88%E4%B8%94%E7%BB%9F%E4%B8%80%E5%A4%84%E7%90%86io%E4%BA%8B%E4%BB%B6/</link>
+    <pubDate>Wed, 12 Apr 2023 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/tcpconnectionimpl%E5%A6%82%E4%BD%95%E9%AB%98%E6%95%88%E4%B8%94%E7%BB%9F%E4%B8%80%E5%A4%84%E7%90%86io%E4%BA%8B%E4%BB%B6/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center" referrerpolicy="no-referrer">
+            </div>TcpConnectionImpl如何高效且统一处理IO事件]]></description>
+</item>
+<item>
+    <title>实现高性能时间轮用于踢出空闲连接</title>
+    <link>https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/</link>
+    <pubDate>Sat, 25 Feb 2023 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center" referrerpolicy="no-referrer">
+            </div>完整代码实现： netpoll/net/inner/timing_wheel.h netpoll/net/inner/timing_wheel.cc 实现契机 在网络框架的设计中,有一个环节是踢出空闲的连接,但是我觉得这个过程并不是一个很紧急的过程,有没有一种可以损失定时任]]></description>
+</item>
+</channel>
+</rss>

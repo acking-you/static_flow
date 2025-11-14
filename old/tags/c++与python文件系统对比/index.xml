@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>C&#43;&#43;与python文件系统对比 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/c&#43;&#43;%E4%B8%8Epython%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E5%AF%B9%E6%AF%94/</link>
+        <description>C&#43;&#43;与python文件系统对比 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Tue, 25 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/c&#43;&#43;%E4%B8%8Epython%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E5%AF%B9%E6%AF%94/" rel="self" type="application/rss+xml" /><item>
+    <title>C&#43;&#43;与python文件系统对比</title>
+    <link>https://acking-you.github.io/posts/c&#43;&#43;%E4%B8%8Epython%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E5%AF%B9%E6%AF%94/</link>
+    <pubDate>Tue, 25 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/c&#43;&#43;%E4%B8%8Epython%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E5%AF%B9%E6%AF%94/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/2319540b52ba53f88ff0afbf5cabb92c.png#pic_center" referrerpolicy="no-referrer">
+            </div>C++17 和 python 中好用的文件操作 | filesystem | os | shutil C++ 17 python 功能 filesystem::path::is_absolute() os.path.isabs() 判断是否为绝对路径 filesystem::path::parent_path() os.path.dirname() 路径分割 filesystem::path::filename() os.path.basename() 路径分割 filesystem::operator/() os.path.join() 路径拼接 filesystem::current_path() os.getcwd() 获取当前路径 filesystem::directory_iterator os.listdir() 返回指定目录下的所]]></description>
+</item>
+</channel>
+</rss>

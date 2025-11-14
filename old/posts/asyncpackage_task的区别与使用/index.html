@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>async、packaged_task、promise、future的区别与使用 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="async、packaged_task、promise、future的区别与使用"><meta property="og:title" content="async、packaged_task、promise、future的区别与使用" />
+<meta property="og:description" content="async、packaged_task、promise、future的区别与使用" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-08-17T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-08-17T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="async、packaged_task、promise、future的区别与使用"/>
+<meta name="twitter:description" content="async、packaged_task、promise、future的区别与使用"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" /><link rel="prev" href="https://acking-you.github.io/posts/c&#43;&#43;%E9%9D%A2%E8%AF%95%E4%B8%80%E6%9D%A1%E8%B7%AF/" /><link rel="next" href="https://acking-you.github.io/posts/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "async、packaged_task、promise、future的区别与使用",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8\/"
+        },"genre": "posts","keywords": "async、packaged_task、promise、future的区别与使用","wordcount":  2780 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8\/","datePublished": "2022-08-17T00:00:00+00:00","dateModified": "2022-08-17T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "async、packaged_task、promise、future的区别与使用"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center, https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center"
+        title="async、packaged_task、promise、future的区别与使用" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">async、packaged_task、promise、future的区别与使用</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/c++%E5%A4%9A%E7%BA%BF%E7%A8%8B/"><i class="far fa-folder fa-fw"></i>C++多线程</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-08-17">2022-08-17</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 2780 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 6 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#使用方法">使用方法</a></li>
+    <li><a href="#stdasync">std::async</a></li>
+    <li><a href="#stdpackaged_task">std::packaged_task</a></li>
+    <li><a href="#stdpromise">std::promise</a></li>
+    <li><a href="#自顶向下">自顶向下</a>
+      <ul>
+        <li><a href="#用packaged_task实现async">用packaged_task实现async</a></li>
+        <li><a href="#使用promise实现packaged_task">使用promise实现packaged_task</a></li>
+      </ul>
+    </li>
+    <li><a href="#总结">总结</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="使用方法">使用方法</h2>
+<p>想要更详尽的介绍可以看看这本书，这几个函数牵扯到的内容是并发操作的同步，对应<a href="https://nj.gitbooks.io/c/content/content/chapter4/chapter4-chinese.html" target="_blank" rel="noopener noreffer">《C++并发编程实战》</a>的第四章，这本书很难啃，有很多地方我也是断断续续看了几遍才有体会。</p>
+<p>首先我们来看看让人迷惑的地方：<code>std::aync</code>、<code>std::package_task</code>、<code>std::promise</code> 这几个调用都能获得 <code>std::future</code>，那到底有什么区别呢？下面我们挨个来看看基本使用方法，再进行一个小总结。</p>
+<h2 id="stdasync">std::async</h2>
+<p><strong>前言</strong></p>
+<p><code>async</code> 这个词在其他语言中想必也不陌生，比如 js 里有await和async关键字用于执行异步任务等等，C++中的这个词表示一个函数，实际上也是用于异步执行。但是与js那个实现原理有很大的不同，简单的说就是js那个更加的上层，而C++这个偏底层。导致的区别就是js那两个关键字配合起来只为达到并发的效果，而其中的实现细节是非常复杂的，比如js实际上始终只用到了一个线程来实现了并发，这点类似于协程，具体到内部js是通过事件循环队列来实现的，所以你始终无法确切的理解到它的底层工作。
+而C++的async与之相比，就好像一个原始人，需要你传递参数来确定它的工作机制，但和C++标准库的其他api相比，它却是非常高级的存在。</p>
+<p><strong>使用</strong></p>
+<p>在此之前先简单了解下C++的async使用方式，一个简单的代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;future&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp"></span><span class="kt">int</span> <span class="nf">find_the_answer_to_ltuae</span><span class="p">();</span>
+<span class="kt">void</span> <span class="nf">do_other_stuff</span><span class="p">();</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">the_answer</span><span class="o">=</span><span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span><span class="n">find_the_answer_to_ltuae</span><span class="p">);</span>
+    <span class="n">do_other_stuff</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="o">&lt;&lt;</span><span class="s">&#34;The answer is &#34;</span><span class="o">&lt;&lt;</span><span class="n">the_answer</span><span class="p">.</span><span class="n">get</span><span class="p">()</span><span class="o">&lt;&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>这个函数会返回一个future用于将异步的任务和主线程同步。也就是当你调用future的get方法时，它会等待异步任务完成，并得到对应的返回值。
+关于 <code>std::future</code> 也有三个重要的api：wait、wait_for、get，前面两个不返回结果，只等待任务，wait_for可以设置等待的时间限制。</p>
+<p>但是请注意，这个任务不一定是按照你想的那样异步执行的，它可能在你调用get方法的时候才执行，这个取决于你传递的第一个参数。</p>
+<ul>
+<li>std::launch::async：表示会开启一个线程去执行任务。</li>
+<li>std::launch::deferred：表示延迟调用，只有在外界需要得到结果的时候才调用。</li>
+<li>不传参数或者两者相与：表示由C++底层去调度，可能是async也可能是defferred。</li>
+</ul>
+<p>实际上async函数在这几个C++的api里是最高级的，它同时拥有了异步与同步的能力。</p>
+<h2 id="stdpackaged_task">std::packaged_task</h2>
+<p>这个api与线程是没有任何关系的，它只是负责把普通的函数或者仿函数包装成方便异步转同步的任务。</p>
+<p>比如我们开启一个线程去执行任务，我们又想对外界保有同步获取任务结果的能力，这个时候就需要用 <code>std::package_task</code> 来对现有的任务进行封装了。
+如下代码：</p>
+<blockquote>
+<p>以抖音用户的一次点赞行为对应的数据库底层需要调用的api举例子：
+plusVideoLike:增加对应视频的点赞数目，返回值为自定义的error类型
+plusUserLikeList:增加用户喜欢的视频，返回值为自定义的error类型
+很明显，这个两个过程互相并不影响，可以使用并发操作进行。</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">UserService</span><span class="o">::</span><span class="n">addLike</span><span class="p">(</span><span class="kt">int</span> <span class="n">uid</span><span class="p">,</span><span class="kt">int</span> <span class="n">vid</span><span class="p">){</span>
+    <span class="k">auto</span> <span class="n">task1</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">package_task</span><span class="o">&lt;</span><span class="n">error</span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="o">&gt;</span><span class="p">{</span><span class="n">plusVideoLike</span><span class="p">};</span>
+    <span class="k">auto</span> <span class="n">task2</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">package_task</span><span class="o">&lt;</span><span class="n">error</span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="kt">int</span><span class="p">)</span><span class="o">&gt;</span><span class="p">{</span><span class="n">plusUserLikeList</span><span class="p">};</span>
+    <span class="k">auto</span> <span class="n">f1</span> <span class="o">=</span> <span class="n">task1</span><span class="p">.</span><span class="n">get_future</span><span class="p">();</span>
+    <span class="k">auto</span> <span class="n">f2</span> <span class="o">=</span> <span class="n">task2</span><span class="p">.</span><span class="n">get_future</span><span class="p">();</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">t1</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](){</span>
+       <span class="n">task1</span><span class="p">(</span><span class="n">vid</span><span class="p">);</span> <span class="c1">//video点赞+1 
+</span><span class="c1"></span>    <span class="p">});</span>
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">t2</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](){</span>
+        <span class="n">task2</span><span class="p">(</span><span class="n">uid</span><span class="p">,</span><span class="n">vid</span><span class="p">);</span> <span class="c1">//用户点赞视频+1
+</span><span class="c1"></span>    <span class="p">});</span>
+    
+    <span class="c1">//得到返回值的同时完成同步操作
+</span><span class="c1"></span>    
+    <span class="k">if</span><span class="p">(</span><span class="n">f1</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">==</span> <span class="err">某错误</span><span class="p">){</span>
+        
+    <span class="p">}</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">f2</span><span class="p">.</span><span class="n">get</span><span class="p">()</span><span class="o">==</span> <span class="err">某错误</span><span class="p">{</span>
+    
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><h2 id="stdpromise">std::promise</h2>
+<p>从上面看下来，我们其实不难发现，async和packaged_task好像有某种联系？似乎async是封装了packaged_task的方便操作的api，没错大概就是这样。同样promise也是packaged_task中不可缺少的一环。</p>
+<p>std::promise算是C++中提供的方便线程间通信的纽带之一，它的行为有些类似于管道，熟悉Go的朋友，你可以把这个类似于无缓冲的管道，通过promise我们存入数据，通过它的future我们读取数据，这里就类似于管道的读写了，只不过不能通过一个类型进行双向读写，这一点还是没有Golang的方便啊。</p>
+<p>线程间通信我们一般都是通过共享内存，而共享内存写起来就很麻烦，为了线程安全以及事件完成的通知还要手动去封装一大堆的东西（用条件变量、信号量之类的去封装），我们大部分场景并不需要这么高的控制粒度，所以标准库帮你封装了一个promise和对应的future进行线程间的通信也是一个选择，当然如果能再进化成Golang中的channl模样，那就更好了（似乎C++20有协程又有管道😁）。</p>
+<p>说了这么多，来一个简单的例子吧。</p>
+<blockquote>
+<p>我们再切换到一个场景：实现一个聊天程序的后台服务器，我们举其中较为契合的地方，比如一个聊天室的消息收发，当聊天室里的一个人发送消息后，需要将该消息对聊天室里的其他人进行广播，这个广播的过程，我们可以用并发来进行，但是最好建议不要把每个任务都开启一个新线程去执行，这样服务器迟早崩溃，最好的做法是使用线程池或者直接上协程无所畏惧。这里的执行成功或者失败需要传递到外界，这时我们可以使用promise当然你也可以用package_task将任务进行封装，只不过没有promise灵活（但大部分时候比promise好用，比如这里我还是用package_task好些）</p>
+</blockquote>
+<p>我们把该类命名为ChatRoom类，方法如下：</p>
+<ul>
+<li>broadcast(int userId,Message msg);用于对消息进行广播</li>
+</ul>
+<p>房间内有非常多的用户对应User类，而user有对应的接收消息的方法：</p>
+<ul>
+<li>receive(Message msg); 接收对应的消息</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">broadcast</span><span class="p">(</span><span class="kt">int</span> <span class="n">userId</span><span class="p">,</span><span class="n">Message</span> <span class="n">msg</span><span class="p">){</span>
+    <span class="n">vector</span><span class="o">&lt;</span><span class="n">future</span><span class="o">&lt;</span><span class="n">error</span><span class="o">&gt;&gt;</span> <span class="n">futures</span><span class="p">;</span>
+    <span class="k">for</span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;&amp;</span> <span class="nl">user</span><span class="p">:</span><span class="n">Users</span><span class="p">){</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">user</span><span class="p">.</span><span class="n">id</span> <span class="o">!=</span> <span class="n">userId</span><span class="p">){</span>
+           <span class="n">thread_pool</span><span class="p">.</span><span class="n">submit</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]{</span>
+           <span class="n">package_task</span><span class="o">&lt;</span><span class="kt">bool</span><span class="p">(</span><span class="n">Message</span><span class="p">)</span><span class="o">&gt;</span><span class="n">task</span><span class="p">{</span><span class="n">std</span><span class="o">::</span><span class="n">bind</span><span class="p">(</span><span class="n">User</span><span class="o">::</span><span class="n">recive</span><span class="p">,</span><span class="o">&amp;</span><span class="n">user</span><span class="p">)};</span>
+           <span class="n">futures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">task</span><span class="p">.</span><span class="n">get_future</span><span class="p">());</span>
+           <span class="n">task</span><span class="p">(</span><span class="n">msg</span><span class="p">);</span>
+          <span class="p">});</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="kt">bool</span> <span class="n">f</span><span class="p">;</span>
+    <span class="k">do</span><span class="p">{</span> <span class="c1">//主线程等待完成并进行对应的错误处理，当全都完成任务执行完成
+</span><span class="c1"></span>        <span class="n">f</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+        <span class="k">for</span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;&amp;</span> <span class="nl">f</span><span class="p">:</span><span class="n">futures</span><span class="p">){</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">f</span><span class="p">.</span><span class="n">wait_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">seconds</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="n">std</span><span class="o">::</span><span class="n">future_status</span><span class="o">::</span><span class="n">ready</span><span class="p">){</span>
+            <span class="p">...</span> <span class="c1">//对应的错误处理
+</span><span class="c1"></span>            <span class="k">continue</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="n">f</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+      <span class="p">}</span>
+   <span class="p">}</span><span class="k">while</span><span class="p">(</span><span class="n">f</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>其实这里的线程池返回一个 future 是最好，否则同步操作将不那么优雅。</p>
+<h2 id="自顶向下">自顶向下</h2>
+<p>看完上面的内容，相信你对这些线程同步的api应该有了一定的了解，我们会发现这几个api的应用场景都非常相似，实际上是一层套一层的往上进行封装起来得到对应的功能的。</p>
+<p>有了promise，我们可以封装出package_task，有了package_task我们可以封装出async，这都是一环套一环，使用的复杂度不断降低的同时，线程同步的灵活性也在不断降低。当我们需要自己封装一套工具的时候，大概率是用的promise和package_task比较多，而我们只管简单使用时，则最好时使用已经封装好的上层api。<strong>比如我们如果要自己实现一个返回future的线程池，那么封装packaged_task是最好的选择</strong>。</p>
+<p>现在我们自顶向下，来简单看看如何实现（以下代码非原创，如有雷同，那就是我抄的😥）。</p>
+<h3 id="用packaged_task实现async">用packaged_task实现async</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">my_async</span><span class="p">(</span><span class="n">function</span><span class="o">&lt;</span><span class="kt">int</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="p">)</span><span class="o">&gt;</span> <span class="n">task</span><span class="p">,</span> <span class="kt">int</span> <span class="n">i</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">packaged_task</span><span class="o">&lt;</span><span class="kt">int</span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="o">&gt;</span> <span class="n">package</span><span class="p">{</span><span class="n">task</span><span class="p">};</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">f</span> <span class="o">=</span> <span class="n">package</span><span class="p">.</span><span class="n">get_future</span><span class="p">();</span>
+
+    <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">t</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">package</span><span class="p">),</span> <span class="n">i</span><span class="p">);</span>
+    <span class="n">t</span><span class="p">.</span><span class="n">detach</span><span class="p">();</span>
+    <span class="k">return</span> <span class="n">f</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="k">auto</span> <span class="n">task</span> <span class="o">=</span> <span class="p">[](</span><span class="kt">int</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span> <span class="n">std</span><span class="o">::</span><span class="n">this_thread</span><span class="o">::</span><span class="n">sleep_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">seconds</span><span class="p">(</span><span class="mi">5</span><span class="p">));</span> <span class="k">return</span> <span class="n">i</span><span class="o">+</span><span class="mi">100</span><span class="p">;</span> <span class="p">};</span>
+
+    <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">f</span> <span class="o">=</span> <span class="n">my_async</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="n">f</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><h3 id="使用promise实现packaged_task">使用promise实现packaged_task</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span><span class="o">&gt;</span> <span class="k">class</span> <span class="nc">my_task</span><span class="p">;</span>
+
+<span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="n">R</span><span class="p">,</span> <span class="k">typename</span> <span class="p">...</span><span class="n">Args</span><span class="o">&gt;</span>
+<span class="k">class</span> <span class="nc">my_task</span><span class="o">&lt;</span><span class="n">R</span><span class="p">(</span><span class="n">Args</span><span class="p">...)</span><span class="o">&gt;</span>
+<span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="n">R</span><span class="p">(</span><span class="n">Args</span><span class="p">...)</span><span class="o">&gt;</span> <span class="n">fn</span><span class="p">;</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">promise</span><span class="o">&lt;</span><span class="n">R</span><span class="o">&gt;</span> <span class="n">pr</span><span class="p">;</span>             <span class="c1">// the promise of the result
+</span><span class="c1"></span><span class="k">public</span><span class="o">:</span>
+    <span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="p">...</span><span class="n">Ts</span><span class="o">&gt;</span>
+    <span class="k">explicit</span> <span class="n">my_task</span><span class="p">(</span><span class="n">Ts</span> <span class="o">&amp;&amp;</span><span class="p">...</span> <span class="n">ts</span><span class="p">)</span> <span class="o">:</span> <span class="n">fn</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">forward</span><span class="o">&lt;</span><span class="n">Ts</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ts</span><span class="p">)...)</span> <span class="p">{</span> <span class="p">}</span>
+
+    <span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="p">...</span><span class="n">Ts</span><span class="o">&gt;</span>
+    <span class="kt">void</span> <span class="k">operator</span><span class="p">()(</span><span class="n">Ts</span> <span class="o">&amp;&amp;</span><span class="p">...</span> <span class="n">ts</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">pr</span><span class="p">.</span><span class="n">set_value</span><span class="p">(</span><span class="n">fn</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">forward</span><span class="o">&lt;</span><span class="n">Ts</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ts</span><span class="p">)...));</span>  <span class="c1">// fulfill the promise
+</span><span class="c1"></span>    <span class="p">}</span>
+
+    <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="n">R</span><span class="o">&gt;</span> <span class="n">get_future</span><span class="p">()</span> <span class="p">{</span> <span class="k">return</span> <span class="n">pr</span><span class="p">.</span><span class="n">get_future</span><span class="p">();</span> <span class="p">}</span>
+
+    <span class="c1">// disable copy, default move
+</span><span class="c1"></span><span class="p">};</span>
+</code></pre></div><h2 id="总结">总结</h2>
+<ol>
+<li>如果需要封装自己的api方便使用，那么packaged_task和promise可能是你最常用的。</li>
+<li>如果想要开箱即用，那么直接async也挺好。</li>
+</ol>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/asyncpackaged_taskpromisefuture%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/">async、packaged_task、promise、future的区别与使用</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-08-17</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用" data-hashtags="async、packaged_task、promise、future的区别与使用"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-hashtag="async、packaged_task、promise、future的区别与使用"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用" data-image="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用" data-description="async、packaged_task、promise、future的区别与使用"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用" data-description="async、packaged_task、promise、future的区别与使用"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/asyncpackage_task%E7%9A%84%E5%8C%BA%E5%88%AB%E4%B8%8E%E4%BD%BF%E7%94%A8/" data-title="async、packaged_task、promise、future的区别与使用"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/c&#43;&#43;%E9%9D%A2%E8%AF%95%E4%B8%80%E6%9D%A1%E8%B7%AF/" class="prev" rel="prev" title="C&#43;&#43;面试面试一条龙"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/" class="next" rel="next" title="细粒度锁线程安全队列实现">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

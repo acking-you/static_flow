@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>[Java课设]Swing用分层思想浅写个管理系统课设 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/java%E8%AF%BE%E8%AE%BEswing%E7%94%A8%E5%88%86%E5%B1%82%E6%80%9D%E6%83%B3%E6%B5%85%E5%86%99%E4%B8%AA%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F%E8%AF%BE%E8%AE%BE/</link>
+        <description>[Java课设]Swing用分层思想浅写个管理系统课设 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 05 Jun 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/java%E8%AF%BE%E8%AE%BEswing%E7%94%A8%E5%88%86%E5%B1%82%E6%80%9D%E6%83%B3%E6%B5%85%E5%86%99%E4%B8%AA%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F%E8%AF%BE%E8%AE%BE/" rel="self" type="application/rss+xml" /><item>
+    <title>[Java课设]Swing用分层思想浅写个管理系统课设</title>
+    <link>https://acking-you.github.io/posts/java%E8%AF%BE%E8%AE%BEswing%E7%94%A8%E5%88%86%E5%B1%82%E6%80%9D%E6%83%B3%E6%B5%85%E5%86%99%E4%B8%AA%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F%E8%AF%BE%E8%AE%BE/</link>
+    <pubDate>Sun, 05 Jun 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E8%AF%BE%E8%AE%BEswing%E7%94%A8%E5%88%86%E5%B1%82%E6%80%9D%E6%83%B3%E6%B5%85%E5%86%99%E4%B8%AA%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F%E8%AF%BE%E8%AE%BE/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/861ccd022cf85b53da1fb8c0d9ce9cbf.png#pic_center" referrerpolicy="no-referrer">
+            </div>本为Java实验课设，为了不浪费时间，故用良好的构思，写出了这个管理系统。 项目仓库地址：已开源GitHub 项目需求 基本要求： 社团管理：具体完]]></description>
+</item>
+</channel>
+</rss>

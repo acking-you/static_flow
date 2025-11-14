@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>go语言业务代码一键逆向生成 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="go语言业务代码一键逆向生成"><meta property="og:title" content="go语言业务代码一键逆向生成" />
+<meta property="og:description" content="go语言业务代码一键逆向生成" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-11-18T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-11-18T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="go语言业务代码一键逆向生成"/>
+<meta name="twitter:description" content="go语言业务代码一键逆向生成"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" /><link rel="prev" href="https://acking-you.github.io/posts/cs%E5%8E%9F%E7%90%86%E5%A4%9A%E7%BA%A7%E9%A1%B5%E8%A1%A8%E5%88%B0%E5%BA%95%E5%A6%82%E4%BD%95%E8%8A%82%E7%BA%A6%E5%86%85%E5%AD%98/" /><link rel="next" href="https://acking-you.github.io/posts/c&#43;&#43;%E7%BC%96%E8%AF%91%E6%9C%9F%E5%8F%8D%E5%B0%84%E4%BB%A5aop%E4%B8%BA%E4%BE%8B/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "go语言业务代码一键逆向生成",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90\/"
+        },"genre": "posts","keywords": "go语言业务代码一键逆向生成","wordcount":  1696 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90\/","datePublished": "2022-11-18T00:00:00+00:00","dateModified": "2022-11-18T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "go语言业务代码一键逆向生成"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center, https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center"
+        title="go语言业务代码一键逆向生成" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">go语言业务代码一键逆向生成</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/golang%E7%9B%B8%E5%85%B3/"><i class="far fa-folder fa-fw"></i>golang相关</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-11-18">2022-11-18</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1696 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 4 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#快速开始">快速开始</a>
+      <ul>
+        <li><a href="#要求">要求</a></li>
+        <li><a href="#安装">安装</a></li>
+      </ul>
+    </li>
+    <li><a href="#项目实现">项目实现</a>
+      <ul>
+        <li><a href="#架构设计">架构设计</a></li>
+        <li><a href="#代码逻辑">代码逻辑</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="go_project_quickstart">go_project_quickstart</h1>
+<h2 id="快速开始">快速开始</h2>
+<h3 id="要求">要求</h3>
+<ul>
+<li>Go 1.18 及以上版本</li>
+</ul>
+<h3 id="安装">安装</h3>
+<p>1.下载并安装 gin：</p>
+<pre><code> go get -u github.com/ACking-you/quickstart_project
+</code></pre><p>2.将 gin 引入到代码中：</p>
+<pre><code> import &quot;github.com/ACking-you/quickstart_project&quot;
+</code></pre><p>3.一键根据数据库快速逆向生成所有业务代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"> <span class="kn">import</span> <span class="p">(</span>
+     <span class="s">&#34;github.com/ACking-you/quickstart_project&#34;</span>
+     <span class="s">&#34;github.com/ACking-you/quickstart_project/util&#34;</span>
+ <span class="p">)</span>
+ 
+ <span class="kd">func</span> <span class="nf">autoQuickStart</span><span class="p">()</span> <span class="p">{</span>
+     <span class="nx">config</span> <span class="o">:=</span> <span class="nx">quickstart</span><span class="p">.</span><span class="nf">DefaultConfig</span><span class="p">(</span><span class="s">&#34;项目名称&#34;</span><span class="p">,</span> <span class="s">&#34;root&#34;</span><span class="p">,</span> <span class="s">&#34;123&#34;</span><span class="p">,</span> <span class="s">&#34;127.0.0.1&#34;</span><span class="p">,</span> <span class="mi">3306</span><span class="p">,</span> <span class="s">&#34;数据库名称&#34;</span><span class="p">).</span>
+     <span class="c1">//打印出生成结果
+</span><span class="c1"></span>     <span class="nf">EnableDebug</span><span class="p">(</span><span class="kc">true</span><span class="p">).</span>
+     <span class="c1">//改变基本路径（默认为项目根目录）
+</span><span class="c1"></span>     <span class="nf">BasePath</span><span class="p">(</span><span class="s">&#34;./example&#34;</span><span class="p">)</span>
+     
+     <span class="nx">err</span> <span class="o">:=</span> <span class="nx">quickstart</span><span class="p">.</span><span class="nf">Run</span><span class="p">(</span><span class="nx">config</span><span class="p">)</span>
+     <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+         <span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+     <span class="p">}</span>
+ <span class="p">}</span>
+ 
+ <span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+     <span class="nf">autoQuickStart</span><span class="p">()</span>
+ <span class="p">}</span>
+ 
+</code></pre></div><p>上述代码，只更改了默认配置项中的两项，其他配置项的更改和作用请翻看源代码：<a href="https://github.com/ACking-you/quickstart_project/blob/master/config.go" target="_blank" rel="noopener noreffer">./config</a></p>
+<p>上述调用会一键生成 model、dao、service、vo、to、controller层的所有模板代码，且无法做到对每层代码生成的精确控制，如果本身项目已有model层的结构体，那么可以利用我提供的 <a href="https://github.com/ACking-you/quickstart_project/tree/master/dao_convertor" target="_blank" rel="noopener noreffer">dao_convertor</a> 、<a href="https://github.com/ACking-you/quickstart_project/tree/master/service_convertor" target="_blank" rel="noopener noreffer">service_convertor</a>、<a href="https://github.com/ACking-you/quickstart_project/tree/master/controller_convertor" target="_blank" rel="noopener noreffer">controller_convertor</a> 对整个代码生成做细化处理。</p>
+<p>上述接口具体如何使用请点击以下文档进行查看：</p>
+<p><a href="https://github.com/ACking-you/quickstart_project/tree/master/dao_convertor/example" target="_blank" rel="noopener noreffer">dao_convertor/example</a></p>
+<p><a href="https://github.com/ACking-you/quickstart_project/tree/master/service_convertor/example" target="_blank" rel="noopener noreffer">service_convertor/example</a></p>
+<p><a href="https://github.com/ACking-you/quickstart_project/tree/master/controller_convertor/example" target="_blank" rel="noopener noreffer">controller_convertor/example</a></p>
+<h2 id="项目实现">项目实现</h2>
+<h3 id="架构设计">架构设计</h3>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3b66ce55165c44c9a7766a9459f378f7~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3b66ce55165c44c9a7766a9459f378f7~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3b66ce55165c44c9a7766a9459f378f7~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3b66ce55165c44c9a7766a9459f378f7~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3b66ce55165c44c9a7766a9459f378f7~tplv-k3u1fbpfcp-watermark.image?"
+        title="framework.png" />
+对应的项目文件如下：
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8c8aac4dcdaa4dbf9f3551655a322604~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8c8aac4dcdaa4dbf9f3551655a322604~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8c8aac4dcdaa4dbf9f3551655a322604~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8c8aac4dcdaa4dbf9f3551655a322604~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8c8aac4dcdaa4dbf9f3551655a322604~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="代码逻辑">代码逻辑</h3>
+<p>上述架构设计阐述了，如何将四个单独的模块生成解耦，且同时数据也能产生关联，下面将详细介绍这一块。</p>
+<h4 id="统一的调用逻辑">统一的调用逻辑</h4>
+<p>如果细心的使用者会发现，所有模块的接口调用都是统一的形式。</p>
+<ol>
+<li>创建对应模块的 <code>Config</code> ，通过链式调用进行配置，或者直接使用默认配置。</li>
+<li>将 <code>config</code> 传入，new出新的 <code>convertor</code> 对象。</li>
+<li>调用 <code>Run</code> 方法。当然，除了 <code>model_convertor</code> 不需要反射机制的接口外，其余的层级都提供了 <code>AutoMigrate</code> 方法供使用者选择基于哪个信息生成代码。</li>
+</ol>
+<h4 id="代码复用">代码复用</h4>
+<p>一、反射信息生成函数复用</p>
+<p>最开始，在写 <a href="https://github.com/ACking-you/quickstart_project/blob/master/dao_convertor/taginfo_praser.go" target="_blank" rel="noopener noreffer">dao_convertor</a> 的时候并未意识到解耦的重要性，但写到后面发现都要用到这个解析类型元信息的功能，而且代码十分重复，但是又不能直接抽离，因为此段逻辑与每个层级的代码产生了一定的耦合。</p>
+<ul>
+<li>耦合体现在：每个层级的 <code>tag</code> 解析过程和需要的数据结构都是不一样的，而之前的操作则是将这部分代码嵌入到了元信息的解析中。</li>
+<li>如何解耦：将耦合的代码通过函数回调的统一参数接口形式，代码便不再耦合了，成功实现复用。具体实现在 <a href="https://github.com/ACking-you/quickstart_project/blob/master/util/reflect_util.go" target="_blank" rel="noopener noreffer">UpdateFromStruct</a></li>
+</ul>
+<p>二、文件保存动作的复用</p>
+<p>这个行为在所有的层级都需要用到，在解析完信息并拼装生成好代码后，最后的动作就是要保存到文件了。
+我这里对文件保存动作的复用分为三个级别：
+<a href="https://github.com/ACking-you/quickstart_project/blob/master/util/file_util.go" target="_blank" rel="noopener noreffer">code</a></p>
+<ul>
+<li><code>SaveAction</code>：将一个go文件分为三个组成部分，本文件包名、需要导入的包名、具体的代码内容。将上述三个信息以及保存路径传入到此函数后，会自动根据保存的路径是文件还是文件夹决定是分文件保存还是单文件保存，文件名取自 <code>common_info</code> 里各个模型数据的名字 + 当前的包名(如user_dao.go)。</li>
+<li><code>saveHelper.singleFileSave</code>：无法被外界调用，<strong>由SaveAction选择性调用</strong>，单文件保存，计算某些必要信息后，继续调用 <code>SaveFile</code>。</li>
+<li><code>saveHelper.multiFileSave</code>：无法被外界调用，<strong>由SaveAction选择性调用</strong>，多文件保存，计算某些必要信息后，继续调用 <code>SaveFile</code>。</li>
+<li><code>SaveFile</code>：最简单且底层的封装，只需要传递文件名和文件内容，负责文件创建保存，由于所有的文件保存工作最终都会经过它，所以在此添加的任何操作将会作用于所有文件(比如可以在文件创建后利用gofmt格式化)。</li>
+</ul>
+<p>对于保存的内容复杂且多的情况，直接准备好数据调用 <code>SaveAction</code> 是最好的选择，而对于只有单个文件，且数据相对固定，能很快得出文件内容的，则可以直接提前调用 <code>SaveFile</code>(如dao层的init.go)。</p>
+<p>三、有意思的小工具轮子</p>
+<ul>
+<li><a href="https://github.com/ACking-you/quickstart_project/blob/master/util/name_util.go" target="_blank" rel="noopener noreffer">name_util</a>：实现了各种代码风格的转化如snackcase-&gt;PascalCase</li>
+<li><a href="https://github.com/ACking-you/quickstart_project/blob/master/util/sscanf.go" target="_blank" rel="noopener noreffer">sscanf</a>：一个根据格式化串和资源串来填充后续字符串变量的函数，比如</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="nf">Sscanf</span><span class="p">(</span><span class="s">&#34;hello( you)world)&#34;</span><span class="p">,</span><span class="s">&#34;$($)$&#34;</span><span class="p">,</span><span class="o">&amp;</span><span class="nx">s1</span><span class="p">,</span><span class="o">&amp;</span><span class="nx">s2</span><span class="p">,</span><span class="o">&amp;</span><span class="nx">s3</span><span class="p">)</span> <span class="c1">//s1:hello s2: you s3:world
+</span></code></pre></div><p>写个这玩意是在使用fmt.Sscanf的时候被恶心到了，fmt版本的有分隔符的限制，所以不得不自己造个轮子了，这个主要用在tag的解析上面。</p>
+<ul>
+<li><code>str_util</code>：暂时只写了一个StrHandleByChain，主要用于方便链式调用来操作字符串的替换等操作，实现很简单，如下：</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">StrHandleByChain</span> <span class="kd">struct</span> <span class="p">{</span>
+   <span class="nx">Str</span> <span class="kt">string</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">s</span> <span class="o">*</span><span class="nx">StrHandleByChain</span><span class="p">)</span> <span class="nf">ReplaceAll</span><span class="p">(</span><span class="nx">old</span><span class="p">,</span> <span class="nx">new</span> <span class="kt">string</span><span class="p">)</span> <span class="o">*</span><span class="nx">StrHandleByChain</span> <span class="p">{</span>
+   <span class="nx">s</span><span class="p">.</span><span class="nx">Str</span> <span class="p">=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">ReplaceAll</span><span class="p">(</span><span class="nx">s</span><span class="p">.</span><span class="nx">Str</span><span class="p">,</span> <span class="nx">old</span><span class="p">,</span> <span class="nx">new</span><span class="p">)</span>
+   <span class="k">return</span> <span class="nx">s</span>
+<span class="p">}</span>
+</code></pre></div><p>但是能简化我的代码效果如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="nx">strings</span><span class="p">.</span><span class="nf">ReplaceAll</span><span class="p">(</span><span class="nx">strings</span><span class="p">.</span><span class="nf">ReplaceAll</span><span class="p">(</span><span class="nx">content</span><span class="p">,</span><span class="s">&#34;old&#34;</span><span class="p">,</span><span class="s">&#34;new&#34;</span><span class="p">),</span><span class="s">&#34;old&#34;</span><span class="p">,</span><span class="s">&#34;new&#34;</span><span class="p">)</span> 
+<span class="p">=&gt;</span> <span class="nx">content</span><span class="p">.</span><span class="nf">ReplaceAll</span><span class="p">(</span><span class="s">&#34;old&#34;</span><span class="p">,</span><span class="s">&#34;new&#34;</span><span class="p">).</span><span class="nf">ReplaceAll</span><span class="p">(</span><span class="s">&#34;old&#34;</span><span class="p">,</span><span class="s">&#34;new&#34;</span><span class="p">)</span>
+</code></pre></div><p>很明显可读性变高了，而且这还只是套了两层的结果。。。</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/go%E8%AF%AD%E8%A8%80%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/">go语言业务代码一键逆向生成</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-11-18</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成" data-hashtags="go语言业务代码一键逆向生成"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-hashtag="go语言业务代码一键逆向生成"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成" data-image="https://img-blog.csdnimg.cn/img_convert/acea126d07748d6630f37b1b481e5d73.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成" data-description="go语言业务代码一键逆向生成"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成" data-description="go语言业务代码一键逆向生成"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/go%E4%B8%9A%E5%8A%A1%E4%BB%A3%E7%A0%81%E4%B8%80%E9%94%AE%E9%80%86%E5%90%91%E7%94%9F%E6%88%90/" data-title="go语言业务代码一键逆向生成"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/cs%E5%8E%9F%E7%90%86%E5%A4%9A%E7%BA%A7%E9%A1%B5%E8%A1%A8%E5%88%B0%E5%BA%95%E5%A6%82%E4%BD%95%E8%8A%82%E7%BA%A6%E5%86%85%E5%AD%98/" class="prev" rel="prev" title="[CS原理]多级页表到底如何节约内存？"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/c&#43;&#43;%E7%BC%96%E8%AF%91%E6%9C%9F%E5%8F%8D%E5%B0%84%E4%BB%A5aop%E4%B8%BA%E4%BE%8B/" class="next" rel="next" title="C&#43;&#43;编译期反射——以AOP为例">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

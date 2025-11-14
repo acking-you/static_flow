@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>Go语言编码规范和性能调优 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="Go语言编码规范和性能调优"><meta property="og:title" content="Go语言编码规范和性能调优" />
+<meta property="og:description" content="Go语言编码规范和性能调优" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/glang3/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-05-11T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-05-11T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="Go语言编码规范和性能调优"/>
+<meta name="twitter:description" content="Go语言编码规范和性能调优"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/glang3/" /><link rel="prev" href="https://acking-you.github.io/posts/golang-note2/" /><link rel="next" href="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "Go语言编码规范和性能调优",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/glang3\/"
+        },"genre": "posts","keywords": "Go语言编码规范和性能调优","wordcount":  3150 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/glang3\/","datePublished": "2022-05-11T00:00:00+00:00","dateModified": "2022-05-11T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "Go语言编码规范和性能调优"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"
+        title="Go语言编码规范和性能调优" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">Go语言编码规范和性能调优</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E9%9D%92%E8%AE%AD%E8%90%A5%E7%AC%94%E8%AE%B0/"><i class="far fa-folder fa-fw"></i>青训营笔记</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-05-11">2022-05-11</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 3150 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 7 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#编码规范">编码规范</a>
+      <ul>
+        <li><a href="#注释">注释</a></li>
+        <li><a href="#控制流程">控制流程</a></li>
+        <li><a href="#错误处理">错误处理</a></li>
+      </ul>
+    </li>
+    <li><a href="#性能调优">性能调优</a>
+      <ul>
+        <li><a href="#benchmark测试">benchmark测试</a></li>
+        <li><a href="#slice的阴暗面">slice的阴暗面</a></li>
+        <li><a href="#关于string可变与不可变的优化">关于string可变与不可变的优化</a></li>
+        <li><a href="#空结构体的使用">空结构体的使用</a></li>
+        <li><a href="#atomic包">atomic包</a></li>
+      </ul>
+    </li>
+    <li><a href="#性能调优实战">性能调优实战</a>
+      <ul>
+        <li><a href="#pprof工具的使用">pprof工具的使用</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="编码规范">编码规范</h2>
+<h3 id="注释">注释</h3>
+<blockquote>
+<p>Good code has lots of comments,bad code requires lots of comments.</p>
+</blockquote>
+<h4 id="不必要的注释">不必要的注释</h4>
+<p><strong>场景一</strong></p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/5c616628db1b4f59aa047e4fdacefdd1~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/5c616628db1b4f59aa047e4fdacefdd1~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/5c616628db1b4f59aa047e4fdacefdd1~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/5c616628db1b4f59aa047e4fdacefdd1~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/5c616628db1b4f59aa047e4fdacefdd1~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>如上图所示，第一个Open函数应该解释代码作用，而第二个函数这样的作用解释则毫无必要，因为它的函数名就已经解释了。</p>
+<p><strong>场景二</strong></p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/33e0b4ed42b74712ade9cb4cabcca019~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/33e0b4ed42b74712ade9cb4cabcca019~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/33e0b4ed42b74712ade9cb4cabcca019~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/33e0b4ed42b74712ade9cb4cabcca019~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/33e0b4ed42b74712ade9cb4cabcca019~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>第一个函数的逻辑较为复杂，很多情况没法看懂，需要注释，而第二个则完全没必要。</p>
+<h4 id="需要的注释">需要的注释</h4>
+<p><strong>公共符号始终要注释</strong></p>
+<p>这里的公共符号包括全局可见的函数和变量，而方法则不包含在内。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/91fbaeb659f84255a52c867f6d9950b8~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/91fbaeb659f84255a52c867f6d9950b8~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/91fbaeb659f84255a52c867f6d9950b8~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/91fbaeb659f84255a52c867f6d9950b8~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/91fbaeb659f84255a52c867f6d9950b8~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h4 id="小结">小结</h4>
+<ul>
+<li>代码是最好的注释。</li>
+<li>注释应提供代码未表达出的上下文信息。</li>
+</ul>
+<h4 id="变量命名">变量命名</h4>
+<ul>
+<li>简洁</li>
+<li>缩略词都大写，比如HTTP不要Http</li>
+<li>变量定义的位置距离使用的地方越远，命名需要越详细，特别是全局变量，有时需要注释</li>
+</ul>
+<p><strong>函数内</strong></p>
+<p>例如for循环时：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span> <span class="nx">i</span><span class="p">&lt;</span><span class="nx">size</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span> <span class="c1">//good
+</span><span class="c1"></span>    <span class="o">...</span>
+<span class="p">}</span>
+<span class="k">for</span> <span class="nx">index</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">index</span><span class="p">&lt;</span><span class="nx">size</span><span class="p">;</span><span class="nx">index</span><span class="o">++</span><span class="p">{</span><span class="c1">//bad
+</span><span class="c1"></span>    <span class="o">...</span>
+<span class="p">}</span>
+</code></pre></div><p>而作为函数参数时：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="c1">//good 
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">c</span> <span class="o">*</span><span class="nx">Client</span><span class="p">)</span> <span class="nf">send</span><span class="p">(</span><span class="nx">req</span> <span class="o">*</span><span class="nx">Request</span><span class="p">,</span> <span class="nx">deadline</span> <span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">)</span>
+<span class="c1">//bad
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">c</span> <span class="o">*</span><span class="nx">Client</span><span class="p">)</span> <span class="nf">send</span><span class="p">(</span><span class="nx">req</span> <span class="o">*</span><span class="nx">Request</span><span class="p">,</span> <span class="nx">t</span> <span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="p">)</span>
+</code></pre></div><blockquote>
+<p>由于第一个变量仅在for循环这个作用域内，它的作用也很清晰，如果命名的更详细，反而会影响阅读。</p>
+<p>第二个变量作为函数的参数，作用域很大，且需要作为提供给使用者的名字，这个需要带有详细信息描述。</p>
+</blockquote>
+<p><strong>包内</strong></p>
+<ul>
+<li>函数名应该不携带报名的上下文信息。</li>
+</ul>
+<blockquote>
+<p>例如在http包中有个Serve方法和ServeHTTP方法这两个命名，我们应该选择Serve去命名而不是ServeHTTP。因为我们使用的时候会携带包名。类比于C++的命名空间，Java的包名。</p>
+</blockquote>
+<p><strong>包命名</strong></p>
+<ul>
+<li>只有小写字母组成（不包含下划线等字母</li>
+<li>简短并包含一定的信息</li>
+<li>不要和标准库的包冲突，标准库的很多包名喜欢用复数，我们应该避免使用复数形式为包名，比如strings是标准库的一个包名。</li>
+</ul>
+<h3 id="控制流程">控制流程</h3>
+<p>这里我用之前在其他地方学到的两个优化代码的方式来讲。</p>
+<h4 id="嵌套条件校验链">嵌套条件校验链</h4>
+<blockquote>
+<p>嵌套两层以上的if</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">if</span> <span class="nx">a</span><span class="p">&gt;</span><span class="mi">10</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="nx">b</span><span class="p">&gt;</span><span class="mi">10</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="nx">c</span><span class="p">&gt;</span><span class="mi">10</span> <span class="p">{</span>
+            <span class="o">...</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>优化如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">for</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="p">!(</span><span class="nx">a</span><span class="p">&gt;</span><span class="mi">10</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">break</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="p">!(</span><span class="nx">b</span><span class="p">&gt;</span><span class="mi">10</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">break</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="p">!(</span><span class="nx">c</span><span class="p">&gt;</span><span class="mi">10</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">break</span>
+    <span class="p">}</span>
+    <span class="o">...</span>
+<span class="p">}</span>
+</code></pre></div><h4 id="互斥条件表驱动">互斥条件表驱动</h4>
+<p>比如有以下并列的if嵌套逻辑：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">func</span> <span class="nf">CalculateByCmd</span><span class="p">(</span><span class="nx">cmd</span> <span class="kt">string</span><span class="p">,</span><span class="nx">a</span><span class="p">,</span><span class="nx">b</span> <span class="kt">int</span><span class="p">)(</span><span class="kt">int</span><span class="p">,</span><span class="kt">error</span><span class="p">){</span>
+	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">EqualFold</span><span class="p">(</span><span class="nx">cmd</span><span class="p">,</span><span class="s">&#34;add&#34;</span><span class="p">){</span>
+		<span class="k">return</span> <span class="nx">a</span><span class="o">+</span><span class="nx">b</span><span class="p">,</span><span class="kc">nil</span>
+	<span class="p">}</span>
+	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">EqualFold</span><span class="p">(</span><span class="nx">cmd</span><span class="p">,</span><span class="s">&#34;sub&#34;</span><span class="p">){</span>
+		<span class="k">return</span> <span class="nx">a</span><span class="o">-</span><span class="nx">b</span><span class="p">,</span><span class="kc">nil</span>
+	<span class="p">}</span>
+	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">EqualFold</span><span class="p">(</span><span class="nx">cmd</span><span class="p">,</span><span class="s">&#34;mul&#34;</span><span class="p">){</span>
+		<span class="k">return</span> <span class="nx">a</span><span class="o">*</span><span class="nx">b</span><span class="p">,</span><span class="kc">nil</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="mi">0</span><span class="p">,</span><span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;cmd not exist&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>这段代码是根据给出的字符串命令，得出对应的计算结果。但是我们发现，这个代码的可读性虽然还行，但由于最终的计算和这个函数的耦合性太强，实现功能拓展有点拖后腿。</p>
+<p>我们通过表驱动做出以下优化：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">mapCalculate</span> <span class="p">=</span> <span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">func</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span><span class="nx">b</span> <span class="kt">int</span><span class="p">)</span> <span class="kt">int</span><span class="p">{</span>
+	<span class="s">&#34;add&#34;</span><span class="p">:</span> <span class="kd">func</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span> <span class="kt">int</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">a</span><span class="o">+</span><span class="nx">b</span>
+	<span class="p">},</span>
+	<span class="s">&#34;sub&#34;</span><span class="p">:</span> <span class="kd">func</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span> <span class="kt">int</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">a</span><span class="o">-</span><span class="nx">b</span>
+	<span class="p">},</span>
+	<span class="s">&#34;mul&#34;</span><span class="p">:</span> <span class="kd">func</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span> <span class="kt">int</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">a</span><span class="o">*</span><span class="nx">b</span>
+	<span class="p">},</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">CalculateByCmd</span><span class="p">(</span><span class="nx">cmd</span> <span class="kt">string</span><span class="p">,</span><span class="nx">a</span><span class="p">,</span><span class="nx">b</span> <span class="kt">int</span><span class="p">)(</span><span class="kt">int</span><span class="p">,</span><span class="kt">error</span><span class="p">){</span>
+	<span class="k">if</span> <span class="nx">v</span><span class="p">,</span><span class="nx">ok</span> <span class="o">:=</span> <span class="nx">mapCalculate</span><span class="p">[</span><span class="nx">cmd</span><span class="p">];</span><span class="nx">ok</span><span class="p">{</span>
+		<span class="k">return</span> <span class="nf">v</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span><span class="nx">b</span><span class="p">),</span><span class="kc">nil</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="mi">0</span><span class="p">,</span><span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;cmd not exist&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><h3 id="错误处理">错误处理</h3>
+<h4 id="error相关的函数">error相关的函数</h4>
+<p><strong>errors.New()</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">return</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;需要的错误信息描述&#34;</span><span class="p">)</span>
+</code></pre></div><p><strong>errors.Is()</strong></p>
+<blockquote>
+<p>用于判断错误断言，不同于简单的==，它能够判断错误链中是否包含它。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/77c054ea43b24853888d0743076e37aa~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/77c054ea43b24853888d0743076e37aa~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/77c054ea43b24853888d0743076e37aa~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/77c054ea43b24853888d0743076e37aa~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/77c054ea43b24853888d0743076e37aa~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p><strong>errors.As()</strong></p>
+<blockquote>
+<p>从错误链中提取想要的错误。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f4051606ae8d4eac9c649dd0f609045d~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f4051606ae8d4eac9c649dd0f609045d~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f4051606ae8d4eac9c649dd0f609045d~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f4051606ae8d4eac9c649dd0f609045d~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f4051606ae8d4eac9c649dd0f609045d~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h4 id="panic和recover和defer">panic和recover和defer</h4>
+<blockquote>
+<p>这几样东西，语法就那样，真要理解原理可以看看下面这些视频链接。</p>
+</blockquote>
+<p><a href="https://www.bilibili.com/video/BV1hv411x7we?p=9" target="_blank" rel="noopener noreffer">老版本go derfer实现</a></p>
+<p><a href="https://www.bilibili.com/video/BV1hv411x7we?p=10" target="_blank" rel="noopener noreffer">新版本go defer实现</a></p>
+<p><a href="https://www.bilibili.com/video/BV1hv411x7we?p=11" target="_blank" rel="noopener noreffer">panic和recover</a></p>
+<h2 id="性能调优">性能调优</h2>
+<h3 id="benchmark测试">benchmark测试</h3>
+<blockquote>
+<p>这个benchmark，之前在<a href="https://juejin.cn/post/7095758872601690119#heading-32" target="_blank" rel="noopener noreffer">（二）</a>里面讲了如何去使用，这里直接贴图看如何看懂测试结果。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b9b6f458eafe4150be5497312e2d2779~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b9b6f458eafe4150be5497312e2d2779~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b9b6f458eafe4150be5497312e2d2779~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b9b6f458eafe4150be5497312e2d2779~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b9b6f458eafe4150be5497312e2d2779~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="slice的阴暗面">slice的阴暗面</h3>
+<p>对于之前使用C++的同学，这里slice的预分配应该不用多讲。主要就是学会避坑。</p>
+<p><strong>最大坑点</strong></p>
+<ol>
+<li>更新slice后<strong>持有的底层数组相同</strong>。
+具体而言：有时我们只是想要底层数组的一小部分，结果因为简单切个片，然后就和他共用了同一片底层数组。go的垃圾回收机制在某种程度上和C++智能指针(引用计数)很相似，如果此时大的数组实际上已经没用了，而有用的只有小数组，而它们是共用同一片底层数组，此时这整个底层数组的空间会得不到释放，因为引用计数不为零！算是意外延长了生命周期。</li>
+<li>更新slice后<strong>持有的底层数组不同</strong>。
+具体而言：如果一个map映射的值是slice类型，那么我们每次更新这个slice里的元素时，我们还得更新map映射的这个slice，这是为了防止底层数组发生了变化。所以一般slice作为值最好是使用slice指针。</li>
+</ol>
+<h3 id="关于string可变与不可变的优化">关于string可变与不可变的优化</h3>
+<h4 id="不可变string的优化">不可变string的优化</h4>
+<p>go语言和Java等等语言都把string设置为了不可变，我觉得这样设置是非常合理的，毕竟字符串在使用过程中，多数情况下都是传递，而且可以利用不可变做很多优化，比如内存池之类的。</p>
+<p><strong>string不可变的缺陷</strong></p>
+<p>一旦string不可变，就意味着，每次得到一个新的字符串就需要申请一片新的内存，那么这样的话，多次字符串拼接的过程中将会有严重的性能损失！</p>
+<p>如下，每次 <code>+=</code> 右边的值都会引起内存的分配。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="nx">s</span> <span class="o">:=</span> <span class="s">&#34;aa&#34;</span>
+<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="nx">size</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span>
+    <span class="nx">s</span> <span class="o">+=</span> <span class="s">&#34;ccc&#34;</span>
+<span class="p">}</span>
+</code></pre></div><h4 id="解决方案">解决方案</h4>
+<ul>
+<li>使用strings.Builder。</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">s</span> <span class="nx">strings</span><span class="p">.</span><span class="nx">Builder</span>
+<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="nx">size</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span>
+    <span class="nx">s</span><span class="p">.</span><span class="nf">WriteString</span><span class="p">(</span><span class="s">&#34;cc&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+<span class="nx">s</span><span class="p">.</span><span class="nf">String</span><span class="p">()</span>
+</code></pre></div><ul>
+<li>使用bytes.Builder。</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">s</span> <span class="nx">bytes</span><span class="p">.</span><span class="nx">Buffer</span>
+<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="mi">10</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span>
+    <span class="nx">s</span><span class="p">.</span><span class="nf">WriteString</span><span class="p">(</span><span class="s">&#34;cc&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+<span class="nx">s</span><span class="p">.</span><span class="nf">String</span><span class="p">()</span>
+</code></pre></div><p>第一种解决方案比第二种要快。</p>
+<p>因为在最后的String()阶段bytes包的处理方式是再进行一次切片处理。</p>
+<p>而strings包则是直接指针强转。</p>
+<h4 id="可变string的优化">可变string的优化</h4>
+<p>可变string的代表便是C++。</p>
+<p>C++的string是可变的，而且因为实现了重载=号实现的深拷贝，导致很多情况下string的使用是需要进行拷贝的，但为了解决这个问题C++可以使用 <code>const&amp;</code> 来引用字符串以防止拷贝，但这就有一个问题：由于string是可变的万一我在使用的过程中string被外界改变了怎么办？这是可变string需要面临的最大问题，所以可变string一般都是会实现深拷贝，但使用起来大多数人还是会通过引用传递，毕竟拷贝太耗时了！但这时使用起来就得遵守编码规范唯唯诺诺了。</p>
+<p>回到正题，即便是使用了 <code>const&amp;</code> 进行字符串的传递，从实践来看，它至少有以下几方面问题：</p>
+<ol>
+<li>字符串字面值、字符数组、字符串指针的传递仍要数据拷贝 这三类低级数据类型与<code>string</code>类型不同，传入时，编译器需要做隐式转换，即需要拷贝这些数据生成<code>string</code>临时对象。<code>const string&amp;</code>指向的实际上是这个临时对象。通常字符串字面值较小，性能损耗可以忽略不计；<strong>但字符串指针和字符数组某些情况下可能会比较大</strong>（比如读取文件的内容），此时会引起频繁的内存分配和数据拷贝，会严重影响程序的性能。</li>
+<li><code>substr</code> <strong>O(n)<strong>复杂度 这是一个特别常用的函数，好在<code>std::string</code>提供了这个函数，美中不足的是其</strong>每次都返回一个新生成的子串，很容易引起性能热点</strong>。实际上我们本意并不是要改变原字符串，为什么不在原字符串基础上返回呢？</li>
+</ol>
+<p>说说可变字符串类型的好处，内存的开辟问题不会太多，因为虽然在拷贝，但基本上都是复用的同一片内存。</p>
+<h5 id="解决方案-1">解决方案</h5>
+<p><strong>方案一：SSO优化</strong></p>
+<p>SSO，全称为：小字符串优化。</p>
+<p>这个优化简单粗暴，就是根据字符串的长度来决定内存的开辟情况。</p>
+<p>比如字符串长度如果小于128字节，那么内存就开辟在栈上面，众所周知，栈内存开辟比堆内存开辟的代价小很多！</p>
+<p><strong>方案二：string_view（C++17引入）</strong></p>
+<p>通过提供一个新的类型，这个类型和不可变的字符串的类型类似，它是不可变的，只能看，不然怎么叫view🤭</p>
+<p>每次string赋值给它，代价都很小，不是直接拷贝字符串，而是指针的赋值而已。</p>
+<p>而且string_view重写了substr，这个方法返回string_view而且你会发现通过它再构建string性能会比string调用substr快很多。</p>
+<p>string_view虽然解决了拷贝问题，但是依旧没有解决C++的内存安全问题，string_view内部是原始指针，不会意外延长生命周期，所以要非常注意它所观察的字符串内存是否被释放了，如果被释放string_view将失效，将会产生严重的内存安全问题。</p>
+<p>关于string_view，可以看看我的这篇博客<a href="https://acking-you.gitee.io/posts/%E5%88%A9%E7%94%A8string_view%E4%BC%98%E5%8C%96%E7%8E%B0%E4%BB%A3c&#43;&#43;%E8%AF%AD%E6%B3%95/#%E5%9B%9B%E6%B5%8B%E8%AF%95%E5%85%B7%E4%BD%93%E6%80%A7%E8%83%BD" target="_blank" rel="noopener noreffer">string_view</a>。</p>
+<h3 id="空结构体的使用">空结构体的使用</h3>
+<blockquote>
+<p>空结构体，不占内存，仅作为占位符，所以可以作为map实现set的理想工具。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/64d8c816591f4c66b20060cfe10f3d6a~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/64d8c816591f4c66b20060cfe10f3d6a~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/64d8c816591f4c66b20060cfe10f3d6a~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/64d8c816591f4c66b20060cfe10f3d6a~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/64d8c816591f4c66b20060cfe10f3d6a~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="atomic包">atomic包</h3>
+<blockquote>
+<p>用atomic保护变量的并发安全，用sync.Mutex保护一段代码逻辑的并发安全。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f9c953d459bf42db813d604322e494ee~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f9c953d459bf42db813d604322e494ee~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f9c953d459bf42db813d604322e494ee~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f9c953d459bf42db813d604322e494ee~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f9c953d459bf42db813d604322e494ee~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>对于非数值变量，可以使用atomic.Value来承载一个空接口。</p>
+<h2 id="性能调优实战">性能调优实战</h2>
+<h3 id="pprof工具的使用">pprof工具的使用</h3>
+<blockquote>
+<p>这个东西暂时用不来，感觉暂时这个阶段也很难用上。用上了再研究（主要是感觉很多东西都还完全不会分析，只会工具操作很麻木的感觉</p>
+</blockquote>
+<p><a href="https://zhuanlan.zhihu.com/p/51559344" target="_blank" rel="noopener noreffer">pprof</a></p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/go%E8%AF%AD%E8%A8%80%E7%BC%96%E7%A0%81%E8%A7%84%E8%8C%83%E5%92%8C%E6%80%A7%E8%83%BD%E8%B0%83%E4%BC%98/">Go语言编码规范和性能调优</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-05-11</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优" data-hashtags="Go语言编码规范和性能调优"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/glang3/" data-hashtag="Go语言编码规范和性能调优"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优" data-image="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优" data-description="Go语言编码规范和性能调优"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优" data-description="Go语言编码规范和性能调优"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/glang3/" data-title="Go语言编码规范和性能调优"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/golang-note2/" class="prev" rel="prev" title="Go语言工程实践（二） | 青训营笔记"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" class="next" rel="next" title="前端基础">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

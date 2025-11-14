@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>TCP网络编程中connect、listen、accept三者之间的关系 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/tcp%E7%BD%91%E7%BB%9C%E7%BC%96%E7%A8%8B%E4%B8%ADconnectlistenaccept%E4%B8%89%E8%80%85%E4%B9%8B%E9%97%B4%E7%9A%84%E5%85%B3%E7%B3%BB/</link>
+        <description>TCP网络编程中connect、listen、accept三者之间的关系 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Wed, 26 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/tcp%E7%BD%91%E7%BB%9C%E7%BC%96%E7%A8%8B%E4%B8%ADconnectlistenaccept%E4%B8%89%E8%80%85%E4%B9%8B%E9%97%B4%E7%9A%84%E5%85%B3%E7%B3%BB/" rel="self" type="application/rss+xml" /><item>
+    <title>TCP网络编程中connect、listen、accept三者之间的关系</title>
+    <link>https://acking-you.github.io/posts/tcp%E7%BD%91%E7%BB%9C%E7%BC%96%E7%A8%8B%E4%B8%ADconnectlistenaccept%E4%B8%89%E8%80%85%E4%B9%8B%E9%97%B4%E7%9A%84%E5%85%B3%E7%B3%BB/</link>
+    <pubDate>Wed, 26 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/tcp%E7%BD%91%E7%BB%9C%E7%BC%96%E7%A8%8B%E4%B8%ADconnectlistenaccept%E4%B8%89%E8%80%85%E4%B9%8B%E9%97%B4%E7%9A%84%E5%85%B3%E7%B3%BB/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://s4.ax1x.com/2022/01/22/7hhFR1.png" referrerpolicy="no-referrer">
+            </div>基于 TCP 的网络编程开发分为服务器端和客户端两部分，常见的核心步骤和流程如下： 整个函数调用(image)" 整个函数调用(image) accept]]></description>
+</item>
+</channel>
+</rss>

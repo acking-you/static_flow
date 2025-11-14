@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>Java对象和多态 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/java%E5%AF%B9%E8%B1%A1%E5%92%8C%E5%A4%9A%E6%80%81/</link>
+        <description>Java对象和多态 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/java%E5%AF%B9%E8%B1%A1%E5%92%8C%E5%A4%9A%E6%80%81/" rel="self" type="application/rss+xml" /><item>
+    <title>Java对象和多态</title>
+    <link>https://acking-you.github.io/posts/java%E9%9D%A2%E5%90%91%E5%AF%B9%E8%B1%A1/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java%E9%9D%A2%E5%90%91%E5%AF%B9%E8%B1%A1/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java对象和多态 （面向对象） 配套视频 面向对象基础 面向对象程序设计(Object Oriented Programming) 对象基于类创建，类相当于一个模板，对象就是根据模板创建出]]></description>
+</item>
+</channel>
+</rss>

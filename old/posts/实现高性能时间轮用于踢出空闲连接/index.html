@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>实现高性能时间轮用于踢出空闲连接 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="实现高性能时间轮用于踢出空闲连接"><meta property="og:title" content="实现高性能时间轮用于踢出空闲连接" />
+<meta property="og:description" content="实现高性能时间轮用于踢出空闲连接" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-02-25T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-02-25T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="实现高性能时间轮用于踢出空闲连接"/>
+<meta name="twitter:description" content="实现高性能时间轮用于踢出空闲连接"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" /><link rel="prev" href="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" /><link rel="next" href="https://acking-you.github.io/posts/tcpconnectionimpl%E5%A6%82%E4%BD%95%E9%AB%98%E6%95%88%E4%B8%94%E7%BB%9F%E4%B8%80%E5%A4%84%E7%90%86io%E4%BA%8B%E4%BB%B6/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "实现高性能时间轮用于踢出空闲连接",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5\/"
+        },"genre": "posts","keywords": "实现高性能时间轮用于踢出空闲连接","wordcount":  3035 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5\/","datePublished": "2023-02-25T00:00:00+00:00","dateModified": "2023-02-25T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "实现高性能时间轮用于踢出空闲连接"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center, https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"
+        title="实现高性能时间轮用于踢出空闲连接" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">实现高性能时间轮用于踢出空闲连接</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E4%BB%8E%E9%9B%B6%E5%BC%80%E5%A7%8B%E5%AE%9E%E7%8E%B0nio%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%BA%93/"><i class="far fa-folder fa-fw"></i>从零开始实现NIO高性能网络库</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-02-25">2023-02-25</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 3035 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 7 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#实现契机">实现契机</a></li>
+    <li><a href="#框架设计">框架设计</a></li>
+    <li><a href="#源码实现">源码实现</a>
+      <ul>
+        <li><a href="#任务队列实现">任务队列实现</a></li>
+        <li><a href="#时间轮逻辑实现">时间轮逻辑实现</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><p>完整代码实现：</p>
+<p><a href="" rel="">netpoll/net/inner/timing_wheel.h</a></p>
+<p><a href="" rel="">netpoll/net/inner/timing_wheel.cc</a></p>
+<h2 id="实现契机">实现契机</h2>
+<p>在网络框架的设计中,有一个环节是踢出空闲的连接,但是我觉得这个过程并不是一个很紧急的过程,有没有一种可以损失定时任务精度,但追求更小的时间消耗的方式呢?</p>
+<p>我想到在原本的定时器上层封装一个时间轮,这样可以让那些不怎么重要的任务迅速添加,且即便在并发量很大的时候也能够防止过多的系统调用,因为你只需要和中间层打交道,并且时间轮本身的插入复杂度就是 O1 级别的. 这样每个线程维护一个每秒一转的时间轮来处理不重要的定时任务,可以减少整个系统在繁忙时不必要的开销.</p>
+<p>如下图:</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/88eac866328b4d15bdb1529bb354831d.png"
+        data-srcset="https://img-blog.csdnimg.cn/88eac866328b4d15bdb1529bb354831d.png, https://img-blog.csdnimg.cn/88eac866328b4d15bdb1529bb354831d.png 1.5x, https://img-blog.csdnimg.cn/88eac866328b4d15bdb1529bb354831d.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/88eac866328b4d15bdb1529bb354831d.png"
+        title="img" /></p>
+<h2 id="框架设计">框架设计</h2>
+<p>我们这里的时间轮由于是直接调用已经实现好的定时器来进行轮转，所以不需要考虑定时轮转的问题。只需要关注实现时间轮采取的数据结构。</p>
+<p>可以先考虑一种最简单的时间轮实现：使用一个数组结构，然后保存一个下标用于存储每次轮询到的位置，每次触发轮询都只需要把下标+1即可，然后通过模运算得到数组下标获取对应需要执行的任务。</p>
+<p>但这样实现有一个很明显的问题：如果需要支持较长的定时任务，需要大量的内存。</p>
+<p>为了优化这个内存的问题,我们采取多个不同精度的时间轮同时推进,如下图:</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/f24085f253d44fee9bb90507a506cdda.png"
+        data-srcset="https://img-blog.csdnimg.cn/f24085f253d44fee9bb90507a506cdda.png, https://img-blog.csdnimg.cn/f24085f253d44fee9bb90507a506cdda.png 1.5x, https://img-blog.csdnimg.cn/f24085f253d44fee9bb90507a506cdda.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/f24085f253d44fee9bb90507a506cdda.png"
+        title="img" /></p>
+<p>我们假设从左往右的任务队列依次是 <code>Q4/Q3/Q2/Q1</code> .</p>
+<p>假设全局时间轮一共轮转了 <code>112</code> 次,我们可以把上述队列的各个位置看成是10进制数的各个位置,那么四个队列从左到右分别代表 <code>0 1 1 2</code> 这四个值,每个队列都是自己单独的每隔对应的 <code>10^n</code> 推进一次,而这个数字就记录了它们目前已经推进过多少次了(进位后不算),这个数值可以度量挨着的高位队列距离下次推进需要多久. 当我们需要往对应的队列中插入任务时,需要加上这个值(当前队列的前一个)作为初值.</p>
+<p>对于上述描述,我们举一个例子比如当前时间轮计数器已经是 <code>123</code> ,当前我需要添加一个 <code>100s</code> 后的任务,根据 <code>123%10=3</code> 可知还需要 <code>7</code> 次 <code>Q1</code> 的推进,<code>Q2</code> 才推进,以此类推 <code>Q2</code> 还需要推进 <code>10-12%10=8</code> 次,<code>Q3</code> 才推进一格&hellip;&hellip;而我们目前需要添加一个延时 <code>100s</code> 的任务,首先计算需要在第一个队列添加到什么位置,如果任务需要的时间少于 <code>10s</code> ,那么只需要放入 <code>Q1</code> 中对应的位置即可,但是本例中需要添加 <code>100s</code> 后的任务,则优先往 <code>Q2</code> 添加任务,<code>Q1</code> 就只需要记录 <code>Q2</code> 无法表示的精度即可,计算在 <code>Q2</code> 中的位置首先需要 <code>100+3=103</code> 得到初值, 然后得到 <code>103%10=3</code> 是 <code>Q2</code> 不能表示的精度,也就是需要使用 <code>Q1</code> 来表示 <code>3s</code> 的精度,<code>103/10=10</code> 得到在 <code>Q2</code> 需要的精度,该数值正好小于等于 <code>10</code> ,那么直接在 <code>Q2</code> 的相应位置插入任务即可.</p>
+<p>最后我们可以验算一下,计数器是 <code>123</code> 的时候,添加<code>100s</code> 后的任务,我们在 <code>Q1</code> 添加了 <code>3s</code> 的任务,在 <code>Q2</code> 添加了 <code>10*10-7=93s</code> 的任务,请注意,我们对于这个 <code>3s</code> 的任务并不是立马就添加,而是在 <code>Q2</code> 中的任务执行结束后再添加,所以最终成功完成了延时 <code>100s</code> 后执行任务.</p>
+<p>我们再次计算上述逻辑实现的时间轮最多可以添加多长的延时任务呢?
+$$
+10^3<em>10+10^2</em>10+10^1<em>10+10^0</em>10=11111s
+$$
+以上都是以 <code>10</code> 进制为基底的情况,实际的实现中,我默认是以 <code>100</code> 进制为基底,如果按照上述图中有 <code>4</code> 个队列,我算了算大概是可以表示 <code>100000101s</code> 大概是 <code>3.17</code> 年.</p>
+<p>假设每个任务需要 <code>32byte</code> 内存,那么时间轮队列的内存消耗也只有 <code>32*100*4=12800=12.5KB</code> ,如果采用的是朴素的实现方式,最终需要的内存可能是 <code>2.98GB</code> ,这波优化确实是好很多.</p>
+<h2 id="源码实现">源码实现</h2>
+<h3 id="任务队列实现">任务队列实现</h3>
+<p>对于时间轮中队列的设计使用 <code>std::deque</code> ,队列中每个元素是一个 <code>std::unordered_set</code> ,这个集合中包含多个任务,每个任务是一个 <code>void*</code> 指针,使用<code>shared_ptr</code> 进行内存管理,具体每个任务的调用是通过将队列头部的智能指针给 <code>pop</code> 出去,然后尾部继续插入空的指针,如果被 <code>pop</code> 的智能指针对应的引用计数减少为0,那么就调用对应的析构,而析构函数才是真正需要调用的任务.</p>
+<p>这种设计逻辑是为了简化对同一个任务的延时逻辑,如果之前已经添加的延时任务马上就要被调用了,但是我还是想重置这个延时,那么只要这个引用计数不为零,真正的任务都不会被调用.这样设计特别适合踢出空闲的 TCP 连接.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">using</span> <span class="n">EntryPtr</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="kt">void</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="k">using</span> <span class="n">EntryBucket</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">unordered_set</span><span class="o">&lt;</span><span class="n">EntryPtr</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="k">using</span> <span class="n">BucketQueue</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">deque</span><span class="o">&lt;</span><span class="n">EntryBucket</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="k">class</span> <span class="nc">CallbackEntry</span>
+<span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="k">explicit</span> <span class="n">CallbackEntry</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="kt">void</span><span class="p">()</span><span class="o">&gt;</span> <span class="n">cb</span><span class="p">)</span> <span class="o">:</span> <span class="n">m_cb</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">cb</span><span class="p">))</span> <span class="p">{}</span>
+    <span class="o">~</span><span class="n">CallbackEntry</span><span class="p">()</span> <span class="p">{</span> <span class="n">m_cb</span><span class="p">();</span> <span class="p">}</span>
+
+<span class="k">private</span><span class="o">:</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="kt">void</span><span class="p">()</span><span class="o">&gt;</span> <span class="n">m_cb</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div><h3 id="时间轮逻辑实现">时间轮逻辑实现</h3>
+<h4 id="时间轮定时模块">时间轮定时模块</h4>
+<p>时间轮的具体逻辑就是之前所提到的,但是在源码的具体实现中需要分离一些内容方便自定义配置.</p>
+<p>比如下面的这几个变量:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">float</span>  <span class="n">m_ticksInterval</span><span class="p">;</span> 	<span class="c1">//时间轮每次轮转经历的时间,比如每秒转一次
+</span><span class="c1"></span><span class="n">size_t</span> <span class="n">m_QueueNum</span><span class="p">;</span>			<span class="c1">//一共有多少个任务队列,比如之前演示的时候就是4个
+</span><span class="c1"></span><span class="n">size_t</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">;</span><span class="c1">//每个任务队列长度为多少,也就是之前所说的基底
+</span></code></pre></div><p>默认情况下,<code>m_ticksInterval</code> 的值的 1.0s, <code>m_bucketsNumPerQueue</code> 的值是 100 ,而 <code>m_QueueNum</code> 则需要根据你最多需要多长的延时时间来确定.</p>
+<p>下面是时间轮对应的构造函数, <code>loop</code> 表示该时间轮所用到的 <code>loop</code> (底层计时器), <code>maxTimeout</code> 是最大需要的延时时间.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TimingWheel</span><span class="p">(</span><span class="n">EventLoop</span> <span class="o">*</span><span class="n">loop</span><span class="p">,</span> <span class="n">size_t</span> <span class="n">maxTimeout</span><span class="p">,</span>
+            <span class="kt">float</span>  <span class="n">ticksInterval</span>      <span class="o">=</span> <span class="n">TIMING_TICK_INTERVAL</span><span class="p">,</span>
+            <span class="n">size_t</span> <span class="n">bucketsNumPerQueue</span> <span class="o">=</span> <span class="n">TIMING_BUCKET_NUM_PER_WHEEL</span><span class="p">);</span>
+</code></pre></div><p>构造函数的具体实现如下:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TimingWheel</span><span class="o">::</span><span class="n">TimingWheel</span><span class="p">(</span><span class="n">EventLoop</span><span class="o">*</span> <span class="n">loop</span><span class="p">,</span> <span class="n">size_t</span> <span class="n">maxTimeout</span><span class="p">,</span>
+                         <span class="kt">float</span> <span class="n">ticksInterval</span><span class="p">,</span> <span class="n">size_t</span> <span class="n">bucketsNumPerQueue</span><span class="p">)</span>
+  <span class="o">:</span> <span class="n">m_loop</span><span class="p">(</span><span class="n">loop</span><span class="p">),</span>
+    <span class="n">m_ticksInterval</span><span class="p">(</span><span class="n">ticksInterval</span><span class="p">),</span>
+    <span class="n">m_bucketsNumPerQueue</span><span class="p">(</span><span class="n">bucketsNumPerQueue</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">maxTimeout</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">);</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">ticksInterval</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span>
+   <span class="n">assert</span><span class="p">(</span><span class="n">m_bucketsNumPerQueue</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">);</span>
+
+   <span class="k">auto</span> <span class="n">maxTickNum</span> <span class="o">=</span> <span class="k">static_cast</span><span class="o">&lt;</span><span class="n">size_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">maxTimeout</span> <span class="o">/</span> <span class="n">ticksInterval</span><span class="p">);</span>
+   <span class="k">auto</span> <span class="n">ticksNum</span>   <span class="o">=</span> <span class="n">bucketsNumPerQueue</span><span class="p">;</span>
+   <span class="n">m_QueueNum</span>      <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+   <span class="c1">// Find out how many task queue of different accuracy are needed.
+</span><span class="c1"></span>   <span class="k">while</span> <span class="p">(</span><span class="n">maxTickNum</span> <span class="o">&gt;</span> <span class="n">ticksNum</span><span class="p">)</span>
+   <span class="p">{</span>
+      <span class="o">++</span><span class="n">m_QueueNum</span><span class="p">;</span>
+      <span class="n">ticksNum</span> <span class="o">*=</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">;</span>
+   <span class="p">}</span>
+   <span class="n">m_taskQueues</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">m_QueueNum</span><span class="p">);</span>
+   <span class="k">for</span> <span class="p">(</span><span class="n">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m_QueueNum</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span>
+   <span class="p">{</span>
+      <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">resize</span><span class="p">(</span><span class="n">m_bucketsNumPerQueue</span><span class="p">);</span>
+   <span class="p">}</span>
+
+   <span class="k">auto</span> <span class="n">cb</span> <span class="o">=</span> <span class="p">[</span><span class="k">this</span><span class="p">](</span><span class="n">TimerId</span> <span class="n">_</span><span class="p">)</span> <span class="p">{</span>
+      <span class="o">++</span><span class="n">m_ticksCounter</span><span class="p">;</span>
+      <span class="n">size_t</span> <span class="n">t</span>   <span class="o">=</span> <span class="n">m_ticksCounter</span><span class="p">;</span>
+      <span class="n">size_t</span> <span class="n">pow</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+      <span class="c1">// bucketsNumPerQueue is used as a base for counting. For example, in
+</span><span class="c1"></span>      <span class="c1">// base 100, suppose there are 4 task queues: Q1, Q2, Q3, and Q4.
+</span><span class="c1"></span>      <span class="c1">// Q1 is advanced once every revolution.Q2 is advanced once
+</span><span class="c1"></span>      <span class="c1">// every 100 revolutions. Q3 is 100^2 and 100^4.
+</span><span class="c1"></span>      <span class="k">for</span> <span class="p">(</span><span class="n">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m_QueueNum</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span>
+      <span class="p">{</span>
+         <span class="k">if</span> <span class="p">((</span><span class="n">t</span> <span class="o">%</span> <span class="n">pow</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+         <span class="p">{</span>
+            <span class="n">EntryBucket</span> <span class="n">tmp</span><span class="p">;</span>
+            <span class="p">{</span>
+               <span class="c1">// use tmp val to make this critical area as short as
+</span><span class="c1"></span>               <span class="c1">// possible.
+</span><span class="c1"></span>               <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">front</span><span class="p">().</span><span class="n">swap</span><span class="p">(</span><span class="n">tmp</span><span class="p">);</span>
+               <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">pop_front</span><span class="p">();</span>
+               <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">emplace_back</span><span class="p">();</span>
+            <span class="p">}</span>
+         <span class="p">}</span>
+         <span class="n">pow</span> <span class="o">=</span> <span class="n">pow</span> <span class="o">*</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">;</span>
+      <span class="p">}</span>
+   <span class="p">};</span>
+   <span class="c1">// Mark the lowest priority and rotate every m_ticksInterval.
+</span><span class="c1"></span>   <span class="n">m_timerId</span> <span class="o">=</span> <span class="n">m_loop</span><span class="o">-&gt;</span><span class="n">runEvery</span><span class="p">(</span><span class="n">m_ticksInterval</span><span class="p">,</span> <span class="n">cb</span><span class="p">,</span> <span class="nb">false</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>上述代码实现两个逻辑:</p>
+<ul>
+<li>
+<p>根据 <code>maxTimeout</code> 计算出 <code>m_QueueNum</code> ,并初始化对应的队列内存.
+因为之前介绍过这个时间轮的实现逻辑,比如 10 为基底有4个队列,并且每次tick需要1s的时候,最多可以:<code>10+10^2+10^3+10^4</code> .</p>
+<p>这是最好的情况,最坏的情况是:</p>
+<p><code>9+9*10^1+9*10^2+9*10^3+1 = 10^4</code></p>
+<p>得出最多可以的延时时间和队列数量的关系是 <code>base^num</code> ,根据这个计算出num即可.</p>
+</li>
+<li>
+<p>往 <code>loop</code> 中注册一个每隔 <code>m_ticksInterval</code> 时间后都执行的任务.
+这个任务每次执行需要将时间轮的计时器+1,根据这个计数之前说过可以算出当前各个队列是否需要向前推进,而队列的向前推进过程就是把 <code>front()</code> 元素 <code>swap</code> 出来,然后 <code>pop</code> ,最后在 <code>push_back</code> 补齐长度.</p>
+</li>
+</ul>
+<h4 id="时间轮的任务插入">时间轮的任务插入</h4>
+<p>虽然通过多个任务队列解决了时间轮的内存消耗问题,但是同样也增加了插入代码的书写复杂程度.</p>
+<p>我们需要解决的问题有:</p>
+<ul>
+<li>如何计算不同的耗时插入到哪个精度的任务队列?</li>
+<li>如何让一个任务按照顺序插入不同精度的任务队列?</li>
+</ul>
+<p>第一个问题很好理解,比如 101s 后的延时任务该怎么去插入到不同精度的队列,这个复杂的关键原因在于当你分成的不同精度之后,不同的任务队列当前执行到的位置是不同的,比如一个需要 100s 推进一次的任务队列,当你在时间轮开始轮转23s后插入这个延时101s的任务,那么这个精度为100s的任务队列距离下次任务推进的时间并不是100s而是 <code>100-23 = 77s</code> ,所以我们需要将原来的延时任务  <code>+23s</code> 才能平衡为完整的 <code>100s</code> ,这样就方便查找我需要插入的位置,比如 <code>(101+23)/100=1</code> 得出需要在该任务队列的第1个位置插入一个延时任务,通过 <code>(101+23)%100=24</code> 得出需要在前一个低精度的任务队列的第24个位置插入延时任务.  通过这种计算方式就解决了第一个问题.</p>
+<p>但是我们不应该同时加入这两个任务,因为这两个任务的计时是并行的,所以无法进行时间的累加.为了解决这个问题,我们可以手动通过函数套娃封装去添加任务,比如上述有两个任务需要添加,我们先添加延时较长的那个任务,这个任务的内容就是添加后续较短的任务,以此类推.这样就保证了其实只添加了一个任务,当当这个任务被执行的时候再去添加下一个任务,到最后的截止时间才去调用真正的任务.</p>
+<p>源代码如下:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">void</span> <span class="n">TimingWheel</span><span class="o">::</span><span class="n">insertEntryInLoop</span><span class="p">(</span><span class="n">size_t</span> <span class="n">delay</span><span class="p">,</span> <span class="n">EntryPtr</span> <span class="n">entryPtr</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">m_loop</span><span class="o">-&gt;</span><span class="n">assertInLoopThread</span><span class="p">();</span>
+
+   <span class="c1">// If delay is not a multiple of the rotation interval, then the number of
+</span><span class="c1"></span>   <span class="c1">// rotations needs plus one.
+</span><span class="c1"></span>   <span class="n">delay</span> <span class="o">=</span> <span class="k">static_cast</span><span class="o">&lt;</span><span class="n">size_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">delay</span> <span class="o">/</span> <span class="n">m_ticksInterval</span><span class="p">)</span> <span class="o">+</span>
+           <span class="p">(</span><span class="n">delay</span> <span class="o">%</span> <span class="k">static_cast</span><span class="o">&lt;</span><span class="n">size_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">m_ticksInterval</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span> <span class="o">:</span> <span class="mi">0</span><span class="p">);</span>
+   <span class="n">size_t</span> <span class="n">t</span> <span class="o">=</span> <span class="n">m_ticksCounter</span><span class="p">;</span>
+   <span class="k">for</span> <span class="p">(</span><span class="n">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m_QueueNum</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span>
+   <span class="p">{</span>
+      <span class="c1">// The number of rotations required is less than or equal to the maximum
+</span><span class="c1"></span>      <span class="c1">// number of rotations of the TimingWheel with the current accuracy.
+</span><span class="c1"></span>      <span class="k">if</span> <span class="p">(</span><span class="n">delay</span> <span class="o">&lt;=</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">)</span>
+      <span class="p">{</span>
+         <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">delay</span> <span class="o">-</span> <span class="mi">1</span><span class="p">].</span><span class="n">insert</span><span class="p">(</span><span class="n">entryPtr</span><span class="p">);</span>
+         <span class="k">break</span><span class="p">;</span>
+      <span class="p">}</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">m_QueueNum</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span>
+      <span class="p">{</span>
+         <span class="n">entryPtr</span> <span class="o">=</span>
+           <span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">CallbackEntry</span><span class="o">&gt;</span><span class="p">([</span><span class="k">this</span><span class="p">,</span> <span class="n">delay</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">entryPtr</span><span class="p">]()</span> <span class="p">{</span>
+              <span class="k">if</span> <span class="p">(</span><span class="n">delay</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+              <span class="p">{</span>
+                 <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">][(</span><span class="n">delay</span> <span class="o">+</span> <span class="p">(</span><span class="n">t</span> <span class="o">%</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">)</span> <span class="o">-</span> <span class="mi">0</span><span class="p">)</span> <span class="o">%</span>
+                                 <span class="n">m_bucketsNumPerQueue</span><span class="p">]</span>
+                   <span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">entryPtr</span><span class="p">);</span>
+              <span class="p">}</span>
+           <span class="p">});</span>
+      <span class="p">}</span>
+      <span class="k">else</span>
+      <span class="p">{</span>
+         <span class="c1">// delay is too long to put entry at valid position in wheels.
+</span><span class="c1"></span>         <span class="n">m_taskQueues</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">m_bucketsNumPerQueue</span> <span class="o">-</span> <span class="mi">1</span><span class="p">].</span><span class="n">insert</span><span class="p">(</span><span class="n">entryPtr</span><span class="p">);</span>
+      <span class="p">}</span>
+      <span class="n">delay</span> <span class="o">=</span> <span class="p">(</span><span class="n">delay</span> <span class="o">+</span> <span class="p">(</span><span class="n">t</span> <span class="o">%</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">;</span>
+      <span class="n">t</span>     <span class="o">=</span> <span class="n">t</span> <span class="o">/</span> <span class="n">m_bucketsNumPerQueue</span><span class="p">;</span>
+   <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/">实现高性能时间轮用于踢出空闲连接</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-02-25</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接" data-hashtags="实现高性能时间轮用于踢出空闲连接"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-hashtag="实现高性能时间轮用于踢出空闲连接"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接" data-image="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接" data-description="实现高性能时间轮用于踢出空闲连接"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接" data-description="实现高性能时间轮用于踢出空闲连接"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E9%AB%98%E6%80%A7%E8%83%BD%E6%97%B6%E9%97%B4%E8%BD%AE%E7%94%A8%E4%BA%8E%E8%B8%A2%E5%87%BA%E7%A9%BA%E9%97%B2%E8%BF%9E%E6%8E%A5/" data-title="实现高性能时间轮用于踢出空闲连接"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" class="prev" rel="prev" title="elog4cpp官方文档"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/tcpconnectionimpl%E5%A6%82%E4%BD%95%E9%AB%98%E6%95%88%E4%B8%94%E7%BB%9F%E4%B8%80%E5%A4%84%E7%90%86io%E4%BA%8B%E4%BB%B6/" class="next" rel="next" title="TcpConnectionImpl如何高效且统一处理IO事件">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>实现实时qq好友搜索框 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/</link>
+        <description>实现实时qq好友搜索框 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 24 Apr 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/" rel="self" type="application/rss+xml" /><item>
+    <title>实现实时qq好友搜索框</title>
+    <link>https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/</link>
+    <pubDate>Sun, 24 Apr 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%AE%9E%E7%8E%B0%E5%AE%9E%E6%97%B6qq%E5%A5%BD%E5%8F%8B%E6%90%9C%E7%B4%A2%E6%A1%86/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center" referrerpolicy="no-referrer">
+            </div>项目背景 想要用纯C++实现一个QQ，包括客户端的ui和通信，以及服务端的数据收发通信。 客户端：使用C++的Qt框架实现UI（正在进行），使用]]></description>
+</item>
+</channel>
+</rss>

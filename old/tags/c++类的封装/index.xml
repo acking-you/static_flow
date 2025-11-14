@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>C&#43;&#43;类的封装 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/c&#43;&#43;%E7%B1%BB%E7%9A%84%E5%B0%81%E8%A3%85/</link>
+        <description>C&#43;&#43;类的封装 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/c&#43;&#43;%E7%B1%BB%E7%9A%84%E5%B0%81%E8%A3%85/" rel="self" type="application/rss+xml" /><item>
+    <title>大数加减类的实现(C&#43;&#43;实现)✨</title>
+    <link>https://acking-you.github.io/posts/%E5%A4%A7%E6%95%B4%E6%95%B0%E5%8A%A0%E5%87%8F/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%A4%A7%E6%95%B4%E6%95%B0%E5%8A%A0%E5%87%8F/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/d01d5f8864d540fd9f68582d8f01d017.png?x-oss-process=image/watermark,type_ZHJvaWRzYW5zZmFsbGJhY2s,shadow_50,text_Q1NETiBAQ19ZQ0JYIFB5X1lZRFM=,size_20,color_FFFFFF,t_70,g_se,x_16" referrerpolicy="no-referrer">
+            </div>为什么需要大数加减类？ 对于计算机而言，基本的数据类型一般最多为64位数据表示范围，这个范围是有限的，没法无限的表示所有的数据，那么有没有一种]]></description>
+</item>
+</channel>
+</rss>

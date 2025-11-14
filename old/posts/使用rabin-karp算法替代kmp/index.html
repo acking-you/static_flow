@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>使用Rabin-Karp算法替代KMP - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="使用Rabin-Karp算法替代KMP"><meta property="og:title" content="使用Rabin-Karp算法替代KMP" />
+<meta property="og:description" content="使用Rabin-Karp算法替代KMP" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-06-04T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-06-04T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="使用Rabin-Karp算法替代KMP"/>
+<meta name="twitter:description" content="使用Rabin-Karp算法替代KMP"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" /><link rel="prev" href="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" /><link rel="next" href="https://acking-you.github.io/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "使用Rabin-Karp算法替代KMP",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp\/"
+        },"genre": "posts","keywords": "使用Rabin-Karp算法替代KMP","wordcount":  5824 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp\/","datePublished": "2023-06-04T00:00:00+00:00","dateModified": "2023-06-04T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "使用Rabin-Karp算法替代KMP"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center, https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center"
+        title="使用Rabin-Karp算法替代KMP" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">使用Rabin-Karp算法替代KMP</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E7%AE%97%E6%B3%95%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3/"><i class="far fa-folder fa-fw"></i>算法——滑动窗口</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-06-04">2023-06-04</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 5824 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 12 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#高效寻找重复子序列">高效寻找重复子序列</a></li>
+    <li><a href="#rabin-karp-算法">Rabin-Karp 算法</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="rabin-karp算法">Rabin-Karp算法</h1>
+<p>Rabin-Karp算法是利用滑动窗口的方式来计算哈希值，并通过该哈希值直接进行比较来判断字符串是否匹配，也就是消减了字符串比较的过程来实现 O(n) 的时间复杂度。</p>
+<p>废话不多说了，直接上干货。</p>
+<p>首先，我问你一个很基础的问题，给你输入一个字符串形式的正整数，如何把它转化成数字的形式？很简单，下面这段代码就可以做到：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">string</span> <span class="n">s</span> <span class="o">=</span> <span class="s">&#34;8264&#34;</span><span class="p">;</span>
+<span class="kt">int</span> <span class="n">number</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">s</span><span class="p">.</span><span class="n">size</span><span class="p">();</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c1">// 将字符转化成数字
+</span><span class="c1"></span>    <span class="n">number</span> <span class="o">=</span> <span class="mi">10</span> <span class="o">*</span> <span class="n">number</span> <span class="o">+</span> <span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">-</span> <span class="sc">&#39;0&#39;</span><span class="p">);</span>
+    <span class="n">print</span><span class="p">(</span><span class="n">number</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="c1">// 打印输出：
+</span><span class="c1">// 8
+</span><span class="c1">// 82
+</span><span class="c1">// 826
+</span><span class="c1">// 8264
+</span></code></pre></div><p><strong>可以看到这个算法的核心思路就是不断向最低位（个位）添加数字</strong>，同时把前面的数字整体左移一位（乘以 10）。</p>
+<p>为什么是乘以 10？因为我们默认探讨的是十进制数。这和我们操作二进制数的时候是一个道理，左移一位就是把二进制数乘以 2，右移一位就是除以 2。</p>
+<p>上面这个场景是不断给数字添加最低位，<strong>那如果我想删除数字的最高位，怎么做呢</strong>？比如说我想把 8264 变成 264，应该如何运算？其实也很简单，让 8264 减去 8000 就得到 264 了。</p>
+<p>这个 8000 是怎么来的？是 8 x 10^3 算出来的。8 是最高位的数字，10 是因为我们这里是十进制数，3 是因为 8264 去掉最高位后还剩三位数。</p>
+<p>上述内容主要探讨了如何在数字的最低位添加数字以及如何删除数字的最高位，用<code>R</code>表示数字的进制数，用<code>L</code>表示数字的位数，就可以总结出如下公式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cm">/* 在最低位添加一个数字 */</span>
+<span class="kt">int</span> <span class="n">number</span> <span class="o">=</span> <span class="mi">8264</span><span class="p">;</span>
+<span class="c1">// number 的进制
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">R</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="c1">// 想在 number 的最低位添加的数字
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">appendVal</span> <span class="o">=</span> <span class="mi">3</span><span class="p">;</span>
+<span class="c1">// 运算，在最低位添加一位
+</span><span class="c1"></span><span class="n">number</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">number</span> <span class="o">+</span> <span class="n">appendVal</span><span class="p">;</span>
+<span class="c1">// 此时 number = 82643
+</span><span class="c1"></span>
+<span class="cm">/* 在最高位删除一个数字 */</span>
+<span class="kt">int</span> <span class="n">number</span> <span class="o">=</span> <span class="mi">8264</span><span class="p">;</span>
+<span class="c1">// number 的进制
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">R</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="c1">// number 最高位的数字
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">removeVal</span> <span class="o">=</span> <span class="mi">8</span><span class="p">;</span>
+<span class="c1">// 此时 number 的位数
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">L</span> <span class="o">=</span> <span class="mi">4</span><span class="p">;</span>
+<span class="c1">// 运算，删除最高位数字
+</span><span class="c1"></span><span class="n">number</span> <span class="o">=</span> <span class="n">number</span> <span class="o">-</span> <span class="n">removeVal</span> <span class="o">*</span> <span class="n">R</span><span class="o">^</span><span class="p">(</span><span class="n">L</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="c1">// 此时 number = 264
+</span></code></pre></div><p><strong>如果你能理解这两个公式，那么 Rabin-Karp 算法就没有任何难度</strong>，算法就是这样，再高大上的技巧，都是在最简单最基本的原理之上构建的。不过在讲 Rabin-Karp 算法之前，我们先来看一道简单的力扣题目。</p>
+<h2 id="高效寻找重复子序列">高效寻找重复子序列</h2>
+<p>看下力扣第 187 题「重复的 DNA 序列」，我简单描述下题目：</p>
+<p>DNA 序列由四种碱基<code>A, G, C, T</code>组成，现在给你输入一个只包含<code>A, G, C, T</code>四种字符的字符串<code>s</code>代表一个 DNA 序列，请你在<code>s</code>中找出所有重复出现的长度为 10 的子字符串。</p>
+<p>比如下面的测试用例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="err">输入：</span><span class="n">s</span> <span class="o">=</span> <span class="s">&#34;AAAAACCCCCAAAAACCCCCCAAAAAGGGTTT&#34;</span>
+<span class="err">输出：</span><span class="p">[</span><span class="s">&#34;AAAAACCCCC&#34;</span><span class="p">,</span><span class="s">&#34;CCCCCAAAAA&#34;</span><span class="p">]</span>
+<span class="err">解释：子串</span> <span class="s">&#34;AAAAACCCCC&#34;</span> <span class="err">和</span> <span class="s">&#34;CCCCCAAAAA&#34;</span> <span class="err">都重复出现了两次。</span>
+
+<span class="err">输入：</span><span class="n">s</span> <span class="o">=</span> <span class="s">&#34;AAAAAAAAAAAAA&#34;</span>
+<span class="err">输出：</span><span class="p">[</span><span class="s">&#34;AAAAAAAAAA&#34;</span><span class="p">]</span>
+</code></pre></div><p>函数签名如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">vector</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">findRepeatedDnaSequences</span><span class="p">(</span><span class="n">string</span> <span class="n">s</span><span class="p">);</span>
+</code></pre></div><p>这道题的拍脑袋解法比较简单粗暴，我直接穷举所有长度为 10 的子串，然后借助哈希集合寻找那些重复的子串就行了，代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">// 暴力解法
+</span><span class="c1"></span><span class="n">vector</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">findRepeatedDnaSequences</span><span class="p">(</span><span class="n">string</span> <span class="n">s</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">n</span> <span class="o">=</span> <span class="n">s</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+    <span class="c1">// 记录出现过的子串
+</span><span class="c1"></span>    <span class="n">unordered_set</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">seen</span><span class="p">;</span>
+    <span class="c1">// 记录那些重复出现多次的子串
+</span><span class="c1"></span>    <span class="c1">// 注意要用哈希集合，防止记录重复的结果
+</span><span class="c1"></span>    <span class="n">unordered_set</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">res</span><span class="p">;</span>
+
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">10</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">auto</span> <span class="n">subStr</span> <span class="o">=</span> <span class="n">s</span><span class="p">.</span><span class="n">substr</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">seen</span><span class="p">.</span><span class="n">count</span><span class="p">(</span><span class="n">subStr</span><span class="p">)){</span>
+            <span class="c1">// 之前出现过，找到一个重复的
+</span><span class="c1"></span>            <span class="n">res</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">subStr</span><span class="p">);</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+            <span class="c1">// 之前没出现过，加入集合
+</span><span class="c1"></span>            <span class="n">seen</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">subStr</span><span class="p">);</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="p">{</span><span class="n">res</span><span class="p">.</span><span class="n">begin</span><span class="p">(),</span><span class="n">res</span><span class="p">.</span><span class="n">end</span><span class="p">()};</span>
+<span class="p">}</span>
+</code></pre></div><p>这个算法肯定是没问题的，只是时间复杂度略高。假设<code>s</code>的长度为<code>N</code>，目标子串的长度为<code>L</code>（本题<code>L = 10</code>），for 循环遍历<code>s</code>的<code>O(N)</code>个字符，对每个字符都要截取长度为<code>L</code>的子字符串，所以这个算法的时间复杂是<code>O(NL)</code>。</p>
+<p><strong>遍历整个<code>s</code>肯定是免不了的，问题是我们能不能不要每次都调用<code>substr</code>去截取子字符串</strong>？</p>
+<p>你注意我们这个匹配过程实际上就是维护了一个长度为<code>L = 10</code>的定长窗口在从左向右滑动，是否可以使用滑动窗口中的做法，只维护<code>left, right</code>指针来划定子字符串区间？</p>
+<p>其实可以的，直接套用前文给出的滑动窗口算法框架写出伪码思路：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">int</span> <span class="n">L</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="n">map</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">seen</span><span class="p">;</span>
+
+<span class="c1">// 滑动窗口代码框架
+</span><span class="c1"></span><span class="n">CharWindow</span> <span class="n">window</span><span class="p">;</span>
+<span class="kt">int</span> <span class="n">left</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">while</span> <span class="p">(</span><span class="n">right</span> <span class="o">&lt;</span> <span class="n">s</span><span class="p">.</span><span class="n">size</span><span class="p">())</span> <span class="p">{</span>
+    <span class="c1">// 扩大窗口，移入字符
+</span><span class="c1"></span>    <span class="n">window</span><span class="p">.</span><span class="n">addRight</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="n">right</span><span class="p">]);</span>
+    <span class="n">right</span><span class="o">++</span><span class="p">;</span>
+    
+    <span class="c1">// 当子串的长度达到要求
+</span><span class="c1"></span>    <span class="k">if</span> <span class="p">(</span><span class="n">right</span> <span class="o">-</span> <span class="n">left</span> <span class="o">==</span> <span class="n">L</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">// 把窗口中的字符变成字符串，还是需要 O(L) 的时间
+</span><span class="c1"></span>        <span class="n">String</span> <span class="n">windowStr</span> <span class="o">=</span> <span class="n">window</span><span class="p">.</span><span class="n">toString</span><span class="p">();</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">seen</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">windowStr</span><span class="p">))</span> <span class="p">{</span>
+            <span class="n">print</span><span class="p">(</span><span class="s">&#34;找到一个重复子串: &#34;</span><span class="p">,</span> <span class="n">windowStr</span><span class="p">);</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+            <span class="n">seen</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">windowHash</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="c1">// 缩小窗口，移出字符
+</span><span class="c1"></span>        <span class="n">window</span><span class="p">.</span><span class="n">removeLeft</span><span class="p">();</span>
+        <span class="n">left</span><span class="o">++</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>这段伪码直接套用了滑动窗口算法框架，你应该不难理解。但你注意这个解法依然需要将窗口中的字符转化成字符串然后去<code>seen</code>集合判断是否存在重复，你一旦想把字符转化成字符串，就难免需要<code>O(L)</code>的时间来操作。所以这个算法的时间复杂度还是没有降低，依然是<code>O(NL)</code>。</p>
+<p><strong>所以优化的关键在于，我们能不能不要真的把子字符串生成出来，而是用一些其他形式的唯一标识来表示滑动窗口中的子字符串，并且还能在窗口滑动的过程中快速更新</strong>？</p>
+<p>有办法的，回想一下本文开头我们讨论的那两个公式，现在你应该明白的用意了。</p>
+<p>你把<code>AGCT</code>四种字符等价为<code>0123</code>四个数字，那么长度为<code>L = 10</code>的一个碱基序列其实就可以等价为一个十位数，这个数字可以唯一标识一个子串。<strong>而且窗口移动的过程，其实就是给这个数字的最低位添加数字，并删除最高位数字的过程</strong>，回顾之前的讲解，添加和删除数字的运算就是两个公式，可以在<code>O(1)</code>的时间完成。</p>
+<p>然后，我们不要在哈希集合中直接存储子串了，而是存储子串对应的十位数。因为一个十位数可以唯一标识一个子串，所以也可以起到识别重复的作用。</p>
+<p>这样，我们就避免了直接生成子串存入集合，而是生成一个十位数来表示子串，而且生成这个十位数的时间花费为<code>O(1)</code>，从而降低了匹配算法的时间复杂度。</p>
+<p>其实你想下，你把一个字符串对象转化成了一个数字，这是什么？这就是你设计的一个哈希算法，生成的数字就可以认为是字符串的哈希值。<strong>在滑动窗口中快速计算窗口中元素的哈希值，叫做滑动哈希技巧</strong>。</p>
+<p>上述优化思路的伪码思路如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">int</span> <span class="n">L</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="c1">// 集合中不要存储字符串了，而是存储字符串对应的哈希值
+</span><span class="c1"></span><span class="n">HashSet</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span> <span class="n">seen</span><span class="p">;</span>
+
+<span class="c1">// 滑动窗口代码框架
+</span><span class="c1"></span><span class="n">CharWindow</span> <span class="n">window</span><span class="p">;</span>
+<span class="kt">int</span> <span class="n">left</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">while</span> <span class="p">(</span><span class="n">right</span> <span class="o">&lt;</span> <span class="n">s</span><span class="p">.</span><span class="n">size</span><span class="p">())</span> <span class="p">{</span>
+    <span class="c1">// 扩大窗口，移入字符
+</span><span class="c1"></span>    <span class="n">window</span><span class="p">.</span><span class="n">addRight</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="n">right</span><span class="p">]);</span>
+    <span class="n">right</span><span class="o">++</span><span class="p">;</span>
+    
+    <span class="c1">// 当子串的长度达到要求
+</span><span class="c1"></span>    <span class="k">if</span> <span class="p">(</span><span class="n">right</span> <span class="o">-</span> <span class="n">left</span> <span class="o">==</span> <span class="n">L</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">// 获取当前窗口内字符串的哈希值，时间 O(1)
+</span><span class="c1"></span>        <span class="kt">int</span> <span class="n">windowHash</span> <span class="o">=</span> <span class="n">window</span><span class="p">.</span><span class="n">hash</span><span class="p">();</span>
+        <span class="c1">// 根据哈希值判断是否曾经出现过相同的子串
+</span><span class="c1"></span>        <span class="k">if</span> <span class="p">(</span><span class="n">seen</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">windowHash</span><span class="p">))</span> <span class="p">{</span>
+            <span class="c1">// 当前窗口中的子串是重复出现的
+</span><span class="c1"></span>            <span class="n">print</span><span class="p">(</span><span class="s">&#34;找到一个重复子串: &#34;</span><span class="p">,</span> <span class="n">window</span><span class="p">.</span><span class="n">toString</span><span class="p">());</span>
+        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+            <span class="c1">// 当前窗口中的子串之前没有出现过，记下来
+</span><span class="c1"></span>            <span class="n">seen</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">windowHash</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="c1">// 缩小窗口，移出字符
+</span><span class="c1"></span>        <span class="n">window</span><span class="p">.</span><span class="n">removeLeft</span><span class="p">();</span>
+        <span class="n">left</span><span class="o">++</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>进一步，我们用一个 10 位数来标识一个长度为 10 的碱基字符序列，这需要 long 类型存储，int 存不下 10 位数。但你注意这个 10 位数中所有的数字只会局限于<code>0,1,2,3</code>，是不是有些浪费？</p>
+<p>换句话说，<strong>我们需要存储的其实只是一个四进制下的十位数</strong>（共包含 4^10 个数字），却用了十进制的十位数（可以包含 10^10 个数字）来保存，显然是有些浪费的。</p>
+<p>因为 4^10 = 1048576 &lt; 10^8，所以只要我们在四进制的运算规则下进行运算，十进制的八位数就能存下，这样的话 int 类型就够用了，不需要 long 类型。</p>
+<p>具体来说，只要改变我们之前那两个公式的进制<code>R</code>就行了：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cm">/* 在最低位添加一个数字 */</span>
+<span class="c1">// number 的进制
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">R</span> <span class="o">=</span> <span class="mi">4</span><span class="p">;</span>
+<span class="c1">// 想在 number 的最低位添加的数字
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">appendVal</span> <span class="o">=</span> <span class="mi">0</span><span class="o">~</span><span class="mi">3</span> <span class="err">中的任意数字</span><span class="p">;</span>
+<span class="c1">// 运算，在最低位添加一位
+</span><span class="c1"></span><span class="n">number</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">number</span> <span class="o">+</span> <span class="n">appendVal</span><span class="p">;</span>
+
+<span class="cm">/* 在最高位删除一个数字 */</span>
+<span class="c1">// number 的进制
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">R</span> <span class="o">=</span> <span class="mi">4</span><span class="p">;</span>
+<span class="c1">// number 最高位的数字
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">removeVal</span> <span class="o">=</span> <span class="mi">0</span><span class="o">~</span><span class="mi">3</span> <span class="err">中的任意数字</span><span class="p">;</span>
+<span class="c1">// 此时 number 的位数
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">L</span> <span class="o">=</span> <span class="o">?</span><span class="p">;</span>
+<span class="c1">// 运算，删除最高位数字
+</span><span class="c1"></span><span class="n">number</span> <span class="o">=</span> <span class="n">number</span> <span class="o">-</span> <span class="n">removeVal</span> <span class="o">*</span> <span class="n">R</span><span class="o">^</span><span class="p">(</span><span class="n">L</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+</code></pre></div><p>结合数字最高/最低位的处理技巧和滑动窗口代码框架，我们就可以轻松地写出最终的解法代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">vector</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">findRepeatedDnaSequences</span><span class="p">(</span><span class="n">string</span> <span class="n">s</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">auto</span> <span class="n">getNumber</span> <span class="o">=</span> <span class="p">[](</span><span class="kt">char</span> <span class="n">x</span><span class="p">)</span><span class="o">-&gt;</span><span class="kt">int</span><span class="p">{</span>
+        <span class="k">switch</span><span class="p">(</span><span class="n">x</span><span class="p">){</span>
+            <span class="k">case</span> <span class="sc">&#39;A&#39;</span><span class="o">:</span>
+                <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+            <span class="k">case</span> <span class="sc">&#39;G&#39;</span><span class="o">:</span>
+                <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+            <span class="k">case</span> <span class="sc">&#39;C&#39;</span><span class="o">:</span>
+                <span class="k">return</span> <span class="mi">2</span><span class="p">;</span>
+            <span class="k">case</span> <span class="sc">&#39;T&#39;</span><span class="o">:</span>
+               <span class="k">return</span> <span class="mi">3</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="c1">// 记录重复出现的哈希值
+</span><span class="c1"></span>    <span class="n">unordered_set</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">seen</span><span class="p">;</span>
+    <span class="c1">// 记录重复出现的字符串结果
+</span><span class="c1"></span>    <span class="n">unordered_set</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">res</span><span class="p">;</span>
+    
+    <span class="c1">// 数字位数
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">L</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+    <span class="c1">// 进制
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">R</span> <span class="o">=</span> <span class="mi">4</span><span class="p">;</span>
+    <span class="c1">// 存储 R^(L - 1) 的结果
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">RL</span> <span class="o">=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span> <span class="n">pow</span><span class="p">(</span><span class="n">R</span><span class="p">,</span> <span class="n">L</span> <span class="o">-</span> <span class="mi">1</span><span class="p">);</span>
+    <span class="c1">// 维护滑动窗口中字符串的哈希值
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">windowHash</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    
+    <span class="c1">// 滑动窗口代码框架，时间 O(N)
+</span><span class="c1"></span>    <span class="kt">int</span> <span class="n">left</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">while</span> <span class="p">(</span><span class="n">right</span> <span class="o">&lt;</span> <span class="n">nums</span><span class="p">.</span><span class="n">length</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">// 扩大窗口，移入字符，并维护窗口哈希值（在最低位添加数字）
+</span><span class="c1"></span>        <span class="n">windowHash</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">windowHash</span> <span class="o">+</span> <span class="n">getNumber</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="n">right</span><span class="o">++</span><span class="p">]);</span>
+
+        <span class="c1">// 当子串的长度达到要求
+</span><span class="c1"></span>        <span class="k">if</span> <span class="p">(</span><span class="n">right</span> <span class="o">-</span> <span class="n">left</span> <span class="o">==</span> <span class="n">L</span><span class="p">)</span> <span class="p">{</span>
+            <span class="c1">// 根据哈希值判断是否曾经出现过相同的子串
+</span><span class="c1"></span>            <span class="k">if</span> <span class="p">(</span><span class="n">seen</span><span class="p">.</span><span class="n">count</span><span class="p">(</span><span class="n">windowHash</span><span class="p">))</span> <span class="p">{</span>
+                <span class="c1">// 当前窗口中的子串是重复出现的
+</span><span class="c1"></span>                <span class="n">res</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">s</span><span class="p">.</span><span class="n">substr</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">L</span><span class="p">));</span>
+            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                <span class="c1">// 当前窗口中的子串之前没有出现过，记下来
+</span><span class="c1"></span>                <span class="n">seen</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">windowHash</span><span class="p">);</span>
+            <span class="p">}</span>
+            <span class="c1">// 缩小窗口，移出字符，并维护窗口哈希值（删除最高位数字）
+</span><span class="c1"></span>            <span class="n">windowHash</span> <span class="o">=</span> <span class="n">windowHash</span> <span class="o">-</span> <span class="n">nums</span><span class="p">[</span><span class="n">left</span><span class="p">]</span> <span class="o">*</span> <span class="n">RL</span><span class="p">;</span>
+            <span class="n">left</span><span class="o">++</span><span class="p">;</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="c1">// 转化成题目要求的 List 类型
+</span><span class="c1"></span>    <span class="k">return</span> <span class="p">{</span><span class="n">res</span><span class="p">.</span><span class="n">begin</span><span class="p">(),</span><span class="n">res</span><span class="p">.</span><span class="n">end</span><span class="p">()};</span>
+<span class="p">}</span>
+</code></pre></div><p>滑动窗口算法本身的时间复杂度是<code>O(N)</code>，而窗口滑动的过程中的操作耗时都是<code>O(1)</code>（给<code>res</code>添加子串的过程不算），所以整体的时间复杂度是<code>O(N)</code>，这样就把算法的复杂度降低到线性级别了。</p>
+<h2 id="rabin-karp-算法">Rabin-Karp 算法</h2>
+<p>有了上面由浅入深的铺垫，你理解 Rabin-Karp 算法就非常容易了，因为上面这道题目的本质就是一个字符串匹配的问题。</p>
+<p>字符串匹配算法大家都很熟悉，让你在文本串<code>txt</code>中搜索模式串<code>pat</code>的起始索引，暴力字符串匹配算法是这样的：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">// 在文本串 txt 中搜索模式串 pat 的起始索引
+</span><span class="c1"></span><span class="kt">int</span> <span class="nf">search</span><span class="p">(</span><span class="n">string</span> <span class="n">txt</span><span class="p">,</span> <span class="n">string</span> <span class="n">pat</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">N</span> <span class="o">=</span> <span class="n">txt</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="n">L</span> <span class="o">=</span> <span class="n">pat</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">+</span> <span class="n">L</span> <span class="o">&lt;=</span> <span class="n">N</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">auto</span> <span class="n">subStr</span> <span class="o">=</span> <span class="n">txt</span><span class="p">.</span><span class="n">substr</span><span class="p">(</span><span class="n">i</span><span class="p">,</span>  <span class="n">L</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">subStr</span> <span class="o">==</span> <span class="n">pat</span><span class="p">){</span>
+            <span class="c1">// 在 txt 中找到模式串 pat，返回起始索引
+</span><span class="c1"></span>            <span class="k">return</span> <span class="n">i</span><span class="p">;</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="c1">// txt 中不存在模式串 pat
+</span><span class="c1"></span>    <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>你可以发现，这个逻辑和上面讲的那道题的暴力解法非常类似，总的时间复杂度是<code>O(LN)</code>，优化的核心也是子串<code>subStr</code>和模式串<code>pat</code>匹配的部分。</p>
+<p><strong>那么借鉴上面的思路，我们不要每次都去一个字符一个字符地比较子串和模式串，而是维护一个滑动窗口，运用滑动哈希算法一边滑动一边计算窗口中字符串的哈希值，拿这个哈希值去和模式串的哈希值比较，这样就可以避免截取子串，从而把匹配算法降低为<code>O(N)</code>，这就是 Rabin-Karp 指纹字符串查找算法的核心逻辑</strong>。</p>
+<p>那你可能会问，刚才我们处理的题目给你输入的只有<code>AGCT</code>四种字符，所以可以转化成数字，但面对五花八门的字符串，如何把他们转化成数字计算哈希值呢？其实很简单，字符本质上就是编码，而编码其实就是数字。</p>
+<p>比方说以 ASCII 码为例，ASCII 码其实就是 0~255 这 256 个数字，分别对应所有英文字符和英文符号。那么一个长度为<code>L</code>的 ASCII 字符串，我们就可以等价理解成一个<code>L</code>位的 256 进制的数字，这个数字就可以唯一标识这个字符串，也就可以作为哈希值。</p>
+<p>有了这个想法，我们就可以直接复制粘贴上一道题的大部分代码，写出 Rabin-Karp 算法的主要逻辑：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">// 文本串
+</span><span class="c1"></span><span class="n">string</span> <span class="n">txt</span><span class="p">;</span>
+<span class="c1">// 模式串
+</span><span class="c1"></span><span class="n">string</span> <span class="n">pat</span><span class="p">;</span>
+
+
+<span class="c1">// 需要寻找的子串长度为模式串 pat 的长度
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">L</span> <span class="o">=</span> <span class="n">pat</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+<span class="c1">// 仅处理 ASCII 码字符串，可以理解为 256 进制的数字
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">R</span> <span class="o">=</span> <span class="mi">256</span><span class="p">;</span>
+<span class="c1">// 存储 R^(L - 1) 的结果
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">RL</span> <span class="o">=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span> <span class="n">pow</span><span class="p">(</span><span class="n">R</span><span class="p">,</span> <span class="n">L</span> <span class="o">-</span> <span class="mi">1</span><span class="p">);</span>
+<span class="c1">// 维护滑动窗口中字符串的哈希值
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">windowHash</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="c1">// 计算模式串的哈希值
+</span><span class="c1"></span><span class="kt">long</span> <span class="n">patHash</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">pat</span><span class="p">.</span><span class="n">size</span><span class="p">();</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">patHash</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">patHash</span> <span class="o">+</span> <span class="n">pat</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+<span class="p">}</span>
+
+<span class="c1">// 滑动窗口代码框架
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">left</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">while</span> <span class="p">(</span><span class="n">right</span> <span class="o">&lt;</span> <span class="n">txt</span><span class="p">.</span><span class="n">length</span><span class="p">())</span> <span class="p">{</span>
+    <span class="c1">// 扩大窗口，移入字符（在最低位添加数字）
+</span><span class="c1"></span>    <span class="n">windowHash</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">windowHash</span> <span class="o">+</span> <span class="n">txt</span><span class="p">[</span><span class="n">right</span><span class="p">];</span>
+    <span class="n">right</span><span class="o">++</span><span class="p">;</span>
+
+    <span class="c1">// 当子串的长度达到要求
+</span><span class="c1"></span>    <span class="k">if</span> <span class="p">(</span><span class="n">right</span> <span class="o">-</span> <span class="n">left</span> <span class="o">==</span> <span class="n">L</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">// 根据哈希值判断窗口中的子串是否匹配模式串 pat
+</span><span class="c1"></span>        <span class="k">if</span> <span class="p">(</span><span class="n">patHash</span> <span class="o">==</span> <span class="n">windowHash</span><span class="p">)</span> <span class="p">{</span>
+            <span class="c1">// 找到模式串
+</span><span class="c1"></span>            <span class="n">print</span><span class="p">(</span><span class="s">&#34;找到模式串，起始索引为&#34;</span><span class="p">,</span> <span class="n">left</span><span class="p">);</span>
+            <span class="k">return</span> <span class="n">left</span><span class="p">;</span>
+        <span class="p">}</span>
+        
+        <span class="c1">// 缩小窗口，移出字符（删除最高位数字）
+</span><span class="c1"></span>        <span class="n">windowHash</span> <span class="o">=</span> <span class="n">windowHash</span> <span class="o">-</span> <span class="n">txt</span><span class="p">[</span><span class="n">left</span><span class="p">]</span> <span class="o">*</span> <span class="n">RL</span><span class="p">;</span>
+        <span class="n">left</span><span class="o">++</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="c1">// 没有找到模式串
+</span><span class="c1"></span><span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</code></pre></div><p>相对上一道题的解法，这段代码将进制数<code>R</code>改为了 256，同时计算了模式串<code>pat</code>的哈希值<code>patHash</code>用来和窗口中字符串的哈希值<code>windowHash</code>做对比，以便判断是否找到了模式串，其他的代码部分完全相同。</p>
+<p><strong>不过呢，这段代码实际运行的时候会有一个严重的问题，那就是整型溢出</strong>。</p>
+<p>你想，上一道题给定的 DNA 序列字符串只包含<code>AGCT</code>四种字符，所以我们可以把 DNA 序列抽象成四进制的数字，即算法中<code>R = 4</code>。相同位数下，四进制包含的数字数量是小于十进制包含的数字数量的。比方说<code>L = 10</code>时，4^10 = 1048576 &lt; 10^8，即 10 位四进制数字用 8 位十进制数字就可以存下了。</p>
+<p>但现在输入为 ASCII 码字符串，我们不得不把字符串抽象成 256 进制的数字，即算法中<code>R = 256</code>。而相同位数下，256 进制包含的数字数量显然是远大于十进制包含的数字数量的。比如<code>L = 10</code>时，256^10 = 1.2 x 10^24 &lt; 10 ^25，所以你需要一个 25 位的十进制数才能表示一个 10 位的 256 进制数。</p>
+<p>可想而知，如果你真的把字符串对应的 256 进制数字的十进制表示作为该字符串的哈希值，那恐怕<code>L</code>稍微大一点，像<code>RL, windowHash, patHash</code>这些变量就超级大了，long 类型都远远装不下。</p>
+<p><strong>所以解决办法是什么呢？如何把一个很大的数字映射到一个较小的范围内呢？答案是求模（余数）</strong>。</p>
+<p>无论一个数字多大，你让它除以<code>Q</code>，余数一定会落在<code>[0, Q-1]</code>的范围内。所以我们可以设置一个<code>Q</code>，用求模的方式让<code>windowHash</code>和<code>patHash</code>保持在<code>[0, Q-1]</code>之间，就可以有效避免整型溢出。</p>
+<p>具体来说，对于一个字符串，我们不需要把完整的 256 进制数字存下来，而是对这个巨大的 256 进制数求<code>Q</code>的余数，然后把这个余数作为该字符串的哈希值即可。</p>
+<p><strong>好，整型溢出的问题倒是解决了，但新的问题又来了：求模之后的哈希值不能和原始字符串一一对应了，可能出现一对多的情况，即哈希冲突</strong>。</p>
+<p>比方说 10 % 7 等于 3，而 17 % 7 也等于 3，所以如果你得到余数 3，你能确定原始数字就一定是 10 么？不能。</p>
+<p>类似的，如果你发现<code>windowHash == patHash</code>，你也不敢完全肯定窗口中的字符串一定就和模式串<code>pat</code>匹配，有可能它俩不匹配，但恰好求模算出来的哈希值一样，这就产生了是「哈希冲突」。</p>
+<p>对于 Rabin-Karp 算法来说，当发现<code>windowHash == patHash</code>时，使用暴力匹配算法检查一下窗口中的字符串和<code>pat</code>是否相同就可以避免哈希冲突了。因为希冲突出现的概率比较小，所以偶尔用一下暴力匹配算法是不影响总体的时间复杂度的。</p>
+<p>明白了这些问题的解决方案，你就能很自然地写出 Rabin-Karp 算法了：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">// Rabin-Karp 指纹字符串查找算法
+</span><span class="c1"></span><span class="kt">int</span> <span class="nf">rabinKarp</span><span class="p">(</span><span class="n">string</span> <span class="n">str</span><span class="p">,</span> <span class="n">string</span> <span class="n">pattern</span><span class="p">)</span> <span class="p">{</span>
+   <span class="k">const</span> <span class="kt">int64_t</span> <span class="n">mod</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1ll</span> <span class="o">&lt;&lt;</span> <span class="mi">53</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="k">auto</span>    <span class="n">getNumber</span>   <span class="o">=</span> <span class="p">[](</span><span class="kt">char</span> <span class="n">x</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="n">x</span> <span class="o">-</span> <span class="sc">&#39;a&#39;</span><span class="p">;</span> <span class="p">};</span>
+   <span class="kt">int</span>     <span class="n">R</span>           <span class="o">=</span> <span class="mi">26</span><span class="p">;</span>
+   <span class="kt">int</span>     <span class="n">L</span>           <span class="o">=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">pattern</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+   <span class="kt">int64_t</span> <span class="n">RL</span>          <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+   <span class="kt">int64_t</span> <span class="n">patternHash</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+   <span class="kt">int64_t</span> <span class="n">windowHash</span>  <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+   <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">L</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="n">RL</span> <span class="o">=</span> <span class="p">(</span><span class="n">RL</span> <span class="o">*</span> <span class="n">R</span><span class="p">)</span> <span class="o">%</span> <span class="n">mod</span><span class="p">;</span>
+   <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">L</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+      <span class="n">patternHash</span> <span class="o">=</span> <span class="p">((</span><span class="n">patternHash</span> <span class="o">*</span> <span class="n">R</span><span class="p">)</span> <span class="o">%</span> <span class="n">mod</span> <span class="o">+</span> <span class="n">getNumber</span><span class="p">(</span><span class="n">pattern</span><span class="p">[</span><span class="n">i</span><span class="p">]))</span> <span class="o">%</span> <span class="n">mod</span><span class="p">;</span>
+   <span class="kt">int</span> <span class="n">left</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+   <span class="k">while</span> <span class="p">(</span><span class="n">right</span> <span class="o">&lt;</span> <span class="n">str</span><span class="p">.</span><span class="n">size</span><span class="p">())</span>
+   <span class="p">{</span>
+      <span class="n">windowHash</span> <span class="o">=</span> <span class="p">((</span><span class="n">windowHash</span> <span class="o">*</span> <span class="n">R</span><span class="p">)</span> <span class="o">%</span> <span class="n">mod</span> <span class="o">+</span> <span class="n">getNumber</span><span class="p">(</span><span class="n">str</span><span class="p">[</span><span class="n">right</span><span class="o">++</span><span class="p">]))</span> <span class="o">%</span> <span class="n">mod</span><span class="p">;</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">right</span> <span class="o">-</span> <span class="n">left</span> <span class="o">==</span> <span class="n">L</span><span class="p">)</span>
+      <span class="p">{</span>
+         <span class="k">if</span> <span class="p">(</span><span class="n">windowHash</span> <span class="o">==</span> <span class="n">patternHash</span><span class="p">)</span>
+         <span class="p">{</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">str</span><span class="p">.</span><span class="n">substr</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">L</span><span class="p">)</span> <span class="o">==</span> <span class="n">pattern</span><span class="p">)</span> <span class="k">return</span> <span class="n">left</span><span class="p">;</span>
+         <span class="p">}</span>
+         <span class="k">else</span>
+         <span class="p">{</span>
+            <span class="n">windowHash</span> <span class="o">=</span>
+              <span class="p">(</span><span class="n">windowHash</span> <span class="o">-</span> <span class="p">(</span><span class="n">getNumber</span><span class="p">(</span><span class="n">str</span><span class="p">[</span><span class="n">left</span><span class="o">++</span><span class="p">])</span> <span class="o">*</span> <span class="n">RL</span><span class="p">)</span> <span class="o">%</span> <span class="n">mod</span> <span class="o">+</span> <span class="n">mod</span><span class="p">)</span> <span class="o">%</span> <span class="n">mod</span><span class="p">;</span>
+         <span class="p">}</span>
+      <span class="p">}</span>
+   <span class="p">}</span>
+   <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>上述代码可以在力扣28题验证。</p>
+<p>有之前那么多铺垫，算法逻辑应该没啥可说的，就说一下模运算的两个运算法则吧：</p>
+<pre><code>X % Q == (X + Q) % Q
+(X + Y) % Q == (X % Q + Y % Q) % Q
+</code></pre><p>稍微想一想就能理解这两个运算法则，在代码中但凡涉及到乘法和加法，都可能产生很大的结果，所以一有机会就可以运用上述法则对结果进行求模，以避免造成溢出。</p>
+<p>Rabin-Karp 算法的时间复杂度是<code>O(N + L)</code>，<code>N</code>为文本串<code>txt</code>的长度，<code>L</code>为模式串<code>pat</code>的长度。当然，每次出现哈希冲突时会使用<code>O(L)</code>的时间进行暴力匹配，但考虑到只要<code>Q</code>设置的合理，哈希冲突的出现概率会很小，所以可以忽略不计。</p>
+<p>最后说一下这个大素数<code>Q</code>的选择。</p>
+<p><strong>为什么要这个<code>Q</code>尽可能大呢？主要是为了降低哈希冲突的概率</strong>。</p>
+<p>因为代码中你把这个<code>Q</code>作为除数，余数（哈希值）一定落在<code>[0, Q-1]</code>之间，所以<code>Q</code>越大，哈希值的空间就越大，就越不容易出现哈希冲突，整个算法的效率就会高一些。</p>
+<p><strong>为什么这个<code>Q</code>要是素数呢？依然是为了降低哈希冲突的概率</strong>。</p>
+<p>举个极端一点的例子，你令<code>Q = 100</code>，那么无论一个数<code>X</code>再大，<code>X % Q</code>的结果必然是<code>X</code>的最后两位。换句话说<code>X</code>前面的那些位你根本没利用，可想而知你这个哈希算法存在某些规律性，不够随机，进而更容易导致哈希冲突，降低算法的效率。</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/">使用Rabin-Karp算法替代KMP</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-06-04</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP" data-hashtags="使用Rabin-Karp算法替代KMP"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-hashtag="使用Rabin-Karp算法替代KMP"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP" data-image="https://img-blog.csdnimg.cn/img_convert/c2804a2e21ea79a0b060126b82a9145c.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP" data-description="使用Rabin-Karp算法替代KMP"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP" data-description="使用Rabin-Karp算法替代KMP"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" data-title="使用Rabin-Karp算法替代KMP"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" class="prev" rel="prev" title="使用expected进行错误处理"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/c&#43;&#43;clion%E9%9B%86%E6%88%90vcpkg%E4%B8%80%E9%94%AE%E5%AE%8C%E6%88%90%E5%8C%85%E7%AE%A1%E7%90%86/" class="next" rel="next" title="[C&#43;&#43;]CLion集成vcpkg一键完成包管理——以使用imgui为例">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

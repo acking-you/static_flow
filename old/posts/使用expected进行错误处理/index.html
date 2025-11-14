@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>使用expected进行错误处理 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="使用expected进行错误处理"><meta property="og:title" content="使用expected进行错误处理" />
+<meta property="og:description" content="使用expected进行错误处理" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-06-02T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-06-02T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="使用expected进行错误处理"/>
+<meta name="twitter:description" content="使用expected进行错误处理"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" /><link rel="prev" href="https://acking-you.github.io/posts/mysql%E6%97%A5%E5%BF%97undoredobinlog/" /><link rel="next" href="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "使用expected进行错误处理",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86\/"
+        },"genre": "posts","keywords": "使用expected进行错误处理","wordcount":  1398 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86\/","datePublished": "2023-06-02T00:00:00+00:00","dateModified": "2023-06-02T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "使用expected进行错误处理"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center, https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center"
+        title="使用expected进行错误处理" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">使用expected进行错误处理</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/c++%E5%A5%BD%E5%BA%93%E6%8E%A8%E8%8D%90/"><i class="far fa-folder fa-fw"></i>C++好库推荐</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-06-02">2023-06-02</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 1398 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 3 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#使用expected进行错误处理">使用expected进行错误处理</a>
+      <ul>
+        <li><a href="#expected-使用实例">expected 使用实例</a></li>
+        <li><a href="#函数式的接口">函数式的接口</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="使用expected进行错误处理">使用expected进行错误处理</h2>
+<p>C++ 中提供了很多中方式进行错误处理。无论是通过抛异常还是通过错误码，标准库都提供相应的调用。</p>
+<ol>
+<li>通过 try catch 以抛出异常的方式进行处理，这种方式很多人会觉得看起来可读性很差（包括我），并且由于缺少异常规约（某些异常必须捕获），容易出现 bug，而且异常的传递很多时候可能伴随动态分配内存，这是一笔不小的开销。</li>
+<li>通过 error_code 作为返回值判断，这种方式虽然看似简单易用，但是由于 C++ 中并未对 error_code 作过多的规范，使用起来并不方便，很多时候还是倾向于自定义一些枚举作为自己的 error_code，但是由于缺少多返回值的语法（当然如果C++版本比较高可用使用tuple以及解构的语法实现），如果把错误码作为返回值，那么原本的数据返回就只能函数参数传递引用的形式返回了。当然，如果不考虑函数返回值的具体错误信息，可以使用 C++17 的 optional 。</li>
+</ol>
+<p>由于 optional 无法包含具体的错误信息，expected 横空出世，在 C++23 开始纳入标准。如果你的C++版本较低，可以使用第三方开源的 expected 库：<a href="https://github.com/TartanLlama/expected" target="_blank" rel="noopener noreffer">https://github.com/TartanLlama/expected</a></p>
+<p>关于 C++23 中的新特性，包括 expected 库的使用，大家可以观看 CppCon：<a href="https://www.bilibili.com/video/BV1FB4y1H7VS?p=5&amp;vd_source=96dd2539b156b0809378103a5f27b949" target="_blank" rel="noopener noreffer">How C++23 Changes the Way We Write Code</a></p>
+<p>下面我会以一个例子把第三方库中的 expected 库的使用方式介绍给大家。</p>
+<h3 id="expected-使用实例">expected 使用实例</h3>
+<p>由于该第三方库是 head-only 的，所以你只需要进到GitHub仓库把对应的头文件复制过来，便可引入使用。</p>
+<p>下面是示例代码，样例是 <a href="https://en.cppreference.com/w/cpp/utility/expected" target="_blank" rel="noopener noreffer">cppreference</a> 中的。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&#34;expected.h&#34;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iomanip&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;string&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="k">enum</span> <span class="k">class</span> <span class="nc">parse_error</span>
+<span class="p">{</span>
+	<span class="n">invalid_input</span><span class="p">,</span>
+	<span class="n">overflow</span>
+<span class="p">};</span>
+
+<span class="n">tl</span><span class="o">::</span><span class="n">expected</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span> <span class="n">parse_error</span><span class="o">&gt;</span> <span class="n">parse_number</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="o">&amp;</span> <span class="n">str</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">const</span> <span class="kt">char</span><span class="o">*</span> <span class="n">begin</span> <span class="o">=</span> <span class="n">str</span><span class="p">.</span><span class="n">data</span><span class="p">();</span>
+	<span class="kt">char</span><span class="o">*</span> <span class="n">end</span><span class="p">;</span>
+	<span class="kt">double</span> <span class="n">retval</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">strtod</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">end</span><span class="p">);</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">begin</span> <span class="o">==</span> <span class="n">end</span><span class="p">)</span>
+		<span class="k">return</span> <span class="n">tl</span><span class="o">::</span><span class="n">unexpected</span><span class="p">(</span><span class="n">parse_error</span><span class="o">::</span><span class="n">invalid_input</span><span class="p">);</span>
+	<span class="k">else</span> <span class="nf">if</span> <span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">isinf</span><span class="p">(</span><span class="n">retval</span><span class="p">))</span>
+		<span class="k">return</span> <span class="n">tl</span><span class="o">::</span><span class="n">unexpected</span><span class="p">(</span><span class="n">parse_error</span><span class="o">::</span><span class="n">overflow</span><span class="p">);</span>
+
+	<span class="n">str</span><span class="p">.</span><span class="n">remove_prefix</span><span class="p">(</span><span class="n">end</span> <span class="o">-</span> <span class="n">begin</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">retval</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="k">auto</span> <span class="n">process</span> <span class="o">=</span> <span class="p">[](</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span> <span class="n">str</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;str: &#34;</span> <span class="o">&lt;&lt;</span> <span class="n">std</span><span class="o">::</span><span class="n">quoted</span><span class="p">(</span><span class="n">str</span><span class="p">)</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;, &#34;</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="k">const</span> <span class="k">auto</span> <span class="n">num</span> <span class="o">=</span> <span class="n">parse_number</span><span class="p">(</span><span class="n">str</span><span class="p">);</span> <span class="n">num</span><span class="p">)</span>
+		<span class="p">{</span>
+			<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;value: &#34;</span> <span class="o">&lt;&lt;</span> <span class="o">*</span><span class="n">num</span> <span class="o">&lt;&lt;</span> <span class="sc">&#39;\n&#39;</span><span class="p">;</span>
+			<span class="c1">// If num did not have a value, dereferencing num
+</span><span class="c1"></span>			<span class="c1">// would cause an undefined behavior, and
+</span><span class="c1"></span>			<span class="c1">// num.value() would throw std::bad_expected_access.
+</span><span class="c1"></span>			<span class="c1">// num.value_or(123) uses specified default value 123.
+</span><span class="c1"></span>		<span class="p">}</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">num</span><span class="p">.</span><span class="n">error</span><span class="p">()</span> <span class="o">==</span> <span class="n">parse_error</span><span class="o">::</span><span class="n">invalid_input</span><span class="p">)</span>
+		<span class="p">{</span>
+			<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;error: invalid input</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+		<span class="p">}</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">num</span><span class="p">.</span><span class="n">error</span><span class="p">()</span> <span class="o">==</span> <span class="n">parse_error</span><span class="o">::</span><span class="n">overflow</span><span class="p">)</span>
+		<span class="p">{</span>
+			<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;error: overflow</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+		<span class="p">}</span>
+		<span class="k">else</span>
+		<span class="p">{</span>
+			<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;unexpected!</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span><span class="c1">// or invoke std::unreachable();
+</span><span class="c1"></span>		<span class="p">}</span>
+	<span class="p">};</span>
+
+	<span class="k">for</span> <span class="p">(</span><span class="k">auto</span> <span class="nl">src</span> <span class="p">:</span> <span class="p">{</span><span class="s">&#34;42&#34;</span><span class="p">,</span> <span class="s">&#34;42abc&#34;</span><span class="p">,</span> <span class="s">&#34;meow&#34;</span><span class="p">,</span> <span class="s">&#34;inf&#34;</span><span class="p">})</span>
+		<span class="n">process</span><span class="p">(</span><span class="n">src</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>上面的代码如果想要跑通，情确保C++版本至少是C++17，因为其中用到了 string_view 以及更智能的自动类型推导（如果低于这个帮会导致unexpected需要指定明确的error类型）。</p>
+<h3 id="函数式的接口">函数式的接口</h3>
+<ul>
+<li>and_then：传入一个回调，在没有错误的时候调用，该回调的返回值是新的 expected 值（可以控制err）。如果有错误返回原 expected 值。</li>
+<li>or_else：传入一个回调，在有错误的时候调用，该回调的返回值是新的 expected 值（可以控制err），并且回调的参数是对应的错误类型。如果没有错误返回原 expected 值。</li>
+<li>transform/map：transform 是C++23标准中规定的接口，而该第三方库作者又实现了一个名为map的接口，这两者效果是一致的。传入一个回调，在没有错误的时候调用，回调的参数和返回值都不牵扯 expected 值，只是作值的变换，所以无法控制新的 expected 的 err 值。如果有错误则返回原 expected 值。</li>
+<li>transform_error/map_error：同上，但回调的调用时机和参数于 or_else 相同，但是需要注意的是，回调的返回值并不具备任何效用，也就是说如果 transform_error 中的回调被调用，那么返回的仍然是原本包含错误信息的 expected 值。</li>
+</ul>
+<p>简单示例如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&#34;expected.h&#34;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;string&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="k">enum</span> <span class="k">class</span> <span class="nc">parse_error</span>
+<span class="p">{</span>
+	<span class="n">invalid_input</span><span class="p">,</span>
+	<span class="n">overflow</span>
+<span class="p">};</span>
+
+<span class="n">tl</span><span class="o">::</span><span class="n">expected</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span> <span class="n">parse_error</span><span class="o">&gt;</span> <span class="n">parse_number</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="o">&amp;</span> <span class="n">str</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">const</span> <span class="kt">char</span><span class="o">*</span> <span class="n">begin</span> <span class="o">=</span> <span class="n">str</span><span class="p">.</span><span class="n">data</span><span class="p">();</span>
+	<span class="kt">char</span><span class="o">*</span> <span class="n">end</span><span class="p">;</span>
+	<span class="kt">double</span> <span class="n">retval</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">strtod</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">end</span><span class="p">);</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">begin</span> <span class="o">==</span> <span class="n">end</span><span class="p">)</span>
+		<span class="k">return</span> <span class="n">tl</span><span class="o">::</span><span class="n">unexpected</span><span class="p">(</span><span class="n">parse_error</span><span class="o">::</span><span class="n">invalid_input</span><span class="p">);</span>
+	<span class="k">else</span> <span class="nf">if</span> <span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">isinf</span><span class="p">(</span><span class="n">retval</span><span class="p">))</span>
+		<span class="k">return</span> <span class="n">tl</span><span class="o">::</span><span class="n">unexpected</span><span class="p">(</span><span class="n">parse_error</span><span class="o">::</span><span class="n">overflow</span><span class="p">);</span>
+
+	<span class="n">str</span><span class="p">.</span><span class="n">remove_prefix</span><span class="p">(</span><span class="n">end</span> <span class="o">-</span> <span class="n">begin</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">retval</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="k">auto</span> <span class="n">sv</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="p">{</span><span class="s">&#34;0&#34;</span><span class="p">};</span>
+	<span class="k">auto</span> <span class="n">result</span> <span class="o">=</span> <span class="n">parse_number</span><span class="p">(</span><span class="n">sv</span><span class="p">)</span>
+					  <span class="p">.</span><span class="n">and_then</span><span class="p">([](</span><span class="kt">double</span> <span class="n">x</span><span class="p">)</span> <span class="p">{</span>
+						  <span class="k">return</span> <span class="n">tl</span><span class="o">::</span><span class="n">expected</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span> <span class="n">parse_error</span><span class="o">&gt;</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+					  <span class="p">})</span>
+					  <span class="p">.</span><span class="n">map</span><span class="p">([](</span><span class="kt">double</span> <span class="n">x</span><span class="p">)</span> <span class="p">{</span>
+						  <span class="k">return</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+					  <span class="p">})</span>
+					  <span class="p">.</span><span class="n">transform</span><span class="p">([](</span><span class="kt">double</span> <span class="n">x</span><span class="p">)</span> <span class="p">{</span>
+						  <span class="k">return</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+					  <span class="p">});</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">result</span><span class="p">)</span>
+		<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="o">*</span><span class="n">result</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+	<span class="k">auto</span> <span class="n">result2</span> <span class="o">=</span> <span class="n">parse_number</span><span class="p">(</span><span class="n">sv</span><span class="p">)</span>
+					   <span class="p">.</span><span class="n">and_then</span><span class="p">([](</span><span class="kt">double</span> <span class="n">x</span><span class="p">)</span> <span class="p">{</span>
+						   <span class="c1">//自己构造了一个错误
+</span><span class="c1"></span>						   <span class="n">tl</span><span class="o">::</span><span class="n">expected</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span> <span class="n">parse_error</span><span class="o">&gt;</span> <span class="n">ret</span> <span class="o">=</span> <span class="n">tl</span><span class="o">::</span><span class="n">unexpected</span><span class="o">&lt;</span><span class="n">parse_error</span><span class="o">&gt;</span><span class="p">(</span><span class="n">parse_error</span><span class="o">::</span><span class="n">invalid_input</span><span class="p">);</span>
+						   <span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+					   <span class="p">})</span>
+					   <span class="p">.</span><span class="n">or_else</span><span class="p">([](</span><span class="n">parse_error</span> <span class="n">err</span><span class="p">)</span> <span class="p">{</span>
+						   <span class="k">if</span> <span class="p">(</span><span class="n">err</span> <span class="o">==</span> <span class="n">parse_error</span><span class="o">::</span><span class="n">invalid_input</span><span class="p">)</span>
+						   <span class="p">{</span>
+							   <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;invalid error</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+						   <span class="p">}</span>
+						   <span class="c1">//自己构造了一个错误
+</span><span class="c1"></span>						   <span class="n">tl</span><span class="o">::</span><span class="n">expected</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span> <span class="n">parse_error</span><span class="o">&gt;</span> <span class="n">ret</span> <span class="o">=</span> <span class="n">tl</span><span class="o">::</span><span class="n">unexpected</span><span class="o">&lt;</span><span class="n">parse_error</span><span class="o">&gt;</span><span class="p">(</span><span class="n">parse_error</span><span class="o">::</span><span class="n">overflow</span><span class="p">);</span>
+						   <span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+					   <span class="p">})</span>
+					   <span class="p">.</span><span class="n">transform_error</span><span class="p">([](</span><span class="n">parse_error</span> <span class="n">err</span><span class="p">)</span> <span class="p">{</span>
+						   <span class="k">if</span> <span class="p">(</span><span class="n">err</span> <span class="o">==</span> <span class="n">parse_error</span><span class="o">::</span><span class="n">overflow</span><span class="p">)</span>
+						   <span class="p">{</span>
+							   <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;overflow error</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span>
+						   <span class="p">}</span>
+						   <span class="k">return</span> <span class="mf">32432.4324</span><span class="p">;</span>
+					   <span class="p">}).</span><span class="n">map</span><span class="p">([](</span><span class="kt">double</span> <span class="n">x</span><span class="p">){</span>
+						   <span class="k">return</span> <span class="n">x</span><span class="o">+</span><span class="mi">1</span><span class="p">;</span>
+					   <span class="p">});</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">result2</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="o">*</span><span class="n">result2</span><span class="p">;</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/">使用expected进行错误处理</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-06-02</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理" data-hashtags="使用expected进行错误处理"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-hashtag="使用expected进行错误处理"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理" data-image="https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理" data-description="使用expected进行错误处理"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理" data-description="使用expected进行错误处理"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E4%BD%BF%E7%94%A8expected%E8%BF%9B%E8%A1%8C%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" data-title="使用expected进行错误处理"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/mysql%E6%97%A5%E5%BF%97undoredobinlog/" class="prev" rel="prev" title="MySQL日志：undo、redo、binlog"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E4%BD%BF%E7%94%A8rabin-karp%E7%AE%97%E6%B3%95%E6%9B%BF%E4%BB%A3kmp/" class="next" rel="next" title="使用Rabin-Karp算法替代KMP">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

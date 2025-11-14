@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><meta property="og:title" content="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" />
+<meta property="og:description" content="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-01-27T00:00:00+00:00" />
+<meta property="article:modified_time" content="2023-01-27T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"/>
+<meta name="twitter:description" content="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" /><link rel="prev" href="https://acking-you.github.io/posts/ejson4cpp%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3/" /><link rel="next" href="https://acking-you.github.io/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "C++工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/c\u002b\u002b%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B\/"
+        },"genre": "posts","keywords": "C\u002b\u002b工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测","wordcount":  7321 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/c\u002b\u002b%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B\/","datePublished": "2023-01-27T00:00:00+00:00","dateModified": "2023-01-27T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "C++工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/aa6bde4ddb8d4ddda947454fb8656ba3.png"
+        data-srcset="https://img-blog.csdnimg.cn/aa6bde4ddb8d4ddda947454fb8656ba3.png, https://img-blog.csdnimg.cn/aa6bde4ddb8d4ddda947454fb8656ba3.png 1.5x, https://img-blog.csdnimg.cn/aa6bde4ddb8d4ddda947454fb8656ba3.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/aa6bde4ddb8d4ddda947454fb8656ba3.png"
+        title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E5%BC%80%E5%8F%91%E7%8E%AF%E5%A2%83%E9%85%8D%E7%BD%AE/"><i class="far fa-folder fa-fw"></i>开发环境配置</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2023-01-27">2023-01-27</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 7321 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 15 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#单元测试框架">单元测试框架</a>
+      <ul>
+        <li><a href="#如何引入">如何引入</a></li>
+        <li><a href="#如何使用">如何使用</a></li>
+      </ul>
+    </li>
+    <li><a href="#benchmark框架">benchmark框架</a>
+      <ul>
+        <li><a href="#如何引入-1">如何引入</a></li>
+        <li><a href="#如何使用-1">如何使用</a></li>
+      </ul>
+    </li>
+    <li><a href="#clion中查看测试覆盖率">CLion中查看测试覆盖率</a></li>
+    <li><a href="#clion中使用sanitizers检测内存错误">CLion中使用sanitizers检测内存错误</a>
+      <ul>
+        <li><a href="#环境准备">环境准备</a></li>
+        <li><a href="#如何使用-2">如何使用</a></li>
+      </ul>
+    </li>
+    <li><a href="#clion中使用perf生成火焰图">CLion中使用perf生成火焰图</a>
+      <ul>
+        <li><a href="#环境准备-1">环境准备</a></li>
+        <li><a href="#如何使用-3">如何使用</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="单元测试框架">单元测试框架</h2>
+<p>google test是一个C++中常用且历史悠久的测试框架，其他类似且较新的测试框架有 catch2 或 doetest等，这两个测试框架的优势在于引入简单，是完全 <code>head only</code> 的，但是也正是因为 <code>head only</code> 导致编译速度很慢，当然 <code>doctest</code> 还是挺快的，但 <code>catch2</code> 真的编译太慢了。而 <code>googletest</code> 引入就需要我们自行编译了，当然用cmake的话是可以简化这个过程的，<code>gtest</code> 的使用和引入其实也很简单，由于是直接链接编译好的库，所以编译速度是比较快的（最近测试了下，同样以链接库的方式比 <code>doctest</code> 慢一些&hellip; ）。我现在更推荐使用 <a href="https://github.com/doctest/doctest" target="_blank" rel="noopener noreffer">doctest</a> 而不是 <a href="https://github.com/google/googletest" target="_blank" rel="noopener noreffer">gtest</a> 了。</p>
+<p>本来是想讲 Google test 的使用的（看我开篇就知道），但是使用了 <code>doctest</code> 后，我现在完全放弃了 Googletest，对我而言有以下几点非常好：</p>
+<ol>
+<li>文件轻量，非常轻量，就几个文件，而且代码量好像就7000行，编译速度奇快，而相对的 Googletest 里包含的东西有点多，比如 gmock，对比起来略显重量级。</li>
+<li>CLion 对 doctest 的支持更好，每次我用 Googletest 的时候，CLion都需要重新我当前使用的测试框架，而使用doctest后，则完全没有这方面困扰，反应奇快，这也是轻量带来的好处。</li>
+<li>api超级友好，用过就真的回不去。虽然断言宏不是很多，但核心观点是它分解了比较表达式，所以会比其他框架用起来方便太多。</li>
+<li>功能丰富（比如支持对模板进行批量测试），尽管代码轻量，但是功能也毫不含糊，感觉比googletest更好用。</li>
+</ol>
+<h3 id="如何引入">如何引入</h3>
+<p>正如上述所说，<code>doctest</code> 是head-only的，所以仅仅只需要一个 <code>.h</code> 文件即可，但是我建议不要这样，这样编译速度会慢一些，建议使用编译库再链接的方式，这种方式在cmake里面也很简单，如果不懂cmake，可以看看我这期视频：<a href="https://www.bilibili.com/video/BV18R4y127UV" target="_blank" rel="noopener noreffer">cmake入门</a> 。</p>
+<p>你只需在cmake项目中添加下列代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">include</span><span class="p">(</span><span class="s">FetchContent</span><span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">FetchContent_Declare</span><span class="p">(</span>
+        <span class="s">doctest</span>
+        <span class="s">GIT_REPOSITORY</span> <span class="s">https://github.com/doctest/doctest.git</span>
+        <span class="s">GIT_TAG</span> <span class="s">v2.4.9</span>
+        <span class="s">GIT_SHALLOW</span> <span class="s">TRUE</span>
+<span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">FetchContent_MakeAvailable</span><span class="p">(</span><span class="s">doctest</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">target</span> <span class="s">doctest_with_main</span><span class="p">)</span><span class="err">
+</span></code></pre></div><p>这里的仓库链接由于是GitHub上，如果你不会科学上网的话，建议可以去手动下载GitHub上的代码然后 <code>add_subdirectory()</code> 也是一样的。当然也可以把对应的仓库在gitee上创建一个镜像，那么你就可以直接把上面的 <code>GIT_REPOSITORY</code> 换成你镜像的地址了，比如我拉了一个镜像地址如下：https://gitee.com/acking-you/doctest.git 替换即可。</p>
+<h3 id="如何使用">如何使用</h3>
+<p>开始前，你可以直接去看官方文档，写的也挺详细：<a href="https://github.com/doctest/doctest/tree/master/doc/markdown" target="_blank" rel="noopener noreffer">官方文档</a></p>
+<p>首先，我们要清楚，一个测试框架，你需要注意的就只有两点：</p>
+<ol>
+<li>如何组织测试 -&gt; 测试宏</li>
+<li>如何进行测试断言 -&gt; 断言宏</li>
+</ol>
+<p>通过下面这个简单的测试进行一个简单的讲解：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//这个宏如果是通过链接的方式引入库的话千万不要加，如果是通过直接的include头文件引入的则需要加入
+</span><span class="c1">//#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+</span><span class="c1"></span><span class="cp">#include</span> <span class="cpf">&#34;doctest.h&#34;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">factorial</span><span class="p">(</span><span class="kt">int</span> <span class="n">number</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="n">number</span> <span class="o">&lt;=</span> <span class="mi">1</span> <span class="o">?</span> <span class="nl">number</span> <span class="p">:</span> <span class="n">factorial</span><span class="p">(</span><span class="n">number</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">number</span><span class="p">;</span> <span class="p">}</span>
+
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;testing the factorial function&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">CHECK</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">);</span>
+    <span class="n">CHECK</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">);</span>
+    <span class="n">CHECK</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span> <span class="o">==</span> <span class="mi">6</span><span class="p">);</span>
+    <span class="n">CHECK</span><span class="p">(</span><span class="n">factorial</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3628800</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>上述代码是在测试斐波那契数列的值。</p>
+<ol>
+<li>
+<p>通过 <code>TEST_CASE</code> 这个宏来组织一个测试，参数是该测试的名字是一个字符串值，在CLion中会以这个名字来标识这个测试。与 <code>googletest</code> 相比，对应的是 <code>TEST</code> 宏，但不同的是 googletest 需要传两个参数，两个都不是字符串，而且必须符合C++变量命名的字符规则，所以不能以空格或者其他非字母数字的任何符号放在其中，这点其实很不方便。</p>
+</li>
+<li>
+<p>通过 <code>CHECK</code> 宏来进行断言判断，如果失败了CLion中会有对应的提示。参数是一个判断表达式，不要小看这个宏，它是默认支持几乎所有内置的类型，并且包括stl容器。对应的 googletest 一般使用 <code>EXPECT_EQ()</code> 传递两个参数来进行比较，默认不支持 <code>const char*</code> 类型，需要使用 <code>EXPECT_STREQ</code> ，而 doctest 则不需要有这方面的考虑，只需要关注这个 <code>CHECK</code> 宏即可，当然它也有对应的 <code>CHECK_XX</code> 宏。</p>
+</li>
+</ol>
+<h4 id="测试相关">测试相关</h4>
+<p>经过一个小demo的讲解，那么大家对于测试宏有了一定的了解，下面将继续介绍更多的测试宏。</p>
+<h5 id="subcase">SUBCASE</h5>
+<p>这个宏用于在TEST_CASE中继续产生更小的分组，然后你可以安全的捕获到外界的变量来使用。因为每个SUBCASE都是完全独立的重新执行，而不是在同一次执行，比如我将下面的代码块分为1、2、3，那么第一个SUBCASE的顺序将会是 <code>1-&gt;2-&gt;结束</code> ，第二个SUBCASE的执行顺序将会是 <code>1-&gt;3-&gt;结束</code> 。如果最外层的代码在 SUBCASE 后面，那么不会被执行，所有的 <code>SUBCASE</code> 执行情况，我们可以看作是从一个树的根节点到子节点的简单遍历，但每次遍历没有前后文关系（也就是每次遍历都是重新执行的）</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;vectors can be sized and resized&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
+	<span class="c1">//1
+</span><span class="c1"></span>    <span class="n">REQUIRE</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="mi">5</span><span class="p">);</span>
+    <span class="n">REQUIRE</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">capacity</span><span class="p">()</span> <span class="o">&gt;=</span> <span class="mi">5</span><span class="p">);</span>
+
+    <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;adding to the vector increases it&#39;s size&#34;</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">//2
+</span><span class="c1"></span>        <span class="n">v</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+
+        <span class="n">CHECK</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="mi">6</span><span class="p">);</span>
+        <span class="n">CHECK</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">capacity</span><span class="p">()</span> <span class="o">&gt;=</span> <span class="mi">6</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;reserving increases just the capacity&#34;</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">//3
+</span><span class="c1"></span>        <span class="n">v</span><span class="p">.</span><span class="n">reserve</span><span class="p">(</span><span class="mi">6</span><span class="p">);</span>
+
+        <span class="n">CHECK</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="mi">5</span><span class="p">);</span>
+        <span class="n">CHECK</span><span class="p">(</span><span class="n">v</span><span class="p">.</span><span class="n">capacity</span><span class="p">()</span> <span class="o">&gt;=</span> <span class="mi">6</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>例如下面这个例子将会输出：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;lots of nested subcases&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;root&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span>
+    <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;1&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span>
+        <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;1.1&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span> <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span>   
+        <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span>
+        <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.1&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span> <span class="p">}</span>
+        <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.2&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span>
+            <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.2.1&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span>
+                <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.2.1.1&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span> <span class="p">}</span>
+                <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.2.1.2&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span> <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.3&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span> <span class="p">}</span>
+        <span class="n">SUBCASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;2.4&#34;</span> <span class="o">&lt;&lt;</span> <span class="n">endl</span><span class="p">;</span> <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/6765c942228e464eae427b7a1ac21f9a.png"
+        data-srcset="https://img-blog.csdnimg.cn/6765c942228e464eae427b7a1ac21f9a.png, https://img-blog.csdnimg.cn/6765c942228e464eae427b7a1ac21f9a.png 1.5x, https://img-blog.csdnimg.cn/6765c942228e464eae427b7a1ac21f9a.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/6765c942228e464eae427b7a1ac21f9a.png"
+        title="output" /></p>
+<h5 id="test_suite">TEST_SUITE</h5>
+<p>test suite表示测试集，顾名思义，就是可以把 test case 分组。</p>
+<p>比如可以这样写：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TEST_SUITE</span><span class="p">(</span><span class="s">&#34;math&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{}</span> <span class="c1">// part of the math test suite
+</span><span class="c1"></span>    <span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{}</span> <span class="c1">// part of the math test suite
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>也可以分开用 TEST_SUITE_BEGIN 和 TEST_SUITE_END 宏来实现：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TEST_SUITE_BEGIN</span><span class="p">(</span><span class="s">&#34;utils&#34;</span><span class="p">);</span>
+
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{}</span> <span class="c1">// part of the utils test suite
+</span><span class="c1"></span>
+<span class="n">TEST_SUITE_END</span><span class="p">();</span>
+
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;&#34;</span><span class="p">)</span> <span class="p">{}</span> <span class="c1">// not part of any test suite
+</span></code></pre></div><p>分组后的好处当然是可以直接分组执行了。</p>
+<h5 id="test_case_fixture">TEST_CASE_FIXTURE</h5>
+<p>这个宏是用来直接测试某个类的方法的，相当于是通过继承的方式创建了一个新的类，所以 protect 修饰的东西都能访问，比如：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">class</span> <span class="nc">UniqueTestsFixture</span>
+<span class="p">{</span>
+ <span class="k">private</span><span class="o">:</span>
+	<span class="k">static</span> <span class="kt">int</span> <span class="n">uniqueID</span><span class="p">;</span>
+
+ <span class="k">protected</span><span class="o">:</span>
+	<span class="kt">int</span> <span class="n">conn</span><span class="p">;</span>
+
+ <span class="k">public</span><span class="o">:</span>
+	<span class="n">UniqueTestsFixture</span><span class="p">()</span>
+		<span class="o">:</span> <span class="n">conn</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+	<span class="p">{</span>
+	<span class="p">}</span>
+
+ <span class="k">protected</span><span class="o">:</span>
+	<span class="k">static</span> <span class="kt">int</span> <span class="n">getID</span><span class="p">()</span>
+	<span class="p">{</span>
+		<span class="k">return</span> <span class="o">++</span><span class="n">uniqueID</span><span class="p">;</span>
+	<span class="p">}</span>
+<span class="p">};</span>
+
+<span class="kt">int</span> <span class="n">UniqueTestsFixture</span><span class="o">::</span><span class="n">uniqueID</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+<span class="n">TEST_CASE_FIXTURE</span><span class="p">(</span><span class="n">UniqueTestsFixture</span><span class="p">,</span> <span class="s">&#34;test get ID&#34;</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="n">REQUIRE</span><span class="p">(</span><span class="n">getID</span><span class="p">()</span> <span class="o">==</span> <span class="n">conn</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><h5 id="test_case_template">TEST_CASE_TEMPLATE</h5>
+<p>这个宏是用来测试模板的，如果需要测试的模板功能有共通性，只是类型不一致，那么你可以减少重复劳动，直接用这个宏来帮忙实例化再测试。</p>
+<p>比如下列代码测试了 <code>std::any</code> 对于接收字符串类型和整数类型的情况测试：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TEST_CASE_TEMPLATE</span><span class="p">(</span><span class="s">&#34;test std::any as integer&#34;</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="kt">char</span><span class="p">,</span> <span class="kt">short</span><span class="p">,</span> <span class="kt">int</span><span class="p">,</span> <span class="kt">long</span> <span class="kt">long</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">auto</span> <span class="n">v</span> <span class="o">=</span> <span class="n">T</span><span class="p">();</span>
+	<span class="n">std</span><span class="o">::</span><span class="n">any</span> <span class="n">var</span> <span class="o">=</span> <span class="n">T</span><span class="p">();</span>
+	<span class="n">CHECK</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">any_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">==</span><span class="n">v</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">TEST_CASE_TEMPLATE</span><span class="p">(</span><span class="s">&#34;test std::any as string&#34;</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span><span class="o">*</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">T</span> <span class="n">v</span> <span class="o">=</span> <span class="s">&#34;hello world&#34;</span><span class="p">;</span>
+	<span class="n">std</span><span class="o">::</span><span class="n">any</span> <span class="n">var</span> <span class="o">=</span> <span class="n">v</span><span class="p">;</span>
+	<span class="n">CHECK</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">any_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">==</span><span class="n">v</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>也可用 <code>TEST_CASE_TEMPLATE_DEFINE</code> 先定义一个模板测试，后面再用 <code>TEST_CASE_TEMPLATE_INVOKE</code> 来决定实例化模板的类型：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">TEST_CASE_TEMPLATE_DEFINE</span><span class="p">(</span><span class="s">&#34;test std::any as integer&#34;</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span><span class="n">integer</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">auto</span> <span class="n">v</span> <span class="o">=</span> <span class="n">T</span><span class="p">();</span>
+	<span class="n">std</span><span class="o">::</span><span class="n">any</span> <span class="n">var</span> <span class="o">=</span> <span class="n">T</span><span class="p">();</span>
+	<span class="n">CHECK</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">any_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">==</span><span class="n">v</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">TEST_CASE_TEMPLATE_DEFINE</span><span class="p">(</span><span class="s">&#34;test std::any as string&#34;</span><span class="p">,</span> <span class="n">T</span><span class="p">,</span><span class="n">string</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">T</span> <span class="n">v</span> <span class="o">=</span> <span class="s">&#34;hello world&#34;</span><span class="p">;</span>
+	<span class="n">std</span><span class="o">::</span><span class="n">any</span> <span class="n">var</span> <span class="o">=</span> <span class="n">v</span><span class="p">;</span>
+	<span class="n">CHECK</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">any_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">==</span><span class="n">v</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">TEST_CASE_TEMPLATE_INVOKE</span><span class="p">(</span><span class="n">integer</span><span class="p">,</span> <span class="kt">char</span><span class="p">,</span> <span class="kt">short</span><span class="p">,</span> <span class="kt">int</span><span class="p">,</span> <span class="kt">long</span> <span class="kt">long</span> <span class="kt">int</span><span class="p">);</span>
+<span class="n">TEST_CASE_TEMPLATE_INVOKE</span><span class="p">(</span><span class="n">string</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span><span class="o">*</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">);</span>
+</code></pre></div><h4 id="断言相关">断言相关</h4>
+<p>doctest的断言宏是很有规律的，它的设计我之前也提到过，是一种尽量以表达式的方式去简化对api的记忆，你只需要清楚三个断言的等级即可，当然如果想要直接通过对应的类似于 <code>gtest</code> 的 <code>EXPECT_XXX</code> 之类的api来进行断言，实际上也是有的。</p>
+<p>断言宏一共有以下三个等级：</p>
+<ul>
+<li>REQUIRE：这个等级算是最高的，如果断言失败，不仅会标记为测试不通过，而且会强制退出测试（也就是后续的测试将不会再进行）。</li>
+<li>CHECK：如果断言失败，标记为测试不通过，但不会强制退出（也就是后续的测试还是会执行）。</li>
+<li>WARN：如果断言失败，不会标记测试不通过，也不会强制退出，但是会给出对应的提示。</li>
+</ul>
+<h5 id="常用断言宏">常用断言宏</h5>
+<p>下面为常见的宏使用，使用这些宏比直接使用表达式的编译速度要快一点。</p>
+<p><code>&lt;LEVEL&gt;</code> 表示 REQUIRE、CHECK、WARN 三个等级。</p>
+<ul>
+<li><code>&lt;LEVEL&gt;_EQ(left, right)</code> - same as <code>&lt;LEVEL&gt;(left == right)</code></li>
+<li><code>&lt;LEVEL&gt;_NE(left, right)</code> - same as <code>&lt;LEVEL&gt;(left != right)</code></li>
+<li><code>&lt;LEVEL&gt;_GT(left, right)</code> - same as <code>&lt;LEVEL&gt;(left &gt;  right)</code></li>
+<li><code>&lt;LEVEL&gt;_LT(left, right)</code> - same as <code>&lt;LEVEL&gt;(left &lt;  right)</code></li>
+<li><code>&lt;LEVEL&gt;_GE(left, right)</code> - same as <code>&lt;LEVEL&gt;(left &gt;= right)</code></li>
+<li><code>&lt;LEVEL&gt;_LE(left, right)</code> - same as <code>&lt;LEVEL&gt;(left &lt;= right)</code></li>
+<li><code>&lt;LEVEL&gt;_UNARY(expr)</code> - same as <code>&lt;LEVEL&gt;(expr)</code></li>
+<li><code>&lt;LEVEL&gt;_UNARY_FALSE(expr)</code> - same as <code>&lt;LEVEL&gt;_FALSE(expr)</code></li>
+</ul>
+<blockquote>
+<p>小提示：在引入头文件之前定义 <code>DOCTEST_CONFIG_SUPER_FAST_ASSERTS</code> 这个宏，也可以提升编译速度。</p>
+</blockquote>
+<p><code>&lt;LEVEL&gt;_MESSAGE</code> ：这个宏用于在错误的适合你可以设置对应的提示信息。</p>
+<p>同样，你可以为了方便，先通过 <code>INFO</code> 宏来进行提示消息的预设，然后只要出现测试失败，都会提示这个预设的消息。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">CHECK_MESSAGE</span><span class="p">(</span><span class="mi">2</span><span class="o">==</span><span class="mi">1</span><span class="p">,</span><span class="s">&#34;not valid&#34;</span><span class="p">);</span>
+</code></pre></div><p>比如上面的代码可以用 <code>INFO</code> 宏，写成下面这样：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">INFO</span><span class="p">(</span><span class="s">&#34;not valid&#34;</span><span class="p">)</span>
+<span class="n">CHECK</span><span class="p">(</span><span class="mi">2</span><span class="o">==</span><span class="mi">1</span><span class="p">);</span>
+</code></pre></div><h5 id="常用工具函数">常用工具函数</h5>
+<p><code>doctest::Contains()</code> 用于判断字符串是包含这其中的字符。</p>
+<p>比如下面这个例子：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">REQUIRE</span><span class="p">(</span><span class="s">&#34;foobar&#34;</span> <span class="o">==</span> <span class="n">doctest</span><span class="o">::</span><span class="n">Contains</span><span class="p">(</span><span class="s">&#34;foo&#34;</span><span class="p">));</span>
+</code></pre></div><p><code> doctest::Approx()</code> 用于更精确的比较浮点数。</p>
+<p>比如下面这个例子：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="n">REQUIRE</span><span class="p">(</span><span class="mf">22.0</span><span class="o">/</span><span class="mi">7</span> <span class="o">==</span> <span class="n">doctest</span><span class="o">::</span><span class="n">Approx</span><span class="p">(</span><span class="mf">3.141</span><span class="p">).</span><span class="n">epsilon</span><span class="p">(</span><span class="mf">0.01</span><span class="p">));</span> <span class="c1">// allow for a 1% error
+</span></code></pre></div><h2 id="benchmark框架">benchmark框架</h2>
+<p>关于benchmark，我建议使用 <code>nanobench</code> ，同样也是因为引入简单轻量，使用简单且 <code>head only</code> 。</p>
+<p>官方文档如下：https://nanobench.ankerl.com/tutorial.html#usage</p>
+<h3 id="如何引入-1">如何引入</h3>
+<p>其实官方文档已经介绍了如何引入，它也是推荐使用下面的方式进行引入：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">cmake_minimum_required</span><span class="p">(</span><span class="s">VERSION</span> <span class="s">3.14</span><span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">set</span><span class="p">(</span><span class="s">CMAKE_CXX_STANDARD</span> <span class="s">17</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">project</span><span class="p">(</span>
+    <span class="s">CMakeNanobenchExample</span>
+    <span class="s">VERSION</span> <span class="s">1.0</span>
+    <span class="s">LANGUAGES</span> <span class="s">CXX</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">include</span><span class="p">(</span><span class="s">FetchContent</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">FetchContent_Declare</span><span class="p">(</span>
+    <span class="s">nanobench</span>
+    <span class="s">GIT_REPOSITORY</span> <span class="s">https://github.com/martinus/nanobench.git</span>
+    <span class="s">GIT_TAG</span> <span class="s">v4.1.0</span>
+    <span class="s">GIT_SHALLOW</span> <span class="s">TRUE</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">FetchContent_MakeAvailable</span><span class="p">(</span><span class="s">nanobench</span><span class="p">)</span><span class="err">
+</span><span class="err">
+</span><span class="err"></span><span class="nb">add_executable</span><span class="p">(</span><span class="s">MyExample</span> <span class="s">my_example.cpp</span><span class="p">)</span><span class="err">
+</span><span class="err"></span><span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">MyExample</span> <span class="s">PRIVATE</span> <span class="s">nanobench</span><span class="p">)</span><span class="err">
+</span></code></pre></div><h3 id="如何使用-1">如何使用</h3>
+<p>使用非常简单，不依赖于宏，而是使用对应的类的成员函数。</p>
+<p>比如：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;nanobench.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;atomic&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">y</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">x</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span><span class="p">().</span><span class="n">run</span><span class="p">(</span><span class="s">&#34;compare_exchange_strong&#34;</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">{</span>
+        <span class="n">x</span><span class="p">.</span><span class="n">compare_exchange_strong</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+    <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><p>输出如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/47193d25117d41b08afb168257085e37.png"
+        data-srcset="https://img-blog.csdnimg.cn/47193d25117d41b08afb168257085e37.png, https://img-blog.csdnimg.cn/47193d25117d41b08afb168257085e37.png 1.5x, https://img-blog.csdnimg.cn/47193d25117d41b08afb168257085e37.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/47193d25117d41b08afb168257085e37.png"
+        title="图片10" /></p>
+<p>可以看得出来，上述的输出结果其实可以直接copy到markdown中，会被渲染为表格。</p>
+<ul>
+<li>ns/op：每个bench内容需要经历的时间（ns为单位）。</li>
+<li>op/s：每秒可以执行多少次操作。</li>
+<li>err%：运行多次测试的波动情况（误差）。</li>
+<li>ins/op：每次操作需要多少条指令。</li>
+<li>cyc/op：每次操作需要多少次时钟周期。</li>
+<li>bra/op：每次操作有多少次分支预判。</li>
+<li>miss%：分支预判的miss率。</li>
+<li>total：本次消耗的总时间。</li>
+<li>benchmark：对应的名字。</li>
+</ul>
+<blockquote>
+<p>对于不同的机器上述的指标支持程度略有不同，官方的描述为：</p>
+<p>CPU statistics like instructions, cycles, branches, branch misses are only available on Linux, through <a href="http://web.eece.maine.edu/~vweaver/projects/perf_events/" target="_blank" rel="noopener noreffer">perf events</a>. On some systems you might need to <a href="https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html#unprivileged-users" target="_blank" rel="noopener noreffer">change permissions</a> through <code>perf_event_paranoid</code> or use ACL.</p>
+</blockquote>
+<h4 id="防止被优化">防止被优化</h4>
+<p>如下示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;nanobench.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;thirdparty/doctest/doctest.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;tutorial_fast_v1&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">uint64_t</span> <span class="n">x</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span><span class="p">().</span><span class="n">run</span><span class="p">(</span><span class="s">&#34;++x&#34;</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]()</span> <span class="p">{</span>
+        <span class="o">++</span><span class="n">x</span><span class="p">;</span>
+    <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><p>可能无法输出结果，因为x被优化了，所以可以改为下面这样：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;nanobench.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;doctest/doctest.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;tutorial_fast_v2&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">uint64_t</span> <span class="n">x</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span><span class="p">().</span><span class="n">run</span><span class="p">(</span><span class="s">&#34;++x&#34;</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]()</span> <span class="p">{</span>
+        <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">doNotOptimizeAway</span><span class="p">(</span><span class="n">x</span> <span class="o">+=</span> <span class="mi">1</span><span class="p">);</span>
+    <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><h4 id="优化不稳定">优化不稳定</h4>
+<p>有些时候输出结果会提示你测试不稳定，你可以按照提示增加 <code>minEpochIterations</code> 。</p>
+<p>比如：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;nanobench.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;doctest/doctest.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;random&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;tutorial_fluctuating_v1&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">random_device</span> <span class="n">dev</span><span class="p">;</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">mt19937_64</span> <span class="n">rng</span><span class="p">(</span><span class="n">dev</span><span class="p">());</span>
+    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span><span class="p">().</span><span class="n">run</span><span class="p">(</span><span class="s">&#34;random fluctuations&#34;</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">{</span>
+        <span class="c1">// each run, perform a random number of rng calls
+</span><span class="c1"></span>        <span class="k">auto</span> <span class="n">iterations</span> <span class="o">=</span> <span class="n">rng</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">UINT64_C</span><span class="p">(</span><span class="mh">0xff</span><span class="p">);</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">uint64_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">iterations</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">doNotOptimizeAway</span><span class="p">(</span><span class="n">rng</span><span class="p">());</span>
+        <span class="p">}</span>
+    <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><p>输出如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/0ad608d783b044ad89aca124773ced1d.png"
+        data-srcset="https://img-blog.csdnimg.cn/0ad608d783b044ad89aca124773ced1d.png, https://img-blog.csdnimg.cn/0ad608d783b044ad89aca124773ced1d.png 1.5x, https://img-blog.csdnimg.cn/0ad608d783b044ad89aca124773ced1d.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/0ad608d783b044ad89aca124773ced1d.png"
+        title="图片11" /></p>
+<p>我们按照提示修改代码如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;nanobench.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;doctest/doctest.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;random&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;tutorial_fluctuating_v2&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">random_device</span> <span class="n">dev</span><span class="p">;</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">mt19937_64</span> <span class="n">rng</span><span class="p">(</span><span class="n">dev</span><span class="p">());</span>
+    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span><span class="p">().</span><span class="n">minEpochIterations</span><span class="p">(</span><span class="mi">5000</span><span class="p">).</span><span class="n">run</span><span class="p">(</span>
+        <span class="s">&#34;random fluctuations&#34;</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">{</span>
+            <span class="c1">// each run, perform a random number of rng calls
+</span><span class="c1"></span>            <span class="k">auto</span> <span class="n">iterations</span> <span class="o">=</span> <span class="n">rng</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">UINT64_C</span><span class="p">(</span><span class="mh">0xff</span><span class="p">);</span>
+            <span class="k">for</span> <span class="p">(</span><span class="kt">uint64_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">iterations</span><span class="p">;</span> <span class="o">++</span><span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">doNotOptimizeAway</span><span class="p">(</span><span class="n">rng</span><span class="p">());</span>
+            <span class="p">}</span>
+        <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div><p>结果果然稳定了。</p>
+<h4 id="比较测试结果">比较测试结果</h4>
+<p>有时候我们需要对很多测试结果进行比较，在 <code>nanobench</code> 中，很容易做到，只要共用同一个 <code>Bench</code> 对象即可，在开始的时候调用对应的方法。</p>
+<p>比如官方给出了一个对比不同随机数生成器的性能的例子：完整代码：<a href="https://github.com/martinus/nanobench/blob/master/src/test/example_random_number_generators.cpp" target="_blank" rel="noopener noreffer">example_random_number_generators.cpp</a></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">private</span><span class="o">:</span>
+    <span class="k">static</span> <span class="k">constexpr</span> <span class="kt">uint64_t</span> <span class="n">rotl</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="n">k</span><span class="p">)</span> <span class="k">noexcept</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">x</span> <span class="o">&lt;&lt;</span> <span class="n">k</span><span class="p">)</span> <span class="o">|</span> <span class="p">(</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="p">(</span><span class="mi">64U</span> <span class="o">-</span> <span class="n">k</span><span class="p">));</span>
+    <span class="p">}</span>
+
+    <span class="kt">uint64_t</span> <span class="n">stateA</span><span class="p">;</span>
+    <span class="kt">uint64_t</span> <span class="n">stateB</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="k">namespace</span> <span class="p">{</span>
+
+<span class="c1">// Benchmarks how fast we can get 64bit random values from Rng.
+</span><span class="c1"></span><span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="n">Rng</span><span class="o">&gt;</span>
+<span class="kt">void</span> <span class="n">bench</span><span class="p">(</span><span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span><span class="o">*</span> <span class="n">bench</span><span class="p">,</span> <span class="kt">char</span> <span class="k">const</span><span class="o">*</span> <span class="n">name</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">random_device</span> <span class="n">dev</span><span class="p">;</span>
+    <span class="n">Rng</span> <span class="nf">rng</span><span class="p">(</span><span class="n">dev</span><span class="p">());</span>
+
+    <span class="n">bench</span><span class="o">-&gt;</span><span class="n">run</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]()</span> <span class="p">{</span>
+        <span class="k">auto</span> <span class="n">r</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">uniform_int_distribution</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">{}(</span><span class="n">rng</span><span class="p">);</span>
+        <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">doNotOptimizeAway</span><span class="p">(</span><span class="n">r</span><span class="p">);</span>
+    <span class="p">});</span>
+<span class="p">}</span>
+
+<span class="p">}</span> <span class="c1">// namespace
+</span><span class="c1"></span>
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;example_random_number_generators&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c1">// perform a few warmup calls, and since the runtime is not always stable
+</span><span class="c1"></span>    <span class="c1">// for each generator, increase the number of epochs to get more accurate
+</span><span class="c1"></span>    <span class="c1">// numbers.
+</span><span class="c1"></span>    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span> <span class="n">b</span><span class="p">;</span>
+    <span class="n">b</span><span class="p">.</span><span class="n">title</span><span class="p">(</span><span class="s">&#34;Random Number Generators&#34;</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">unit</span><span class="p">(</span><span class="s">&#34;uint64_t&#34;</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">warmup</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">relative</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+    <span class="n">b</span><span class="p">.</span><span class="n">performanceCounters</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+
+    <span class="c1">// sets the first one as the baseline
+</span><span class="c1"></span>    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">default_random_engine</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::default_random_engine&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mt19937</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::mt19937&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mt19937_64</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::mt19937_64&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">ranlux24_base</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::ranlux24_base&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">ranlux48_base</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::ranlux48_base&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">ranlux24</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::ranlux24_base&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">ranlux48</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::ranlux48&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">knuth_b</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;std::knuth_b&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">WyRng</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;WyRng&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">NasamRng</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;NasamRng&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">Sfc4</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;Sfc4&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">RomuTrio</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;RomuTrio&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">RomuDuo</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;RomuDuo&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">RomuDuoJr</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;RomuDuoJr&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">Orbit</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;Orbit&#34;</span><span class="p">);</span>
+    <span class="n">bench</span><span class="o">&lt;</span><span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Rng</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">b</span><span class="p">,</span> <span class="s">&#34;ankerl::nanobench::Rng&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>我们需要注意的几个关键方法：</p>
+<ol>
+<li><code>unit</code> ：用于将原本默认的 <code>xx/op</code> 中的 op 替换为自定义的字符串。</li>
+<li><code>warmup</code> ：在测试开始之前进行预热的次数，也就是先执行这么些次数，不会计入最终数据。</li>
+<li><code>relative</code> ：设置为 true 之后，再run，之后的所有run都会以这个为基准线做对比。</li>
+<li><code>performanceCounters</code> ：是否测试 <code>ins/op</code> 、<code>bra/op</code> 、<code>miss%</code>。</li>
+</ol>
+<p>上述测试结果如下：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">relative</th>
+<th style="text-align:right">ns/uint64_t</th>
+<th style="text-align:right">uint64_t/s</th>
+<th style="text-align:right">err%</th>
+<th style="text-align:right">ins/uint64_t</th>
+<th style="text-align:right">bra/uint64_t</th>
+<th style="text-align:right">miss%</th>
+<th style="text-align:right">total</th>
+<th style="text-align:left">Random Number Generators</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">31.42</td>
+<td style="text-align:right">31,828,534.72</td>
+<td style="text-align:right">5.0%</td>
+<td style="text-align:right">219.22</td>
+<td style="text-align:right">20.48</td>
+<td style="text-align:right">1.4%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>std::default_random_engine</code></td>
+</tr>
+<tr>
+<td style="text-align:right">266.3%</td>
+<td style="text-align:right">11.80</td>
+<td style="text-align:right">84,745,762.71</td>
+<td style="text-align:right">9.3%</td>
+<td style="text-align:right">155.67</td>
+<td style="text-align:right">18.01</td>
+<td style="text-align:right">0.1%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left">:wavy_dash: <code>std::mt19937</code> (Unstable with ~1,685.8 iters. Increase <code>minEpochIterations</code> to e.g. 16858)</td>
+</tr>
+<tr>
+<td style="text-align:right">1,019.7%</td>
+<td style="text-align:right">3.08</td>
+<td style="text-align:right">324,567,855.83</td>
+<td style="text-align:right">6.6%</td>
+<td style="text-align:right">34.63</td>
+<td style="text-align:right">1.50</td>
+<td style="text-align:right">0.2%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left">:wavy_dash: <code>std::mt19937_64</code> (Unstable with ~7,097.7 iters. Increase <code>minEpochIterations</code> to e.g. 70977)</td>
+</tr>
+<tr>
+<td style="text-align:right">148.9%</td>
+<td style="text-align:right">21.11</td>
+<td style="text-align:right">47,380,744.69</td>
+<td style="text-align:right">2.3%</td>
+<td style="text-align:right">204.09</td>
+<td style="text-align:right">19.00</td>
+<td style="text-align:right">0.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>std::ranlux24_base</code></td>
+</tr>
+<tr>
+<td style="text-align:right">171.1%</td>
+<td style="text-align:right">18.36</td>
+<td style="text-align:right">54,456,268.71</td>
+<td style="text-align:right">1.4%</td>
+<td style="text-align:right">143.51</td>
+<td style="text-align:right">14.00</td>
+<td style="text-align:right">2.9%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>std::ranlux48_base</code></td>
+</tr>
+<tr>
+<td style="text-align:right">47.1%</td>
+<td style="text-align:right">66.76</td>
+<td style="text-align:right">14,979,338.84</td>
+<td style="text-align:right">22.8%</td>
+<td style="text-align:right">799.13</td>
+<td style="text-align:right">50.23</td>
+<td style="text-align:right">0.6%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left">:wavy_dash: <code>std::ranlux24_base</code> (Unstable with ~293.1 iters. Increase <code>minEpochIterations</code> to e.g. 2931)</td>
+</tr>
+<tr>
+<td style="text-align:right">18.2%</td>
+<td style="text-align:right">172.82</td>
+<td style="text-align:right">5,786,199.91</td>
+<td style="text-align:right">21.7%</td>
+<td style="text-align:right">1,744.87</td>
+<td style="text-align:right">85.30</td>
+<td style="text-align:right">0.3%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left">:wavy_dash: <code>std::ranlux48</code> (Unstable with ~118.9 iters. Increase <code>minEpochIterations</code> to e.g. 1189)</td>
+</tr>
+<tr>
+<td style="text-align:right">64.6%</td>
+<td style="text-align:right">48.64</td>
+<td style="text-align:right">20,558,002.94</td>
+<td style="text-align:right">1.1%</td>
+<td style="text-align:right">289.60</td>
+<td style="text-align:right">20.41</td>
+<td style="text-align:right">1.2%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>std::knuth_b</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,665.9%</td>
+<td style="text-align:right">1.89</td>
+<td style="text-align:right">530,227,329.50</td>
+<td style="text-align:right">0.1%</td>
+<td style="text-align:right">10.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">63.4%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>WyRng</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,293.7%</td>
+<td style="text-align:right">2.43</td>
+<td style="text-align:right">411,770,089.69</td>
+<td style="text-align:right">7.4%</td>
+<td style="text-align:right">23.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left">:wavy_dash: <code>NasamRng</code> (Unstable with ~9,712.3 iters. Increase <code>minEpochIterations</code> to e.g. 97123)</td>
+</tr>
+<tr>
+<td style="text-align:right">1,197.4%</td>
+<td style="text-align:right">2.62</td>
+<td style="text-align:right">381,101,236.99</td>
+<td style="text-align:right">0.1%</td>
+<td style="text-align:right">20.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>Sfc4</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,243.4%</td>
+<td style="text-align:right">2.53</td>
+<td style="text-align:right">395,763,921.94</td>
+<td style="text-align:right">0.1%</td>
+<td style="text-align:right">15.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>RomuTrio</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,193.0%</td>
+<td style="text-align:right">2.63</td>
+<td style="text-align:right">379,720,219.70</td>
+<td style="text-align:right">1.1%</td>
+<td style="text-align:right">14.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>RomuDuo</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,268.4%</td>
+<td style="text-align:right">2.48</td>
+<td style="text-align:right">403,703,084.51</td>
+<td style="text-align:right">1.0%</td>
+<td style="text-align:right">11.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>RomuDuoJr</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,511.6%</td>
+<td style="text-align:right">2.08</td>
+<td style="text-align:right">481,135,323.92</td>
+<td style="text-align:right">0.7%</td>
+<td style="text-align:right">23.00</td>
+<td style="text-align:right">2.00</td>
+<td style="text-align:right">0.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>Orbit</code></td>
+</tr>
+<tr>
+<td style="text-align:right">1,309.5%</td>
+<td style="text-align:right">2.40</td>
+<td style="text-align:right">416,799,283.87</td>
+<td style="text-align:right">0.4%</td>
+<td style="text-align:right">11.00</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:right">100.0%</td>
+<td style="text-align:right">0.00</td>
+<td style="text-align:left"><code>ankerl::nanobench::Rng</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="计算bigo">计算BigO</h4>
+<p>计算BigO也很简单，只需要模拟一个数据，然后将其中的 <code>n</code> 传入 <code>complexityN</code> 方法中，然后再run，它会输出对应的结果。</p>
+<p>下面是一个测试 <code>std::set::find</code> BigO的代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;nanobench.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;doctest/doctest.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;set&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="n">TEST_CASE</span><span class="p">(</span><span class="s">&#34;tutorial_complexity_set_find&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c1">// Create a single benchmark instance that is used in multiple benchmark
+</span><span class="c1"></span>    <span class="c1">// runs, with different settings for complexityN.
+</span><span class="c1"></span>    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Bench</span> <span class="n">bench</span><span class="p">;</span>
+
+    <span class="c1">// a RNG to generate input data
+</span><span class="c1"></span>    <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">Rng</span> <span class="n">rng</span><span class="p">;</span>
+
+    <span class="n">std</span><span class="o">::</span><span class="n">set</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span> <span class="n">set</span><span class="p">;</span>
+
+    <span class="c1">// Running the benchmark multiple times, with different number of elements
+</span><span class="c1"></span>    <span class="k">for</span> <span class="p">(</span><span class="k">auto</span> <span class="nl">setSize</span> <span class="p">:</span>
+         <span class="p">{</span><span class="mi">10U</span><span class="p">,</span> <span class="mi">20U</span><span class="p">,</span> <span class="mi">50U</span><span class="p">,</span> <span class="mi">100U</span><span class="p">,</span> <span class="mi">200U</span><span class="p">,</span> <span class="mi">500U</span><span class="p">,</span> <span class="mi">1000U</span><span class="p">,</span> <span class="mi">2000U</span><span class="p">,</span> <span class="mi">5000U</span><span class="p">,</span> <span class="mi">10000U</span><span class="p">})</span> <span class="p">{</span>
+
+        <span class="c1">// fill up the set with random data
+</span><span class="c1"></span>        <span class="k">while</span> <span class="p">(</span><span class="n">set</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">setSize</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">set</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">rng</span><span class="p">());</span>
+        <span class="p">}</span>
+
+        <span class="c1">// Run the benchmark, provide setSize as the scaling variable.
+</span><span class="c1"></span>        <span class="n">bench</span><span class="p">.</span><span class="n">complexityN</span><span class="p">(</span><span class="n">set</span><span class="p">.</span><span class="n">size</span><span class="p">()).</span><span class="n">run</span><span class="p">(</span><span class="s">&#34;std::set find&#34;</span><span class="p">,</span> <span class="p">[</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">{</span>
+            <span class="n">ankerl</span><span class="o">::</span><span class="n">nanobench</span><span class="o">::</span><span class="n">doNotOptimizeAway</span><span class="p">(</span><span class="n">set</span><span class="p">.</span><span class="n">find</span><span class="p">(</span><span class="n">rng</span><span class="p">()));</span>
+        <span class="p">});</span>
+    <span class="p">}</span>
+
+    <span class="c1">// calculate BigO complexy best fit and print the results
+</span><span class="c1"></span>    <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="n">bench</span><span class="p">.</span><span class="n">complexityBigO</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>上述先是模拟了一个set不断被插入，从 10 ~ 10k 的数据规模，所有数据的输入都是使用 <code>nanobench</code> 中提供的 Rng 类来生成随机数。</p>
+<p>最终结果如下：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">coefficient</th>
+<th style="text-align:right">err%</th>
+<th>complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">3.4946962e-09</td>
+<td style="text-align:right">46.5%</td>
+<td>O(log n)</td>
+</tr>
+<tr>
+<td style="text-align:right">8.0377807e-12</td>
+<td style="text-align:right">62.9%</td>
+<td>O(n)</td>
+</tr>
+<tr>
+<td style="text-align:right">6.0188709e-13</td>
+<td style="text-align:right">67.6%</td>
+<td>O(n log n)</td>
+</tr>
+<tr>
+<td style="text-align:right">2.6440637e-08</td>
+<td style="text-align:right">77.4%</td>
+<td>O(1)</td>
+</tr>
+<tr>
+<td style="text-align:right">7.3746892e-16</td>
+<td style="text-align:right">87.8%</td>
+<td>O(n^2)</td>
+</tr>
+<tr>
+<td style="text-align:right">6.7357968e-20</td>
+<td style="text-align:right">97.0%</td>
+<td>O(n^3)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="输出结果到其他格式">输出结果到其他格式</h4>
+<p>nanobench还支持将测试结果输出到其他文件格式，比如csv、json，或者html形成可视化界面。</p>
+<p>还能输出到 <code>pyperf</code> 中进行进一步性能分析。</p>
+<p>具体就不讲了，大家看文档：https://nanobench.ankerl.com/tutorial.html#rendering-mustache-like-templates</p>
+<h2 id="clion中查看测试覆盖率">CLion中查看测试覆盖率</h2>
+<p>关于测试覆盖率，截一段chatgpt的对话：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/13b8ff34f17b4270ad96f05645460495.png"
+        data-srcset="https://img-blog.csdnimg.cn/13b8ff34f17b4270ad96f05645460495.png, https://img-blog.csdnimg.cn/13b8ff34f17b4270ad96f05645460495.png 1.5x, https://img-blog.csdnimg.cn/13b8ff34f17b4270ad96f05645460495.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/13b8ff34f17b4270ad96f05645460495.png"
+        title="图片10" /></p>
+<p>其实测试覆盖率是几乎所有编译器自带的功能（CLion中暂时不支持msvc，mingw是支持的），但是需要在编译的时候加入对应的参数，但不同的编译器参数很多很繁杂，CLion就为我们提供了便利性，使用CLion你只需要点击两下鼠标就行了。</p>
+<p>第一次点击鼠标：用于CLion帮我们生成对应的coverage配置项。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/744f3e1a18d648e8967b04d3c2263145.png"
+        data-srcset="https://img-blog.csdnimg.cn/744f3e1a18d648e8967b04d3c2263145.png, https://img-blog.csdnimg.cn/744f3e1a18d648e8967b04d3c2263145.png 1.5x, https://img-blog.csdnimg.cn/744f3e1a18d648e8967b04d3c2263145.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/744f3e1a18d648e8967b04d3c2263145.png"
+        title="图片8" /></p>
+<p>第二次点击鼠标：用于运行coverage配置项生成覆盖率数据，然后CLion将会有图形化显示。</p>
+<p>已经生成好了对应的配置项，用对应配置项去运行这个测试即可得出结果如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/5da11287f6e64ceaa464947368689966.png"
+        data-srcset="https://img-blog.csdnimg.cn/5da11287f6e64ceaa464947368689966.png, https://img-blog.csdnimg.cn/5da11287f6e64ceaa464947368689966.png 1.5x, https://img-blog.csdnimg.cn/5da11287f6e64ceaa464947368689966.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/5da11287f6e64ceaa464947368689966.png"
+        title="图片9" /></p>
+<p>当然你也可以自己在配置项里面添加对应的编译器flag，下面是gcc编译器的flag，别的编译器有所不同，所以CLion提供了自动帮我们生成配置项的功能。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="o">-</span><span class="n">DCMAKE_CXX_FLAGS</span><span class="o">=</span><span class="s">&#34;--coverage&#34;</span>
+</code></pre></div><h2 id="clion中使用sanitizers检测内存错误">CLion中使用sanitizers检测内存错误</h2>
+<p>关于sanitizer是什么，可以看下面这段chatgpt的截图：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/7b7178e75e564614be161160d8862097.png"
+        data-srcset="https://img-blog.csdnimg.cn/7b7178e75e564614be161160d8862097.png, https://img-blog.csdnimg.cn/7b7178e75e564614be161160d8862097.png 1.5x, https://img-blog.csdnimg.cn/7b7178e75e564614be161160d8862097.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/7b7178e75e564614be161160d8862097.png"
+        title="图片1" /></p>
+<p>现在其实在clang/gcc中已经自带了这个功能，只需要在编译时加入编译选项 <code>-fsanitize</code> 即可（亲测Windows下的mingw里的gcc并不支持）。</p>
+<p>整个所有的 sanitize 功能如下：</p>
+<ul>
+<li><code>AddressSanitizer</code> (ASan)：检测内存访问错误，如越界访问和使用释放的内存。它通过在程序执行期间在内存中插入虚拟填充来实现这一点，并在程序试图访问这些填充时生成错误消息。</li>
+<li><code>LeakSanitizer</code> (LSan)：检测内存泄漏，即程序未释放的内存。它通过跟踪程序中的每个动态分配来实现这一点，并在程序结束时生成报告。</li>
+<li><code>ThreadSanitizer</code> (TSan)：检测多线程程序中的数据竞争。它通过在程序执行期间跟踪线程之间的共享变量访问来实现这一点，并在发现竞争时生成错误消息。</li>
+<li><code>UndefinedBehaviorSanitizer</code> (UBSan)：检测未定义行为，如类型转换错误和溢出。它通过在程序执行期间插入检查代码来实现这一点，并在发现错误时生成错误消息。</li>
+<li><code>MemorySanitizer</code> (MSan)：检测未初始化内存的使用，这是一个非常隐蔽的错误，它通过在程序中所有未初始化内存插入值来实现这一点，并在程序试图使用这些值时生成错误消息。</li>
+</ul>
+<p>其实上述的 <code>memory</code> 和 <code>ub</code> 问题的检测，在CLion中你还未编译时就已经给出了提示。</p>
+<h3 id="环境准备">环境准备</h3>
+<p>官方文档在这：https://www.jetbrains.com/help/clion/google-sanitizers.html，如果是windows环境可以通过安装clang-cl编译器来得到 <code>AddressSanitizer</code> 的能力，具体操作在这个文档中：https://www.jetbrains.com/help/clion/quick-tutorial-on-configuring-clion-on-windows.html#clang-cl</p>
+<p>如果是 Linux/wsl/macos 环境使用 gcc/clang 都可以得到 <code>AddressSanitizer</code> 、<code>LeakSanitizer</code> 、<code>ThreadSanitizer</code>、 <code>UndefinedBehaviorSanitizer</code> 的能力。</p>
+<p>我推荐使用clang，至少在我的wsl上gcc的 <code>ThreadSanitizer</code>  能力是错误的。</p>
+<p>如何安装clang环境就非常简单了，apt install即可。</p>
+<h3 id="如何使用-2">如何使用</h3>
+<p>其实使用对应的能力很简单，只需要在编译选项中加入对应的参数即可。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cmake" data-lang="cmake"><span class="nb">set</span><span class="p">(</span><span class="s">CMAKE_CXX_FLAGS</span> <span class="s2">&#34;${CMAKE_CXX_FLAGS} -fsanitize=[sanitizer_name] [-g] [-OX]&#34;</span><span class="p">)</span><span class="err">
+</span></code></pre></div><p>下面这些是 <code>[sanitizer_name]</code> 对应的选项：</p>
+<ul>
+<li><code>address</code> ：表示开启 AddressSanitizer</li>
+<li><code>leak</code> ： 表示开启LeakSanitizer</li>
+<li><code>thread</code>： 表示开启 ThreadSanitizer</li>
+<li><code>undefined</code>： 表示开启UndefinedBehaviorSanitizer (other options are also available, see the <a href="https://www.jetbrains.com/help/clion/google-sanitizers.html#UbSanChapter" target="_blank" rel="noopener noreffer">UBSan section</a>)</li>
+<li><code>memory</code>： 表示开启MemorySanitizer</li>
+</ul>
+<p><code>-g</code> 是用来生成调试信息的，建议不要再选项里面加，因为CLion会根据cmake配置项里的 Release/Debug 模式来自动加上，所以你不要画蛇添足，这样会出错，加入调试信息可以让最终收集到的信息有具体的源码位置，方便我们查看分析的结果。</p>
+<p><code>-ox</code> 是优化选项，比如 -o1 -o2之类的，这个也不用管，CLion同样也是根据cmake配置项里的信息生成，比如Release就是-o3，Debug就是-o2。</p>
+<p>设置哈对应的编译参数后，我们对需要分析的程序运行一次即可，然后CLion中就会出现图形化的结果。</p>
+<h4 id="内存泄漏检测leak">内存泄漏检测（leak）</h4>
+<p>比如我现在有下面这段内存泄漏代码，我开了 <code>-fsanitize=leak</code> 并且为Debug模式 ：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="kt">int</span> <span class="nf">main</span><span class="p">(){</span>
+    <span class="k">auto</span><span class="o">*</span> <span class="n">p</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">(</span><span class="mi">3234</span><span class="p">);</span>
+    <span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>最终的结果图如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/eeb2aca5e08943f4baaac21bb1605fa1.png"
+        data-srcset="https://img-blog.csdnimg.cn/eeb2aca5e08943f4baaac21bb1605fa1.png, https://img-blog.csdnimg.cn/eeb2aca5e08943f4baaac21bb1605fa1.png 1.5x, https://img-blog.csdnimg.cn/eeb2aca5e08943f4baaac21bb1605fa1.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/eeb2aca5e08943f4baaac21bb1605fa1.png"
+        title="图片2" /></p>
+<p>请不要同时开启多个选项，可能会报错，如果没有报错，也可能只出现一个效果。</p>
+<h4 id="内存访问错误检测address">内存访问错误检测（address）</h4>
+<p>加入 <code>-fsanitize=address</code> 并设置为Debug模式。</p>
+<p>同样我有下面这段代码（请在C++17及以上进行编译）：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;iostream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;sstream&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;string&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;string_view&gt;</span><span class="cp">
+</span><span class="cp">#include</span> <span class="cpf">&lt;vector&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="k">struct</span> <span class="nc">str_helper</span>
+<span class="p">{</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">*</span> <span class="n">data</span><span class="p">;</span>
+   <span class="n">str_helper</span><span class="p">()</span> <span class="o">:</span> <span class="n">data</span><span class="p">(</span><span class="k">new</span> <span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">())</span> <span class="p">{}</span>
+   <span class="o">~</span><span class="n">str_helper</span><span class="p">()</span> <span class="p">{</span> <span class="k">delete</span> <span class="n">data</span><span class="p">;</span> <span class="p">}</span>
+<span class="p">};</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="o">&gt;</span> <span class="n">split_by_line_v1</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">str</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">stringstream</span>             <span class="n">ss</span><span class="p">(</span><span class="n">str</span><span class="p">);</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="o">&gt;</span> <span class="n">ret</span><span class="p">;</span>
+   <span class="n">str_helper</span>                   <span class="n">line</span><span class="p">;</span>
+   <span class="k">while</span> <span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">getline</span><span class="p">(</span><span class="n">ss</span><span class="p">,</span> <span class="o">*</span><span class="n">line</span><span class="p">.</span><span class="n">data</span><span class="p">,</span> <span class="sc">&#39;\n&#39;</span><span class="p">))</span> <span class="p">{</span> <span class="n">ret</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="o">*</span><span class="n">line</span><span class="p">.</span><span class="n">data</span><span class="p">);</span> <span class="p">}</span>
+   <span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="o">&gt;</span> <span class="n">split_by_line_v2</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="k">const</span><span class="o">&amp;</span> <span class="n">str</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">size_t</span> <span class="n">pos</span> <span class="o">=</span> <span class="n">str</span><span class="p">.</span><span class="n">find</span><span class="p">(</span><span class="sc">&#39;\n&#39;</span><span class="p">),</span> <span class="n">pre_pos</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+   <span class="k">auto</span>   <span class="n">ret</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="o">&gt;</span><span class="p">();</span>
+   <span class="k">while</span> <span class="p">(</span><span class="n">pos</span> <span class="o">!=</span> <span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">::</span><span class="n">npos</span><span class="p">)</span>
+   <span class="p">{</span>
+      <span class="n">ret</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">str</span><span class="p">.</span><span class="n">data</span><span class="p">()</span> <span class="o">+</span> <span class="n">pre_pos</span><span class="p">,</span> <span class="n">pos</span> <span class="o">-</span> <span class="n">pre_pos</span><span class="p">);</span>
+      <span class="n">pre_pos</span> <span class="o">=</span> <span class="n">pos</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+      <span class="n">pos</span>     <span class="o">=</span> <span class="n">str</span><span class="p">.</span><span class="n">find</span><span class="p">(</span><span class="sc">&#39;\n&#39;</span><span class="p">,</span> <span class="n">pre_pos</span><span class="p">);</span>
+   <span class="p">}</span>
+   <span class="k">if</span> <span class="p">(</span><span class="n">pre_pos</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="n">str</span><span class="p">.</span><span class="n">size</span><span class="p">())</span>
+   <span class="p">{</span>
+      <span class="n">ret</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">str</span><span class="p">.</span><span class="n">data</span><span class="p">()</span> <span class="o">+</span> <span class="n">pre_pos</span><span class="p">,</span> <span class="n">str</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">-</span> <span class="n">pre_pos</span><span class="p">);</span>
+   <span class="p">}</span>
+   <span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">split_by_line_v3</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span> <span class="n">str</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">stringstream</span> <span class="n">ss</span><span class="p">;</span>
+   <span class="n">ss</span> <span class="o">&lt;&lt;</span> <span class="n">str</span><span class="p">;</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span> <span class="n">list</span><span class="p">;</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">string</span>              <span class="n">line</span><span class="p">;</span>
+   <span class="k">while</span> <span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">getline</span><span class="p">(</span><span class="n">ss</span><span class="p">,</span> <span class="n">line</span><span class="p">,</span> <span class="sc">&#39;\n&#39;</span><span class="p">))</span> <span class="p">{</span> <span class="n">list</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">line</span><span class="p">));</span> <span class="p">}</span>
+   <span class="k">return</span> <span class="n">list</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+   <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">data</span> <span class="o">=</span> <span class="s">&#34;你好</span><span class="se">\n</span><span class="s">你好2</span><span class="se">\n</span><span class="s">哈哈哈哈&#34;</span><span class="p">;</span>
+   <span class="k">for</span> <span class="p">(</span><span class="k">const</span> <span class="k">auto</span><span class="o">&amp;</span> <span class="nl">v</span> <span class="p">:</span> <span class="n">split_by_line_v1</span><span class="p">(</span><span class="n">data</span><span class="p">))</span> <span class="p">{</span> <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="n">v</span> <span class="o">&lt;&lt;</span> <span class="s">&#34;</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">;</span> <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>这段代码有三个版本的split实现，很明显，第一个版本有空悬指针的问题，还有我解释为什么我第一个版本要专门再写一个 <code>str_helper</code> ，因为如果直接用 <code>std::string</code> 的话，它是检查不出来问题的，必须要使用new和delete进行内存的申请与释放才能被检测到，而标准库容器中使用的是 <code>std::acllocator</code> 。</p>
+<p>第二个版本，没有内存安全问题，且不存在拷贝，但是使用的时候需要注意生命周期的问题，因为都是浅拷贝(<code>string_view</code>)。</p>
+<p>第三个版本，没有内存安全问题，且不需要注意生命周期问题，但是有深拷贝和堆内存创建的性能损耗。</p>
+<p>使用第一个版本检测出的情况如下图：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/654c878c98aa4141b36cfef6071f62ca.png"
+        data-srcset="https://img-blog.csdnimg.cn/654c878c98aa4141b36cfef6071f62ca.png, https://img-blog.csdnimg.cn/654c878c98aa4141b36cfef6071f62ca.png 1.5x, https://img-blog.csdnimg.cn/654c878c98aa4141b36cfef6071f62ca.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/654c878c98aa4141b36cfef6071f62ca.png"
+        title="图片3" /></p>
+<h4 id="多线程数据竞争检测thread">多线程数据竞争检测（thread）</h4>
+<p>加入 <code>-fsanitize=thread</code> 并设置为Debug模式。</p>
+<p>有下列简单代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="cp">#include</span> <span class="cpf">&lt;thread&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">int</span> <span class="n">s_count</span><span class="p">;</span>
+
+<span class="kt">void</span> <span class="nf">count_plus</span><span class="p">(</span><span class="kt">int</span> <span class="n">times</span><span class="p">)</span>
+<span class="p">{</span>
+   <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">times</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="o">++</span><span class="n">s_count</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+   <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th1</span><span class="p">(</span><span class="n">count_plus</span><span class="p">,</span><span class="mi">100</span><span class="p">);</span>
+   <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">th2</span><span class="p">(</span><span class="n">count_plus</span><span class="p">,</span><span class="mi">100</span><span class="p">);</span>
+
+   <span class="n">th1</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+   <span class="n">th2</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div><p>检测结果如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/860f6c60b5774c94bc5690de809dc2b6.png"
+        data-srcset="https://img-blog.csdnimg.cn/860f6c60b5774c94bc5690de809dc2b6.png, https://img-blog.csdnimg.cn/860f6c60b5774c94bc5690de809dc2b6.png 1.5x, https://img-blog.csdnimg.cn/860f6c60b5774c94bc5690de809dc2b6.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/860f6c60b5774c94bc5690de809dc2b6.png"
+        title="图片4" /></p>
+<h2 id="clion中使用perf生成火焰图">CLion中使用perf生成火焰图</h2>
+<p>同样截取一段chatgpt的回答：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/1dd8d12fae5e4ed5ab5e276e9ad0f0e2.png"
+        data-srcset="https://img-blog.csdnimg.cn/1dd8d12fae5e4ed5ab5e276e9ad0f0e2.png, https://img-blog.csdnimg.cn/1dd8d12fae5e4ed5ab5e276e9ad0f0e2.png 1.5x, https://img-blog.csdnimg.cn/1dd8d12fae5e4ed5ab5e276e9ad0f0e2.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/1dd8d12fae5e4ed5ab5e276e9ad0f0e2.png"
+        title="图片11" /></p>
+<p>说白了就是分析软件的性能瓶颈，具体是通过查看各个函数调用所占用的时间或cpu消耗等等。</p>
+<p>这个功能需要下载 <code>perf</code> 工具，而 <code>perf</code> 需要Linux环境，所以Windows可以使用wsl2来实现，但是我的wsl2无法直接使用需要手动去下载wsl2内核源代码然后编译安装，安装好后，我使用后发现还是有bug（无法显示非系统调用函数），所以这个还是只适合在 Linux/macos 使用。官方文档在：https://www.jetbrains.com/help/clion/2022.3/cpu-profiler.html</p>
+<h3 id="环境准备-1">环境准备</h3>
+<p>我这里就偷个懒直接把官方文档的中文翻译截图放这里了，建议自己去看官方文档：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/061d7c2ca7314a188fd35b9f0045ddf9.png"
+        data-srcset="https://img-blog.csdnimg.cn/061d7c2ca7314a188fd35b9f0045ddf9.png, https://img-blog.csdnimg.cn/061d7c2ca7314a188fd35b9f0045ddf9.png 1.5x, https://img-blog.csdnimg.cn/061d7c2ca7314a188fd35b9f0045ddf9.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/061d7c2ca7314a188fd35b9f0045ddf9.png"
+        title="图片7" /></p>
+<h3 id="如何使用-3">如何使用</h3>
+<p>使用的话，只需要像下面这样配置即可：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/7145e37897c547268b4be5d59e3a4fd8.png"
+        data-srcset="https://img-blog.csdnimg.cn/7145e37897c547268b4be5d59e3a4fd8.png, https://img-blog.csdnimg.cn/7145e37897c547268b4be5d59e3a4fd8.png 1.5x, https://img-blog.csdnimg.cn/7145e37897c547268b4be5d59e3a4fd8.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/7145e37897c547268b4be5d59e3a4fd8.png"
+        title="设置图片" /></p>
+<p>在CLion中运行的时候按下这个按钮即可：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/b3f86d8539d44efbaff881eadc789363.png"
+        data-srcset="https://img-blog.csdnimg.cn/b3f86d8539d44efbaff881eadc789363.png, https://img-blog.csdnimg.cn/b3f86d8539d44efbaff881eadc789363.png 1.5x, https://img-blog.csdnimg.cn/b3f86d8539d44efbaff881eadc789363.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/b3f86d8539d44efbaff881eadc789363.png"
+        title="图片5" /></p>
+<p>运行后等一会儿，然后CLion里会有个通知告诉你可以查看profiler了，我的结果如下图（有bug，只能显示出系统调用的函数）：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/ad281447b4c9496e8dac979142ff3250.png"
+        data-srcset="https://img-blog.csdnimg.cn/ad281447b4c9496e8dac979142ff3250.png, https://img-blog.csdnimg.cn/ad281447b4c9496e8dac979142ff3250.png 1.5x, https://img-blog.csdnimg.cn/ad281447b4c9496e8dac979142ff3250.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/ad281447b4c9496e8dac979142ff3250.png"
+        title="图片6" /></p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/">C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2023-01-27</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" data-hashtags="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-hashtag="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" data-image="https://img-blog.csdnimg.cn/aa6bde4ddb8d4ddda947454fb8656ba3.png"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" data-description="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测" data-description="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/c&#43;&#43;%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5%E5%BF%85%E5%A4%87%E6%B5%8B%E8%AF%95%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E8%A6%86%E7%9B%96%E6%B5%8B%E8%AF%95%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E6%A3%80%E6%B5%8B/" data-title="C&#43;&#43;工程实践必备：测试、基准测试、覆盖测试、性能分析、内存泄漏检测"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/ejson4cpp%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3/" class="prev" rel="prev" title="ejson4cpp使用文档"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/elog4cpp%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3/" class="next" rel="next" title="elog4cpp官方文档">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>Java I/O - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/java-i/o/</link>
+        <description>Java I/O - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><atom:link href="https://acking-you.github.io/tags/java-i/o/" rel="self" type="application/rss+xml" /><item>
+    <title>Java I/O</title>
+    <link>https://acking-you.github.io/posts/java-io/</link>
+    <pubDate>Sun, 23 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/java-io/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center" referrerpolicy="no-referrer">
+            </div>Java I/O 配套视频 注意：这块会涉及到操作系统和计算机组成原理相关内容。 I/O简而言之，就是输入输出，那么为什么会有I/O呢？其实I/O无时无刻都在]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>面试八股——计算机网络1 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E9%9D%A2%E8%AF%95%E5%85%AB%E8%82%A1%E8%AE%A1%E7%AE%97%E6%9C%BA%E7%BD%91%E7%BB%9C1/</link>
+        <description>面试八股——计算机网络1 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Mon, 20 Jun 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E9%9D%A2%E8%AF%95%E5%85%AB%E8%82%A1%E8%AE%A1%E7%AE%97%E6%9C%BA%E7%BD%91%E7%BB%9C1/" rel="self" type="application/rss+xml" /><item>
+    <title>面试八股——计算机网络1</title>
+    <link>https://acking-you.github.io/posts/%E9%9D%A2%E8%AF%95%E5%85%AB%E8%82%A1%E8%AE%A1%E7%AE%97%E6%9C%BA%E7%BD%91%E7%BB%9C1/</link>
+    <pubDate>Mon, 20 Jun 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E9%9D%A2%E8%AF%95%E5%85%AB%E8%82%A1%E8%AE%A1%E7%AE%97%E6%9C%BA%E7%BD%91%E7%BB%9C1/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/daefa95e021376b822b5938e65b8252b.png#pic_center" referrerpolicy="no-referrer">
+            </div>1、OSI 的七层模型分别是？各自的功能是什么？ 简要概括 物理层：底层数据传输，如网线；网卡标准。 数据链路层：定义数据的基本格式，如何传输，如何]]></description>
+</item>
+</channel>
+</rss>

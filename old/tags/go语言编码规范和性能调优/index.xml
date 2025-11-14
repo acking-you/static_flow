@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>Go语言编码规范和性能调优 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/go%E8%AF%AD%E8%A8%80%E7%BC%96%E7%A0%81%E8%A7%84%E8%8C%83%E5%92%8C%E6%80%A7%E8%83%BD%E8%B0%83%E4%BC%98/</link>
+        <description>Go语言编码规范和性能调优 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Wed, 11 May 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/go%E8%AF%AD%E8%A8%80%E7%BC%96%E7%A0%81%E8%A7%84%E8%8C%83%E5%92%8C%E6%80%A7%E8%83%BD%E8%B0%83%E4%BC%98/" rel="self" type="application/rss+xml" /><item>
+    <title>Go语言编码规范和性能调优</title>
+    <link>https://acking-you.github.io/posts/glang3/</link>
+    <pubDate>Wed, 11 May 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/glang3/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center" referrerpolicy="no-referrer">
+            </div>编码规范 注释 Good code has lots of comments,bad code requires lots of comments. 不必要的注释 场景一 如上图所示，第一个Open函数应该解释代码作用，而第二个函数这样的作用解释则毫无必要，因]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>矩阵快速幂 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E7%9F%A9%E9%98%B5%E5%BF%AB%E9%80%9F%E5%B9%82/</link>
+        <description>矩阵快速幂 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E7%9F%A9%E9%98%B5%E5%BF%AB%E9%80%9F%E5%B9%82/" rel="self" type="application/rss+xml" /><item>
+    <title>矩阵快速幂的C&#43;&#43;封装</title>
+    <link>https://acking-you.github.io/posts/%E7%9F%A9%E9%98%B5%E5%BF%AB%E9%80%9F%E5%B9%82%E7%9A%84c&#43;&#43;%E5%B0%81%E8%A3%85/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E7%9F%A9%E9%98%B5%E5%BF%AB%E9%80%9F%E5%B9%82%E7%9A%84c&#43;&#43;%E5%B0%81%E8%A3%85/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/687db1a327b1ff978e25faf116abe71a.png#pic_center" referrerpolicy="no-referrer">
+            </div>实现源码在线查看 如果对于类的设计已经非常清楚，只是进来想看看我的这个泛型模板源代码，那么直接点到下面这个链接进行查看： 源码链接 什么是矩阵快速]]></description>
+</item>
+</channel>
+</rss>

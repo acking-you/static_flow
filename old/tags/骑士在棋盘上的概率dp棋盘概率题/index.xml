@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>骑士在棋盘上的概率——dp棋盘概率题 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E9%AA%91%E5%A3%AB%E5%9C%A8%E6%A3%8B%E7%9B%98%E4%B8%8A%E7%9A%84%E6%A6%82%E7%8E%87dp%E6%A3%8B%E7%9B%98%E6%A6%82%E7%8E%87%E9%A2%98/</link>
+        <description>骑士在棋盘上的概率——dp棋盘概率题 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Fri, 18 Feb 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E9%AA%91%E5%A3%AB%E5%9C%A8%E6%A3%8B%E7%9B%98%E4%B8%8A%E7%9A%84%E6%A6%82%E7%8E%87dp%E6%A3%8B%E7%9B%98%E6%A6%82%E7%8E%87%E9%A2%98/" rel="self" type="application/rss+xml" /><item>
+    <title>骑士在棋盘上的概率——dp棋盘概率题</title>
+    <link>https://acking-you.github.io/posts/%E9%AA%91%E5%A3%AB%E5%9C%A8%E6%A3%8B%E7%9B%98%E4%B8%8A%E7%9A%84%E6%A6%82%E7%8E%87dp%E6%A3%8B%E7%9B%98%E6%A6%82%E7%8E%87%E9%A2%98/</link>
+    <pubDate>Fri, 18 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E9%AA%91%E5%A3%AB%E5%9C%A8%E6%A3%8B%E7%9B%98%E4%B8%8A%E7%9A%84%E6%A6%82%E7%8E%87dp%E6%A3%8B%E7%9B%98%E6%A6%82%E7%8E%87%E9%A2%98/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/687db1a327b1ff978e25faf116abe71a.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目 题目链接 题目详解 一个骑士有 $8$ 种可能的走法，骑士会从中以等概率随机选择一种。部分走法可能会让骑士离开棋盘，另外的走法则会让骑士移动到棋盘的]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>驾考软件实现文档 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="驾考软件实现文档"><meta property="og:title" content="驾考软件实现文档" />
+<meta property="og:description" content="驾考软件实现文档" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-09-05T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-09-05T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="驾考软件实现文档"/>
+<meta name="twitter:description" content="驾考软件实现文档"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" /><link rel="prev" href="https://acking-you.github.io/posts/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/" /><link rel="next" href="https://acking-you.github.io/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "驾考软件实现文档",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3\/"
+        },"genre": "posts","keywords": "驾考软件实现文档","wordcount":  704 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3\/","datePublished": "2022-09-05T00:00:00+00:00","dateModified": "2022-09-05T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "驾考软件实现文档"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center, https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center"
+        title="驾考软件实现文档" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">驾考软件实现文档</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E4%B8%AA%E4%BA%BA%E9%A1%B9%E7%9B%AE/"><i class="far fa-folder fa-fw"></i>个人项目</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-09-05">2022-09-05</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 704 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 2 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#1软件后台架构">1.软件后台架构</a></li>
+        <li><a href="#2软件前台架构">2.软件前台架构</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="整体架构">整体架构</h1>
+<h3 id="1软件后台架构">1.软件后台架构</h3>
+<p>采用标准的三层架构：</p>
+<ul>
+<li>
+<p>Models层用于底层获取数据和对应的序列化过程</p>
+</li>
+<li>
+<p>Service层用于包装数据提供接口</p>
+</li>
+<li>
+<p>Controller层用于提供良好易用的接口</p>
+</li>
+</ul>
+<p>后台采用Python语言的fastapi框架编写，数据采用request库请求再用beautifulsoup库解析得到（网络爬虫获得）。</p>
+<h3 id="2软件前台架构">2.软件前台架构</h3>
+<p>如下图：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=Yzc3OTg1MzQwOGE0YTVjYzEyZDliYTc1ZjAwZDJkZjVfUGlib2dBRzdXVkMydWY5MDJpaFdHVVV6YzFybUVDV0FfVG9rZW46Ym94Y25paHZRcjlKNGdwQld1b1ppV05zdnJoXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA"
+        data-srcset="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=Yzc3OTg1MzQwOGE0YTVjYzEyZDliYTc1ZjAwZDJkZjVfUGlib2dBRzdXVkMydWY5MDJpaFdHVVV6YzFybUVDV0FfVG9rZW46Ym94Y25paHZRcjlKNGdwQld1b1ppV05zdnJoXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA, https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=Yzc3OTg1MzQwOGE0YTVjYzEyZDliYTc1ZjAwZDJkZjVfUGlib2dBRzdXVkMydWY5MDJpaFdHVVV6YzFybUVDV0FfVG9rZW46Ym94Y25paHZRcjlKNGdwQld1b1ppV05zdnJoXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA 1.5x, https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=Yzc3OTg1MzQwOGE0YTVjYzEyZDliYTc1ZjAwZDJkZjVfUGlib2dBRzdXVkMydWY5MDJpaFdHVVV6YzFybUVDV0FfVG9rZW46Ym94Y25paHZRcjlKNGdwQld1b1ppV05zdnJoXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA 2x"
+        data-sizes="auto"
+        alt="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=Yzc3OTg1MzQwOGE0YTVjYzEyZDliYTc1ZjAwZDJkZjVfUGlib2dBRzdXVkMydWY5MDJpaFdHVVV6YzFybUVDV0FfVG9rZW46Ym94Y25paHZRcjlKNGdwQld1b1ppV05zdnJoXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA"
+        title="img" /></p>
+<p>整个前台采用跨平台方案flutter框架进行编写</p>
+<p>界面如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=ZGFiNDJlNTMyNGE3MzAwN2VjNmY4NWU4ZTg3NTJlYjlfSVlRVkl2cmVYYkx3RDJPbG9tZDNvMXRSS2wxWVZwOURfVG9rZW46Ym94Y255bzFwRU5BekRTNlpialc5b3V6V3FiXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA"
+        data-srcset="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=ZGFiNDJlNTMyNGE3MzAwN2VjNmY4NWU4ZTg3NTJlYjlfSVlRVkl2cmVYYkx3RDJPbG9tZDNvMXRSS2wxWVZwOURfVG9rZW46Ym94Y255bzFwRU5BekRTNlpialc5b3V6V3FiXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA, https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=ZGFiNDJlNTMyNGE3MzAwN2VjNmY4NWU4ZTg3NTJlYjlfSVlRVkl2cmVYYkx3RDJPbG9tZDNvMXRSS2wxWVZwOURfVG9rZW46Ym94Y255bzFwRU5BekRTNlpialc5b3V6V3FiXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA 1.5x, https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=ZGFiNDJlNTMyNGE3MzAwN2VjNmY4NWU4ZTg3NTJlYjlfSVlRVkl2cmVYYkx3RDJPbG9tZDNvMXRSS2wxWVZwOURfVG9rZW46Ym94Y255bzFwRU5BekRTNlpialc5b3V6V3FiXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA 2x"
+        data-sizes="auto"
+        alt="https://vfchdrh6q6.feishu.cn/space/api/box/stream/download/asynccode/?code=ZGFiNDJlNTMyNGE3MzAwN2VjNmY4NWU4ZTg3NTJlYjlfSVlRVkl2cmVYYkx3RDJPbG9tZDNvMXRSS2wxWVZwOURfVG9rZW46Ym94Y255bzFwRU5BekRTNlpialc5b3V6V3FiXzE2NjIzNTY0NDE6MTY2MjM2MDA0MV9WNA"
+        title="img" /></p>
+<h1 id="数据流传递">数据流传递</h1>
+<ol>
+<li>
+<p>从Api网络调用层级请求得到对应的Future数据 。</p>
+</li>
+<li>
+<p>传递Future到Service层级。</p>
+</li>
+<li>
+<p><strong>Service</strong>根据UI的需求返回对应的 <code>Future&lt;QuestionResponse&gt;</code> ，且封装默认数据（用于不存在的时的数据）。</p>
+</li>
+<li>
+<p>在UI层的 <code>MyHomePage</code> 主界面点击按钮后，通过await同步得到Future里的 <code>QuestionResponse</code> 数据并将该数据用于构建一个新的 <code>QuestionPage</code> 界面。</p>
+</li>
+<li>
+<p><code>QuestionPage</code> 中通过封装好各个方法通过对应的动作来操作数据生成新的界面。比如题目通过更新 <code>_index</code> 下标再 <code>setState</code> 来实现重建，答案则通过 <code>showAnswer</code> 这个bool标志来判断是否需要显示&hellip;</p>
+</li>
+<li>
+<p>由于每次答案都是得到的Future数据，所以可以在界面中使用 <code>FutureBuilder</code> 来实现数据的展示。</p>
+</li>
+</ol>
+<p><strong>坑点：</strong></p>
+<ul>
+<li>
+<p>注意Future数据不能在底层进行await同步，否则界面层进行调用时数据会得不到，所以网络数据最好是直接传毒Future或者Stream。</p>
+</li>
+<li>
+<p>注意每个异常的处理，否则它将会导致处理数据的底层完全崩溃（异常不被处理将不再往下走，UI界面表现正常，但是数据无），Flutter很多地方都很容易发生异常，比如类型的强制转化不成功将导致异常（如int转Int64），或者空安全将导致异常（采用?则表示断言会告诉你出现错误的地方，而如果采用!则表示一定不为空，则直接抛出异常很难察觉发生在哪）。</p>
+</li>
+</ul>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/">驾考软件实现文档</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-09-05</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档" data-hashtags="驾考软件实现文档"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-hashtag="驾考软件实现文档"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档" data-image="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档" data-description="驾考软件实现文档"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档" data-description="驾考软件实现文档"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E9%A9%BE%E8%80%83%E8%BD%AF%E4%BB%B6%E5%AE%9E%E7%8E%B0%E6%96%87%E6%A1%A3/" data-title="驾考软件实现文档"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E7%BB%86%E7%B2%92%E5%BA%A6%E9%94%81%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E9%98%9F%E5%88%97%E5%AE%9E%E7%8E%B0/" class="prev" rel="prev" title="细粒度锁线程安全队列实现"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/c&#43;&#43;%E9%AB%98%E6%98%93%E7%94%A8%E6%97%A5%E5%BF%97%E5%BA%93%E5%AE%9E%E7%8E%B0/" class="next" rel="next" title="C&#43;&#43;高易用日志库实现">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

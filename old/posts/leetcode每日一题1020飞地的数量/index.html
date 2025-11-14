@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>并查集/dfs解决——leetcode每日一题——1020飞地的数量 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="leetcode每日一题——1020飞地的数量"><meta property="og:title" content="并查集/dfs解决——leetcode每日一题——1020飞地的数量" />
+<meta property="og:description" content="leetcode每日一题——1020飞地的数量" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-02-12T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-02-12T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="并查集/dfs解决——leetcode每日一题——1020飞地的数量"/>
+<meta name="twitter:description" content="leetcode每日一题——1020飞地的数量"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" /><link rel="prev" href="https://acking-you.github.io/posts/%E8%87%AA%E5%8A%A8%E5%8C%96%E6%90%AD%E5%BB%BA%E5%8D%9A%E5%AE%A2%E5%B7%A5%E5%85%B7/" /><link rel="next" href="https://acking-you.github.io/posts/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "并查集/dfs解决——leetcode每日一题——1020飞地的数量",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F\/"
+        },"genre": "posts","keywords": "leetcode每日一题——1020飞地的数量","wordcount":  992 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F\/","datePublished": "2022-02-12T00:00:00+00:00","dateModified": "2022-02-12T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "leetcode每日一题——1020飞地的数量"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center, https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center"
+        title="leetcode每日一题——1020飞地的数量" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">并查集/dfs解决——leetcode每日一题——1020飞地的数量</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E7%AE%97%E6%B3%95%E6%90%9C%E7%B4%A2%E7%B1%BB%E9%97%AE%E9%A2%98/"><i class="far fa-folder fa-fw"></i>算法——搜索类问题</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-02-12">2022-02-12</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 992 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 2 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#题目描述">题目描述</a></li>
+    <li><a href="#题目解析">题目解析</a></li>
+    <li><a href="#解题代码">解题代码</a></li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="题目描述">题目描述</h2>
+<p><a href="https://leetcode-cn.com/problems/number-of-enclaves/" target="_blank" rel="noopener noreffer">题目链接</a></p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://s2.loli.net/2022/02/12/kJtFnyfEbqUdgLj.png"
+        data-srcset="https://s2.loli.net/2022/02/12/kJtFnyfEbqUdgLj.png, https://s2.loli.net/2022/02/12/kJtFnyfEbqUdgLj.png 1.5x, https://s2.loli.net/2022/02/12/kJtFnyfEbqUdgLj.png 2x"
+        data-sizes="auto"
+        alt="https://s2.loli.net/2022/02/12/kJtFnyfEbqUdgLj.png"
+        title="https://s2.loli.net/2022/02/12/kJtFnyfEbqUdgLj.png" /></p>
+<h2 id="题目解析">题目解析</h2>
+<p><strong>一、以边界值为对象进行搜索解决</strong></p>
+<p>一开始很快就想到用比较暴力的直接dfs深搜，然后就超时了。</p>
+<p>注意此题由于以 <code>1</code> 是否能延申到整个边界以外来判断是否为有效的 <code>1</code> 所以我们需要取巧，应该以所有边界的 <code>1</code> 为对象先把所有能超出的 <code>1</code> 搜出来，然后剩余的 <code>1</code> 就是答案了。</p>
+<p><strong>二、并查集合并+是否接壤边界属性更新</strong></p>
+<p>创建一个并查集，用一维数组存下所有二维数组的元素，同时再增加一个一维数组用于判断是否边界接壤，每次 merge 操作的时候判断需要同时执行合并操作和是否接壤的更新。</p>
+<p>先利用并查集 merge 所有的 <code>1</code>，然后再挨个判断是否接壤即可。</p>
+<h2 id="解题代码">解题代码</h2>
+<blockquote>
+<p>dfs方法：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="k">class</span> <span class="nc">Solution</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;</span> <span class="n">dirs</span> <span class="o">=</span> <span class="p">{{</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">},</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">},</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">},</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">}};</span>
+
+    <span class="kt">int</span> <span class="nf">numEnclaves</span><span class="p">(</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;&amp;</span> <span class="n">grid</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">this</span><span class="o">-&gt;</span><span class="n">m</span> <span class="o">=</span> <span class="n">grid</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+        <span class="k">this</span><span class="o">-&gt;</span><span class="n">n</span> <span class="o">=</span> <span class="n">grid</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">size</span><span class="p">();</span>
+        <span class="k">this</span><span class="o">-&gt;</span><span class="n">visited</span> <span class="o">=</span> <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="nb">false</span><span class="p">));</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">dfs</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+            <span class="n">dfs</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">dfs</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">j</span><span class="p">);</span>
+            <span class="n">dfs</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">m</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">j</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="kt">int</span> <span class="n">enclaves</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">grid</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">visited</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">])</span> <span class="p">{</span>
+                    <span class="n">enclaves</span><span class="o">++</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">enclaves</span><span class="p">;</span>
+    <span class="p">}</span>
+
+    <span class="kt">void</span> <span class="nf">dfs</span><span class="p">(</span><span class="k">const</span> <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;</span> <span class="o">&amp;</span> <span class="n">grid</span><span class="p">,</span> <span class="kt">int</span> <span class="n">row</span><span class="p">,</span> <span class="kt">int</span> <span class="n">col</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">row</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">row</span> <span class="o">&gt;=</span> <span class="n">m</span> <span class="o">||</span> <span class="n">col</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">col</span> <span class="o">&gt;=</span> <span class="n">n</span> <span class="o">||</span> <span class="n">grid</span><span class="p">[</span><span class="n">row</span><span class="p">][</span><span class="n">col</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">visited</span><span class="p">[</span><span class="n">row</span><span class="p">][</span><span class="n">col</span><span class="p">])</span> <span class="p">{</span>
+            <span class="k">return</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="n">visited</span><span class="p">[</span><span class="n">row</span><span class="p">][</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+        <span class="k">for</span> <span class="p">(</span><span class="k">auto</span> <span class="o">&amp;</span> <span class="nl">dir</span> <span class="p">:</span> <span class="n">dirs</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">dfs</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">row</span> <span class="o">+</span> <span class="n">dir</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">col</span> <span class="o">+</span> <span class="n">dir</span><span class="p">[</span><span class="mi">1</span><span class="p">]);</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="k">private</span><span class="o">:</span>
+    <span class="kt">int</span> <span class="n">m</span><span class="p">,</span> <span class="n">n</span><span class="p">;</span>
+    <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;</span> <span class="n">visited</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div><blockquote>
+<p>并查集方法：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-cpp" data-lang="cpp"><span class="c1">//这个并查集写的好
+</span><span class="c1"></span><span class="k">class</span> <span class="nc">UnionFind</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="n">UnionFind</span><span class="p">(</span><span class="k">const</span> <span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;</span> <span class="o">&amp;</span> <span class="n">grid</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kt">int</span> <span class="n">m</span> <span class="o">=</span> <span class="n">grid</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="n">n</span> <span class="o">=</span> <span class="n">grid</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">size</span><span class="p">();</span>
+        <span class="k">this</span><span class="o">-&gt;</span><span class="n">parent</span> <span class="o">=</span> <span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">(</span><span class="n">m</span> <span class="o">*</span> <span class="n">n</span><span class="p">);</span>  <span class="c1">//存储并查集的联通关系
+</span><span class="c1"></span>        <span class="k">this</span><span class="o">-&gt;</span><span class="n">onEdge</span> <span class="o">=</span> <span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="n">m</span> <span class="o">*</span> <span class="n">n</span><span class="p">,</span> <span class="nb">false</span><span class="p">);</span><span class="c1">//查找是否有在边界元素的关键所在
+</span><span class="c1"></span>        <span class="k">this</span><span class="o">-&gt;</span><span class="n">rank</span> <span class="o">=</span> <span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">(</span><span class="n">m</span> <span class="o">*</span> <span class="n">n</span><span class="p">);</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>   <span class="c1">//根据传过来的二维数组更新并查集，同时更新onEdge边界元素为true
+</span><span class="c1"></span>            <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">grid</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="kt">int</span> <span class="n">index</span> <span class="o">=</span> <span class="n">i</span> <span class="o">*</span> <span class="n">n</span> <span class="o">+</span> <span class="n">j</span><span class="p">;</span>
+                    <span class="n">parent</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">index</span><span class="p">;</span>
+                    <span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i</span> <span class="o">==</span> <span class="n">m</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">||</span> <span class="n">j</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">j</span> <span class="o">==</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+                        <span class="n">onEdge</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+                    <span class="p">}</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+    <span class="kt">int</span> <span class="nf">find</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">parent</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">!=</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+            <span class="n">parent</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">find</span><span class="p">(</span><span class="n">parent</span><span class="p">[</span><span class="n">i</span><span class="p">]);</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">parent</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+    <span class="p">}</span>
+
+    <span class="kt">void</span> <span class="nf">uni</span><span class="p">(</span><span class="kt">int</span> <span class="n">x</span><span class="p">,</span> <span class="kt">int</span> <span class="n">y</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kt">int</span> <span class="n">rootx</span> <span class="o">=</span> <span class="n">find</span><span class="p">(</span><span class="n">x</span><span class="p">);</span>
+        <span class="kt">int</span> <span class="n">rooty</span> <span class="o">=</span> <span class="n">find</span><span class="p">(</span><span class="n">y</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">rootx</span> <span class="o">!=</span> <span class="n">rooty</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">rank</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">rank</span><span class="p">[</span><span class="n">rooty</span><span class="p">])</span> <span class="p">{</span><span class="c1">//这里时按秩优化处理
+</span><span class="c1"></span>                <span class="n">parent</span><span class="p">[</span><span class="n">rooty</span><span class="p">]</span> <span class="o">=</span> <span class="n">rootx</span><span class="p">;</span>
+                <span class="n">onEdge</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">=</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">|</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">rooty</span><span class="p">];</span><span class="c1">//每次合并元素的时候同时把这一堆是否与边界接壤的关系更新
+</span><span class="c1"></span>            <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">rank</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">rank</span><span class="p">[</span><span class="n">rooty</span><span class="p">])</span> <span class="p">{</span>
+                <span class="n">parent</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">=</span> <span class="n">rooty</span><span class="p">;</span>
+                <span class="n">onEdge</span><span class="p">[</span><span class="n">rooty</span><span class="p">]</span> <span class="o">=</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">rooty</span><span class="p">]</span> <span class="o">|</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">rootx</span><span class="p">];</span>
+            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                <span class="n">parent</span><span class="p">[</span><span class="n">rooty</span><span class="p">]</span> <span class="o">=</span> <span class="n">rootx</span><span class="p">;</span>
+                <span class="n">onEdge</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">=</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span> <span class="o">|</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">rooty</span><span class="p">];</span>
+                <span class="n">rank</span><span class="p">[</span><span class="n">rootx</span><span class="p">]</span><span class="o">++</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+    <span class="kt">bool</span> <span class="nf">isOnEdge</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="n">onEdge</span><span class="p">[</span><span class="n">find</span><span class="p">(</span><span class="n">i</span><span class="p">)];</span>
+    <span class="p">}</span>
+<span class="k">private</span><span class="o">:</span>
+    <span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">parent</span><span class="p">;</span>  <span class="c1">//并查集的必备
+</span><span class="c1"></span>    <span class="n">vector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span> <span class="n">onEdge</span><span class="p">;</span> <span class="c1">//判断是否接壤边界
+</span><span class="c1"></span>    <span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">rank</span><span class="p">;</span>    <span class="c1">//按秩
+</span><span class="c1"></span><span class="p">};</span>
+
+<span class="k">class</span> <span class="nc">Solution</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+    <span class="kt">int</span> <span class="n">numEnclaves</span><span class="p">(</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;&amp;</span> <span class="n">grid</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kt">int</span> <span class="n">m</span> <span class="o">=</span> <span class="n">grid</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="n">n</span> <span class="o">=</span> <span class="n">grid</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">size</span><span class="p">();</span>
+        <span class="n">UnionFind</span> <span class="nf">uf</span><span class="p">(</span><span class="n">grid</span><span class="p">);</span>
+        <span class="c1">//先把所有的1连接起来，然后再判断是否接壤边界即可
+</span><span class="c1"></span>        <span class="c1">//由于循环是从上往下，从左往右，故左和上方向不需要考虑
+</span><span class="c1"></span>        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">grid</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="kt">int</span> <span class="n">index</span> <span class="o">=</span> <span class="n">i</span> <span class="o">*</span> <span class="n">n</span> <span class="o">+</span> <span class="n">j</span><span class="p">;</span>
+                    <span class="k">if</span> <span class="p">(</span><span class="n">j</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="n">n</span> <span class="o">&amp;&amp;</span> <span class="n">grid</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+                        <span class="n">uf</span><span class="p">.</span><span class="n">uni</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">index</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+                    <span class="p">}</span>
+                    <span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="n">m</span> <span class="o">&amp;&amp;</span> <span class="n">grid</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">][</span><span class="n">j</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+                        <span class="n">uf</span><span class="p">.</span><span class="n">uni</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">index</span> <span class="o">+</span> <span class="n">n</span><span class="p">);</span>
+                    <span class="p">}</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="c1">//判断这个1是否和边界接壤
+</span><span class="c1"></span>        <span class="kt">int</span> <span class="n">enclaves</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+        <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">grid</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">uf</span><span class="p">.</span><span class="n">isOnEdge</span><span class="p">(</span><span class="n">i</span> <span class="o">*</span> <span class="n">n</span> <span class="o">+</span> <span class="n">j</span><span class="p">))</span> <span class="p">{</span>
+                    <span class="n">enclaves</span><span class="o">++</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">enclaves</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">};</span>
+</code></pre></div></div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/">leetcode每日一题——1020飞地的数量</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-02-12</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量" data-hashtags="leetcode每日一题——1020飞地的数量"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-hashtag="leetcode每日一题——1020飞地的数量"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量" data-image="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量" data-description="leetcode每日一题——1020飞地的数量"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量" data-description="leetcode每日一题——1020飞地的数量"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%981020%E9%A3%9E%E5%9C%B0%E7%9A%84%E6%95%B0%E9%87%8F/" data-title="并查集/dfs解决——leetcode每日一题——1020飞地的数量"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E8%87%AA%E5%8A%A8%E5%8C%96%E6%90%AD%E5%BB%BA%E5%8D%9A%E5%AE%A2%E5%B7%A5%E5%85%B7/" class="prev" rel="prev" title="自动化搭建博客工具"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/hugo%E5%8D%9A%E5%AE%A2%E5%9B%BE%E5%BD%A2%E5%8C%96%E5%86%99%E4%BD%9C%E5%B7%A5%E5%85%B7/" class="next" rel="next" title="Hugo博客图形化写作工具">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

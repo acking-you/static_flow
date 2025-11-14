@@ -1,0 +1,1336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>Go语言工程实践（二） | 青训营笔记 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。"><meta property="og:title" content="Go语言工程实践（二） | 青训营笔记" />
+<meta property="og:description" content="这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/golang-note2/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-05-08T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-05-08T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="Go语言工程实践（二） | 青训营笔记"/>
+<meta name="twitter:description" content="这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/golang-note2/" /><link rel="prev" href="https://acking-you.github.io/posts/%E4%B8%80go%E8%AF%AD%E8%A8%80%E4%B8%8A%E6%89%8B-%E9%9D%92%E8%AE%AD%E8%90%A5%E7%AC%94%E8%AE%B0/" /><link rel="next" href="https://acking-you.github.io/posts/glang3/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "Go语言工程实践（二） | 青训营笔记",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/golang-note2\/"
+        },"genre": "posts","keywords": "Go工程实践","wordcount":  7806 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/golang-note2\/","datePublished": "2022-05-08T00:00:00+00:00","dateModified": "2022-05-08T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center, https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center"
+        title="这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">Go语言工程实践（二） | 青训营笔记</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/%E9%9D%92%E8%AE%AD%E8%90%A5%E7%AC%94%E8%AE%B0/"><i class="far fa-folder fa-fw"></i>青训营笔记</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-05-08">2022-05-08</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 7806 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 16 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#并发和goroutine">并发和Goroutine</a>
+      <ul>
+        <li><a href="#并发和并行的区别">并发和并行的区别</a></li>
+        <li><a href="#线程与协程的区别">线程与协程的区别</a></li>
+        <li><a href="#goroutine">Goroutine</a></li>
+      </ul>
+    </li>
+    <li><a href="#依赖管理">依赖管理</a>
+      <ul>
+        <li><a href="#gopath">GOPATH</a></li>
+        <li><a href="#go-vendor">Go Vendor</a></li>
+        <li><a href="#go-module-最终解决方案">Go Module （最终解决方案</a></li>
+      </ul>
+    </li>
+    <li><a href="#测试">测试</a>
+      <ul>
+        <li><a href="#为什么要测试">为什么要测试？</a></li>
+        <li><a href="#测试类型">测试类型</a></li>
+        <li><a href="#单元测试">单元测试</a></li>
+        <li><a href="#打桩测试">打桩测试</a></li>
+        <li><a href="#基准测试benchmark">基准测试（Benchmark）</a></li>
+      </ul>
+    </li>
+    <li><a href="#项目实战">项目实战</a>
+      <ul>
+        <li><a href="#需求描述">需求描述</a></li>
+        <li><a href="#项目分层结构">项目分层结构</a></li>
+        <li><a href="#代码实现">代码实现</a></li>
+        <li><a href="#实测结果">实测结果</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><p>这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。</p>
+<h2 id="并发和goroutine">并发和Goroutine</h2>
+<h3 id="并发和并行的区别">并发和并行的区别</h3>
+<p>并发可能更多的是精确到语言的逻辑，也就是直接的多线程，或者多进程。</p>
+<p>而并行则是一种表述程序运行的方式，就如同异步和同步的描述。</p>
+<p>并发程序不一定是并行的，这个看操作系统的调度。</p>
+<h3 id="线程与协程的区别">线程与协程的区别</h3>
+<p>线程：是比进程更小粒度的运行单位，存在于内核态，需要操作系统来调度，内存消耗是MB级别。</p>
+<p>协程：是比线程更小的粒度，通过m:n的比例在一个线程中再细分出来的单位，存在于用户态，用户可以自由调度，内存消耗是KB级别。</p>
+<p>协程对比线程的优势：</p>
+<ol>
+<li>存在于用户态，可操作性强，调度可由自己控制。</li>
+<li>更轻量，所需资源更少。</li>
+</ol>
+<h3 id="goroutine">Goroutine</h3>
+<p>go语言的go关键字跑的就是协程，我们称为goroutine。</p>
+<blockquote>
+<p>关于协程背后更多的故事，可以看这个视频 <a href="https://www.bilibili.com/video/BV1hv411x7we?p=16" target="_blank" rel="noopener noreffer">go协程实现原理</a> ，我们这里只讲简单使用。</p>
+</blockquote>
+<h4 id="用法">用法</h4>
+<p>简单用法如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+	<span class="s">&#34;sync&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">hello</span><span class="p">(</span><span class="nx">i</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
+	<span class="nb">println</span><span class="p">(</span><span class="s">&#34;hello world : &#34;</span> <span class="o">+</span> <span class="nx">fmt</span><span class="p">.</span><span class="nf">Sprint</span><span class="p">(</span><span class="nx">i</span><span class="p">))</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="c1">//go的风格来说一般都喜欢运行一个闭包
+</span><span class="c1"></span>    <span class="k">go</span> <span class="kd">func</span><span class="p">(</span><span class="nx">j</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nf">hello</span><span class="p">(</span><span class="nx">j</span><span class="p">)</span>
+    <span class="p">}(</span><span class="nx">i</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><h4 id="并发的通信">并发的通信</h4>
+<blockquote>
+<p>并发程序之间的通信，一般都是通过共享内存的形式实现通信，临界区一般需要加锁保护。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7863d82123bf4f2a8d74794e3be46fc8~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7863d82123bf4f2a8d74794e3be46fc8~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7863d82123bf4f2a8d74794e3be46fc8~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7863d82123bf4f2a8d74794e3be46fc8~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7863d82123bf4f2a8d74794e3be46fc8~tplv-k3u1fbpfcp-watermark.image?"
+        title="communication" /></p>
+<p>而go语言采取的是通过通信来实现共享内存，这个过程是反过来的，但用起来更为直观。</p>
+<h5 id="channel">Channel</h5>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ca30515f10ec4a318f9f4b7fc88270a3~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ca30515f10ec4a318f9f4b7fc88270a3~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ca30515f10ec4a318f9f4b7fc88270a3~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ca30515f10ec4a318f9f4b7fc88270a3~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ca30515f10ec4a318f9f4b7fc88270a3~tplv-k3u1fbpfcp-watermark.image?"
+        title="channel" /></p>
+<p>通过内置函数 make 可以得到两种类型的 channel 。</p>
+<p><strong>注意</strong>：channel是类似于引用的一个类型，如果直接通过var声明定义是没法初始化得到内部内存的，故记得通过make创建channel。还有就是记得不用的时候关闭。</p>
+<p><strong>channel的使用</strong></p>
+<blockquote>
+<p>channel的简单使用如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="kd">var</span> <span class="nx">src</span> <span class="kd">chan</span> <span class="kt">int</span>
+	<span class="nx">src</span> <span class="p">=</span> <span class="nb">make</span><span class="p">(</span><span class="kd">chan</span> <span class="kt">int</span><span class="p">)</span><span class="c1">//不带缓冲
+</span><span class="c1"></span>	<span class="nx">dest</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">(</span><span class="kd">chan</span> <span class="kt">int</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span><span class="c1">//带缓冲
+</span><span class="c1"></span>	<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">defer</span> <span class="nb">close</span><span class="p">(</span><span class="nx">src</span><span class="p">)</span>
+		<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="mi">10</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+			<span class="nx">src</span> <span class="o">&lt;-</span> <span class="nx">i</span><span class="c1">//生产
+</span><span class="c1"></span>		<span class="p">}</span>
+	<span class="p">}()</span>
+	<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">defer</span> <span class="nb">close</span><span class="p">(</span><span class="nx">dest</span><span class="p">)</span>
+		<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">src</span> <span class="p">{</span><span class="c1">//消费者1
+</span><span class="c1"></span>			<span class="nx">dest</span> <span class="o">&lt;-</span> <span class="nx">i</span> <span class="o">*</span> <span class="nx">i</span>
+		<span class="p">}</span>
+	<span class="p">}()</span>
+	<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">dest</span> <span class="p">{</span><span class="c1">//消费者2
+</span><span class="c1"></span>		<span class="nb">println</span><span class="p">(</span><span class="nx">i</span><span class="p">)</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p><strong>使用带缓冲channel的好处</strong></p>
+<p>在一个生产者消费者模型中，生产者的生产效率远高于消费者，那么可以使用带缓冲的channel，防止生产者因为等待消费者消费过程而产生阻塞。反之对消费者来说也是受用的。</p>
+<h5 id="并发安全">并发安全</h5>
+<p><strong>互斥锁</strong></p>
+<p>go语言并没有对加锁机制的弃用，标准库里面仍然有sync.Mutex。</p>
+<p>以下为简单加锁实现并发安全：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+	<span class="s">&#34;sync&#34;</span>
+	<span class="s">&#34;time&#34;</span>
+<span class="p">)</span>
+<span class="kd">var</span><span class="p">(</span>
+	<span class="nx">x</span> <span class="kt">int</span>
+	<span class="nx">mut</span> <span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+<span class="p">)</span>
+<span class="kd">func</span> <span class="nf">AddWithLock</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nx">mut</span><span class="p">.</span><span class="nf">Lock</span><span class="p">()</span>
+	<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="mi">2000</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="nx">x</span><span class="o">++</span>
+	<span class="p">}</span>
+	<span class="nx">mut</span><span class="p">.</span><span class="nf">Unlock</span><span class="p">()</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">AddWithoutLock</span><span class="p">()</span>  <span class="p">{</span>
+	<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="mi">2000</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="nx">x</span><span class="o">++</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="c1">//开五个协程的锁版本，再打印最终结果
+</span><span class="c1"></span>	<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="mi">5</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="k">go</span> <span class="nf">AddWithoutLock</span><span class="p">()</span>
+	<span class="p">}</span>
+	<span class="c1">//等待上面的协程执行结束
+</span><span class="c1"></span>	<span class="nx">time</span><span class="p">.</span><span class="nf">Sleep</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">x</span><span class="p">)</span>
+
+	<span class="c1">//有锁版本
+</span><span class="c1"></span>	<span class="nx">x</span> <span class="p">=</span> <span class="mi">0</span>
+	<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="mi">5</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span>
+		<span class="k">go</span> <span class="nf">AddWithLock</span><span class="p">()</span>
+	<span class="p">}</span>
+	<span class="nx">time</span><span class="p">.</span><span class="nf">Sleep</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">x</span><span class="p">)</span>
+<span class="p">}</span>
+
+</code></pre></div><p><strong>计数器</strong></p>
+<p>WaitGroup，通过Add(a)计时器+a，通过Done()计数器-1，通过Wait()阻塞直到计数器为0。这个东西我觉得有些类似于操作系统的信号量。</p>
+<p>以下为实例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+	<span class="s">&#34;sync&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">hello</span><span class="p">(){</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;hello&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="kd">var</span> <span class="nx">wg</span> <span class="nx">sync</span><span class="p">.</span><span class="nx">WaitGroup</span>
+	<span class="nx">wg</span><span class="p">.</span><span class="nf">Add</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+	<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="mi">5</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+			<span class="k">defer</span> <span class="nx">wg</span><span class="p">.</span><span class="nf">Done</span><span class="p">()</span>
+			<span class="nf">hello</span><span class="p">()</span>
+		<span class="p">}()</span>
+	<span class="p">}</span>
+	<span class="nx">wg</span><span class="p">.</span><span class="nf">Wait</span><span class="p">()</span>
+<span class="p">}</span>
+
+</code></pre></div><hr>
+<h2 id="依赖管理">依赖管理</h2>
+<p>Go依赖管理的演进：</p>
+<pre><code class="language-mermaid" data-lang="mermaid">graph LR
+a[GOPATH]
+b[Go Vendor]
+c[Go Module]
+a--&gt;b--&gt;c
+</code></pre><h3 id="gopath">GOPATH</h3>
+<p>go语言有一个内置的全局环境变量GOPATH，指定了GOPATH文件夹后，他会在这个文件夹内创建以下三个文件夹：</p>
+<p>|——bin：项目编译的二进制文件</p>
+<p>|——pkg：项目编译的中间产物，加速编译</p>
+<p>|——src：项目源码</p>
+<p>项目直接依赖src下的代码，go get命令下载的软件包都会在src目录下。</p>
+<h4 id="gopath弊端">GOPATH弊端</h4>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f66164dd6cf649708ec9357f7e858f80~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f66164dd6cf649708ec9357f7e858f80~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f66164dd6cf649708ec9357f7e858f80~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f66164dd6cf649708ec9357f7e858f80~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f66164dd6cf649708ec9357f7e858f80~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>当我们对某个依赖进行升级后，则项目A依赖的版本可能无法实现兼容，这就是GOPATH无法解决的<strong>多版本控制问题</strong>。</p>
+<h3 id="go-vendor">Go Vendor</h3>
+<p>为了解决多版本控制问题，go又增加了Go Vendor的方式来管理依赖。</p>
+<p>使用govendor init 在项目根目录会生成vendor文件夹，其中存放了当前项目依赖的副本。在Vendor机制下，如果当前项目存在Vendor目录，会优先使用该目录下的依赖，如果依赖不存在，会从GOPATH中寻找；这样解决了更新GOPATH依赖源码后之前的版本不兼容的问题。</p>
+<h4 id="go-vendor弊端">Go Vendor弊端</h4>
+<p>弊端很明显，无法解决依赖的依赖。</p>
+<p>同样还是无法解决依赖的冲突。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/36697e481dd2470badd68c1181e735ad~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/36697e481dd2470badd68c1181e735ad~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/36697e481dd2470badd68c1181e735ad~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/36697e481dd2470badd68c1181e735ad~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/36697e481dd2470badd68c1181e735ad~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>归根到底vendor不能很清晰的标识依赖的版本概念。</p>
+<h3 id="go-module-最终解决方案">Go Module （最终解决方案</h3>
+<p>特点：</p>
+<ul>
+<li>通过 go.mod 管理依赖包版本。</li>
+<li>通过 go get/mod 工具管理依赖包。</li>
+</ul>
+<p>最终目标：定义版本规则和管理项目的依赖关系。</p>
+<h4 id="依赖管理三要素">依赖管理三要素</h4>
+<ol>
+<li>配置文件，描述依赖 （对应go.mod）</li>
+<li>中心仓库管理依赖库   （GoProxy）</li>
+<li>本地工具              go get/mod</li>
+</ol>
+<h5 id="配置文件">配置文件</h5>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58d8d2cff08141afb920f0b73015f630~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58d8d2cff08141afb920f0b73015f630~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58d8d2cff08141afb920f0b73015f630~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58d8d2cff08141afb920f0b73015f630~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58d8d2cff08141afb920f0b73015f630~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>每个依赖单元用模块路径+版本来唯一标示。</p>
+<h6 id="版本规则">版本规则</h6>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c1fbd9f8468c44c3ada2d8dca8dfb277~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c1fbd9f8468c44c3ada2d8dca8dfb277~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c1fbd9f8468c44c3ada2d8dca8dfb277~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c1fbd9f8468c44c3ada2d8dca8dfb277~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/c1fbd9f8468c44c3ada2d8dca8dfb277~tplv-k3u1fbpfcp-watermark.image?"
+        title="版本规则" /></p>
+<p>gopath和govendor都是源码副本方式依赖，没有版本规则概念，而gomod为了放方便管理则定义了版本规则。</p>
+<p>对于语义化版本有如下规则：</p>
+<ul>
+<li>MAJOR：表示是不兼容的 API，所以即使是同一个库，MAJOR 版本不同也会被认为是不同的模块。</li>
+<li>MINOR：通常是新增函数或功能，向后（向下）兼容。</li>
+<li>PATCH：修复 bug。</li>
+</ul>
+<h6 id="杂项">杂项</h6>
+<p>版本号后面添加 <code>//indirect</code> 表示间接依赖。</p>
+<p><strong>选择题</strong></p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/aaf73772466a49cf8a9a1e439c50f9a7~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/aaf73772466a49cf8a9a1e439c50f9a7~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/aaf73772466a49cf8a9a1e439c50f9a7~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/aaf73772466a49cf8a9a1e439c50f9a7~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/aaf73772466a49cf8a9a1e439c50f9a7~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>选择1.4，因为它向后兼容。</p>
+<h4 id="中心仓库管理依赖库">中心仓库管理依赖库</h4>
+<h5 id="依赖的分发">依赖的分发</h5>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f297d3d4b4b04299a6f3105ba3809a98~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f297d3d4b4b04299a6f3105ba3809a98~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f297d3d4b4b04299a6f3105ba3809a98~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f297d3d4b4b04299a6f3105ba3809a98~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f297d3d4b4b04299a6f3105ba3809a98~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>如果直接向代码托管平台进行依赖的请求，很快会发现有以下这些问题：</p>
+<ul>
+<li>无法保证构建的稳定性（可能代码仓库的所有者更改删除了包版本</li>
+<li>无法保证可用性</li>
+<li>增加了平台压力</li>
+</ul>
+<p>为了很好的解决以上依赖分发的问题，go采用Proxy进行代理分发。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f0d00bcd1b294408b59fcc201506772e~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f0d00bcd1b294408b59fcc201506772e~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f0d00bcd1b294408b59fcc201506772e~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f0d00bcd1b294408b59fcc201506772e~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f0d00bcd1b294408b59fcc201506772e~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>Go Proxy 是一个服务站点，它会缓源站中的软件内容，缓存的软件版本不会改变，并且在源站软件删除之后依然可用。</p>
+<h6 id="较为神奇的地方">较为神奇的地方</h6>
+<p>Go语言通过设置环境变量GOPROXY来设置具体的服务站点。可以通过逗号设置多个Proxy站点，最后如果这几个都没有找到，那么会通过direct进行回源，也就是回到本来的请求站点，而不是代理站。有意思的是，当你此时从源站下载好依赖后，你之前走过的Proxy站点也会将这个缓存下来。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0f8435cb7cb14c6597c1ce34011471c1~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0f8435cb7cb14c6597c1ce34011471c1~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0f8435cb7cb14c6597c1ce34011471c1~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0f8435cb7cb14c6597c1ce34011471c1~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0f8435cb7cb14c6597c1ce34011471c1~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p><strong>有趣的实践</strong></p>
+<p>通过go mod init创建一个项目，写好后提交到GitHub仓库里，然后通过go get对你的代码进行请求，注意最后回源的direct要加上，否则肯定get不到，最后你会发现你的Proxy站上，也有了你的代码🥳</p>
+<p>你会发现这样的过程，让go语言的代码仓库非常的繁荣，各种库都可以go get得到！</p>
+<h4 id="本地工具">本地工具</h4>
+<blockquote>
+<p>go get命令</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/e6cd346b7b9e4e2585fd543498ba110c~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/e6cd346b7b9e4e2585fd543498ba110c~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/e6cd346b7b9e4e2585fd543498ba110c~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/e6cd346b7b9e4e2585fd543498ba110c~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/e6cd346b7b9e4e2585fd543498ba110c~tplv-k3u1fbpfcp-watermark.image?"
+        title="go get" /></p>
+<blockquote>
+<p>go mod命令</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7261881ed04a4894b630877d524fd609~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7261881ed04a4894b630877d524fd609~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7261881ed04a4894b630877d524fd609~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7261881ed04a4894b630877d524fd609~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7261881ed04a4894b630877d524fd609~tplv-k3u1fbpfcp-watermark.image?"
+        title="go mod" /></p>
+<hr>
+<h2 id="测试">测试</h2>
+<h3 id="为什么要测试">为什么要测试？</h3>
+<p>测试是避免事故发生的最后一道关口！</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/bfe38dac19b345578cecadfc26de9c2b~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/bfe38dac19b345578cecadfc26de9c2b~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/bfe38dac19b345578cecadfc26de9c2b~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/bfe38dac19b345578cecadfc26de9c2b~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/bfe38dac19b345578cecadfc26de9c2b~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="测试类型">测试类型</h3>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a98f3157596d4d20ab67ea07943b2fac~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a98f3157596d4d20ab67ea07943b2fac~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a98f3157596d4d20ab67ea07943b2fac~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a98f3157596d4d20ab67ea07943b2fac~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a98f3157596d4d20ab67ea07943b2fac~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<ul>
+<li>回归测试：是指修改了旧代码后，重新测试以确认修改没有引入新的错误或导致其他代码产生错误。</li>
+<li>集成测试：集成测试的目的是在集成这些不同的软件模块时揭示它们之间交互中的缺陷。</li>
+<li>单元测试：单元测试测试开发阶段，开发者对单独的函数、模块做功能验证。</li>
+</ul>
+<p>层级从上至下，测试成本逐渐减低，而测试覆盖率确逐步上升，所以单元测试的覆盖率一定程度上决定这代码的质量。</p>
+<h3 id="单元测试">单元测试</h3>
+<h4 id="go单测的规则">go单测的规则</h4>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/17cae9c93adc496780ac152729b33680~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/17cae9c93adc496780ac152729b33680~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/17cae9c93adc496780ac152729b33680~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/17cae9c93adc496780ac152729b33680~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/17cae9c93adc496780ac152729b33680~tplv-k3u1fbpfcp-watermark.image?"
+        title="单测规则" /></p>
+<h4 id="go单测实例">go单测实例</h4>
+<blockquote>
+<p>写了一个json解析的单测</p>
+</blockquote>
+<p>json.go</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">attention</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;bytes&#34;</span>
+	<span class="s">&#34;encoding/json&#34;</span>
+	<span class="s">&#34;fmt&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">NumUnmarshal</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nx">jsonStr</span> <span class="o">:=</span> <span class="s">`{&#34;id&#34;:1,&#34;name&#34;:&#34;Jerry&#34;}`</span>
+	<span class="kd">var</span> <span class="nx">res</span> <span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}</span>
+	<span class="nx">_</span> <span class="p">=</span> <span class="nx">json</span><span class="p">.</span><span class="nf">Unmarshal</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">jsonStr</span><span class="p">),</span> <span class="o">&amp;</span><span class="nx">res</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;%T\n&#34;</span><span class="p">,</span> <span class="nx">res</span><span class="p">[</span><span class="s">&#34;id&#34;</span><span class="p">])</span>
+	<span class="nx">i</span> <span class="o">:=</span> <span class="nx">res</span><span class="p">[</span><span class="s">&#34;id&#34;</span><span class="p">].(</span><span class="kt">int64</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">i</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">NumDecode</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nx">jsonStr</span> <span class="o">:=</span> <span class="s">`{&#34;id&#34;:1,&#34;name&#34;:&#34;Jerry&#34;}`</span>
+	<span class="kd">var</span> <span class="nx">res</span> <span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}</span>
+	<span class="nx">decoder</span> <span class="o">:=</span> <span class="nx">json</span><span class="p">.</span><span class="nf">NewDecoder</span><span class="p">(</span><span class="nx">bytes</span><span class="p">.</span><span class="nf">NewReader</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">jsonStr</span><span class="p">)))</span>
+	<span class="nx">decoder</span><span class="p">.</span><span class="nf">UseNumber</span><span class="p">()</span>
+	<span class="nx">_</span> <span class="p">=</span> <span class="nx">decoder</span><span class="p">.</span><span class="nf">Decode</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">res</span><span class="p">)</span>
+	<span class="nx">i</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">res</span><span class="p">[</span><span class="s">&#34;id&#34;</span><span class="p">].(</span><span class="nx">json</span><span class="p">.</span><span class="nx">Number</span><span class="p">).</span><span class="nf">Int64</span><span class="p">()</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">i</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>json_test.go</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">attention</span>
+
+<span class="kn">import</span> <span class="s">&#34;testing&#34;</span>
+
+<span class="kd">func</span> <span class="nf">TestNumUnmarshal</span><span class="p">(</span><span class="nx">t</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span> <span class="p">{</span>
+	<span class="nf">NumUnmarshal</span><span class="p">()</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">TestNumDecode</span><span class="p">(</span><span class="nx">t</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span> <span class="p">{</span>
+	<span class="nf">NumDecode</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>测试结果：通过 go test 会执行这个软件包里面所有的测试。如果需要执行特定的测试在后面跟上这个测试的go文件名以及对应的测试文件名。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58c338d8fe524c20a87242dfea8ddbc3~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58c338d8fe524c20a87242dfea8ddbc3~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58c338d8fe524c20a87242dfea8ddbc3~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58c338d8fe524c20a87242dfea8ddbc3~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/58c338d8fe524c20a87242dfea8ddbc3~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h4 id="单元测试框架">单元测试框架</h4>
+<p>go语言常见的测试框架有testfy。在go mod文件里面的require部分填上以下代码便可通过<code>go mod download</code>进行下载。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">github.com/stretchr/testify v1.7.1
+</span></code></pre></div><p>或者直接 go get这个包也行。</p>
+<p>这个包里包含测试常用的断言。</p>
+<blockquote>
+<p>基础用法如下，更多用法请去查看官方文档。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f1a6d581e480438cb1ede805ca1d74de~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f1a6d581e480438cb1ede805ca1d74de~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f1a6d581e480438cb1ede805ca1d74de~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f1a6d581e480438cb1ede805ca1d74de~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f1a6d581e480438cb1ede805ca1d74de~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h4 id="衡量单元测试的标准">衡量单元测试的标准</h4>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/50070402b72c4283a46d72b6073b4ae5~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/50070402b72c4283a46d72b6073b4ae5~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/50070402b72c4283a46d72b6073b4ae5~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/50070402b72c4283a46d72b6073b4ae5~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/50070402b72c4283a46d72b6073b4ae5~tplv-k3u1fbpfcp-watermark.image?"
+        title="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/50070402b72c4283a46d72b6073b4ae5~tplv-k3u1fbpfcp-watermark.image?" /></p>
+<h5 id="代码覆盖率">代码覆盖率</h5>
+<p>需要在测试时展示代码覆盖率可以通过添加&ndash;cover命令行参数。</p>
+<p>下面是我的一次带代码覆盖率的单元测试结果：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/10cc4c8b26424adda7581bde5ae02701~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/10cc4c8b26424adda7581bde5ae02701~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/10cc4c8b26424adda7581bde5ae02701~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/10cc4c8b26424adda7581bde5ae02701~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/10cc4c8b26424adda7581bde5ae02701~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>我们可以看到百分比的覆盖率，也就是本次测试经过的代码块占比。</p>
+<p>被测试到的代码都变成了绿色。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1ca5c089484b4d40b2be0b2420c9ff59~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1ca5c089484b4d40b2be0b2420c9ff59~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1ca5c089484b4d40b2be0b2420c9ff59~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1ca5c089484b4d40b2be0b2420c9ff59~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1ca5c089484b4d40b2be0b2420c9ff59~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="打桩测试">打桩测试</h3>
+<p>在打桩测试前，我们先了解单侧的稳定性和幂等性。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a2194021c4524f2c81f12d8d81d70dd6~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a2194021c4524f2c81f12d8d81d70dd6~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a2194021c4524f2c81f12d8d81d70dd6~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a2194021c4524f2c81f12d8d81d70dd6~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a2194021c4524f2c81f12d8d81d70dd6~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<ul>
+<li>稳定：稳定是指相互隔离，能在任何时间，任何环境，运行测试。</li>
+<li>幂等：幂等是指每一次测试运行都应该产生与之前一样的结果。</li>
+</ul>
+<p>如果在有外部依赖的情况下进行单测，换一个测试环境，那么这个外部依赖信息可能会发生变化，比如需要打开某个文件，如果你把这个给别人测试，那么在他本地的文件路径肯定就不一致。这就完全没法符合稳定和幂等两个条件。</p>
+<p>如下代码：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8e12bc1f3bcb4151ac40bb56c1b80f7e~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8e12bc1f3bcb4151ac40bb56c1b80f7e~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8e12bc1f3bcb4151ac40bb56c1b80f7e~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8e12bc1f3bcb4151ac40bb56c1b80f7e~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8e12bc1f3bcb4151ac40bb56c1b80f7e~tplv-k3u1fbpfcp-watermark.image?"
+        title="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8e12bc1f3bcb4151ac40bb56c1b80f7e~tplv-k3u1fbpfcp-watermark.image?" /></p>
+<p>那么我们如何解决这样的问题呢？</p>
+<p>我们通过打桩来解决这个问题。</p>
+<p>所谓打桩就是通过你指定的行为来对原本的行为替换，到计算机语言里面来讲就是通过你定义的桩函数把原本的函数进行替换，这就是打桩。</p>
+<blockquote>
+<p>那打桩有什么用呢？</p>
+</blockquote>
+<ul>
+<li>
+<p>隔离：将测试任务从产品项目中分离出来，使之能够独立编译、链接，并独立运行。</p>
+</li>
+<li>
+<p>补齐：用桩来代替未实现的代码，例如，函数A调用了函数B，而函数B由其他程序员编写，且未实现，那么，可以用桩来代替函数B，使函数A能够运行并测试。</p>
+</li>
+<li>
+<p>控制：控制是指在测试时，人为设定相关代码的行为，使之符合测试需求。</p>
+</li>
+</ul>
+<blockquote>
+<p>go语言的打桩实现原理：</p>
+<p>在运行时通过通过 Go 的 unsafe 包，将内存中函数的地址替换为运行时函数的地址。 将待打桩函数或方法的实现跳转到。</p>
+</blockquote>
+<p>打桩更改后的测试：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b40aef1c719245768b4760192ed662a7~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b40aef1c719245768b4760192ed662a7~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b40aef1c719245768b4760192ed662a7~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b40aef1c719245768b4760192ed662a7~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/b40aef1c719245768b4760192ed662a7~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="基准测试benchmark">基准测试（Benchmark）</h3>
+<p>很多时候我们需要清楚代码的运行效率，这个时候，我们就需要对代码进行基准测试了。</p>
+<p>基准测试需要遵循以下语法规定：</p>
+<ol>
+<li>go语言中的基准测试也是基于单元测试，所以还是需要遵循 <code>*_test.go</code> 的命名规则。</li>
+<li>用于基准测试的函数名必须以Benchmark开头。</li>
+<li>函数的入参需要是 <code>*testing.B</code> 。</li>
+</ol>
+<h4 id="具体例子">具体例子</h4>
+<h5 id="代码分析">代码分析</h5>
+<p>负载均衡中随机选择执行服务器。</p>
+<p><code>server_select.go</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">benchmark</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;github.com/bytedance/gopkg/lang/fastrand&#34;</span>
+	<span class="s">&#34;math/rand&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">var</span> <span class="nx">ServerIndex</span> <span class="p">[</span><span class="mi">10</span><span class="p">]</span><span class="kt">int</span>
+
+<span class="c1">// InitServerIndex 初始化服务器的描述符
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">InitServerIndex</span><span class="p">()</span> <span class="p">{</span>
+	<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="mi">10</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span>
+		<span class="nx">ServerIndex</span><span class="p">[</span><span class="nx">i</span><span class="p">]</span> <span class="p">=</span> <span class="nx">i</span><span class="o">+</span><span class="mi">100</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// RandSelect 随机选择一个服务器
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">RandSelect</span><span class="p">()</span> <span class="kt">int</span>  <span class="p">{</span>
+	<span class="k">return</span> <span class="nx">ServerIndex</span><span class="p">[</span><span class="nx">rand</span><span class="p">.</span><span class="nf">Intn</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
+<span class="p">}</span>
+
+<span class="c1">// FastRandSelect 用外部的fast包
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">FastRandSelect</span><span class="p">()</span><span class="kt">int</span><span class="p">{</span>
+	<span class="k">return</span> <span class="nx">ServerIndex</span><span class="p">[</span><span class="nx">fastrand</span><span class="p">.</span><span class="nf">Intn</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
+<span class="p">}</span>
+</code></pre></div><p><code>server_select_test.go</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">benchmark</span>
+
+<span class="kn">import</span> <span class="s">&#34;testing&#34;</span>
+
+<span class="kd">func</span> <span class="nf">BenchmarkSelect</span><span class="p">(</span><span class="nx">b</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">B</span><span class="p">){</span>
+	<span class="nf">InitServerIndex</span><span class="p">()</span>
+	<span class="nx">b</span><span class="p">.</span><span class="nf">ResetTimer</span><span class="p">()</span>
+	<span class="k">for</span> <span class="nx">i</span><span class="o">:=</span><span class="mi">0</span><span class="p">;</span><span class="nx">i</span><span class="p">&lt;</span><span class="nx">b</span><span class="p">.</span><span class="nx">N</span><span class="p">;</span><span class="nx">i</span><span class="o">++</span><span class="p">{</span>
+		<span class="nf">RandSelect</span><span class="p">()</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">BenchmarkSelectParallel</span><span class="p">(</span><span class="nx">b</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">B</span><span class="p">)</span> <span class="p">{</span>
+	<span class="nf">InitServerIndex</span><span class="p">()</span>
+	<span class="nx">b</span><span class="p">.</span><span class="nf">ResetTimer</span><span class="p">()</span>
+	<span class="nx">b</span><span class="p">.</span><span class="nf">RunParallel</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">pb</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">PB</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">for</span> <span class="nx">pb</span><span class="p">.</span><span class="nf">Next</span><span class="p">(){</span>
+			<span class="nf">FastRandSelect</span><span class="p">()</span>
+		<span class="p">}</span>
+	<span class="p">})</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>我们对Benchmark的代码进行以下讲解：</p>
+<ol>
+<li>对一个测试用例的默认测试时间是 1 秒，当测试用例函数返回时还不到 1 秒，那么 testing.B 中的 N 值将按 1、2、5、10、20、50……递增，并以递增后的值重新进行用例函数测试。</li>
+<li>Resttimer重置计时器，我们在reset之前做了init或其他的准备操作，这些操作不应该作为基准测试的范围。</li>
+<li>runparallel是多协程并发测试。</li>
+</ol>
+</blockquote>
+<h5 id="代码效率分析">代码效率分析</h5>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec0280bd099a44d38f6ec2a00e3b9aa2~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec0280bd099a44d38f6ec2a00e3b9aa2~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec0280bd099a44d38f6ec2a00e3b9aa2~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec0280bd099a44d38f6ec2a00e3b9aa2~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec0280bd099a44d38f6ec2a00e3b9aa2~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>我们发现，多线程的测试反而效率更慢了！</p>
+<p>主要原因是rand为了保证全局的随机性和并发安全，持有了一把全局锁。</p>
+<p>这里贴了字节实现的较为快速的随机数实现库：<a href="github.com/bytedance/gopkg/lang/fastrand" rel="">fastrand</a></p>
+<p>安装这个库也很简单，下面一行命令即可：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">go</span> <span class="nx">get</span> <span class="nx">github</span><span class="p">.</span><span class="nx">com</span><span class="o">/</span><span class="nx">bytedance</span><span class="o">/</span><span class="nx">gopkg</span><span class="o">/</span><span class="nx">lang</span><span class="o">/</span><span class="nx">fastrand</span>
+</code></pre></div><p><strong>优化代码</strong></p>
+<p>通过把 rand 替换为 fastrand 后，重新测试结果如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f46d15c9188c423589c53e8c5f02c6d9~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f46d15c9188c423589c53e8c5f02c6d9~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f46d15c9188c423589c53e8c5f02c6d9~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f46d15c9188c423589c53e8c5f02c6d9~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f46d15c9188c423589c53e8c5f02c6d9~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>我们发现多线程的效率与之前的效率相比，提升了百倍！</p>
+<blockquote>
+<p>fastrand主要的实现思路是牺牲了一定的数列一致性，在大多数场景是适用的，同学在后面遇到随机的场景可以尝试用一下。</p>
+</blockquote>
+<hr>
+<h2 id="项目实战">项目实战</h2>
+<h3 id="需求描述">需求描述</h3>
+<ul>
+<li><i class="far fa-check-square fa-fw"></i> 展示话题（标题，文字描述）和回帖列表</li>
+<li><i class="far fa-check-square fa-fw"></i> 暂不考虑前端页面实现，仅实现一个本地的web服务</li>
+<li><i class="far fa-check-square fa-fw"></i> 话题和回帖数据用文件存储</li>
+</ul>
+<blockquote>
+<p>用户浏览</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1625e2b7f579427a8022c6f51b7c9b17~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1625e2b7f579427a8022c6f51b7c9b17~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1625e2b7f579427a8022c6f51b7c9b17~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1625e2b7f579427a8022c6f51b7c9b17~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/1625e2b7f579427a8022c6f51b7c9b17~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<blockquote>
+<p>实例图</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec319dffe6ae49ad977a8d6a092c7d42~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec319dffe6ae49ad977a8d6a092c7d42~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec319dffe6ae49ad977a8d6a092c7d42~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec319dffe6ae49ad977a8d6a092c7d42~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/ec319dffe6ae49ad977a8d6a092c7d42~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="项目分层结构">项目分层结构</h3>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/d578dcdb48674044a09f6144daa380af~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/d578dcdb48674044a09f6144daa380af~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/d578dcdb48674044a09f6144daa380af~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/d578dcdb48674044a09f6144daa380af~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/d578dcdb48674044a09f6144daa380af~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<ul>
+<li>数据层：Repository 数据<strong>Model</strong>，<strong>封装外部数据的增删改查</strong>，并将数据初步反序列化，且需要直接与底层的数据存储形式打交道，比如存储形式是文件，还是数据库，还是微服务等等。</li>
+<li>逻辑层：Service 业务<strong>Entity</strong>，这里会利用数据层得到封装好的数据再次封装得到更贴近客户端请求的数据，同样也需要写好增删改查，但这里的增删改查并不会与真正的外部数据打交道，也就是说Service层不关心底层数据的存储形式，只关心<strong>核心业务输出</strong>。</li>
+<li>视图层：Controller 视图View，<strong>处理和外部的交互逻辑</strong>，也就是说，这个层级也是依赖于上一个层级的数据，它负责真正和客户端交互的过程，只关心返回什么样的数据给客户端，而前面两个层级都是为这个层级做的铺垫。</li>
+</ul>
+<h3 id="代码实现">代码实现</h3>
+<blockquote>
+<p>代码实现可以到<a href="https://github.com/ACking-you/TraningCamp" target="_blank" rel="noopener noreffer">TraningCamp</a>查看lesson2源码（温馨提示github域名后加上1s可以有意想不到的源码阅读体验哦</p>
+</blockquote>
+<h4 id="repository层实现">Repository层实现</h4>
+<blockquote>
+<p>主要实现底层存储数据序列化到具体的结构体上，以及对应的增删改查。</p>
+</blockquote>
+<p>一般经过以下过程：</p>
+<pre><code class="language-mermaid" data-lang="mermaid">graph LR
+a(初始化)
+b(底层存储的交互)
+a--&gt;b
+</code></pre><ul>
+<li>初始化：主要是对数据的准备，或者时数据库的连接的初始化。</li>
+<li>底层存储的交互：如果数据库，那么就是对数据库发起请求得到对应的Model，如果是文件存储，那么数据应该已经初始化到内存，直接进行取值即可。</li>
+</ul>
+<h5 id="数据映射">数据映射</h5>
+<p>由于本次的存储实现采取的是文件存储，故需要每次一次性把文件读取好并完成数据的反序列化。这里用到的map进行映射数据方便查询。</p>
+<blockquote>
+<p>如果是数据库，这时应该通过一些orm框架直接进行数据的增删改查映射，但在此之前还是得连接数据库（初始化过程</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7d5632cccf7f44f2a7e6ea2c10d3fcab~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7d5632cccf7f44f2a7e6ea2c10d3fcab~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7d5632cccf7f44f2a7e6ea2c10d3fcab~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7d5632cccf7f44f2a7e6ea2c10d3fcab~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7d5632cccf7f44f2a7e6ea2c10d3fcab~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<blockquote>
+<p>具体源码实现（我多加了一个记录最后一个Id的，方便完成id的不重复生成</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/857dc93539494a79a34baf8065406afb~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/857dc93539494a79a34baf8065406afb~tplv-k3u1fbpfcp-watermark.image?, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/857dc93539494a79a34baf8065406afb~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/857dc93539494a79a34baf8065406afb~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/857dc93539494a79a34baf8065406afb~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h5 id="数据的增删改查">数据的增删改查</h5>
+<p><strong>topic.go</strong></p>
+<blockquote>
+<p>实现对话题的增删改查，这里用到了一个结构体+方法的方式去实现，且用sync.Once实现单例，我觉得好处在于：</p>
+<ol>
+<li>防止重名。</li>
+<li>方便记忆，方便调用时进行对应的语法补全（比如想要对Topic进行操作，只需要想到TopicDao这个即可补全后续的操作</li>
+</ol>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/999b2037706f4a09976e14a8785fda88~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/999b2037706f4a09976e14a8785fda88~tplv-k3u1fbpfcp-watermark.image?, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/999b2037706f4a09976e14a8785fda88~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/999b2037706f4a09976e14a8785fda88~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/999b2037706f4a09976e14a8785fda88~tplv-k3u1fbpfcp-watermark.image?"
+        title="topic.go" /></p>
+<p><strong>post.go</strong></p>
+<blockquote>
+<p>和前面的实现类似，这里我完成了<strong>homework</strong>，添加了AddPost方法以及对应的将数据插入到文件的方法，由于可能出现多个客户端同时发起post请求，这时我们需要对数据进行并发安全的保护，这里我使用的Mutex加锁的方式。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/2b1ba9b4fa254d9191ffec0a0efeed3f~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/2b1ba9b4fa254d9191ffec0a0efeed3f~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/2b1ba9b4fa254d9191ffec0a0efeed3f~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/2b1ba9b4fa254d9191ffec0a0efeed3f~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/2b1ba9b4fa254d9191ffec0a0efeed3f~tplv-k3u1fbpfcp-watermark.image?"
+        title="post.go" /></p>
+<h4 id="service层实现">Service层实现</h4>
+<blockquote>
+<p>主要是对Repository层的Modle进行进一步的封装成更上层需要的Entity。</p>
+</blockquote>
+<p>一般经过以下流程：</p>
+<pre><code class="language-mermaid" data-lang="mermaid">graph LR
+a(参数校验)
+b(准备数据)
+c(组装实体)
+a--&gt;b--&gt;c
+</code></pre><ul>
+<li><strong>参数校验</strong>：由于是和上层通信的层，上层调用得到数据时，首先**需要传入对应的参数，那么我们需要对这个参数进行校验，**不同的方法需要的参数是不同的，需要进行的校验也是不同的，比如本项目查询的方法和插入的方法，需要的参数就不同，所以对应的也是走的这三个流程。</li>
+<li><strong>准备数据</strong>：在正式组装得到整个实体之前，我们应该先进行数据的准备，也就是需要把零件得到，当然，不一次性组装好的原因，我认为更重要的是这样可以<strong>减少代码的耦合</strong>，这样一来准备每个数据的过程可以独立开，且可以进行针对性的优化，或者进行局部的修改，也不会直接对组装代码造成影响。</li>
+<li><strong>组装实体</strong>：把准备好的数据返回即可。</li>
+</ul>
+<p>为了实现上述过程，我们建立一个结构体，保存准备的数据，且把整个组装实体的过程流程化。</p>
+<blockquote>
+<p>结构体如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="c1">// PageInfo 一个页面的信息包括，topic和它上面的post言论
+</span><span class="c1"></span><span class="kd">type</span> <span class="nx">PageInfo</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">Topic</span>    <span class="o">*</span><span class="nx">repository</span><span class="p">.</span><span class="nx">Topic</span>
+	<span class="nx">PostList</span> <span class="p">[]</span><span class="o">*</span><span class="nx">repository</span><span class="p">.</span><span class="nx">Post</span>
+<span class="p">}</span>
+
+<span class="c1">// QueryPageInfoFlow 为了防止高耦合度的构造PageInfo，可以构造如下结构体实现流式处理
+</span><span class="c1"></span><span class="kd">type</span> <span class="nx">QueryPageInfoFlow</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">topicId</span>  <span class="kt">int64</span>
+	<span class="nx">pageInfo</span> <span class="o">*</span><span class="nx">PageInfo</span>
+
+	<span class="nx">topic</span> <span class="o">*</span><span class="nx">repository</span><span class="p">.</span><span class="nx">Topic</span>
+	<span class="nx">posts</span> <span class="p">[]</span><span class="o">*</span><span class="nx">repository</span><span class="p">.</span><span class="nx">Post</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>整个组装过程：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="c1">// Do 整个组装过程
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">q</span> <span class="o">*</span><span class="nx">QueryPageInfoFlow</span><span class="p">)</span> <span class="nf">Do</span><span class="p">()</span> <span class="p">(</span><span class="o">*</span><span class="nx">PageInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">//对id进行合法性验证
+</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">q</span><span class="p">.</span><span class="nf">checkNum</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="c1">//准备好生成PageInfo的数据
+</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">q</span><span class="p">.</span><span class="nf">prepareInfo</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="c1">//打包最终的PageInfo
+</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">q</span><span class="p">.</span><span class="nf">packPageInfo</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="nx">q</span><span class="p">.</span><span class="nx">pageInfo</span><span class="p">,</span> <span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div><h5 id="参数校验">参数校验</h5>
+<blockquote>
+<p>由于这个查询过程暂时只需要校验这一个参数</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">func</span> <span class="p">(</span><span class="nx">q</span> <span class="o">*</span><span class="nx">QueryPageInfoFlow</span><span class="p">)</span> <span class="nf">checkNum</span><span class="p">()</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="k">if</span> <span class="nx">q</span><span class="p">.</span><span class="nx">topicId</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;topic must larger than 0&#34;</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div><h5 id="准备数据">准备数据</h5>
+<blockquote>
+<p>由于两个数据的查询毫无关联，可以通过并行处理。</p>
+</blockquote>
+<pre><code class="language-mermaid" data-lang="mermaid">graph LR
+a[话题信息]
+b[回帖信息]
+c[查询]
+d[结束]
+c--&gt;a
+c--&gt;b
+a--&gt;d
+b--&gt;d
+</code></pre><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="c1">//这两个过程，由于是毫无关联的，可以用go协程进行并发处理
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">q</span> <span class="o">*</span><span class="nx">QueryPageInfoFlow</span><span class="p">)</span> <span class="nf">prepareInfo</span><span class="p">()</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="kd">var</span> <span class="nx">wg</span> <span class="nx">sync</span><span class="p">.</span><span class="nx">WaitGroup</span>
+	<span class="nx">wg</span><span class="p">.</span><span class="nf">Add</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+	<span class="c1">//获取Topic
+</span><span class="c1"></span>	<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">defer</span> <span class="nx">wg</span><span class="p">.</span><span class="nf">Done</span><span class="p">()</span>
+		<span class="nx">q</span><span class="p">.</span><span class="nx">topic</span> <span class="p">=</span> <span class="nx">repository</span><span class="p">.</span><span class="nf">NewTopicDao</span><span class="p">().</span><span class="nf">QueryTopicFromId</span><span class="p">(</span><span class="nx">q</span><span class="p">.</span><span class="nx">topicId</span><span class="p">)</span>
+	<span class="p">}()</span>
+	<span class="c1">//获取Posts
+</span><span class="c1"></span>	<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">defer</span> <span class="nx">wg</span><span class="p">.</span><span class="nf">Done</span><span class="p">()</span>
+		<span class="nx">q</span><span class="p">.</span><span class="nx">posts</span> <span class="p">=</span> <span class="nx">repository</span><span class="p">.</span><span class="nf">NewPostDao</span><span class="p">().</span><span class="nf">QueryPostsFromParentId</span><span class="p">(</span><span class="nx">q</span><span class="p">.</span><span class="nx">topicId</span><span class="p">)</span>
+	<span class="p">}()</span>
+
+	<span class="nx">wg</span><span class="p">.</span><span class="nf">Wait</span><span class="p">()</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div><h5 id="组装实体">组装实体</h5>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="c1">//更新最终的PageInfo
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">q</span> <span class="o">*</span><span class="nx">QueryPageInfoFlow</span><span class="p">)</span> <span class="nf">packPageInfo</span><span class="p">()</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="nx">q</span><span class="p">.</span><span class="nx">pageInfo</span> <span class="p">=</span> <span class="o">&amp;</span><span class="nx">PageInfo</span><span class="p">{</span>
+		<span class="nx">Topic</span><span class="p">:</span>    <span class="nx">q</span><span class="p">.</span><span class="nx">topic</span><span class="p">,</span>
+		<span class="nx">PostList</span><span class="p">:</span> <span class="nx">q</span><span class="p">.</span><span class="nx">posts</span><span class="p">,</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+
+</code></pre></div><blockquote>
+<p>这样的话实现整个QueryPageInfo函数就只需要调用这个结构体的方法即可。</p>
+<p>如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">func</span> <span class="nf">QueryPageInfo</span><span class="p">(</span><span class="nx">id</span> <span class="kt">int64</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="nx">PageInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nf">NewQueryPageInfoFlow</span><span class="p">(</span><span class="nx">id</span><span class="p">).</span><span class="nf">Do</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><h4 id="controller层实现">Controller层实现</h4>
+<blockquote>
+<p>这个层级是真正对客户端发来的请求进行直接响应的层级，直接与客户端交互。</p>
+</blockquote>
+<p>一般经过以下过程：</p>
+<pre><code class="language-mermaid" data-lang="mermaid">graph LR
+a[参数解析]
+b[构造数据]
+c[返回数据]
+a--&gt;b--&gt;c
+</code></pre><ul>
+<li><strong>参数解析</strong>：由于对接的数据直接是上层收到的信息，所以大概率是纯字符串，所以需要先对参数进行解析。</li>
+<li><strong>构造数据</strong>：也就是构造响应的数据，一般来说除了直接的数据外，还需要提供一个错误码和错误信息给前端。</li>
+<li><strong>返回数据</strong>：根据不同情况构造的不同数据直接返回即可。</li>
+</ul>
+<h5 id="具体代码">具体代码</h5>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="c1">// PageData 最终发送给客户端的json数据对应的结构体，我们需要错误码，以及对应错误码对应的消息，最后再是数据(用空接口实现泛型
+</span><span class="c1"></span><span class="kd">type</span> <span class="nx">PageData</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">Code</span> <span class="kt">int64</span>       <span class="s">`json:&#34;code&#34;`</span>
+	<span class="nx">Msg</span>  <span class="kt">string</span>      <span class="s">`json:&#34;msg&#34;`</span>
+	<span class="nx">Data</span> <span class="kd">interface</span><span class="p">{}</span> <span class="s">`json:&#34;data&#34;`</span>
+<span class="p">}</span>
+
+<span class="c1">// QueryPageINfo 真正和客户端进行交互的函数，需要注意客户端发来的流量都是字符串形式
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">QueryPageINfo</span><span class="p">(</span><span class="nx">topicIdStr</span> <span class="kt">string</span><span class="p">)</span> <span class="o">*</span><span class="nx">PageData</span> <span class="p">{</span>
+	<span class="nx">pageId</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">topicIdStr</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="o">&amp;</span><span class="nx">PageData</span><span class="p">{</span><span class="nx">Code</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nx">Msg</span><span class="p">:</span> <span class="nx">err</span><span class="p">.</span><span class="nf">Error</span><span class="p">(),</span> <span class="nx">Data</span><span class="p">:</span> <span class="kc">nil</span><span class="p">}</span>
+	<span class="p">}</span>
+	<span class="nx">pageInfo</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">service</span><span class="p">.</span><span class="nf">QueryPageInfo</span><span class="p">(</span><span class="nb">int64</span><span class="p">(</span><span class="nx">pageId</span><span class="p">))</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="o">&amp;</span><span class="nx">PageData</span><span class="p">{</span><span class="nx">Code</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nx">Msg</span><span class="p">:</span> <span class="nx">err</span><span class="p">.</span><span class="nf">Error</span><span class="p">(),</span> <span class="nx">Data</span><span class="p">:</span> <span class="kc">nil</span><span class="p">}</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="o">&amp;</span><span class="nx">PageData</span><span class="p">{</span><span class="nx">Code</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nx">Msg</span><span class="p">:</span> <span class="s">&#34;success&#34;</span><span class="p">,</span> <span class="nx">Data</span><span class="p">:</span> <span class="nx">pageInfo</span><span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div><h4 id="homework部分">homework部分</h4>
+<h5 id="作业内容与思考">作业内容与思考</h5>
+<p>课后实战：</p>
+<ul>
+<li>支持发布帖子。</li>
+<li>本地Id生成保证不重复。</li>
+<li>Append文件，更新索引，注意并发安全问题。</li>
+</ul>
+<blockquote>
+<p>我发现一个特点，这种分Controller、Service、Repository层的情况，</p>
+<p>当你上层调用<strong>查询</strong>接口的时候，<strong>数据是自下往上的</strong>，也就是数据是从下往上依次封装。</p>
+<p>而如果是实现<strong>添加操作</strong>接口的时候，<strong>数据是自上往下的</strong>，则数据是从上往下依次封装。</p>
+</blockquote>
+<h5 id="具体实现">具体实现</h5>
+<blockquote>
+<p>思路：</p>
+<ol>
+<li>Id生成唯一性，是用的一个lastIndexId保存整个post中最大的id，之后每次添加post都继续增加这个lastIndexId来得到新的id。</li>
+<li>并发安全问题，用到Mutex加锁临界区即可。</li>
+</ol>
+</blockquote>
+<h6 id="repository层">Repository层</h6>
+<blockquote>
+<p>AddPost提供是提供给Service层的接口。</p>
+<p>需要实现把数据添加到map里以及append到文件中（对应fileDataInsertPost函数）</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">func</span> <span class="p">(</span><span class="nx">d</span> <span class="o">*</span><span class="nx">PostDao</span><span class="p">)</span> <span class="nf">AddPost</span><span class="p">(</span><span class="nx">post</span> <span class="o">*</span><span class="nx">Post</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="c1">//加锁保证同时请求的并发安全
+</span><span class="c1"></span>	<span class="nx">lock</span> <span class="o">:=</span> <span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span><span class="p">{}</span>
+	<span class="nx">lock</span><span class="p">.</span><span class="nf">Lock</span><span class="p">()</span>
+	<span class="nx">posts</span><span class="p">,</span> <span class="nx">ok</span> <span class="o">:=</span> <span class="nx">postIndexMap</span><span class="p">[</span><span class="nx">post</span><span class="p">.</span><span class="nx">ParentId</span><span class="p">]</span>
+	<span class="k">if</span> <span class="p">!</span><span class="nx">ok</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;post invalid,not exist parent id&#34;</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="c1">//注意更新map里的数据，go切片并不像C++里的Vector，可能append后操作的就不是同一片 底层数组了
+</span><span class="c1"></span>
+	<span class="nx">postIndexMap</span><span class="p">[</span><span class="nx">post</span><span class="p">.</span><span class="nx">ParentId</span><span class="p">]</span> <span class="p">=</span> <span class="nb">append</span><span class="p">(</span><span class="nx">posts</span><span class="p">,</span> <span class="nx">post</span><span class="p">)</span>
+	<span class="nx">err</span> <span class="o">:=</span> <span class="nf">fileDataInsertPost</span><span class="p">(</span><span class="s">&#34;./lesson2/homework/data/&#34;</span><span class="p">,</span> <span class="nx">post</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">err</span>
+	<span class="p">}</span>
+
+	<span class="nx">lock</span><span class="p">.</span><span class="nf">Unlock</span><span class="p">()</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">fileDataInsertPost</span><span class="p">(</span><span class="nx">filePath</span> <span class="kt">string</span><span class="p">,</span> <span class="nx">post</span> <span class="o">*</span><span class="nx">Post</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="nx">open</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">OpenFile</span><span class="p">(</span><span class="nx">filePath</span><span class="o">+</span><span class="s">&#34;post&#34;</span><span class="p">,</span> <span class="nx">os</span><span class="p">.</span><span class="nx">O_WRONLY</span><span class="p">|</span><span class="nx">os</span><span class="p">.</span><span class="nx">O_APPEND</span><span class="p">,</span> <span class="mo">0666</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="nx">writer</span> <span class="o">:=</span> <span class="nx">bufio</span><span class="p">.</span><span class="nf">NewWriter</span><span class="p">(</span><span class="nx">open</span><span class="p">)</span>
+
+	<span class="nx">data</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">json</span><span class="p">.</span><span class="nf">Marshal</span><span class="p">(</span><span class="o">*</span><span class="nx">post</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="nx">writer</span><span class="p">.</span><span class="nf">WriteString</span><span class="p">(</span><span class="s">&#34;\r\n&#34;</span><span class="p">)</span>
+	<span class="nx">writer</span><span class="p">.</span><span class="nf">Write</span><span class="p">(</span><span class="nx">data</span><span class="p">)</span>
+	<span class="nx">writer</span><span class="p">.</span><span class="nf">Flush</span><span class="p">()</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div><h6 id="service层实现-1">Service层实现</h6>
+<blockquote>
+<p>之前实现的流程基本一致，先校验上层传来的参数，数据准备过程换成数据的发布（publish）过程，将得到的数据封装好后再传给下层（<strong>我们发现这个数据的组织过程和查询是反着的</strong></p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">service</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;errors&#34;</span>
+	<span class="s">&#34;github.com/ACking-you/TraningCamp/lesson2/homework/repository&#34;</span>
+	<span class="s">&#34;time&#34;</span>
+	<span class="s">&#34;unicode/utf8&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">PublishPost</span><span class="p">(</span><span class="nx">topicId</span><span class="p">,</span> <span class="nx">userId</span> <span class="kt">int64</span><span class="p">,</span> <span class="nx">content</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="kt">int64</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nf">NewPublishPostFlow</span><span class="p">(</span><span class="nx">topicId</span><span class="p">,</span> <span class="nx">userId</span><span class="p">,</span> <span class="nx">content</span><span class="p">).</span><span class="nf">Do</span><span class="p">()</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">NewPublishPostFlow</span><span class="p">(</span><span class="nx">topicId</span><span class="p">,</span> <span class="nx">userId</span> <span class="kt">int64</span><span class="p">,</span> <span class="nx">content</span> <span class="kt">string</span><span class="p">)</span> <span class="o">*</span><span class="nx">PublishPostFlow</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="o">&amp;</span><span class="nx">PublishPostFlow</span><span class="p">{</span>
+		<span class="nx">userId</span><span class="p">:</span>  <span class="nx">userId</span><span class="p">,</span>
+		<span class="nx">content</span><span class="p">:</span> <span class="nx">content</span><span class="p">,</span>
+		<span class="nx">topicId</span><span class="p">:</span> <span class="nx">topicId</span><span class="p">,</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">type</span> <span class="nx">PublishPostFlow</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">userId</span>  <span class="kt">int64</span>
+	<span class="nx">content</span> <span class="kt">string</span>
+	<span class="nx">topicId</span> <span class="kt">int64</span>
+
+	<span class="nx">postId</span> <span class="kt">int64</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">f</span> <span class="o">*</span><span class="nx">PublishPostFlow</span><span class="p">)</span> <span class="nf">Do</span><span class="p">()</span> <span class="p">(</span><span class="kt">int64</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">f</span><span class="p">.</span><span class="nf">checkParam</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">,</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">f</span><span class="p">.</span><span class="nf">publish</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">,</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="nx">f</span><span class="p">.</span><span class="nx">postId</span><span class="p">,</span> <span class="kc">nil</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">f</span> <span class="o">*</span><span class="nx">PublishPostFlow</span><span class="p">)</span> <span class="nf">checkParam</span><span class="p">()</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="k">if</span> <span class="nx">f</span><span class="p">.</span><span class="nx">userId</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;userId id must be larger than 0&#34;</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="k">if</span> <span class="nx">utf8</span><span class="p">.</span><span class="nf">RuneCountInString</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nx">content</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">500</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;content length must be less than 500&#34;</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">f</span> <span class="o">*</span><span class="nx">PublishPostFlow</span><span class="p">)</span> <span class="nf">publish</span><span class="p">()</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="nx">post</span> <span class="o">:=</span> <span class="o">&amp;</span><span class="nx">repository</span><span class="p">.</span><span class="nx">Post</span><span class="p">{</span>
+		<span class="nx">ParentId</span><span class="p">:</span>   <span class="nx">f</span><span class="p">.</span><span class="nx">topicId</span><span class="p">,</span>
+		<span class="nx">UserId</span><span class="p">:</span>     <span class="nx">f</span><span class="p">.</span><span class="nx">userId</span><span class="p">,</span>
+		<span class="nx">Content</span><span class="p">:</span>    <span class="nx">f</span><span class="p">.</span><span class="nx">content</span><span class="p">,</span>
+		<span class="nx">CreateTime</span><span class="p">:</span> <span class="nx">time</span><span class="p">.</span><span class="nf">Now</span><span class="p">().</span><span class="nf">Unix</span><span class="p">(),</span>
+	<span class="p">}</span>
+	<span class="nx">repository</span><span class="p">.</span><span class="nx">LastPostId</span><span class="o">++</span>
+	<span class="nx">post</span><span class="p">.</span><span class="nx">Id</span> <span class="p">=</span> <span class="nx">repository</span><span class="p">.</span><span class="nx">LastPostId</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">repository</span><span class="p">.</span><span class="nf">NewPostDao</span><span class="p">().</span><span class="nf">AddPost</span><span class="p">(</span><span class="nx">post</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="nx">f</span><span class="p">.</span><span class="nx">postId</span> <span class="p">=</span> <span class="nx">post</span><span class="p">.</span><span class="nx">Id</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+
+</code></pre></div><h6 id="controller层">Controller层</h6>
+<blockquote>
+<p>和之前的Query处理过程是完全一致的，解析参数&ndash;&gt;构造内容&ndash;&gt;返回内容</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">controller</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;strconv&#34;</span>
+
+	<span class="s">&#34;github.com/ACking-you/TraningCamp/lesson2/homework/service&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">PublishPost</span><span class="p">(</span><span class="nx">uidStr</span><span class="p">,</span> <span class="nx">topicIdStr</span><span class="p">,</span> <span class="nx">content</span> <span class="kt">string</span><span class="p">)</span> <span class="o">*</span><span class="nx">PageData</span> <span class="p">{</span>
+	<span class="c1">//参数转换
+</span><span class="c1"></span>	<span class="nx">uid</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">ParseInt</span><span class="p">(</span><span class="nx">uidStr</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">)</span>
+
+	<span class="nx">topic</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">ParseInt</span><span class="p">(</span><span class="nx">topicIdStr</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">)</span>
+	<span class="c1">//获取service层结果
+</span><span class="c1"></span>	<span class="nx">postId</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">service</span><span class="p">.</span><span class="nf">PublishPost</span><span class="p">(</span><span class="nx">topic</span><span class="p">,</span> <span class="nx">uid</span><span class="p">,</span> <span class="nx">content</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="o">&amp;</span><span class="nx">PageData</span><span class="p">{</span>
+			<span class="nx">Code</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+			<span class="nx">Msg</span><span class="p">:</span>  <span class="nx">err</span><span class="p">.</span><span class="nf">Error</span><span class="p">(),</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="o">&amp;</span><span class="nx">PageData</span><span class="p">{</span>
+		<span class="nx">Code</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+		<span class="nx">Msg</span><span class="p">:</span>  <span class="s">&#34;success&#34;</span><span class="p">,</span>
+		<span class="nx">Data</span><span class="p">:</span> <span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">int64</span><span class="p">{</span>
+			<span class="s">&#34;post_id&#34;</span><span class="p">:</span> <span class="nx">postId</span><span class="p">,</span>
+		<span class="p">},</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div><h3 id="实测结果">实测结果</h3>
+<h4 id="服务端代码">服务端代码</h4>
+<p><strong>server.go</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;github.com/ACking-you/TraningCamp/lesson2/homework/controller&#34;</span>
+	<span class="s">&#34;github.com/ACking-you/TraningCamp/lesson2/homework/repository&#34;</span>
+	<span class="s">&#34;gopkg.in/gin-gonic/gin.v1&#34;</span>
+	<span class="s">&#34;os&#34;</span>
+	<span class="s">&#34;strings&#34;</span>
+<span class="p">)</span>
+
+<span class="c1">//最后再通过gin框架搭建服务器
+</span><span class="c1"></span>
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="c1">//准备数据
+</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nf">Init</span><span class="p">(</span><span class="s">&#34;./lesson2/homework/data/&#34;</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="c1">//注册路由
+</span><span class="c1"></span>	
+	<span class="nx">r</span> <span class="o">:=</span> <span class="nx">gin</span><span class="p">.</span><span class="nf">Default</span><span class="p">()</span>
+	<span class="nx">r</span><span class="p">.</span><span class="nf">GET</span><span class="p">(</span><span class="s">&#34;me:id&#34;</span><span class="p">,</span> <span class="kd">func</span><span class="p">(</span><span class="nx">c</span> <span class="o">*</span><span class="nx">gin</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span> <span class="p">{</span>
+		<span class="nx">topicId</span> <span class="o">:=</span> <span class="nx">c</span><span class="p">.</span><span class="nf">Param</span><span class="p">(</span><span class="s">&#34;id&#34;</span><span class="p">)</span>
+		<span class="nx">topicId</span> <span class="p">=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">TrimLeft</span><span class="p">(</span><span class="nx">topicId</span><span class="p">,</span> <span class="s">&#34;:,&#34;</span><span class="p">)</span>
+		<span class="nb">println</span><span class="p">(</span><span class="nx">topicId</span><span class="p">)</span>
+		<span class="nx">data</span> <span class="o">:=</span> <span class="nx">controller</span><span class="p">.</span><span class="nf">QueryPageINfo</span><span class="p">(</span><span class="nx">topicId</span><span class="p">)</span>
+		<span class="nx">c</span><span class="p">.</span><span class="nf">JSONP</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span> <span class="nx">data</span><span class="p">)</span>
+	<span class="p">})</span>
+
+	<span class="nx">r</span><span class="p">.</span><span class="nf">POST</span><span class="p">(</span><span class="s">&#34;/post/do&#34;</span><span class="p">,</span> <span class="kd">func</span><span class="p">(</span><span class="nx">c</span> <span class="o">*</span><span class="nx">gin</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span> <span class="p">{</span>
+		<span class="nx">uid</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">c</span><span class="p">.</span><span class="nf">GetPostForm</span><span class="p">(</span><span class="s">&#34;uid&#34;</span><span class="p">)</span>
+		<span class="nb">println</span><span class="p">(</span><span class="nx">uid</span><span class="p">)</span>
+		<span class="nx">topicId</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">c</span><span class="p">.</span><span class="nf">GetPostForm</span><span class="p">(</span><span class="s">&#34;topic_id&#34;</span><span class="p">)</span>
+		<span class="nb">println</span><span class="p">(</span><span class="nx">topicId</span><span class="p">)</span>
+		<span class="nx">content</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">c</span><span class="p">.</span><span class="nf">GetPostForm</span><span class="p">(</span><span class="s">&#34;content&#34;</span><span class="p">)</span>
+		<span class="nb">println</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span>
+		<span class="nx">data</span> <span class="o">:=</span> <span class="nx">controller</span><span class="p">.</span><span class="nf">PublishPost</span><span class="p">(</span><span class="nx">uid</span><span class="p">,</span> <span class="nx">topicId</span><span class="p">,</span> <span class="nx">content</span><span class="p">)</span>
+		<span class="nx">c</span><span class="p">.</span><span class="nf">JSON</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span> <span class="nx">data</span><span class="p">)</span>
+	<span class="p">})</span>
+	<span class="nx">err</span> <span class="o">:=</span> <span class="nx">r</span><span class="p">.</span><span class="nf">Run</span><span class="p">()</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">Init</span><span class="p">(</span><span class="nx">filepath</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+	<span class="nx">err</span> <span class="o">:=</span> <span class="nx">repository</span><span class="p">.</span><span class="nf">Init</span><span class="p">(</span><span class="nx">filepath</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">err</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div><h4 id="请求结果">请求结果</h4>
+<blockquote>
+<p>使用的是goland里面的http请求工具进行的。</p>
+</blockquote>
+<h5 id="get请求测试成功">GET请求测试（成功）</h5>
+<p>请求报文如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">GET http://localhost:8080/me:1
+</span><span class="err">Accept: application/json
+</span></code></pre></div><p>返回报文如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">200</span> <span class="ne">OK</span>
+<span class="n">Content-Type</span><span class="o">:</span> <span class="l">application/json; charset=utf-8</span>
+<span class="n">Date</span><span class="o">:</span> <span class="l">Mon, 09 May 2022 05:17:28 GMT</span>
+<span class="n">Content-Length</span><span class="o">:</span> <span class="l">426</span>
+
+<span class="p">{</span>
+  <span class="nt">&#34;code&#34;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+  <span class="nt">&#34;msg&#34;</span><span class="p">:</span> <span class="s2">&#34;success&#34;</span><span class="p">,</span>
+  <span class="nt">&#34;data&#34;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="nt">&#34;Topic&#34;</span><span class="p">:</span> <span class="p">{</span>
+      <span class="nt">&#34;id&#34;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+      <span class="nt">&#34;title&#34;</span><span class="p">:</span> <span class="s2">&#34;青训营来啦!&#34;</span><span class="p">,</span>
+      <span class="nt">&#34;content&#34;</span><span class="p">:</span> <span class="s2">&#34;小姐姐，快到碗里来~&#34;</span><span class="p">,</span>
+      <span class="nt">&#34;create_time&#34;</span><span class="p">:</span> <span class="mi">1650437625</span>
+    <span class="p">},</span>
+    <span class="nt">&#34;PostList&#34;</span><span class="p">:</span> <span class="p">[</span>
+      <span class="p">{</span>
+        <span class="nt">&#34;id&#34;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="nt">&#34;parent_id&#34;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="nt">&#34;content&#34;</span><span class="p">:</span> <span class="s2">&#34;小姐姐快来1&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;create_time&#34;</span><span class="p">:</span> <span class="mi">1650437616</span><span class="p">,</span>
+        <span class="nt">&#34;user_id&#34;</span><span class="p">:</span> <span class="mi">1</span>
+      <span class="p">},</span>
+      <span class="p">{</span>
+        <span class="nt">&#34;id&#34;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="nt">&#34;parent_id&#34;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="nt">&#34;content&#34;</span><span class="p">:</span> <span class="s2">&#34;小姐姐快来2&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;create_time&#34;</span><span class="p">:</span> <span class="mi">1650437617</span><span class="p">,</span>
+        <span class="nt">&#34;user_id&#34;</span><span class="p">:</span> <span class="mi">2</span>
+      <span class="p">},</span>
+      <span class="p">{</span>
+        <span class="nt">&#34;id&#34;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+        <span class="nt">&#34;parent_id&#34;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="nt">&#34;content&#34;</span><span class="p">:</span> <span class="s2">&#34;小姐姐快来3&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;create_time&#34;</span><span class="p">:</span> <span class="mi">1650437618</span><span class="p">,</span>
+        <span class="nt">&#34;user_id&#34;</span><span class="p">:</span> <span class="mi">13</span>
+      <span class="p">}</span>
+    <span class="p">]</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="err">Response</span> <span class="err">code:</span> <span class="mi">200</span> <span class="err">(OK);</span> <span class="err">Time:</span> <span class="mi">174</span><span class="err">ms;</span> <span class="err">Content</span> <span class="err">length:</span> <span class="mi">368</span> <span class="err">bytes</span>
+
+</code></pre></div><h5 id="post请求测试成功">POST请求测试（成功）</h5>
+<p>请求报文：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">POST http://localhost:8080/post/do
+</span><span class="err">Content-Type: application/x-www-form-urlencoded
+</span><span class="err">
+</span><span class="err">uid=2&amp;topic_id=1&amp;content=测试内容嗨嗨嗨嗨
+</span></code></pre></div><p>返回报文：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">200</span> <span class="ne">OK</span>
+<span class="n">Content-Type</span><span class="o">:</span> <span class="l">application/json; charset=utf-8</span>
+<span class="n">Date</span><span class="o">:</span> <span class="l">Mon, 09 May 2022 05:22:38 GMT</span>
+<span class="n">Content-Length</span><span class="o">:</span> <span class="l">47</span>
+
+<span class="p">{</span>
+  <span class="nt">&#34;code&#34;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+  <span class="nt">&#34;msg&#34;</span><span class="p">:</span> <span class="s2">&#34;success&#34;</span><span class="p">,</span>
+  <span class="nt">&#34;data&#34;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="nt">&#34;post_id&#34;</span><span class="p">:</span> <span class="mi">5</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="err">Response</span> <span class="err">code:</span> <span class="mi">200</span> <span class="err">(OK);</span> <span class="err">Time:</span> <span class="mi">103</span><span class="err">ms;</span> <span class="err">Content</span> <span class="err">length:</span> <span class="mi">47</span> <span class="err">bytes</span>
+</code></pre></div><p>再看看文件里面的内容是否添加：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0ac87642c8e24e119b7de400578b2ada~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0ac87642c8e24e119b7de400578b2ada~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0ac87642c8e24e119b7de400578b2ada~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0ac87642c8e24e119b7de400578b2ada~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/0ac87642c8e24e119b7de400578b2ada~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>成功！</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/go%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5/">Go工程实践</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-05-08</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记" data-hashtags="Go工程实践"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/golang-note2/" data-hashtag="Go工程实践"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记" data-image="https://img-blog.csdnimg.cn/img_convert/30474f138a1fd099890cfcb17099a60b.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记" data-description="这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记" data-description="这是我参与「第三届青训营 -后端场」笔记创作活动的的第二篇笔记。"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/golang-note2/" data-title="Go语言工程实践（二） | 青训营笔记"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E4%B8%80go%E8%AF%AD%E8%A8%80%E4%B8%8A%E6%89%8B-%E9%9D%92%E8%AE%AD%E8%90%A5%E7%AC%94%E8%AE%B0/" class="prev" rel="prev" title="Go语言上手（一） | 青训营笔记"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/glang3/" class="next" rel="next" title="Go语言编码规范和性能调优">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

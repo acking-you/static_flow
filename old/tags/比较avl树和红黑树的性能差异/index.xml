@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>比较AVL树和红黑树的性能差异 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E6%AF%94%E8%BE%83avl%E6%A0%91%E5%92%8C%E7%BA%A2%E9%BB%91%E6%A0%91%E7%9A%84%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82/</link>
+        <description>比较AVL树和红黑树的性能差异 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Wed, 30 Nov 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E6%AF%94%E8%BE%83avl%E6%A0%91%E5%92%8C%E7%BA%A2%E9%BB%91%E6%A0%91%E7%9A%84%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82/" rel="self" type="application/rss+xml" /><item>
+    <title>比较AVL树和红黑树的性能差异</title>
+    <link>https://acking-you.github.io/posts/%E6%AF%94%E8%BE%83avl%E6%A0%91%E5%92%8C%E7%BA%A2%E9%BB%91%E6%A0%91%E7%9A%84%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82/</link>
+    <pubDate>Wed, 30 Nov 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E6%AF%94%E8%BE%83avl%E6%A0%91%E5%92%8C%E7%BA%A2%E9%BB%91%E6%A0%91%E7%9A%84%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center" referrerpolicy="no-referrer">
+            </div>缘起 最近在复习数据结构，顺便把以前自己写的博客简单的看了一遍，然后发现了一篇手写AVL树的博客 徒手写的AVL竟然比STL中的红黑树效率更高？]]></description>
+</item>
+</channel>
+</rss>

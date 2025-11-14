@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>前端基础 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="前端基础"><meta property="og:title" content="前端基础" />
+<meta property="og:description" content="前端基础" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-05-13T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-05-13T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="前端基础"/>
+<meta name="twitter:description" content="前端基础"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" /><link rel="prev" href="https://acking-you.github.io/posts/glang3/" /><link rel="next" href="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "前端基础",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80\/"
+        },"genre": "posts","keywords": "前端基础","wordcount":  12920 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80\/","datePublished": "2022-05-13T00:00:00+00:00","dateModified": "2022-05-13T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "前端基础"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center, https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center"
+        title="前端基础" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">前端基础</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/javaweb%E7%AC%94%E8%AE%B0/"><i class="far fa-folder fa-fw"></i>JavaWeb笔记</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-05-13">2022-05-13</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 12920 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 26 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#html页面">HTML页面</a>
+      <ul>
+        <li><a href="#第一个html页面">第一个HTML页面</a></li>
+        <li><a href="#html语法规范">HTML语法规范</a></li>
+        <li><a href="#html常用标签">HTML常用标签</a></li>
+        <li><a href="#html表单">HTML表单</a></li>
+      </ul>
+    </li>
+    <li><a href="#css样式">CSS样式</a>
+      <ul>
+        <li><a href="#css选择器">CSS选择器</a></li>
+        <li><a href="#组合选择器和优先级问题">组合选择器和优先级问题</a></li>
+        <li><a href="#自定义边距">自定义边距</a></li>
+        <li><a href="#编写一个漂亮的登陆界面">编写一个漂亮的登陆界面</a></li>
+      </ul>
+    </li>
+    <li><a href="#javascript语言">JavaScript语言</a>
+      <ul>
+        <li><a href="#javascript基本语法">JavaScript基本语法</a></li>
+        <li><a href="#javascript逻辑运算和流程控制">JavaScript逻辑运算和流程控制</a></li>
+        <li><a href="#javascript函数定义">JavaScript函数定义</a></li>
+        <li><a href="#javascript数组和对象">JavaScript数组和对象</a></li>
+        <li><a href="#javascript事件">JavaScript事件</a></li>
+        <li><a href="#document对象">Document对象</a></li>
+        <li><a href="#发送xhr请求">发送XHR请求</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h1 id="前端基础">前端基础</h1>
+<p>本章节会讲解前端基础内容（如果已经学习过，可以直接跳到下一个大章节了）那么什么是前端，什么又是后端呢？</p>
+<ul>
+<li>前端：我们网站的页面，包括网站的样式、图片、视频等一切用户可见的内容都是前端的内容。</li>
+<li>后端：处理网站的所有数据来源，比如我们之前从数据库中查询数据，而我们查询的数据经过处理最终会被展示到前端，而用于处理前端数据的工作就是由后端来完成的。</li>
+</ul>
+<p>相当于，前端仅仅是一层皮，它直接决定了整个网站的美观程度，我们可以自由地编排页面的布局，甚至可以编写好看的特效；而灵魂则是后端，如何处理用户的交互、如何处理数据查询是后端的职责所在，我们前面学习的都是后端内容，而Java也是一门专注于后端开发的语言。</p>
+<p>对于前端开发我们需要学习一些新的内容，只有了解了它们，我们才能编写出美观的页面。</p>
+<p>本教程并不会过多地去讲解前端知识，我们只会提及一些必要的内容，我们主要学习的是JavaWeb，更倾向于后端开发，学习前端的目的只是为了让同学们了解前后端的交互方式，在进行后端开发时思路能够更加清晰，有关前端的完整内容学习，可以浏览其他前端知识教程。</p>
+<p>我们在最开始讲解网络编程时，提到了浏览器访问服务器，实际上浏览器访问服务器就是一种B/S结构，而我们使用Java代码编写的客户端连接服务器就是一种C/S结构。</p>
+<p>Web开发还要从HTML开始讲起，这个语言非常简单，很好学习，看完视频如果你觉得前端简单自己更喜欢一些，建议马上转前端吧，还来得及，工资还比后端高，不像后端那么枯燥乏味。</p>
+<h2 id="html页面">HTML页面</h2>
+<p>我们前面学习了XML语言，它是一种标记语言，我们需要以成对标签的格式进行填写，但是它是专用于保存数据，而不是展示数据，而HTML恰恰相反，它专用于展示数据，由于我们前面已经学习过XML语言了，HTML语言和XML很相似，所以我们学习起来会很快。</p>
+<h3 id="第一个html页面">第一个HTML页面</h3>
+<p>我们前面知道，通过浏览器可以直接浏览XML文件，而浏览器一般是用于浏览HTML文件的，以HTML语言编写的内容，会被浏览器识别为一个页面，并根据我们编写的内容，将对应的组件添加到浏览器窗口中。</p>
+<p>我们一般使用Chrome、Safari、Microsoft Edge等浏览器进行测试，IE浏览器已经彻底淘汰了！</p>
+<p>比如我们可以创建一个Html文件来看看浏览器会如何识别，使用IDEA也能编写HTML页面，我们在IDEA中新建一个<code>Web模块</code>，进入之后我们发现，项目中没有任何内容，我们右键新建一个HTML文件，选择HTML5文件，并命名为index，创建后出现：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="cp">&lt;!DOCTYPE html&gt;</span>
+<span class="p">&lt;</span><span class="nt">html</span> <span class="na">lang</span><span class="o">=</span><span class="s">&#34;en&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">head</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">meta</span> <span class="na">charset</span><span class="o">=</span><span class="s">&#34;UTF-8&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>Title<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">head</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">html</span><span class="p">&gt;</span>
+</code></pre></div><p>我们发现，它和XML基本长得一样，并且还自带了一些标签，那么现在我们通过浏览器来浏览这个HTML文件（这里推荐使用内置预览，不然还得来回切换窗口）</p>
+<p>我们发现现在什么东西都没有，但是在浏览器的标签位置显示了网页的名称为<code>Title</code>，并且显示了一个IDEA的图标作为网页图标。</p>
+<p>现在我们稍微进行一些修改：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="cp">&lt;!DOCTYPE html&gt;</span>
+<span class="p">&lt;</span><span class="nt">html</span> <span class="na">lang</span><span class="o">=</span><span class="s">&#34;en&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">head</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">meta</span> <span class="na">charset</span><span class="o">=</span><span class="s">&#34;UTF-8&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>lbw的直播间<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">head</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    现在全体起立
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">html</span><span class="p">&gt;</span>
+</code></pre></div><p>再次打开浏览器，我们发现页面中出现了我们输入的文本内容，并且标题也改为了我们自定义的标题。</p>
+<p>我们可以在设置-&gt;工具-&gt;Web浏览器和预览中将重新加载页面规则改为<code>变更时</code>，这样我们使用内置浏览器或是外部浏览器，可以自动更新我们编写的内容。</p>
+<p>我们还可以在页面中添加一个图片，随便将一张图片放到html文件的同级目录下，命名为<code>image.xxx</code>，其中xxx是后缀名称，不要修改，我们在body节点中添加以下内容：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">img</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;300&#34;</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.xxx&#34;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&#34;剑光如我，斩尽牛杂&#34;</span><span class="p">&gt;</span>
+<span class="c">&lt;!--  注意xxx替换成对应的后缀名称  --&gt;</span>
+</code></pre></div><p>我们发现，我们的页面中居然能够显示我们添加的图片内容。因此，我们只需要编写对应的标签，浏览器就能够自动识别为对应的组件，并将其展示到我们的浏览器窗口中。</p>
+<p>我们再来看看插入一个B站的视频，很简单，只需要到对应的视频下方，找到分享，我们看到有一个嵌入代码：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">iframe</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;//player.bilibili.com/player.html?aid=333231998&amp;bvid=BV1rA411g7q8&amp;cid=346917516&amp;page=1&#34;</span> <span class="na">scrolling</span><span class="o">=</span><span class="s">&#34;no&#34;</span> <span class="na">border</span><span class="o">=</span><span class="s">&#34;0&#34;</span> <span class="na">frameborder</span><span class="o">=</span><span class="s">&#34;no&#34;</span> <span class="na">framespacing</span><span class="o">=</span><span class="s">&#34;0&#34;</span> <span class="na">allow="fullscreen"</span><span class="o">=</span><span class="s">&#34;true&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;800&#34;</span> <span class="na">height</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span> <span class="p">&lt;/</span><span class="nt">iframe</span><span class="p">&gt;</span>
+</code></pre></div><p>每一个页面都是通过这些标签来编写的，几乎所有的网站都是使用HTML编写页面。</p>
+<h3 id="html语法规范">HTML语法规范</h3>
+<p>一个HTML文件中一般分为两个部分：</p>
+<ul>
+<li>头部：一般包含页面的标题、页面的图标、还有页面的一些设置，也可以在这里导入css、js等内容。</li>
+<li>主体：整个页面所有需要显示的内容全部在主体编写。</li>
+</ul>
+<p>我们首先来看头部，我们之前使用的HTML文件中头部包含了这些内容：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">meta</span> <span class="na">charset</span><span class="o">=</span><span class="s">&#34;UTF-8&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>lbw的直播间<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+</code></pre></div><p>首先<code>meta</code>标签用于定义页面的一些元信息，这里使用它来定义了一个字符集（编码格式），一般是UTF-8，下面的<code>title</code>标签就是页面的标题，会显示在浏览器的上方。我们现在来给页面设置一个图标，图标一般可以在字节跳动的IconPark网站找到：https://iconpark.oceanengine.com/home，选择一个自己喜欢的图标下载即可。</p>
+<p>将图标放入到项目目录中，并命名为icon.png，在HTML头部添加以下内容：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">link</span> <span class="na">rel</span><span class="o">=</span><span class="s">&#34;icon&#34;</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;icon.png&#34;</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;image/x-icon&#34;</span> <span class="p">/&gt;</span>
+</code></pre></div><p><code>link</code>标签用于关联当前HTML页面与其他资源的关系，关系通过<code>rel</code>属性指定，这里使用的是icon表示这个文件是当前页面图标。</p>
+<p>现在访问此页面，我们发现页面的图标已经变成我们指定的图标样式了。</p>
+<p>现在我们再来看主体，我们可以在主体内部编写该页面要展示的所有内容，比如我们之前就用到了img标签来展示一个图片，其中每一个标签都称为一个元素：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">img</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;300&#34;</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.xxx&#34;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&#34;当图片加载失败时，显示的文本&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>我们发现，这个标签只存在一个，并没有成对出现，HTML中有些标签是单标签，也就是说只有这一个，还有一些标签是双标签，必须成对出现，HTML中，也不允许交叉嵌套，但是出现交叉嵌套时，浏览器并不会提示错误，而是仍旧尝试去解析这些内容，甚至会帮助我们进行一定程度的修复，比如：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+
+    <span class="p">&lt;</span><span class="nt">iframe</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;//player.bilibili.com/player.html?aid=333231998&amp;bvid=BV1rA411g7q8&amp;cid=346917516&amp;page=1&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;800&#34;</span> <span class="na">height</span><span class="o">=</span><span class="s">&#34;500&#34;</span>
+            <span class="na">scrolling</span><span class="o">=</span><span class="s">&#34;no&#34;</span> <span class="na">border</span><span class="o">=</span><span class="s">&#34;0&#34;</span> <span class="na">frameborder</span><span class="o">=</span><span class="s">&#34;no&#34;</span> <span class="na">framespacing</span><span class="o">=</span><span class="s">&#34;0&#34;</span> <span class="na">allow="fullscreen"</span><span class="o">=</span><span class="s">&#34;true&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">iframe</span><span class="p">&gt;</span>
+</code></pre></div><p>很明显上面的代码已经出现交叉嵌套的情况了，但是依然能够在浏览器中正确地显示。</p>
+<p>在主体中，我们一般使用div标签来分割页面：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>我是第一块<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>我是第二块<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>通过使用<code>div</code>标签，我们将整个页面按行划分，而高度就是内部元素的高度，那么如果只希望按元素划分，也就是说元素占多大就划分多大的空间，那么我们就可以使用<code>span</code>标签来划分：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;</span>我是第一块第一个部分<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;</span>我是第一块第二个部分<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>我是第二块<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>我们也可以使用<code>p</code>段落标签，它一般用于文章分段：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>
+        你看这个彬彬啊，才喝几罐就醉了，真的太逊了。 这个彬彬就是逊呀！
+        听你这么说，你很勇哦？ 开玩笑，我超勇的，超会喝的啦。
+        超会喝，很勇嘛。身材不错哦，蛮结实的嘛。
+    <span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>
+        哎，杰哥，你干嘛啊。都几岁了，还那么害羞！我看你，完全是不懂哦！
+        懂，懂什么啊？ 你想懂？我房里有一些好康的。
+        好康，是新游戏哦！ 什么新游戏，比游戏还刺激！
+    <span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>
+        杰哥，这是什么啊？ 哎呦，你脸红啦！来，让我看看。
+        不要啦！！ 让我看看嘛。 不要啦，杰哥，你干嘛啊！
+        让我看看你法语正不正常啊！
+    <span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>那么如果遇到特殊字符该怎么办呢？和XML一样，我们可以使用转义字符：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://gimg2.baidu.com/image_search/src=http%3A%2F%2Fwww.51wendang.com%2Fpic%2F208288d7561926f359c6be84%2F1-352-jpg_6_0_______-356-0-0-356.jpg&amp;refer=http%3A%2F%2Fwww.51wendang.com&amp;app=2002&amp;size=f9999,10000&amp;q=a80&amp;n=0&amp;g=0n&amp;fmt=jpeg?sec=1639877607&amp;t=bcc1fcfe8bae53e90c365a4fd8c00a1c"
+        data-srcset="https://gimg2.baidu.com/image_search/src=http%3A%2F%2Fwww.51wendang.com%2Fpic%2F208288d7561926f359c6be84%2F1-352-jpg_6_0_______-356-0-0-356.jpg&amp;refer=http%3A%2F%2Fwww.51wendang.com&amp;app=2002&amp;size=f9999%2c10000&amp;q=a80&amp;n=0&amp;g=0n&amp;fmt=jpeg?sec=1639877607&amp;t=bcc1fcfe8bae53e90c365a4fd8c00a1c, https://gimg2.baidu.com/image_search/src=http%3A%2F%2Fwww.51wendang.com%2Fpic%2F208288d7561926f359c6be84%2F1-352-jpg_6_0_______-356-0-0-356.jpg&amp;refer=http%3A%2F%2Fwww.51wendang.com&amp;app=2002&amp;size=f9999%2c10000&amp;q=a80&amp;n=0&amp;g=0n&amp;fmt=jpeg?sec=1639877607&amp;t=bcc1fcfe8bae53e90c365a4fd8c00a1c 1.5x, https://gimg2.baidu.com/image_search/src=http%3A%2F%2Fwww.51wendang.com%2Fpic%2F208288d7561926f359c6be84%2F1-352-jpg_6_0_______-356-0-0-356.jpg&amp;refer=http%3A%2F%2Fwww.51wendang.com&amp;app=2002&amp;size=f9999%2c10000&amp;q=a80&amp;n=0&amp;g=0n&amp;fmt=jpeg?sec=1639877607&amp;t=bcc1fcfe8bae53e90c365a4fd8c00a1c 2x"
+        data-sizes="auto"
+        alt="https://gimg2.baidu.com/image_search/src=http%3A%2F%2Fwww.51wendang.com%2Fpic%2F208288d7561926f359c6be84%2F1-352-jpg_6_0_______-356-0-0-356.jpg&amp;refer=http%3A%2F%2Fwww.51wendang.com&amp;app=2002&amp;size=f9999,10000&amp;q=a80&amp;n=0&amp;g=0n&amp;fmt=jpeg?sec=1639877607&amp;t=bcc1fcfe8bae53e90c365a4fd8c00a1c"
+        title="点击查看源网页" /></p>
+<p>**注意：**多个连续的空格字符只能被识别为一个，如果需要连续多个必须使用转义字符，同时也不会识别换行，换行只会变成一个空格，需要换行必须使用<code>br</code>标签。</p>
+<p>通过了解了HTML的一些基础语法，我们现在就知道一个页面大致是如何编写了。</p>
+<h3 id="html常用标签">HTML常用标签</h3>
+<p>前面我们已经了解了HTML的基本语法规范，那么现在我们就来看看，有哪些常用的标签吧，首先是换行和分割线：</p>
+<ul>
+<li>br 换行</li>
+<li>hr 分割线</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+        我是一段文字<span class="p">&lt;</span><span class="nt">br</span><span class="p">&gt;</span>我是第二段文字
+    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">hr</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>我是底部文字<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>标题一般用h1到h6表示，我们来看看效果：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>一级标题<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h2</span><span class="p">&gt;</span>二级标题<span class="p">&lt;/</span><span class="nt">h2</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h3</span><span class="p">&gt;</span>三级标题<span class="p">&lt;/</span><span class="nt">h3</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h4</span><span class="p">&gt;</span>四级标题<span class="p">&lt;/</span><span class="nt">h4</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h5</span><span class="p">&gt;</span>五级标题<span class="p">&lt;/</span><span class="nt">h5</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h6</span><span class="p">&gt;</span>六级标题<span class="p">&lt;/</span><span class="nt">h6</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>我是正文内容，真不错。<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>现在我们来看看超链接，我们可以添加一个链接用于指向其他网站：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;https://www.bilibili.com&#34;</span><span class="p">&gt;</span>点击访问小破站<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+</code></pre></div><p>我们也可以指定页面上的一个锚点进行滚动：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;#test&#34;</span><span class="p">&gt;</span>跳转锚点<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">div</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;test&#34;</span><span class="p">&gt;</span>我是锚点<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;image.jpeg&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;500&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>每个元素都可以有一个id属性，我们只需要给元素添加一个id属性，就使用a标签可以跳转到一个指定锚点。</p>
+<p>我们接着来看看列表元素，这是一个无需列表，其中每一个<code>li</code>表示一个列表项：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">ul</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>一号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>二号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>三号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>四号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>五号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">ul</span><span class="p">&gt;</span>
+</code></pre></div><p>我们也可以使用<code>ol</code>来显示一个有序列表：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">ol</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>一号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>二号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>三号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>四号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>五号选项<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">ol</span><span class="p">&gt;</span>
+</code></pre></div><p>表格也是很重要的一种元素，但是它编写起来相对有一点麻烦：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">table</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">thead</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">th</span><span class="p">&gt;</span>学号<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">th</span><span class="p">&gt;</span>姓名<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">th</span><span class="p">&gt;</span>性别<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">th</span><span class="p">&gt;</span>年级<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">thead</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">tbody</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>0001<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>小明<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>男<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>2019<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>0002<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>小红<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>女<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>2020<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">tbody</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">table</span><span class="p">&gt;</span>
+</code></pre></div><p>虽然这样生成了一个表格，但是这个表格并没有分割线，并且格式也不符合我们想要的样式，那么如何才能修改这些基础属性的样式呢，我们就需要聊聊CSS了。</p>
+<h3 id="html表单">HTML表单</h3>
+<p>表单就像其名字一样，用户在页面中填写了对应的内容，点击按钮就可以提交到后台，比如登陆界面，就可以使用表单来实现：</p>
+<p>一个网页中最重要的当属输入框和按钮了，那么我们来看看如何创建一个输入框和按钮：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+    我是输入框
+    <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;text&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+</code></pre></div><p>对于一个输入框，我们一般会将其包括在一个<code>lable</code>标签中，它和span效果一样，但是我们点击前面文字也能快速获取输入框焦点。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>登陆我们的网站<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">hr</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+        账号：
+        <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;text&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+        密码：
+        <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>输入框可以有很多类型，我们来试试看password，现在输入内容就不会直接展示原文了。</p>
+<p>创建一个按钮有以下几种方式，在学习JavaWeb时，我们更推荐第二种方式，我们后面进行登陆操作需要配合表单使用：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">button</span><span class="p">&gt;</span>登陆<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;submit&#34;</span> <span class="na">value</span><span class="o">=</span><span class="s">&#34;登陆&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;button&#34;</span> <span class="na">value</span><span class="o">=</span><span class="s">&#34;登陆&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>现在我们就可以写一个大致的登陆页面了：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>登陆我们的网站<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">form</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+            <span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+                账号：
+                <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;text&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;Username...&#34;</span><span class="p">&gt;</span>
+            <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+            <span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+                密码：
+                <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;Password...&#34;</span><span class="p">&gt;</span>
+            <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">br</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;https://www.baidu.com&#34;</span><span class="p">&gt;</span>忘记密码<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">br</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">br</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+            <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;submit&#34;</span> <span class="na">value</span><span class="o">=</span><span class="s">&#34;登陆&#34;</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">form</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>表单一般使用<code>form</code>标签将其囊括，但是现在我们还用不到表单提交，因此之后我们再来讲解表单的提交。</p>
+<p><code>input</code>只能实现单行文本，那么如何实现多行文本呢？</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+    这是我们的文本框<span class="p">&lt;</span><span class="nt">br</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">textarea</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;文本内容...&#34;</span> <span class="na">cols</span><span class="o">=</span><span class="s">&#34;10&#34;</span> <span class="na">rows</span><span class="o">=</span><span class="s">&#34;10&#34;</span><span class="p">&gt;&lt;/</span><span class="nt">textarea</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+</code></pre></div><p>我们还可以指定默认的行数和列数，拖动左下角可以自定义文本框的大小。</p>
+<p>我们还可以在页面中添加勾选框：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;checkbox&#34;</span><span class="p">&gt;</span>
+    我同意本网站的隐私政策
+<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+</code></pre></div><p>上面演示的是一个多选框，那么我们来看看单选框：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;radio&#34;</span> <span class="na">name</span><span class="o">=</span><span class="s">&#34;role&#34;</span><span class="p">&gt;</span>
+    学生
+<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;radio&#34;</span> <span class="na">name</span><span class="o">=</span><span class="s">&#34;role&#34;</span><span class="p">&gt;</span>
+    教师
+<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+</code></pre></div><p>这里需要使用name属性进行分组，同一个组内的选项只能选择一个。</p>
+<p>我们也可以添加列表让用户进行选择，创建一个下拉列表：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+    登陆身份：
+    <span class="p">&lt;</span><span class="nt">select</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">option</span><span class="p">&gt;</span>学生<span class="p">&lt;/</span><span class="nt">option</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">option</span><span class="p">&gt;</span>教师<span class="p">&lt;/</span><span class="nt">option</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">select</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+</code></pre></div><p>默认选取的是第一个选项，我们可以通过<code>selected</code>属性来决定默认使用的是哪个选项。</p>
+<p>当然，HTML的元素远不止我们所提到的这些，有关更多HTML元素的内容，可以自行了解。</p>
+<hr>
+<h2 id="css样式">CSS样式</h2>
+<p>之前我们编写的页面非常基础，我们只能通过一些很基本的属性来排列我们的页面元素，那么如何实现更高度的自定义呢，我们就需要用到CSS来自定义样式，首先我们创建一个名为<code>style.css</code>的文件。</p>
+<p>首先在我们HTML文件的头部添加：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">link</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;style.css&#34;</span> <span class="na">rel</span><span class="o">=</span><span class="s">&#34;stylesheet&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>我们在CSS文件中添加以下内容：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">body</span> <span class="p">{</span>
+    <span class="k">text-align</span><span class="p">:</span> <span class="kc">center</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们发现，网页的内容全部变为居中显示了，这正是css在生效，相当于我们现在给页面添加了自定义的样式规则。</p>
+<p>当然，我们也可以选择不使用CSS，而是直接对某个元素添加样式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;text-align: center;&#34;</span><span class="p">&gt;</span>
+  ...
+</code></pre></div><p>这样的效果其实是等同于上面的css文件的，相当于我们直接把样式定义在指定元素上。</p>
+<p>也可以在头部直接定义样式，而不是使用外部文件：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+    <span class="nt">body</span> <span class="p">{</span>
+        <span class="k">text-align</span><span class="p">:</span> <span class="kc">center</span><span class="p">;</span>
+    <span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div><p>使用以上三种方式都可以自定义页面的样式，我们推荐使用还是第一种，不然我们的代码会很繁杂。</p>
+<p>样式的属性是非常多的，我们不可能一个一个全部讲完，视频中用到什么再来讲解什么，如果同学们感兴趣，可以自行下去了解。</p>
+<h3 id="css选择器">CSS选择器</h3>
+<p>我们首先来了解一下选择器，那么什么是选择器呢？我们想要自定义一个元素的样式，那么我们肯定要去选择某个元素，只有先找到要自定义的元素，我们才能开始编写样式。</p>
+<p>我们上面的例子中使用的就是标签名选择器，它可以快速选择页面中所有指定的的标签，比如我们之前使用的就是<code>body</code>标签，那么就相当于页面中所有的body元素全都使用此样式，那么我们现在来试试看选择页面中所有的<code>input</code>标签：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">input</span> <span class="p">{</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">200</span><span class="kt">px</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们发现，页面中所有的<code>input</code>元素宽度全部被设定为了200个像素（<code>px</code>是单位大小，代表像素，除了<code>px</code>还有<code>em</code>和<code>rem</code>，他们是根据当前元素字体大小决定的相对大小，一般用于适配各种大小的浏览器窗口，这里暂时不用）</p>
+<p>样式编写完成后，如果只有一个属性，可以不带<code>;</code>若多个属性则每个属性后面都需要添加一个<code>;</code></p>
+<p>因此，一个标签选择器的格式为：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">标签名称</span> <span class="p">{</span>
+  <span class="err">属性名称:</span> <span class="err">属性值</span>
+<span class="p">}</span>
+</code></pre></div><p>我们还可以设定输入框的字体大小、行高等：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">input</span> <span class="p">{</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">200</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">font-size</span><span class="p">:</span> <span class="mi">20</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">line-height</span><span class="p">:</span> <span class="mi">40</span><span class="kt">px</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们现在可以通过选择器快速地去设置某个元素样式了，那么如何实现只设置某个元素的样式呢，现在我们来看看，id选择器，我们之前已经讲解过了，每个元素都可以有一个id属性，我们可以将其当做一个跳转的锚点使用，而现在，我们可以使用css来进行定位：</p>
+<p>我们先为元素添加id属性：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">h1</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;title&#34;</span><span class="p">&gt;</span>登陆我们的网站<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+</code></pre></div><p>现在使用CSS选择我们的元素，并设定一个属性，选择某个id需要在前面加上一个<code>#</code>：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">#</span><span class="nn">title</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>虽然id选择器已经可以很方便的指定某个元素，但是如果我们希望n个但不是元素都被选择，id选择器就无法实现了，因为每个元素的id是唯一的，不允许出现重复id的元素，因此接着我们来讲解一下类选择器。</p>
+<p>每个元素都可以有一个<code>class</code>属性，表示当前元素属于某个类（注意这里的类和我们Java中的类概念完全不同）一个元素可以属于很多个类，一个类也可以被很多个元素使用：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">form</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span> <span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">label</span> <span class="na">class</span><span class="o">=</span><span class="s">&#34;test&#34;</span><span class="p">&gt;</span>
+            账号：
+            <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;text&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;Username...&#34;</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">label</span> <span class="na">class</span><span class="o">=</span><span class="s">&#34;test&#34;</span><span class="p">&gt;</span>
+            密码：
+            <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;Password...&#34;</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">form</span><span class="p">&gt;</span>
+</code></pre></div><p>上面的例子中，两个<code>label</code>元素都使用了<code>test</code>类（类名称是我们自定义的），现在我们在css文件中编写以下内容来以类进行选择：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">.</span><span class="nc">test</span><span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">blue</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们发现，两个标签的文本内容都变为了蓝色，因此使用类选择器，能够对所有为此类的元素添加样式。注意在进行类选择时，我们需要在类名前面加上<code>.</code>来表示。</p>
+<h3 id="组合选择器和优先级问题">组合选择器和优先级问题</h3>
+<p>我们也可以让多个选择器，共用一个css样式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">.</span><span class="nc">test</span><span class="o">,</span> <span class="p">#</span><span class="nn">title</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>只需要并排写即可，注意中间需要添加一个英文的逗号用于分割，我们也可以使用<code>*</code>来一次性选择所有的元素：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="o">*</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们还可以选择位于某个元素内的某个元素：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">div</span> <span class="nt">label</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>这样的话，就会选择所有位于div元素中的label元素。</p>
+<p>当然，我们这里只介绍了一些常用的选择器，有关详细的CSS选择器可以查阅：https://www.runoob.com/cssref/css-selectors.html</p>
+<p>我们接着来看一下选择器的优先级：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7cf7114219a84efa9627444fe8a4a8b2~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7cf7114219a84efa9627444fe8a4a8b2~tplv-k3u1fbpfcp-watermark.image?, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7cf7114219a84efa9627444fe8a4a8b2~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7cf7114219a84efa9627444fe8a4a8b2~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/7cf7114219a84efa9627444fe8a4a8b2~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<p>我们根据上面的信息，来测试一下，首先编写一下HTML文件：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&#34;test&#34;</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;simple&#34;</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;color: blue&#34;</span><span class="p">&gt;</span>我是测试文本内容<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+</code></pre></div><p>现在我们来编写一下css文件：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">.</span><span class="nc">test</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">yellow</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="p">#</span><span class="nn">simple</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="o">*</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">palegreen</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>那么现在我们可以看到，实际上生效的是我们直接编写在标签内部的内联属性，那么现在我们依次进行移除，来看看它们的优先级。</p>
+<p>那么如果我们希望某个属性无视任何的优先级，我们可以在属性后面添加<code>!important</code>标记，表示此属性是一个重要属性，它的优先级会被置为最高。</p>
+<p>**思考：**那要是我每个选择器的这个属性后面都加一个<code>!important</code>会怎么样？</p>
+<h3 id="自定义边距">自定义边距</h3>
+<p>我们来看看，如何使用css控制一个div板块的样式，首先编写以下代码，相当于一个div嵌套了一个div元素：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">div</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;outer&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;inner&#34;</span><span class="p">&gt;</span>
+        
+    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</code></pre></div><p>现在编写一下自定义的css样式，我们将div设定为固定大小，并且背景颜色添加为绿色：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">#</span><span class="nn">outer</span> <span class="p">{</span>
+    <span class="k">background</span><span class="p">:</span> <span class="kc">palegreen</span><span class="p">;</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">300</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">height</span><span class="p">:</span> <span class="mi">300</span><span class="kt">px</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们发现左侧快速预览页面存在空隙，这是因为浏览器给我们添加了一个边距属性，我们只需要覆盖此属性并将其设定为0即可：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">body</span> <span class="p">{</span>
+    <span class="k">margin</span><span class="p">:</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>现在我们给内部嵌套的div也设定一个大小，并将颜色设定为橙色：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">#</span><span class="nn">inner</span> <span class="p">{</span>
+    <span class="k">background</span><span class="p">:</span> <span class="kc">darkorange</span><span class="p">;</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">100</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">height</span><span class="p">:</span> <span class="mi">100</span><span class="kt">px</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>现在我们发现内部的div元素位于右上角，我们还可以以百分比的形式来指定大小：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">#</span><span class="nn">inner</span> <span class="p">{</span>
+    <span class="k">background</span><span class="p">:</span> <span class="kc">darkorange</span><span class="p">;</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+    <span class="k">height</span><span class="p">:</span> <span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>百分比会依照当前可用大小来进行分配，比如当前位于一个div内部，并且外部div元素是固定大小300px，因此100%就相当于使用了外部的全部大小，也是300px，现在内部元素完全将外部元素覆盖了，整个元素现在呈现为橙色。</p>
+<p>我们可以为一个元素设定边距，边距分为外边距和内边距，外部元素内边距决定了内部元素与外部元素之间的间隔，我们来修改一下css样式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">#</span><span class="nn">outer</span> <span class="p">{</span>
+    <span class="k">background</span><span class="p">:</span> <span class="kc">palegreen</span><span class="p">;</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">300</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">height</span><span class="p">:</span> <span class="mi">300</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">padding</span><span class="p">:</span> <span class="mi">10</span><span class="kt">px</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>我们发现，内部的div元素小了一圈，这是因为外部div元素设定了内边距，上下左右都被设定为10px大小。</p>
+<p>而我们发现，实际上我们在一开始也是将body的外边距设定为了0，整个页面跟浏览器窗口直接间隔0px的宽度。</p>
+<h3 id="编写一个漂亮的登陆界面">编写一个漂亮的登陆界面</h3>
+<p>现在我们就来尝试编写一个漂亮的登陆界面吧！</p>
+<hr>
+<h2 id="javascript语言">JavaScript语言</h2>
+<p>也称为js，是我们整个前端基础的重点内容，只有了解了JavaScript语言，我们才能了解前端如何与后端交互。</p>
+<p>JavaScript与Java没有毛关系，仅仅只是名字中包含了Java而已，跟Java比起来，它更像Python，它是一门解释型语言，不需要进行编译，它甚至可以直接在浏览器的命令窗口中运行。</p>
+<p>它相当于是前端静态页面的一个补充，它可以让一个普通的页面在后台执行一些程序，比如我们点击一个按钮，我们可能希望执行某些操作，比如下载文件、页面跳转、页面弹窗、进行登陆等，都可以使用JavaScript来帮助我们实现。</p>
+<p>我们来看看一个简单的JavaScript程序：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kr">const</span> <span class="nx">arr</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>
+
+<span class="k">for</span> <span class="p">(</span><span class="kd">let</span> <span class="nx">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="o">&lt;</span> <span class="nx">arr</span><span class="p">.</span><span class="nx">length</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kd">let</span> <span class="nx">j</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">j</span> <span class="o">&lt;</span> <span class="nx">arr</span><span class="p">.</span><span class="nx">length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span> <span class="nx">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">if</span><span class="p">(</span><span class="nx">arr</span><span class="p">[</span><span class="nx">j</span><span class="p">]</span> <span class="o">&gt;</span> <span class="nx">arr</span><span class="p">[</span><span class="nx">j</span><span class="o">+</span><span class="mi">1</span><span class="p">]){</span>
+            <span class="kr">const</span> <span class="nx">tmp</span> <span class="o">=</span> <span class="nx">arr</span><span class="p">[</span><span class="nx">j</span><span class="p">]</span>
+            <span class="nx">arr</span><span class="p">[</span><span class="nx">j</span><span class="p">]</span> <span class="o">=</span> <span class="nx">arr</span><span class="p">[</span><span class="nx">j</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span>
+            <span class="nx">arr</span><span class="p">[</span><span class="nx">j</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="nx">tmp</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="nb">window</span><span class="p">.</span><span class="nx">alert</span><span class="p">(</span><span class="nx">arr</span><span class="p">)</span>
+</code></pre></div><p>这段代码实际上就是实现了一个冒泡排序算法，我们可以直接在页面的头部中引用此js文件，浏览器会在加载时自动执行js文件中编写的内容：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;test.js&#34;</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p>我们发现JS的语法和Java非常相似，但是它还是和Java存在一些不同之处，而且存在很多阴间语法，那么我们来看看JS的语法。</p>
+<h3 id="javascript基本语法">JavaScript基本语法</h3>
+<p>在js中，定义变量和Java中有一些不同，定义一个变量可以使用<code>let</code>关键字或是<code>var</code>关键字，IDEA推荐我们使用<code>let</code>关键字，因为<code>var</code>存在一定的设计缺陷（这里就不做讲解了，之后一律使用let关键字进行变量声明）：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">a</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="nx">a</span><span class="o">++</span><span class="p">;</span>
+<span class="nb">window</span><span class="p">.</span><span class="nx">alert</span><span class="p">(</span><span class="nx">a</span><span class="p">)</span>
+</code></pre></div><p>上面的结果中，我们得到了a的结果是11，也就是说自增和自减运算在JS中也是支持的，并且JS每一句结尾可以不用加分号。</p>
+<p>js并不是Java那样的强类型语言（任意变量的类型一定是明确的），它是一门弱类型语言，变量的类型并不会在一开始确定，因此我们在定义变量时无需指定变量的确切类型，而是在运行时动态解析类型：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">a</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="nx">a</span> <span class="o">=</span> <span class="s2">&#34;HelloWorld！&#34;</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">a</span><span class="p">)</span>
+</code></pre></div><p>我们发现，变量a已经被赋值为数字类型，但是我们依然在后续能将其赋值一个字符串，它的类型是随时可变的。</p>
+<p>很多人说，这种变态的类型机制是JS的一大缺陷。</p>
+<p>世界上只有两种语言：一种是很多人骂的，一种是没人用的。</p>
+<p>我们接着来看看，JS中存在的基本数据类型：</p>
+<ul>
+<li>Number：数字类型（包括小数和整数）</li>
+<li>String：字符串类型（可以使用单引号或是双引号）</li>
+<li>Boolean：布尔类型（与Java一致）</li>
+</ul>
+<p>还包括一些特殊值：</p>
+<ul>
+<li>
+<p>undefined：未定义 - 变量声明但不赋值默认为undefined</p>
+</li>
+<li>
+<p>null：空值 - 等同于Java中的null</p>
+</li>
+<li>
+<p>NaN：非数字 - 值不是合法数字，比如：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nb">window</span><span class="p">.</span><span class="nx">alert</span><span class="p">(</span><span class="mi">100</span><span class="o">/</span><span class="s1">&#39;xx&#39;</span><span class="p">)</span>
+</code></pre></div></li>
+</ul>
+<p>我们可以使用<code>typeof</code>关键字来查看当前变量值的类型：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">a</span> <span class="o">=</span> <span class="mi">10</span><span class="p">;</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="k">typeof</span> <span class="nx">a</span><span class="p">)</span>
+<span class="nx">a</span> <span class="o">=</span> <span class="s1">&#39;Hello World&#39;</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="k">typeof</span> <span class="nx">a</span><span class="p">)</span>
+</code></pre></div><h3 id="javascript逻辑运算和流程控制">JavaScript逻辑运算和流程控制</h3>
+<p>我们接着来看看js中的关系运算符，包括如下8个关系运算符：大于（&gt;）,小于（&lt;）,小于等于（&lt;=）,大于等于（&gt;=）,相等（==），不等（!=），全等（===），不全等（!==）</p>
+<p>其实关系运算符大致和Java中的使用方法一致，不过它还可以进行字符串比较，有点像C++的语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="mi">666</span> <span class="o">&gt;</span> <span class="mi">777</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span> <span class="o">&gt;</span> <span class="s1">&#39;ab&#39;</span><span class="p">)</span>
+</code></pre></div><p>那么，相等和全等有什么区别呢？</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="n">console</span><span class="o">.</span><span class="na">info</span><span class="o">(</span><span class="err">&#39;</span><span class="n">10</span><span class="err">&#39;</span> <span class="o">==</span> <span class="n">10</span><span class="o">)</span>
+<span class="n">console</span><span class="o">.</span><span class="na">info</span><span class="o">(</span><span class="err">&#39;</span><span class="n">10</span><span class="err">&#39;</span> <span class="o">===</span> <span class="n">10</span><span class="o">)</span>
+</code></pre></div><p>我们发现，在Java中，若运算符两边是不同的基本数据类型，会直接得到false，而JS中却不像这样，我们发现字符串的10居然等于数字10，而使用全等判断才是我们希望的结果。</p>
+<p><code>==</code>的比较规则是：当操作数类型一样时，比较的规则和恒等运算符一样，都相等才相等，如果两个操作数是字符串，则进行字符串的比较，如果里面有一个操作数不是字符串，那两个操作数通过Number()方法进行转换，转成数字进行比较。</p>
+<p>因此，我们上面进行的判断实际上是运算符两边都进行了数字转换的结果进行比较，自然也就得到了true，而全等判断才是我们在Java中认识的相等判断。</p>
+<p>我们接着来看逻辑运算，JS中包括&amp;&amp;、||、&amp;、|、?:等，我们先来看看位运算符：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="mi">4</span> <span class="o">&amp;</span> <span class="mi">7</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="mi">4</span> <span class="o">|</span> <span class="mi">7</span><span class="p">)</span>
+</code></pre></div><p>实际上和Java中是一样的，那么我再来看看逻辑运算：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="kc">true</span> <span class="o">||</span> <span class="kc">false</span><span class="p">)</span>
+</code></pre></div><p>对于boolean变量的判断，是与Java一致的，但是JS也可以使用非Boolen类型变量进行判断：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="mi">0</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div><p>和C/C++语言一样，0代表false，非0代表true，那么字符串呢？</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="s2">&#34;a&#34;</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="s2">&#34;&#34;</span><span class="p">)</span>
+</code></pre></div><p>我们发现，空串为false，非空串为true，我们再来看看：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="kc">true</span> <span class="o">||</span> <span class="mi">7</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="mi">7</span> <span class="o">||</span> <span class="kc">true</span><span class="p">)</span>
+</code></pre></div><p>我们发现，前者得到的结果为true，而后者得到的结果却是是7，真是滑天下之大稽，什么鬼玩意，实际上是因为，默认非0都是true，而后者又是先判断的7，因此会直接得到7而不是被转换为true</p>
+<p>那么我们再来看看几个特殊值默认代表什么：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="kc">undefined</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="kc">null</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="o">!</span><span class="kc">NaN</span><span class="p">)</span>
+</code></pre></div><p>最后来使用一下三元运算符，实际上和Java中是一样的：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">a</span> <span class="o">=</span> <span class="kc">true</span> <span class="o">?</span> <span class="s2">&#34;xx&#34;</span> <span class="o">:</span> <span class="mi">20</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">a</span><span class="p">)</span>
+</code></pre></div><p>得益于JS的动态类型，emmm，三元运算符不一定需要固定的返回值类型。</p>
+<p>JS的分支结构，实际上和Java是一样的，也是使用if-else语句来进行：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="k">if</span><span class="p">(</span><span class="s2">&#34;lbwnb&#34;</span><span class="p">){</span>   <span class="c1">//非空串为true
+</span><span class="c1"></span>    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;!!!&#34;</span><span class="p">)</span>
+<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;???&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>同理，多分支语句也能实现：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="k">if</span><span class="p">(</span><span class="s2">&#34;&#34;</span><span class="p">){</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;!!!&#34;</span><span class="p">)</span>
+<span class="p">}</span> <span class="k">else</span> <span class="k">if</span><span class="p">(</span><span class="o">-</span><span class="mi">666</span><span class="p">){</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;???&#34;</span><span class="p">)</span>
+<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;O.O&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>当然，多分支语句也可以使用switch来完成：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">a</span> <span class="o">=</span> <span class="s2">&#34;a&#34;</span>
+<span class="k">switch</span> <span class="p">(</span><span class="nx">a</span><span class="p">){</span>
+    <span class="k">case</span> <span class="s2">&#34;a&#34;</span><span class="o">:</span>
+        <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;1&#34;</span><span class="p">)</span>
+        <span class="k">break</span>
+    <span class="k">case</span> <span class="s2">&#34;b&#34;</span><span class="o">:</span>
+        <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;2&#34;</span><span class="p">)</span>
+        <span class="k">break</span>
+    <span class="k">case</span> <span class="s2">&#34;c&#34;</span><span class="o">:</span>
+        <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;3&#34;</span><span class="p">)</span>
+        <span class="k">break</span>
+    <span class="k">default</span><span class="o">:</span>
+        <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;4&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>接着我们来看看循环结构，其实循环结构也和Java相差不大：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">i</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="k">while</span><span class="p">(</span><span class="nx">i</span><span class="o">--</span><span class="p">){</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;100&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="k">for</span> <span class="p">(</span><span class="kd">let</span> <span class="nx">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="o">&lt;</span> <span class="mi">10</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;??&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><h3 id="javascript函数定义">JavaScript函数定义</h3>
+<p>JS中的方法和Java中的方法定义不太一样，JS中一般称其为函数，我们来看看定义一个函数的格式是什么：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">()</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;有一个人前来买瓜&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>定义一个函数，需要在前面加上<code>function</code>关键字表示这是一个函数，后面跟上函数名称和<code>()</code>，其中可以包含参数，在<code>{}</code>中编写函数代码。我们只需要直接使用函数名+<code>()</code>就能调用函数：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nx">f</span><span class="p">();</span>
+</code></pre></div><p>我们接着来看一下，如何给函数添加形式参数以及返回值：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">a</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;得到的实参为：&#34;</span><span class="o">+</span><span class="nx">a</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">666</span>
+<span class="p">}</span>
+
+<span class="nx">f</span><span class="p">(</span><span class="s2">&#34;aa&#34;</span><span class="p">);</span>
+</code></pre></div><p>由于JS是动态类型，因此我们不必指明参数a的类型，同时也不必指明返回值的类型，一个函数可能返回不同类型的结果，因此直接编写return语句即可。同理，我们可以在调用函数时，不传参，那么默认会使用undefined：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">a</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;得到的实参为：&#34;</span><span class="o">+</span><span class="nx">a</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">666</span>
+<span class="p">}</span>
+
+<span class="nx">f</span><span class="p">();</span>
+</code></pre></div><p>那么如果我们希望不传参的时候使用我们自定义的默认值呢？</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">a</span> <span class="o">=</span> <span class="s2">&#34;6666&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;得到的实参为：&#34;</span><span class="o">+</span><span class="nx">a</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">666</span>
+<span class="p">}</span>
+
+<span class="nx">f</span><span class="p">();</span>
+</code></pre></div><p>我们可以直接在形参后面指定默认值。</p>
+<p>函数本身也是一种类型，他可以被变量接收，所有函数类型的变量，也可以直接被调用：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">a</span> <span class="o">=</span> <span class="s2">&#34;6666&#34;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;得到的实参为：&#34;</span><span class="o">+</span><span class="nx">a</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">666</span>
+<span class="p">}</span>
+
+<span class="kd">let</span> <span class="nx">k</span> <span class="o">=</span> <span class="nx">f</span><span class="p">;</span>
+<span class="nx">k</span><span class="p">();</span>
+</code></pre></div><p>我们也可以直接将匿名函数赋值给变量：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">f</span> <span class="o">=</span> <span class="kd">function</span> <span class="p">(</span><span class="nx">str</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;实参为：&#34;</span><span class="o">+</span><span class="nx">str</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>既然函数是一种类型，那么函数也能作为一个参数进行传递：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">test</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">test</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="nx">f</span><span class="p">(</span><span class="kd">function</span> <span class="p">()</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;这是一个匿名函数&#34;</span><span class="p">)</span>
+<span class="p">})</span>
+</code></pre></div><p>对于所有的匿名函数，可以像Java的匿名接口实现一样编写lambda表达式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">test</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">test</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="nx">f</span><span class="p">(()</span> <span class="p">=&gt;</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;可以，不跟你多bb&#34;</span><span class="p">)</span>
+<span class="p">})</span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">(</span><span class="nx">test</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">test</span><span class="p">(</span><span class="s2">&#34;这个是回调参数&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="nx">f</span><span class="p">(</span><span class="nx">param</span> <span class="p">=&gt;</span> <span class="p">{</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;接受到回调参数：&#34;</span><span class="o">+</span><span class="nx">param</span><span class="p">)</span>
+<span class="p">})</span>
+</code></pre></div><h3 id="javascript数组和对象">JavaScript数组和对象</h3>
+<p>JS中的数组定义与Java不同，它更像是Python中的列表，数组中的每个元素并不需要时同样的类型：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&#34;lbwnb&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="kc">undefined</span><span class="p">,</span> <span class="kc">NaN</span><span class="p">]</span>
+</code></pre></div><p>我们可以直接使用下标来访问：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&#34;lbwnb&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="kc">undefined</span><span class="p">,</span> <span class="kc">NaN</span><span class="p">]</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">arr</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+</code></pre></div><p>我们一开始编写的排序算法，也是使用了数组。</p>
+<p>数组还可以动态扩容，如果我们尝试访问超出数组长度的元素，并不会出现错误，而是得到undefined，同样的，我们也可以直接往超出数组长度的地方设置元素：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&#34;lbwnb&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="kc">undefined</span><span class="p">,</span> <span class="kc">NaN</span><span class="p">]</span>
+<span class="nx">arr</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&#34;???&#34;</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">arr</span><span class="p">)</span>
+</code></pre></div><p>也可以使用<code>push</code>和<code>pop</code>来实现栈操作：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&#34;lbwnb&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="kc">undefined</span><span class="p">,</span> <span class="kc">NaN</span><span class="p">]</span>
+<span class="nx">arr</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="s2">&#34;bbb&#34;</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">arr</span><span class="p">.</span><span class="nx">pop</span><span class="p">())</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">arr</span><span class="p">)</span>
+</code></pre></div><p>数组还包括一些其他的方法，这里就不一一列出了：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&#34;lbwnb&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="kc">undefined</span><span class="p">,</span> <span class="kc">NaN</span><span class="p">]</span>
+<span class="nx">arr</span><span class="p">.</span><span class="nx">fill</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">arr</span><span class="p">.</span><span class="nx">map</span><span class="p">(</span><span class="nx">o</span> <span class="p">=&gt;</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="s1">&#39;xxx&#39;</span><span class="o">+</span><span class="nx">o</span>
+<span class="p">}))</span>
+</code></pre></div><p>我们接着来看对象，JS中也能定义对象，但是这里的对象有点颠覆我们的认知：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">obj</span> <span class="o">=</span> <span class="k">new</span> <span class="nb">Object</span><span class="p">()</span>
+<span class="kd">let</span> <span class="nx">obj</span> <span class="o">=</span> <span class="p">{}</span>
+</code></pre></div><p>以上两种写法都能够创建一个对象，但是更推荐使用下面的一种。</p>
+<p>JS中的对象也是非常随意的，我们可以动态为其添加属性：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">obj</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="nx">obj</span><span class="p">.</span><span class="nx">name</span> <span class="o">=</span> <span class="s2">&#34;伞兵一号&#34;</span>
+<span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="nx">obj</span><span class="p">)</span>
+</code></pre></div><p>同理，我们也可以给对象动态添加一个函数：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">obj</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="nx">obj</span><span class="p">.</span><span class="nx">f</span> <span class="o">=</span> <span class="kd">function</span> <span class="p">(){</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;我是对象内部的函数&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="nx">obj</span><span class="p">.</span><span class="nx">f</span><span class="p">()</span>
+</code></pre></div><p>我们可以在函数内使用this关键字来指定对象内的属性：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">name</span> <span class="o">=</span> <span class="s2">&#34;我是外部变量&#34;</span>
+<span class="kd">let</span> <span class="nx">obj</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="nx">obj</span><span class="p">.</span><span class="nx">name</span> <span class="o">=</span> <span class="s2">&#34;我是内部变量&#34;</span>
+<span class="nx">obj</span><span class="p">.</span><span class="nx">f</span> <span class="o">=</span> <span class="kd">function</span> <span class="p">(){</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;name属性为：&#34;</span><span class="o">+</span><span class="k">this</span><span class="p">.</span><span class="nx">name</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="nx">obj</span><span class="p">.</span><span class="nx">f</span><span class="p">()</span>
+</code></pre></div><p>**注意：**如果使用lambda表达式，那么this并不会指向对象。</p>
+<p>除了动态添加属性，我们也可以在一开始的时候指定对象内部的成员：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">obj</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="nx">name</span><span class="o">:</span> <span class="s2">&#34;我是内部的变量&#34;</span><span class="p">,</span>
+  	<span class="nx">f</span><span class="o">:</span> <span class="kd">function</span> <span class="p">(){</span>
+        <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;name属性为：&#34;</span><span class="o">+</span><span class="k">this</span><span class="p">.</span><span class="nx">name</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="nx">obj</span><span class="p">.</span><span class="nx">f</span><span class="p">()</span>
+</code></pre></div><p>注意如果有多行属性，需要在属性定义后添加一个<code>,</code>进行分割！</p>
+<h3 id="javascript事件">JavaScript事件</h3>
+<p>当我们点击一个页面中的按钮之后，我们希望之后能够进行登陆操作，或是执行一些JS代码来实现某些功能，那么这个时候，就需要用到事件。</p>
+<p>事件相当于一个通知，我们可以提前设定好事件发生时需要执行的内容，当事件发生时，就会执行我们预先设定好的JS代码。</p>
+<p>事件有很多种类型，其中常用的有：</p>
+<ul>
+<li>onclick：点击事件</li>
+<li>oninput：内容输入事件</li>
+<li>onsubmit：内容提交事件</li>
+</ul>
+<p>那么如何为事件添加一个动作呢？</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;console.info(&#39;正在输入文本&#39;)&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>我们可以直接为一个元素添加对应事件的属性，比如<code>oninput</code>事件，我们可以直接在事件的值中编写js代码，但是注意，只能使用单引号，因为双引号用于囊括整个值。</p>
+<p>我们也可以单独编写一个函数，当事件发生时直接调用我们的函数：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">f</span><span class="p">()</span> <span class="p">{</span>
+    <span class="nb">window</span><span class="p">.</span><span class="nx">alert</span><span class="p">(</span><span class="s2">&#34;你输入了一个字符&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;oninput()&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>仅仅了解了事件，还不足以实现高度自定义，我们接着来看DOM。</p>
+<h3 id="document对象">Document对象</h3>
+<p>当网页被加载时，浏览器会创建页面的文档对象模型（<em>D</em>ocument <em>O</em>bject <em>M</em>odel），它将整个页面的所有元素全部映射为JS对象，这样我们就可以在JS中操纵页面中的元素。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://www.w3school.com.cn/i/ct_htmltree.gif"
+        data-srcset="https://www.w3school.com.cn/i/ct_htmltree.gif, https://www.w3school.com.cn/i/ct_htmltree.gif 1.5x, https://www.w3school.com.cn/i/ct_htmltree.gif 2x"
+        data-sizes="auto"
+        alt="https://www.w3school.com.cn/i/ct_htmltree.gif"
+        title="DOM HTML 树" /></p>
+<p>比如我现在想要读取页面中某个输入框中的内容，那么我们就需要从DOM中获取此输入框元素的对象：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nb">document</span><span class="p">.</span><span class="nx">getElementById</span><span class="p">(</span><span class="s2">&#34;pwd&#34;</span><span class="p">).</span><span class="nx">value</span>
+</code></pre></div><p>通过document对象就能够快速获取当前页面中对应的元素，并且我们也可以快速获取元素中的一些属性。</p>
+<p>比如现在我们可以结合事件，来进行密码长度的校验，密码长度小于6则不合法，不合法的密码，会让密码框边框变红，那么首先我们先来编写一个css样式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">.</span><span class="nc">illegal-pwd</span><span class="p">{</span>
+    <span class="k">border</span><span class="p">:</span> <span class="kc">red</span> <span class="mi">1</span><span class="kt">px</span> <span class="kc">solid</span> <span class="cp">!important</span><span class="p">;</span>
+    <span class="k">box-shadow</span><span class="p">:</span> <span class="mi">0</span> <span class="mi">0</span> <span class="mi">5</span><span class="kt">px</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>接着我们来编写一下js代码，定义一个函数，此函数接受一个参数（元素本身的对象）检测输入的长度是否大于6，否则就将当前元素的class属性设定为css指定的class：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">checkIllegal</span><span class="p">(</span><span class="nx">e</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">value</span><span class="p">.</span><span class="nx">length</span> <span class="o">&lt;</span> <span class="mi">6</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nx">e</span><span class="p">.</span><span class="nx">setAttribute</span><span class="p">(</span><span class="s2">&#34;class&#34;</span><span class="p">,</span> <span class="s2">&#34;illegal-pwd&#34;</span><span class="p">)</span>   
+    <span class="p">}</span><span class="k">else</span> <span class="p">{</span>
+        <span class="nx">e</span><span class="p">.</span><span class="nx">removeAttribute</span><span class="p">(</span><span class="s2">&#34;class&#34;</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>最后我们将此函数绑定到<code>oninput</code>事件即可，注意传入了一个this，这里的this代表的是输入框元素本身：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;pwd&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;checkIllegal(this)&#34;</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>现在我们在输入的时候，会自动检查密码是否合法。</p>
+<p>既然oninput本身也是一个属性，那么实际上我们可以动态进行修改：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nb">document</span><span class="p">.</span><span class="nx">getElementById</span><span class="p">(</span><span class="s2">&#34;pwd&#34;</span><span class="p">).</span><span class="nx">oninput</span> <span class="o">=</span> <span class="p">()</span> <span class="p">=&gt;</span> <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;???&#34;</span><span class="p">)</span>
+</code></pre></div><p>那么，我们前面提及的window对象又是什么东西呢？</p>
+<p>实际上Window对象范围更加广阔，它甚至直接代表了整个窗口，当然也包含我们的Document对象，我们一般通过Window对象来弹出提示框之类的东西。</p>
+<h3 id="发送xhr请求">发送XHR请求</h3>
+<p>JS的大致内容我们已经全部学习完成了，那么如何使用JS与后端进行交互呢？</p>
+<p>我们知道，如果我们需要提交表单，那么我们就需要将表单的信息全部发送给我们的服务器，那么，如何发送给服务器呢？</p>
+<p>通过使用XMLHttpRequest对象，来向服务器发送一个HTTP请求，下面是一个最简单的请求格式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">xhr</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">XMLHttpRequest</span><span class="p">();</span>
+<span class="nx">xhr</span><span class="p">.</span><span class="nx">open</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;https://www.baidu.com&#39;</span><span class="p">);</span>
+<span class="nx">xhr</span><span class="p">.</span><span class="nx">send</span><span class="p">();</span>
+</code></pre></div><p>上面的例子中，我们向服务器发起了一次网络请求，但是我们请求的是百度的服务器，并且此请求的方法为GET请求。</p>
+<p>我们现在将其绑定到一个按钮上作为事件触发：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">http</span><span class="p">()</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="nx">xhr</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">XMLHttpRequest</span><span class="p">();</span>
+    <span class="nx">xhr</span><span class="p">.</span><span class="nx">open</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;https://www.baidu.com&#39;</span><span class="p">);</span>
+    <span class="nx">xhr</span><span class="p">.</span><span class="nx">send</span><span class="p">();</span>    
+<span class="p">}</span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;button&#34;</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;button&#34;</span> <span class="na">onclick</span><span class="o">=</span><span class="s">&#34;http()&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>我们可以在网络中查看我们发起的HTTP请求并且查看请求的响应结果，比如上面的请求，会返回百度这个页面的全部HTML代码。</p>
+<p>实际上，我们的浏览器在我们输入网址后，也会向对应网站的服务器发起一次HTTP的GET请求。</p>
+<p>在浏览器得到页面响应后，会加载当前页面，如果当前页面还引用了其他资源文件，那么会继续向服务器发起请求，直到页面中所有的资源文件全部加载完成后，才会停止。</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/">前端基础</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-05-13</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础" data-hashtags="前端基础"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-hashtag="前端基础"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础" data-image="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础" data-description="前端基础"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础" data-description="前端基础"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" data-title="前端基础"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/glang3/" class="prev" rel="prev" title="Go语言编码规范和性能调优"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" class="next" rel="next" title="一文进入JavaWeb后端">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

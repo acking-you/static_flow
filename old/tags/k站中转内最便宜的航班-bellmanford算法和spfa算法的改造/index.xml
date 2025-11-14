@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/</link>
+        <description>k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Tue, 22 Feb 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" rel="self" type="application/rss+xml" /><item>
+    <title>k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造</title>
+    <link>https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/</link>
+    <pubDate>Tue, 22 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目 oj平台 BellmanFord算法的动态规划解决(效率一般) 看到k站内，肯定会想到 BellmanFord 算法的动态规划解法，本来优化成按边遍历的动态规划可以]]></description>
+</item>
+</channel>
+</rss>

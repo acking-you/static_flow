@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>Logger日志库的实现 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/logger%E6%97%A5%E5%BF%97%E5%BA%93%E7%9A%84%E5%AE%9E%E7%8E%B0/</link>
+        <description>Logger日志库的实现 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 24 Jul 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/logger%E6%97%A5%E5%BF%97%E5%BA%93%E7%9A%84%E5%AE%9E%E7%8E%B0/" rel="self" type="application/rss+xml" /><item>
+    <title>Logger日志库的实现</title>
+    <link>https://acking-you.github.io/posts/logger%E6%97%A5%E5%BF%97%E5%BA%93%E7%9A%84%E5%AE%9E%E7%8E%B0/</link>
+    <pubDate>Sun, 24 Jul 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/logger%E6%97%A5%E5%BF%97%E5%BA%93%E7%9A%84%E5%AE%9E%E7%8E%B0/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c592952aec4e1c875073f2a3d970cde5.png#pic_center" referrerpolicy="no-referrer">
+            </div>代码仓库：https://github.com/ACking-you/MyUtil/tree/master/my-logger 日志的重要性以]]></description>
+</item>
+</channel>
+</rss>

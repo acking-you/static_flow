@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>socket通信 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/socket%E9%80%9A%E4%BF%A1/</link>
+        <description>socket通信 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/socket%E9%80%9A%E4%BF%A1/" rel="self" type="application/rss+xml" /><item>
+    <title>Socket基本操作的C&#43;&#43;封装</title>
+    <link>https://acking-you.github.io/posts/socket%E5%9F%BA%E6%9C%AC%E6%93%8D%E4%BD%9Cc&#43;&#43;%E5%B0%81%E8%A3%85/</link>
+    <pubDate>Thu, 20 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/socket%E5%9F%BA%E6%9C%AC%E6%93%8D%E4%BD%9Cc&#43;&#43;%E5%B0%81%E8%A3%85/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/c3d009d6542a44155b5847c3a9c76dcd.png#pic_center" referrerpolicy="no-referrer">
+            </div>封装过程 接口类的实现(抽象类) _public_socket.h 该头文件用于包含所有该系统平台socket所需要依赖的库。 windows平台 #ifndef MY_TINY_STL__PUBLIC_SOCKET_H #define MY_TINY_STL__PUBLIC_SOCKET_H #include &lt;winsock2.h&gt;#pragma comment (lib, &#34;ws2_32.lib&#34;) //加载 ws2_32.dll #endif //MY_TINY_STL__PUBLIC_SOCKET_H]]></description>
+</item>
+</channel>
+</rss>

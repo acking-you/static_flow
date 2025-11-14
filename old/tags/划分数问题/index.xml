@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>划分数问题 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E5%88%92%E5%88%86%E6%95%B0%E9%97%AE%E9%A2%98/</link>
+        <description>划分数问题 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 30 Jan 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E5%88%92%E5%88%86%E6%95%B0%E9%97%AE%E9%A2%98/" rel="self" type="application/rss+xml" /><item>
+    <title>划分数问题</title>
+    <link>https://acking-you.github.io/posts/%E5%88%92%E5%88%86%E6%95%B0%E9%97%AE%E9%A2%98/</link>
+    <pubDate>Sun, 30 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%88%92%E5%88%86%E6%95%B0%E9%97%AE%E9%A2%98/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/18d027e6aa9fbe6cb650bbfce5b1ce53.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目 题目链接 题目详解 划分数类型题目都是dp解决，而且都有固定的套路和公式，但我们还是需要在前人的公式上加以理解！ 划分数问题dp总结 我这里就提]]></description>
+</item>
+</channel>
+</rss>

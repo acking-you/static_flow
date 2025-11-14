@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>一文进入JavaWeb后端 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="一文进入JavaWeb后端"><meta property="og:title" content="一文进入JavaWeb后端" />
+<meta property="og:description" content="一文进入JavaWeb后端" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-05-13T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-05-13T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="一文进入JavaWeb后端"/>
+<meta name="twitter:description" content="一文进入JavaWeb后端"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" /><link rel="prev" href="https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" /><link rel="next" href="https://acking-you.github.io/posts/jwt/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "一文进入JavaWeb后端",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb\/"
+        },"genre": "posts","keywords": "一文进入JavaWeb后端","wordcount":  3159 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb\/","datePublished": "2022-05-13T00:00:00+00:00","dateModified": "2022-05-13T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "一文进入JavaWeb后端"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center, https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center"
+        title="一文进入JavaWeb后端" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">一文进入JavaWeb后端</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/javaweb%E7%AC%94%E8%AE%B0/"><i class="far fa-folder fa-fw"></i>JavaWeb笔记</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-05-13">2022-05-13</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 3159 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 7 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#前端基础">前端基础</a>
+      <ul>
+        <li><a href="#css实践编写一个漂亮的登录界面">css实践编写一个漂亮的登录界面</a></li>
+        <li><a href="#前端数据交互和动态的关键">前端数据交互和动态的关键</a></li>
+      </ul>
+    </li>
+    <li><a href="#javaweb后端">JavaWeb后端</a>
+      <ul>
+        <li><a href="#http协议简介">HTTP协议简介</a></li>
+        <li><a href="#搭建tomcat服务器">搭建Tomcat服务器</a></li>
+        <li><a href="#使用maven创建web项目">使用Maven创建Web项目</a></li>
+        <li><a href="#servlet类介绍">Servlet类介绍</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><h2 id="前端基础">前端基础</h2>
+<p>整个前端基础详细介绍看下面这个链接，这里直接讲里面的实践。</p>
+<p><a href="../%e5%89%8d%e7%ab%af%e5%9f%ba%e7%a1%80" rel="">前端基础</a></p>
+<h3 id="css实践编写一个漂亮的登录界面">css实践编写一个漂亮的登录界面</h3>
+<blockquote>
+<p>html文件</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="cp">&lt;!DOCTYPE html&gt;</span>
+<span class="p">&lt;</span><span class="nt">html</span> <span class="na">lang</span><span class="o">=</span><span class="s">&#34;en&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">head</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">meta</span> <span class="na">charset</span><span class="o">=</span><span class="s">&#34;UTF-8&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">meta</span> <span class="na">http-equiv</span><span class="o">=</span><span class="s">&#34;X-UA-Compatible&#34;</span> <span class="na">content</span><span class="o">=</span><span class="s">&#34;IE=edge&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">meta</span> <span class="na">name</span><span class="o">=</span><span class="s">&#34;viewport&#34;</span> <span class="na">content</span><span class="o">=</span><span class="s">&#34;width=device-width, initial-scale=1.0&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>lbwnb<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">link</span> <span class="na">rel</span><span class="o">=</span><span class="s">&#34;icon&#34;</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;icon.png&#34;</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;image/x-icon&#34;</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">link</span> <span class="na">rel</span><span class="o">=</span><span class="s">&#34;stylesheet&#34;</span> <span class="na">href</span><span class="o">=</span><span class="s">&#34;style.css&#34;</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">head</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>登录系统<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+    <span class="p">&lt;</span><span class="nt">form</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">hr</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">div</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;username&#34;</span><span class="p">&gt;</span>
+            <span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+                <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;text&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;用户名&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;&#34;</span><span class="p">&gt;</span>
+            <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">div</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;password&#34;</span><span class="p">&gt;</span>
+            <span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+                <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;密码&#34;</span><span class="p">&gt;</span>
+            <span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+        <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
+            <span class="p">&lt;</span><span class="nt">button</span><span class="p">&gt;</span>登录<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+        <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+    <span class="p">&lt;/</span><span class="nt">form</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">html</span><span class="p">&gt;</span>
+</code></pre></div><blockquote>
+<p>css文件</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="nt">body</span><span class="p">{</span>
+    <span class="k">margin</span><span class="p">:</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">text-align</span><span class="p">:</span> <span class="kc">center</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="nt">h1</span><span class="p">:</span><span class="nd">hover</span> <span class="p">{</span>
+    <span class="k">color</span><span class="p">:</span> <span class="nb">rgb</span><span class="p">(</span><span class="mi">45</span><span class="p">,</span> <span class="mi">150</span><span class="p">,</span> <span class="mi">189</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="nt">input</span><span class="p">{</span>
+    <span class="k">border</span><span class="p">:</span> <span class="kc">none</span><span class="p">;</span>
+    <span class="k">background</span><span class="p">:</span> <span class="mh">#e0e0e0</span><span class="p">;</span>
+    <span class="k">line-height</span><span class="p">:</span> <span class="mi">48</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">border-radius</span><span class="p">:</span> <span class="mi">20</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">padding</span><span class="p">:</span> <span class="mi">0</span> <span class="mi">20</span><span class="kt">px</span> <span class="mi">0</span> <span class="mi">20</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">250</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">font-size</span><span class="p">:</span> <span class="mi">15</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">margin-top</span><span class="p">:</span> <span class="mi">20</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">outline</span><span class="p">:</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="nt">input</span><span class="p">:</span><span class="nd">focus</span><span class="p">{</span>
+    <span class="k">box-shadow</span><span class="p">:</span> <span class="mi">0</span> <span class="mi">2</span><span class="kt">px</span> <span class="mi">10</span><span class="kt">px</span> <span class="kc">gray</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="nt">button</span> <span class="p">{</span>
+    <span class="k">margin-top</span><span class="p">:</span> <span class="mi">60</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">background</span><span class="p">:</span> <span class="mh">#4174e3</span><span class="p">;</span>
+    <span class="k">border</span><span class="p">:</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">border-radius</span><span class="p">:</span> <span class="mi">20</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">height</span><span class="p">:</span> <span class="mi">50</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">width</span><span class="p">:</span> <span class="mi">200</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">color</span><span class="p">:</span> <span class="kc">white</span><span class="p">;</span>
+    <span class="k">font-size</span><span class="p">:</span> <span class="mi">18</span><span class="kt">px</span><span class="p">;</span>
+    <span class="k">box-shadow</span><span class="p">:</span> <span class="mi">0</span> <span class="mi">2</span><span class="kt">px</span> <span class="mi">10</span><span class="kt">px</span> <span class="mh">#63b9f6</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="nt">button</span><span class="p">:</span><span class="nd">focus</span><span class="p">{</span>
+    <span class="k">outline</span><span class="p">:</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">background</span><span class="p">:</span> <span class="mh">#3b4f72</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><h3 id="前端数据交互和动态的关键">前端数据交互和动态的关键</h3>
+<h4 id="javascript事件">JavaScript事件</h4>
+<p>事件就是各种动作会触发的信号，这个信号可以添加一个回调给他来调用，在每次触发的时候会调用对应的回调。</p>
+<p>事件有很多种类。</p>
+<p>常用的有：</p>
+<ul>
+<li>onclick：点击事件</li>
+<li>oninput：内容输入事件</li>
+<li>onsubmit：内容提交事件</li>
+</ul>
+<p>如何为事件添加一个回调呢？</p>
+<ol>
+<li>
+<p>直接在属性值里面添加js代码，如下：（注意代码里不要用双引号</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;console.log(&#39;正在输入文本&#39;)&#34;</span>
+</code></pre></div></li>
+<li>
+<p>引入js文件，然后直接能调用js里的函数。如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;text/javascript&#34;</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;test.js&#34;</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><blockquote>
+<p>然后如下进行使用：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html">  <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;密码&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;f()&#34;</span><span class="p">&gt;</span>
+</code></pre></div><blockquote>
+<p>js文件如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="kd">function</span> <span class="nx">f</span><span class="p">(){</span>
+    <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="s1">&#39;正在输入文本&#39;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></li>
+</ol>
+<h4 id="document-object-modeldom">Document Object Model(DOM)</h4>
+<p>当网页被加载时，浏览器会创建页面的文档对象模型（<em>D</em>ocument <em>O</em>bject <em>M</em>odel），它将整个页面的所有元素全部映射为JS对象，这样我们就可以在JS中操纵页面中的元素。</p>
+<p>这个对象的名字就叫做document。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://www.w3school.com.cn/i/ct_htmltree.gif"
+        data-srcset="https://www.w3school.com.cn/i/ct_htmltree.gif, https://www.w3school.com.cn/i/ct_htmltree.gif 1.5x, https://www.w3school.com.cn/i/ct_htmltree.gif 2x"
+        data-sizes="auto"
+        alt="https://www.w3school.com.cn/i/ct_htmltree.gif"
+        title="DOM HTML 树" /></p>
+<p>比如我现在想要读取页面中某个输入框中的内容，那么我们就需要从DOM中获取此输入框元素的对象：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nb">document</span><span class="p">.</span><span class="nx">getElementById</span><span class="p">(</span><span class="s2">&#34;pwd&#34;</span><span class="p">).</span><span class="nx">value</span> <span class="c1">//通过控件的id获取
+</span></code></pre></div><h5 id="dom实践">DOM实践</h5>
+<p>我们通过DOM实现这样一个功能：我们结合事件，来进行密码长度的校验，密码长度小于6则不合法，不合法的密码，会让密码框边框变红。</p>
+<blockquote>
+<p>输入框变红的css样式：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-css" data-lang="css"><span class="p">.</span><span class="nc">illegal-pwd</span><span class="p">{</span>
+    <span class="k">border</span><span class="p">:</span> <span class="kc">red</span> <span class="mi">1</span><span class="kt">px</span> <span class="kc">solid</span> <span class="cp">!important</span><span class="p">;</span>
+    <span class="k">box-shadow</span><span class="p">:</span> <span class="mi">0</span> <span class="mi">0</span> <span class="mi">5</span><span class="kt">px</span> <span class="kc">red</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>对应的js代码，此函数接受一个参数（元素本身的对象）检测输入的长度是否大于6，否则就将当前元素的class属性设定为css指定的class：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">checkIllegal</span><span class="p">(</span><span class="nx">e</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">value</span><span class="p">.</span><span class="nx">length</span> <span class="o">&lt;</span> <span class="mi">6</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nx">e</span><span class="p">.</span><span class="nx">setAttribute</span><span class="p">(</span><span class="s2">&#34;class&#34;</span><span class="p">,</span> <span class="s2">&#34;illegal-pwd&#34;</span><span class="p">)</span>   
+    <span class="p">}</span><span class="k">else</span> <span class="p">{</span>
+        <span class="nx">e</span><span class="p">.</span><span class="nx">removeAttribute</span><span class="p">(</span><span class="s2">&#34;class&#34;</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>html最终使用：注意参数传this表示这个组件</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;password&#34;</span> <span class="na">placeholder</span><span class="o">=</span><span class="s">&#34;密码&#34;</span> <span class="na">oninput</span><span class="o">=</span><span class="s">&#34;checkIllegal(this)&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>完成以上修改后，会自动检查密码是否合法了。</p>
+<p>既然oninput本身也是一个属性，那么实际上我们可以动态进行修改：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="nb">document</span><span class="p">.</span><span class="nx">getElementById</span><span class="p">(</span><span class="s2">&#34;pwd&#34;</span><span class="p">).</span><span class="nx">oninput</span> <span class="o">=</span> <span class="p">()</span> <span class="p">=&gt;</span> <span class="nx">console</span><span class="p">.</span><span class="nx">info</span><span class="p">(</span><span class="s2">&#34;???&#34;</span><span class="p">)</span>
+</code></pre></div><p>那么，我们前面提及的window对象又是什么东西呢？</p>
+<p>实际上Window对象范围更加广阔，它甚至直接代表了整个窗口，当然也包含我们的Document对象，我们一般通过Window对象来弹出提示框之类的东西。</p>
+<blockquote>
+<p>window.document可以得到当前的DOM。</p>
+</blockquote>
+<h4 id="js发送xhr请求">js发送XHR请求</h4>
+<p>通过使用XMLHttpRequest对象，来向服务器发送一个HTTP请求，下面是一个最简单的请求格式：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">let</span> <span class="nx">xhr</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">XMLHttpRequest</span><span class="p">();</span>
+<span class="nx">xhr</span><span class="p">.</span><span class="nx">open</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;https://www.baidu.com&#39;</span><span class="p">);</span>
+<span class="nx">xhr</span><span class="p">.</span><span class="nx">send</span><span class="p">();</span>
+</code></pre></div><p>上面的例子中，我们向服务器发起了一次网络请求，但是我们请求的是百度的服务器，并且此请求的方法为GET请求。</p>
+<p>我们现在将其绑定到一个按钮上作为事件触发：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">http</span><span class="p">()</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="nx">xhr</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">XMLHttpRequest</span><span class="p">();</span>
+    <span class="nx">xhr</span><span class="p">.</span><span class="nx">open</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;https://www.baidu.com&#39;</span><span class="p">);</span>
+    <span class="nx">xhr</span><span class="p">.</span><span class="nx">send</span><span class="p">();</span>    
+<span class="p">}</span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">input</span> <span class="na">id</span><span class="o">=</span><span class="s">&#34;button&#34;</span> <span class="na">type</span><span class="o">=</span><span class="s">&#34;button&#34;</span> <span class="na">onclick</span><span class="o">=</span><span class="s">&#34;http()&#34;</span><span class="p">&gt;</span>
+</code></pre></div><p>我们可以在网络中查看我们发起的HTTP请求并且查看请求的响应结果，比如上面的请求，会返回百度这个页面的全部HTML代码。</p>
+<p>实际上，我们的浏览器在我们输入网址后，也会向对应网站的服务器发起一次HTTP的GET请求。</p>
+<p>在浏览器得到页面响应后，会加载当前页面，如果当前页面还引用了其他资源文件，那么会继续向服务器发起请求，直到页面中所有的资源文件全部加载完成后，才会停止。</p>
+<h2 id="javaweb后端">JavaWeb后端</h2>
+<h3 id="http协议简介">HTTP协议简介</h3>
+<blockquote>
+<p>Web通信使用的上层协议都是HTTP协议，更准确一点应该是HTTPS，但是HTTPS仅仅只是对HTTP协议的通信过程进行加密，而报文的内容是完全一致的。</p>
+</blockquote>
+<p>需要注意两点：</p>
+<ol>
+<li>http不是长连接，请求完得到结果后，会立马断开连接。若要保持长连接，应该使用websocket。</li>
+<li>http是应用层协议，流量的传输过程和他是无关的，他只负责规定双方如何建立聊天，他采取的底层传输协层协议是TCP协议。</li>
+</ol>
+<p>如果对底层的TCP/IP协议发送流量的过程感兴趣，可以看下我之前的博客：<a href="https://acking-you.gitee.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/#tcp%E5%A4%B4%E9%83%A8%E4%BF%A1%E6%81%AF" target="_blank" rel="noopener noreffer">TCP协议详解</a></p>
+<p><strong>http请求的报文</strong></p>
+<blockquote>
+<p>请求头报文</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8f2e95d7fd9340e8bdd61f0dada3ae3c~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8f2e95d7fd9340e8bdd61f0dada3ae3c~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8f2e95d7fd9340e8bdd61f0dada3ae3c~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8f2e95d7fd9340e8bdd61f0dada3ae3c~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/8f2e95d7fd9340e8bdd61f0dada3ae3c~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<blockquote>
+<p>响应头报文</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/085569782ff245219a82d5deaafdec9b~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/085569782ff245219a82d5deaafdec9b~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/085569782ff245219a82d5deaafdec9b~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/085569782ff245219a82d5deaafdec9b~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/085569782ff245219a82d5deaafdec9b~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h3 id="搭建tomcat服务器">搭建Tomcat服务器</h3>
+<ul>
+<li>
+<p>bin目录：Tomcat服务器的可执行二进制文件等。</p>
+</li>
+<li>
+<p>conf目录：配置文件。</p>
+</li>
+<li>
+<p>lib目录：Tomcat服务端运行的一些依赖，不用关心。</p>
+</li>
+<li>
+<p>logs目录：所有的日志信息都在这里。</p>
+</li>
+<li>
+<p>temp目录：存放运行时产生的一些临时文件，不用关心。</p>
+</li>
+<li>
+<p>work目录：工作目录，Tomcat会将jsp文件转换为java文件（我们后面会讲到，这里暂时不提及）</p>
+</li>
+<li>
+<p>webapp目录：所有的Web项目都在这里，每个文件夹都是一个Web应用程序：</p>
+</li>
+</ul>
+<p>启动服务器：进入bin目录运行startup.bat即可。</p>
+<p>结束服务器：运行shutdown.bat</p>
+<h4 id="登录后台gui管理">登录后台GUI管理</h4>
+<ol>
+<li>
+<p>打开conf目录下的tomcat-users.xml文件，添加以下代码用来创建管理GUI的用户名和密码（添加到最后<code>&lt;/tomcat-users&gt;</code>之前。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml"> <span class="nt">&lt;role</span> <span class="na">rolename=</span><span class="s">&#34;manager-gui&#34;</span><span class="nt">/&gt;</span>
+<span class="nt">&lt;user</span> <span class="na">username=</span><span class="s">&#34;root&#34;</span> <span class="na">password=</span><span class="s">&#34;123&#34;</span> <span class="na">roles=</span><span class="s">&#34;manager-gui&#34;</span><span class="nt">/&gt;</span>
+</code></pre></div></li>
+<li>
+<p>开启服务器，然后用浏览器输入URL：http://localhost:8080/manager，输入上述的用户名和密码便可进入后台。</p>
+</li>
+</ol>
+<p>后台如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/cc5ea7baf31348f6acc30f55f9239e6b~tplv-k3u1fbpfcp-watermark.image?"
+        data-srcset="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/cc5ea7baf31348f6acc30f55f9239e6b~tplv-k3u1fbpfcp-watermark.image?, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/cc5ea7baf31348f6acc30f55f9239e6b~tplv-k3u1fbpfcp-watermark.image? 1.5x, https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/cc5ea7baf31348f6acc30f55f9239e6b~tplv-k3u1fbpfcp-watermark.image? 2x"
+        data-sizes="auto"
+        alt="https://p1-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/cc5ea7baf31348f6acc30f55f9239e6b~tplv-k3u1fbpfcp-watermark.image?"
+        title="image.png" /></p>
+<h4 id="将之前的前端页面部署到tomcat服务器">将之前的前端页面部署到tomcat服务器</h4>
+<ol>
+<li>到webapps目录下创建一个文件夹，我这里创建了一个名为test的文件夹。</li>
+<li>进入test文件夹，把需要加载的前端页面的文件copy到里面。</li>
+</ol>
+<p>经过以上步骤，打开本地浏览器，输入http://localhost:8080/test便可完成访问。</p>
+<p>注意整个主页面的html的命名格式，应该名为index.html。</p>
+<h3 id="使用maven创建web项目">使用Maven创建Web项目</h3>
+<p>虽然我们已经可以在Tomcat上部署我们的前端页面了，但是依然只是一个静态页面（每次访问都是同样的样子），那么如何向服务器请求一个动态的页面呢（比如显示我们访问当前页面的时间）这时就需要我们编写一个Web应用程序来实现了，我们需要在用户向服务器发起页面请求时，进行一些处理，再将结果发送给用户的浏览器。</p>
+<p>**注意：**这里需要使用终极版IDEA，如果你的还是社区版，就很难受了。</p>
+<p>我们打开IDEA，新建一个项目，选择Java Enterprise（社区版没有此选项！）项目名称随便，项目模板选择Web应用程序，然后我们需要配置Web应用程序服务器，将我们的Tomcat服务器集成到IDEA中。配置很简单，首先点击新建，然后设置Tomcat主目录即可，配置完成后，点击下一步即可，依赖项使用默认即可，然后点击完成，之后IDEA会自动帮助我们创建Maven项目。</p>
+<p>创建完成后，直接点击右上角即可运行此项目了，但是我们发现，有一个Servlet页面不生效。</p>
+<p>需要注意的是，Tomcat10以上的版本比较新，Servlet API包名发生了一些变化，因此我们需要修改一下依赖：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml"><span class="nt">&lt;dependency&gt;</span>
+    <span class="nt">&lt;groupId&gt;</span>jakarta.servlet<span class="nt">&lt;/groupId&gt;</span>
+    <span class="nt">&lt;artifactId&gt;</span>jakarta.servlet-api<span class="nt">&lt;/artifactId&gt;</span>
+    <span class="nt">&lt;version&gt;</span>5.0.0<span class="nt">&lt;/version&gt;</span>
+    <span class="nt">&lt;scope&gt;</span>provided<span class="nt">&lt;/scope&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre></div><p>注意包名全部从javax改为jakarta，我们需要手动修改一下。</p>
+<p>现在我们手动点击运行，可以发现网页已经可以跑起来了。</p>
+<p><strong>为什么整个项目能够通过tomcat跑起来？</strong></p>
+<p>实际上因为tomcat支持Servlet的标准，然后可以调用Servlet实现动态页面加载。</p>
+<p>当然也可以静态加载网站。我们可以通过maven把项目打包成war包，然后把target里面的war后缀的文件复制到tomcat的webApps目录下，然后重启启动tomcat服务器，你会发现他会被解压为一个文件夹，然后这就是一个可以被服务的新项目了。</p>
+<h3 id="servlet类介绍">Servlet类介绍</h3>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb%E5%90%8E%E7%AB%AF/">一文进入JavaWeb后端</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-05-13</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端" data-hashtags="一文进入JavaWeb后端"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-hashtag="一文进入JavaWeb后端"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端" data-image="https://img-blog.csdnimg.cn/img_convert/8db816efd6abe83538c4d47108d9c840.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端" data-description="一文进入JavaWeb后端"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端" data-description="一文进入JavaWeb后端"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/%E4%B8%80%E6%96%87%E8%BF%9B%E5%85%A5javaweb/" data-title="一文进入JavaWeb后端"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" class="prev" rel="prev" title="前端基础"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/jwt/" class="next" rel="next" title="【项目必会】用户鉴权是什么？jwt是什么？ | 青训营笔记">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>

@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>TCP中已有SO_KEEPALIVE选项，为什么还要在应用层加入心跳包机制？ - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/tcp%E4%B8%AD%E5%B7%B2%E6%9C%89so_keepalive%E9%80%89%E9%A1%B9%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%98%E8%A6%81%E5%9C%A8%E5%BA%94%E7%94%A8%E5%B1%82%E5%8A%A0%E5%85%A5%E5%BF%83%E8%B7%B3%E5%8C%85%E6%9C%BA%E5%88%B6/</link>
+        <description>TCP中已有SO_KEEPALIVE选项，为什么还要在应用层加入心跳包机制？ - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sun, 28 May 2023 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/tcp%E4%B8%AD%E5%B7%B2%E6%9C%89so_keepalive%E9%80%89%E9%A1%B9%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%98%E8%A6%81%E5%9C%A8%E5%BA%94%E7%94%A8%E5%B1%82%E5%8A%A0%E5%85%A5%E5%BF%83%E8%B7%B3%E5%8C%85%E6%9C%BA%E5%88%B6/" rel="self" type="application/rss+xml" /><item>
+    <title>TCP中已有SO_KEEPALIVE选项，为什么还要在应用层加入心跳包机制？</title>
+    <link>https://acking-you.github.io/posts/tcp%E4%B8%AD%E5%B7%B2%E6%9C%89so_keepalive%E9%80%89%E9%A1%B9%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%98%E8%A6%81%E5%9C%A8%E5%BA%94%E7%94%A8%E5%B1%82%E5%8A%A0%E5%85%A5%E5%BF%83%E8%B7%B3%E5%8C%85%E6%9C%BA%E5%88%B6/</link>
+    <pubDate>Sun, 28 May 2023 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/tcp%E4%B8%AD%E5%B7%B2%E6%9C%89so_keepalive%E9%80%89%E9%A1%B9%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%98%E8%A6%81%E5%9C%A8%E5%BA%94%E7%94%A8%E5%B1%82%E5%8A%A0%E5%85%A5%E5%BF%83%E8%B7%B3%E5%8C%85%E6%9C%BA%E5%88%B6/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/e5259f24f6a5a7fb2331d3fd0d18e631.png#pic_center" referrerpolicy="no-referrer">
+            </div>本文解释了 SO_KEEPALIVE 选项，和为什么要在应用层加入心跳包机制，以及心跳包机制如何设计的方方面面。 在实际开发中，我们需要处理下面两种情形中遇到的问题： 情]]></description>
+</item>
+</channel>
+</rss>

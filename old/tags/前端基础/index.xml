@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>前端基础 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/</link>
+        <description>前端基础 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Fri, 13 May 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/" rel="self" type="application/rss+xml" /><item>
+    <title>前端基础</title>
+    <link>https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/</link>
+    <pubDate>Fri, 13 May 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%89%8D%E7%AB%AF%E5%9F%BA%E7%A1%80/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center" referrerpolicy="no-referrer">
+            </div>前端基础 本章节会讲解前端基础内容（如果已经学习过，可以直接跳到下一个大章节了）那么什么是前端，什么又是后端呢？ 前端：我们网站的页面，包括网站]]></description>
+</item>
+</channel>
+</rss>

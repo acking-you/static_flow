@@ -1,0 +1,15 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>宏和模板的对比——预编译和编译的较量 - 标签 - L_B__</title>
+        <link>https://acking-you.github.io/tags/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/</link>
+        <description>宏和模板的对比——预编译和编译的较量 - 标签 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sat, 05 Mar 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/tags/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/" rel="self" type="application/rss+xml" /><item>
+    <title>宏和模板的对比——预编译和编译的较量</title>
+    <link>https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/</link>
+    <pubDate>Sat, 05 Mar 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%AE%8F%E5%92%8C%E6%A8%A1%E6%9D%BF%E7%9A%84%E5%AF%B9%E6%AF%94%E9%A2%84%E7%BC%96%E8%AF%91%E5%92%8C%E7%BC%96%E8%AF%91%E7%9A%84%E8%BE%83%E9%87%8F/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/f58e3cdfd042ae0db6a192022d83a1ac.png#pic_center" referrerpolicy="no-referrer">
+            </div>本文默认你已经拥有基本的gcc编译选项知识，如果没有，可以看看这篇文章 程序的编译过程gcc版。 从预编译的角度对比宏定义和模板 来测测宏定义 大家]]></description>
+</item>
+</channel>
+</rss>

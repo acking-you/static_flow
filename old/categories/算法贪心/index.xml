@@ -1,0 +1,31 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>算法——贪心 - 分类 - L_B__</title>
+        <link>https://acking-you.github.io/categories/%E7%AE%97%E6%B3%95%E8%B4%AA%E5%BF%83/</link>
+        <description>算法——贪心 - 分类 - L_B__</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-CN</language><lastBuildDate>Sat, 19 Feb 2022 00:00:00 &#43;0000</lastBuildDate><atom:link href="https://acking-you.github.io/categories/%E7%AE%97%E6%B3%95%E8%B4%AA%E5%BF%83/" rel="self" type="application/rss+xml" /><item>
+    <title>堆的运用——有序元素的多路归并topk问题</title>
+    <link>https://acking-you.github.io/posts/%E5%A0%86%E7%9A%84%E8%BF%90%E7%94%A8%E6%9C%89%E5%BA%8F%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%9A%E8%B7%AF%E5%BD%92%E5%B9%B6topk%E9%97%AE%E9%A2%98/</link>
+    <pubDate>Sat, 19 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/%E5%A0%86%E7%9A%84%E8%BF%90%E7%94%A8%E6%9C%89%E5%BA%8F%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%9A%E8%B7%AF%E5%BD%92%E5%B9%B6topk%E9%97%AE%E9%A2%98/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/e706274b97f65b3aac9471d1da024918.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目一：有序矩阵第k小的元素(提炼出做题方法) 题目链接 解题技法 感觉这张图基本就清楚了这题目如何解。 具体详解过程请看lc大神：题目详解 解题代码]]></description>
+</item>
+<item>
+    <title>leetcode每日一题——和为K的最少斐波那契数字数目</title>
+    <link>https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98%E5%92%8C%E4%B8%BAk%E7%9A%84%E6%9C%80%E5%B0%91%E6%96%90%E6%B3%A2%E9%82%A3%E5%A5%91%E6%95%B0%E5%AD%97%E6%95%B0%E7%9B%AE/</link>
+    <pubDate>Thu, 03 Feb 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98%E5%92%8C%E4%B8%BAk%E7%9A%84%E6%9C%80%E5%B0%91%E6%96%90%E6%B3%A2%E9%82%A3%E5%A5%91%E6%95%B0%E5%AD%97%E6%95%B0%E7%9B%AE/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://img-blog.csdnimg.cn/img_convert/526441b9fa37b831c54f8b76bf498cca.png#pic_center" referrerpolicy="no-referrer">
+            </div>题目 题目链接 题目详解 我开始是想着构造好fib数组的值，然后用背包问题去解决它。可惜，直接超时了！ 后面直接用最简单的贪心方式没想到真的可行。。]]></description>
+</item>
+<item>
+    <title>leetcode每日一题-游戏中弱角色的数量</title>
+    <link>https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98-%E6%B8%B8%E6%88%8F%E4%B8%AD%E5%BC%B1%E8%A7%92%E8%89%B2%E7%9A%84%E6%95%B0%E9%87%8F/</link>
+    <pubDate>Fri, 28 Jan 2022 00:00:00 &#43;0000</pubDate><guid>https://acking-you.github.io/posts/leetcode%E6%AF%8F%E6%97%A5%E4%B8%80%E9%A2%98-%E6%B8%B8%E6%88%8F%E4%B8%AD%E5%BC%B1%E8%A7%92%E8%89%B2%E7%9A%84%E6%95%B0%E9%87%8F/</guid>
+    <description><![CDATA[<div class="featured-image">
+                <img src="https://s4.ax1x.com/2022/01/26/7L4VE9.png" referrerpolicy="no-referrer">
+            </div>题目 题目链接 解题思路 一句话解决：以第一个字段为标准从大到小排序，然后再遍历数组，对比第二字段的最大值即可。 关键细节： 为了避免第一个字段相同的]]></description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <title>TCP协议详解 - L_B__</title><meta name="referrer" content="no-referrer">
+<meta name="description" content="TCP协议详解"><meta property="og:title" content="TCP协议详解" />
+<meta property="og:description" content="TCP协议详解" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" /><meta property="og:image" content="https://acking-you.github.io/logo.png"/><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-02-21T00:00:00+00:00" />
+<meta property="article:modified_time" content="2022-02-21T00:00:00+00:00" />
+
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:image" content="https://acking-you.github.io/logo.png"/>
+
+<meta name="twitter:title" content="TCP协议详解"/>
+<meta name="twitter:description" content="TCP协议详解"/>
+<meta name="application-name" content="FeelIt">
+<meta name="apple-mobile-web-app-title" content="FeelIt"><meta name="theme-color" content="#ffffff"><meta name="msapplication-TileColor" content="#da532c"><link rel="canonical" href="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" /><link rel="prev" href="https://acking-you.github.io/posts/1bit%E4%B8%8E2bit%E5%AD%97%E7%AC%A6%E7%AE%80%E5%8D%95%E6%A8%A1%E6%8B%9F%E9%A2%98/" /><link rel="next" href="https://acking-you.github.io/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" /><link rel="stylesheet" href="/css/page.min.css"><link rel="stylesheet" href="/css/home.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "TCP协议详解",
+        "inLanguage": "zh-CN",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https:\/\/acking-you.github.io\/posts\/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3\/"
+        },"genre": "posts","keywords": "TCP协议详解","wordcount":  15008 ,
+        "url": "https:\/\/acking-you.github.io\/posts\/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3\/","datePublished": "2022-02-21T00:00:00+00:00","dateModified": "2022-02-21T00:00:00+00:00","publisher": {
+            "@type": "Organization",
+            "name": "作者"},"author": {
+                "@type": "Person",
+                "name": "作者"
+            },"description": "TCP协议详解"
+    }
+    </script></head><body data-header-desktop="auto" data-header-mobile="auto"><script>(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('auto' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : 'auto' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="L_B__">L_B__</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> 文章 </a><a class="menu-item" href="/tags/"> 标签 </a><a class="menu-item" href="/categories/"> 分类 </a><span class="menu-item delimiter"></span><span class="menu-item search" id="search-desktop">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-desktop">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-desktop" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-desktop" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-desktop">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="L_B__">L_B__</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><div class="search-wrapper">
+                    <div class="search mobile" id="search-mobile">
+                        <input type="text" placeholder="搜索文章标题或内容..." id="search-input-mobile">
+                        <a href="#" class="search-button search-toggle" id="search-toggle-mobile" title="搜索">
+                            <i class="fas fa-search fa-fw"></i>
+                        </a>
+                        <a href="#" class="search-button search-clear" id="search-clear-mobile" title="清空">
+                            <i class="fas fa-times-circle fa-fw"></i>
+                        </a>
+                        <span class="search-button search-loading" id="search-loading-mobile">
+                            <i class="fas fa-spinner fa-fw fa-spin"></i>
+                        </span>
+                    </div>
+                    <a href="#" class="search-cancel" id="search-cancel-mobile">
+                        取消
+                    </a>
+                </div><a class="menu-item" href="/posts/" title="">文章</a><a class="menu-item" href="/tags/" title="">标签</a><a class="menu-item" href="/categories/" title="">分类</a><div class="menu-item"><a href="javascript:void(0);" class="theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div></div>
+    </div>
+</header><div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div><main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content" id="toc-content-auto"></div>
+        </div><article class="page single" data-toc="disable"><div class="featured-image"><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"
+        data-srcset="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center, https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center 1.5x, https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"
+        title="TCP协议详解" /></div><div class="single-card" data-image="true"><h2 class="single-title animated flipInX">TCP协议详解</h2><div class="post-meta">
+                <div class="post-meta-line"><span class="post-author"><a href="/" title="Author" rel=" author" class="author"><i class="fas fa-user-circle fa-fw"></i>作者</a></span>&nbsp;<span class="post-category">出版于  <a href="/categories/linux%E7%BD%91%E7%BB%9C%E7%BC%96%E7%A8%8B/"><i class="far fa-folder fa-fw"></i>Linux网络编程</a></span></div>
+                <div class="post-meta-line"><span><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2022-02-21">2022-02-21</time></span>&nbsp;<span><i class="fas fa-pencil-alt fa-fw"></i>&nbsp;约 15008 字</span>&nbsp;
+                    <span><i class="far fa-clock fa-fw"></i>&nbsp;预计阅读 30 分钟</span>&nbsp;</div>
+            </div>
+            
+            <hr><div class="details toc" id="toc-static"  data-kept="">
+                    <div class="details-summary toc-title">
+                        <span>目录</span>
+                        <span><i class="details-icon fas fa-angle-right"></i></span>
+                    </div>
+                    <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#tcp头部信息">TCP头部信息</a>
+      <ul>
+        <li><a href="#tcp头部信息清单">TCP头部信息清单</a></li>
+        <li><a href="#tcp头部选项">TCP头部选项</a></li>
+        <li><a href="#一个真实的抓包验证过程">一个真实的抓包验证过程</a></li>
+      </ul>
+    </li>
+    <li><a href="#tcp的建立和关闭">TCP的建立和关闭</a>
+      <ul>
+        <li><a href="#三次握手和四次挥手">三次握手和四次挥手</a></li>
+        <li><a href="#半关闭状态">半关闭状态</a></li>
+        <li><a href="#超时重连的抓包探索">超时重连的抓包探索</a></li>
+      </ul>
+    </li>
+    <li><a href="#tcp状态转移过程">TCP状态转移过程</a>
+      <ul>
+        <li><a href="#tcp状态转移总图文字详解">TCP状态转移总图文字详解</a></li>
+        <li><a href="#time_wait状态">TIME_WAIT状态</a></li>
+        <li><a href="#复位报文段">复位报文段</a></li>
+      </ul>
+    </li>
+    <li><a href="#tcp数据流">TCP数据流</a>
+      <ul>
+        <li><a href="#交互数据流抓包讲解">交互数据流抓包讲解</a></li>
+        <li><a href="#tcp成块数据流抓包讲解">TCP成块数据流抓包讲解</a></li>
+        <li><a href="#带外数据">带外数据</a></li>
+      </ul>
+    </li>
+    <li><a href="#tcp数据流的控制拥塞控制">TCP数据流的控制（拥塞控制）</a>
+      <ul>
+        <li><a href="#超时重传机制">超时重传机制</a></li>
+        <li><a href="#拥塞控制">拥塞控制</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav></div>
+                </div><div class="content" id="content"><blockquote>
+<p>本文章为《Linux高性能服务器编程》第四章的笔记，该书描述该章的各种内容的时候，几乎都使用了实践的工具来抓包验证并解释的方式来铺开知识点。我这里几乎是照搬了书本的知识点，但做了个分类处理。</p>
+</blockquote>
+<h1 id="tcp协议">TCP协议</h1>
+<p>在详细讨论TCP协议之前，我们先简单介绍一下TCP服务的特点，以及它和UDP服务的区别。</p>
+<p>传输层协议主要有两个：TCP协议和UDP协议。TCP协议相对于UDP协议的特点是：<strong>面向连接、字节流和可靠传输</strong>。</p>
+<ul>
+<li>
+<p><strong>面向连接</strong>：
+使用TCP协议通信的双方必须先建立连接，然后才能开始数据的读写。双方都必须为该连接分配必要的内核资源，以管理连接的状态和连接上数据的传输。TCP连接是全双工的，即双方的数据读写可以通过一个连接进行。完成数据交换之后，通信双方都必须断开连接以释放系统资源。</p>
+</li>
+<li>
+<p><strong>字节流</strong>：
+字节流服务和数据报服务的接收双方的最终表现出来的区别是，通信双方是否必须执行相同次数的读、写操作。具体原因在于，<strong>TCP通信是有接收和发送缓冲区的，应用程序可以一次性将TCP接收缓冲区中的数据全部读出，也可以分多次读取，这取决于用户指定的应用程序读缓冲区的大小</strong>。因此，应用程序执行的读操作次数和TCP模块接收到的TCP报文段个数之间也没有固定的数量关系。
+综上所述，<strong>发送端执行的写操作次数和接收端执行的读操作次数之间没有任何数量关系，这就是字节流的概念：应用程序对数据的发送和接收是没有边界限制的</strong>。UDP则不然。发送端应用程序每执行一次写操作，UDP模块就将其封装成一个UDP数据报并发送之。接收端必须及时针对每一个UDP数据报执行读操作（通过recvfrom系统调用），否则就会丢包（这经常发生在较慢的服务器上）。并且，如果用户没有指定足够的应用程序缓冲区（程序开发者自建的）来读取UDP数据，则UDP数据将被截断。</p>
+<blockquote>
+<p>图3-1和图3-2显示了TCP字节流服务和UDP数据报服务的上述区别。两图中省略了传输层以下的通信细节。
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/0c8d32ae9e064f2a8d196b2672a82380.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/0c8d32ae9e064f2a8d196b2672a82380.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/0c8d32ae9e064f2a8d196b2672a82380.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/0c8d32ae9e064f2a8d196b2672a82380.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/0c8d32ae9e064f2a8d196b2672a82380.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP和UDP对比" /></p>
+</blockquote>
+</li>
+<li>
+<p><strong>可靠传输</strong>：</p>
+<ol>
+<li>TCP协议采用发送应答机制，即发送端发送的每个TCP报文段都必须得到接收方的应答，才认为这个TCP报文段传输成功。</li>
+<li>TCP协议采用超时重传机制，发送端在发送出一个TCP报文段之后启动定时器，如果在定时时间内未收到应答，它将重发该报文段。</li>
+<li>因为TCP报文段最终是以IP数据报发送的，而IP数据报到达接收端可能乱序、重复，所以TCP协议还会对接收到的TCP报文段重排、整理，再交付给应用层。</li>
+</ol>
+<blockquote>
+<p>UDP协议则和IP协议一样，提供不可靠服务。它们都需要上层协议来处理数据确认和超时重传。</p>
+</blockquote>
+</li>
+</ul>
+<h2 id="tcp头部信息">TCP头部信息</h2>
+<h3 id="tcp头部信息清单">TCP头部信息清单</h3>
+<blockquote>
+<p>TCP头部结构如图3-3所示，其中的诸多字段为管理TCP连接和控制数据流提供了足够的信息。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/49b260c92fc748d88d484c2ee59a338a.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/49b260c92fc748d88d484c2ee59a338a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/49b260c92fc748d88d484c2ee59a338a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/49b260c92fc748d88d484c2ee59a338a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/49b260c92fc748d88d484c2ee59a338a.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP头部结构" /></p>
+<h4 id="16位端口号port-number">16位端口号（port number）</h4>
+<p>告知主机该报文段是来自哪里（源端口）以及传给哪个上层协议或应用程序（目的端口）的。</p>
+<blockquote>
+<p>进行TCP通信时，客户端通常使用系统自动选择的临时端口号，而服务器则使用知名服务端口号。</p>
+</blockquote>
+<h4 id="32位序号sequence-number">32位序号（sequence number）</h4>
+<p>一次TCP通信（从TCP连接建立到断开）过程中某一个传输方向上的字节流的每个字节的编号。</p>
+<blockquote>
+<p>假设主机A和主机B进行TCP通信，A发送给B的第一个TCP报文段中，序号值被系统初始化为某个随机值ISN（InitialSequence Number，初始序号值）。那么在该传输方向上（从A到B），后续的TCP报文段中序号值将被系统设置成ISN加上该报文段所携带数据的第一个字节在整个字节流中的偏移。例如，某个TCP报文段传送的数据是字节流中的第1025～2048字节，那么该报文段的序号值就是ISN+1025。另外一个传输方向（从B到A）的TCP报文段的序号值也具有相同的含义。</p>
+</blockquote>
+<h4 id="32位确认号acknowledgement-number">32位确认号（acknowledgement number）</h4>
+<p>用作对另一方发送来的TCP报文段的响应。其值是收到的TCP报文段的序号值加1。</p>
+<blockquote>
+<p>假设主机A和主机B进行TCP通信，那么A发送出的TCP报文段不仅携带自己的序号，而且包含对B发送来的TCP报文段的确认号。反之，B发送出的TCP报文段也同时携带自己的序号和对A发送来的报文段的确认号。</p>
+</blockquote>
+<h4 id="4位头部长度header-length">4位头部长度（header length）</h4>
+<p>标识该TCP头部有多少个32bit字（4字节）。因为4位最大能表示15，所以TCP头部最长是60字节。</p>
+<h4 id="6位标志位">6位标志位</h4>
+<p>❑URG标志，表示紧急指针（urgent pointer）是否有效。</p>
+<p>❑ACK标志，表示确认号是否有效。我们称携带ACK标志的TCP报文段为确认报文段。</p>
+<p>❑PSH标志，提示接收端应用程序应该立即从TCP接收缓冲区中读走数据，为接收后续数据腾出空间（如果应用程序不将接收到的数据读走，它们就会一直停留在TCP接收缓冲区中）。</p>
+<p>❑RST标志，表示要求对方重新建立连接。我们称携带RST标志的TCP报文段为复位报文段。</p>
+<p>❑SYN标志，表示请求建立一个连接。我们称携带SYN标志的TCP报文段为同步报文段。</p>
+<p>❑FIN标志，表示通知对方本端要关闭连接了。我们称携带FIN标志的TCP报文段为结束报文段。</p>
+<h4 id="16位窗口大小window-size">16位窗口大小（window size）</h4>
+<p>是TCP流量控制的一个手段。这里说的窗口，指的是接收通告窗口（Receiver Window，RWND）<a href="" rel="">注意这个名词，后面TCP数据流的控制会再碰到</a>。它告诉对方本端的TCP接收缓冲区还能容纳多少字节的数据，这样对方就可以控制发送数据的速度。</p>
+<h4 id="16位校验和tcp-checksum">16位校验和（TCP checksum）</h4>
+<p>由发送端填充，接收端对TCP报文段执行CRC算法以检验TCP报文段在传输过程中是否损坏。注意，这个校验不仅包括TCP头部，也包括数据部分。这也是TCP可靠传输的一个重要保障。</p>
+<h4 id="16位紧急指针urgent-pointer">16位紧急指针（urgent pointer）</h4>
+<p>是一个正的偏移量。它和序号字段的值相加表示最后一个紧急数据的下一字节的序号。因此，确切地说，这个字段是紧急指针相对当前序号的偏移，不妨称之为紧急偏移。TCP的紧急指针是发送端向接收端发送紧急数据的方法。我们将在后面讨论TCP紧急数据。</p>
+<h3 id="tcp头部选项">TCP头部选项</h3>
+<p>TCP头部的最后一个选项字段（options）是可变长的可选信息。这部分最多包含40字节，因为TCP头部最长是60字节（其中还包含前面讨论的20字节的固定部分）。典型的TCP头部选项结构如图3-4所示。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/95a8f152642e4a168f7eb8c3631c9da6.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/95a8f152642e4a168f7eb8c3631c9da6.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/95a8f152642e4a168f7eb8c3631c9da6.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/95a8f152642e4a168f7eb8c3631c9da6.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/95a8f152642e4a168f7eb8c3631c9da6.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP头部选项" /></p>
+<blockquote>
+<p>选项的第一个字段kind说明选项的类型。有的TCP选项没有后面两个字段，仅包含1字节的kind字段。第二个字段length（如果有的话）指定该选项的总长度，该长度包括kind字段和length字段占据的2字节。第三个字段info（如果有的话）是选项的具体信息。</p>
+</blockquote>
+<p>常见的TCP选项有7种，如图3-5所示。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/991ecc65abe8427fadfae9652ae76620.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/991ecc65abe8427fadfae9652ae76620.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/991ecc65abe8427fadfae9652ae76620.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/991ecc65abe8427fadfae9652ae76620.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/991ecc65abe8427fadfae9652ae76620.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="七种TCP选项" /></p>
+<p>kind=0是选项表结束选项。</p>
+<p>kind=1是空操作（nop）选项，没有特殊含义，一般用于将TCP选项的总长度填充为4字节的整数倍。</p>
+<p>kind=2是最大报文段长度选项。<a href="" rel="">重要</a></p>
+<blockquote>
+<p>TCP连接初始化时，通信双方使用该选项来协商最大报文段长度（Max Segment Size，MSS）。TCP模块通常将MSS设置为（MTU-40）字节（减掉的这40字节包括20字节的TCP头部和20字节的IP头部）。这样携带TCP报文段的IP数据报的长度就不会超过MTU（假设TCP头部和IP头部都不包含选项字段，并且这也是一般情况），从而避免本机发生IP分片。对以太网而言，MSS值是1460（1500-40）字节。</p>
+</blockquote>
+<p>kind=3是窗口扩大因子选项。<a href="" rel="">重要</a></p>
+<blockquote>
+<p>TCP连接初始化时，通信双方使用该选项来协商接收通告窗口的扩大因子。在TCP的头部中，接收通告窗口大小是用16位表示的，故最大为65 535字节，但实际上TCP模块允许的接收通告窗口大小远不止这个数（为了提高TCP通信的吞吐量）。窗口扩大因子解决了这个问题。假设TCP头部中的接收通告窗口大小是N，窗口扩大因子（移位数）是M，那么TCP报文段的实际接收通告窗口大小是N乘2M ，或者说N左移M位。注意，M的取值范围是0～14。我们可以通过修改/proc/sys/net/ipv4/tcp_window_scaling内核变量来启用或关闭窗口扩大因子选项。</p>
+<p>和MSS选项一样，窗口扩大因子选项只能出现在同步报文段中，否则将被忽略。但同步报文段本身不执行窗口扩大操作，即同步报文段头部的接收通告窗口大小就是该TCP报文段的实际接收通告窗口大小。当连接建立好之后，每个数据传输方向的窗口扩大因子就固定不变了。</p>
+</blockquote>
+<p>kind=4是选择性确认（Selective Acknowledgment，SACK）选项。</p>
+<blockquote>
+<p>TCP通信时，如果某个TCP报文段丢失，则TCP模块会重传最后被确认的TCP报文段后续的所有报文段，这样原先已经正确传输的TCP报文段也可能重复发送，从而降低了TCP性能。SACK技术正是为改善这种情况而产生的，<strong>它使TCP模块只重新发送丢失的TCP报文段，不用发送所有未被确认的TCP报文段</strong>。选择性确认选项用在连接初始化时，表示是否支持SACK技术。我们可以通过修改/proc/sys/net/ipv4/tcp_sack内核变量来启用或关闭选择性确认选项。</p>
+</blockquote>
+<p>kind=5是SACK实际工作的选项。</p>
+<blockquote>
+<p>该选项的参数告诉发送方本端已经收到并缓存的不连续的数据块，从而让发送端可以据此检查并重发丢失的数据块。每个块边沿（edge of block）参数包含一个4字节的序号。其中块左边沿表示不连续块的第一个数据的序号，而块右边沿则表示不连续块的最后一个数据的序号的下一个序号。这样一对参数（块左边沿和块右边沿）之间的数据是没有收到的。因为一个块信息占用8字节，所以TCP头部选项中实际上最多可以包含4个这样的不连续数据块（考虑选项类型和长度占用的2字节）。</p>
+</blockquote>
+<p>kind=8是时间戳选项。</p>
+<blockquote>
+<p>该选项提供了较为准确的计算通信双方之间的回路时间（Round Trip Time，RTT）的方法，从而为TCP流量控制提供重要信息。我们可以通过修改/proc/sys/net/ipv4/tcp_timestamps内核变量来启用或关闭时间戳选项。</p>
+</blockquote>
+<h3 id="一个真实的抓包验证过程">一个真实的抓包验证过程</h3>
+<p>tcpdump抓取数据包</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/09234d664196461aa2f625a78a20c42c.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/09234d664196461aa2f625a78a20c42c.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/09234d664196461aa2f625a78a20c42c.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/09234d664196461aa2f625a78a20c42c.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/09234d664196461aa2f625a78a20c42c.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="抓包返回" /></p>
+<p>tcpdump输出Flags[S]，表示该TCP报文段包含SYN标志，因此它是一个同步报文段。如果TCP报文段包含其他标志，则tcpdump也会将该标志的首字母显示在“Flags”后的方括号中。</p>
+<p>seq是序号值。因为该同步报文段是从127.0.0.1.41621（客户端IP地址和端口号）到127.0.0.1.23（服务器IP地址和端口号）这个传输方向上的第一个TCP报文段，所以这个序号值也就是此次通信过程中该传输方向的ISN值。并且，因为这是整个通信过程中的第一个TCP报文段，所以它没有针对对方发送来的TCP报文段的确认值（尚未收到任何对方发送来的TCP报文段）。</p>
+<p>win是接收通告窗口的大小。因为这是一个同步报文段，所以win值反映的是实际的接收通告窗口大小。</p>
+<p>options是TCP选项，其具体内容列在方括号中。mss是发送端（客户端）通告的最大报文段长度。通过ifconfig命令查看回路接口的MTU为16436字节，因此可以预想到TCP报文段的MSS为16396（16436-40）字节。sackOK表示发送端支持并同意使用SACK选项。TS val是发送端的时间戳。ecr是时间戳回显应答。因为这是一次TCP通信的第一个TCP报文段，所以它针对对方的时间戳的应答为0（尚未收到对方的时间戳）。紧接着的nop是一个空操作选项。wscale指出发送端使用的窗口扩大因子为6。</p>
+<h2 id="tcp的建立和关闭">TCP的建立和关闭</h2>
+<h3 id="三次握手和四次挥手">三次握手和四次挥手</h3>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/406a923c04444d3d8312470b4fb40344.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/406a923c04444d3d8312470b4fb40344.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/406a923c04444d3d8312470b4fb40344.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/406a923c04444d3d8312470b4fb40344.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/406a923c04444d3d8312470b4fb40344.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP建立和关闭" /></p>
+<h4 id="三次握手">三次握手</h4>
+<p>第1个TCP报文段包含SYN标志，因此它是一个同步报文段，即ernest-laptop（客户端）向Kongming20（服务器）发起连接请求。同时，该同步报文段包含一个ISN值为535734930的序号。</p>
+<p>第2个TCP报文段也是同步报文段，表示Kongming20同意与ernest-laptop建立连接。同时它发送自己的ISN值为2159701207的序号，并对第1个同步报文段进行确认。确认值是535734931，即第1个同步报文段的序号值加1。<strong>序号值是用来标识TCP数据流中的数据部分的起始字节在整个传输过程中的序号。但同步报文段比较特殊，即使它并没有携带任何应用程序数据，它也要占用一个序号值</strong>。</p>
+<p>第3个TCP报文段是ernest-laptop对第2个同步报文段的确认。至此，TCP连接就建立起来了。建立TCP连接的这3个步骤被称为TCP三次握手。</p>
+<h4 id="四次挥手">四次挥手</h4>
+<p>后面4个TCP报文段是关闭连接的过程。第4个TCP报文段包含FIN标志，因此它是一个结束报文段，即ernest-laptop要求关闭连接。结束报文段和同步报文段一样，也要占用一个序号值。</p>
+<p>Kongming20用TCP报文段5来确认该结束报文段。紧接着Kongming20发送自己的结束报文段6，ernest-laptop则用TCP报文段7给予确认。实际上，仅用于确认目的的确认报文段5是可以省略的，因为结束报文段6也携带了该确认信息。确认报文段5是否出现在连接断开的过程中，取决于TCP的延迟确认特性（<strong>除了延迟确认特性外我觉得还能用来实现半关闭状态</strong>）。</p>
+<p>在连接的关闭过程中，因为ernest-laptop先发送结束报文段（telnet客户端程序主动退出），故称ernest-laptop执行主动关闭，而称Kongming20执行被动关闭。</p>
+<h3 id="半关闭状态">半关闭状态</h3>
+<p>TCP通信的一端可以发送结束报文段给对方，告诉它本端已经完成了数据的发送，但允许继续接收来自对方的数据，直到对方也发送结束报文段以关闭连接。TCP连接的这种状态称为半关闭（half close）状态，如图3-7所示。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/6fc4bf4a08ba42778640e1791a460f8a.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/6fc4bf4a08ba42778640e1791a460f8a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/6fc4bf4a08ba42778640e1791a460f8a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/6fc4bf4a08ba42778640e1791a460f8a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/6fc4bf4a08ba42778640e1791a460f8a.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="半关闭状态的收发过程" /></p>
+<p>socket网络编程接口通过shutdown函数提供了对半关闭的支持，我们将在后续章节讨论它。这里强调一下，虽然我们介绍了半关闭状态，但是使用半关闭的应用程序很少见。</p>
+<h3 id="超时重连的抓包探索">超时重连的抓包探索</h3>
+<p>前面我们讨论的是很快建立连接的情况。如果客户端访问一个距离它很远的服务器，或者由于网络繁忙，导致服务器对于客户端发送出的同步报文段没有应答，此时客户端程序将产生什么样的行为呢？显然，对于提供可靠服务的TCP来说，它必然是先进行重连（可能执行多次），如果重连仍然无效，则通知应用程序连接超时。</p>
+<p>作者抓包Linux系统后输出包的时间戳，得到以下结果：</p>
+<blockquote>
+<p>我们一共抓取到6个TCP报文段，它们都是同步报文段，并且具有相同的序号值，这说明后面5个同步报文段都是超时重连报文段。观察这些TCP报文段被发送的时间间隔，它们分别为1s、2s、4s、8s和16s（由于定时器精度的问题，这些时间间隔都有一定偏差），可以推断最后一个TCP报文段的超时时间是32s（63s-16s-8s-4s-2s-1s）。因此，TCP模块一共执行了5次重连操作，这是由/proc/sys/net/ipv4/tcp_syn_retries内核变量所定义的。每次重连的超时时间都增加一倍。在5次重连均失败的情况下，TCP模块放弃连接并通知应用程序。</p>
+</blockquote>
+<h2 id="tcp状态转移过程">TCP状态转移过程</h2>
+<p>TCP连接的任意一端在任一时刻都处于某种状态，当前状态可以通过netstat命令查看。本节我们要讨论的是TCP连接从建立到关闭的整个过程中通信两端状态的变化。图3-8是完整的状态转移图，它描绘了所有的TCP状态以及可能的状态转换。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/31906726837e4a1ca789991c3d4c795f.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/31906726837e4a1ca789991c3d4c795f.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/31906726837e4a1ca789991c3d4c795f.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/31906726837e4a1ca789991c3d4c795f.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/31906726837e4a1ca789991c3d4c795f.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="整个TCP连接过程的状态转移" /></p>
+<p>图3-8中的粗虚线表示典型的服务器端连接的状态转移；粗实线表示典型的客户端连接的状态转移。CLOSED是一个假想的起始点，并不是一个实际的状态。</p>
+<h3 id="tcp状态转移总图文字详解">TCP状态转移总图文字详解</h3>
+<h4 id="服务器状态转移过程">服务器状态转移过程</h4>
+<p>服务器通过listen系统调用进入 <code>LISTEN</code> 状态，被动等待客户端连接，因此执行的是所谓的被动打开。服务器一旦监听到某个连接请求（收到同步报文段），就将该连接放入内核等待队列中，并向客户端发送带SYN标志的确认报文段。此时该连接处于 <code>SYN_RCVD</code> 状态。如果服务器成功地接收到客户端发送回的确认报文段，则该连接转移到 <code>ESTABLISHED</code> 状态。ESTABLISHED状态是连接双方能够进行双向数据传输的状态。</p>
+<p>当客户端主动关闭连接时（通过close或shutdown系统调用向服务器发送结束报文段），服务器通过返回确认报文段使连接进入 <code>CLOSE_WAIT</code> 状态。这个状态的含义很明确：等待服务器应用程序关闭连接。通常，服务器检测到客户端关闭连接后，也会立即给客户端发送一个结束报文段来关闭连接。这将使连接转移到 <code>LAST_ACK</code> 状态，以等待客户端对结束报文段的最后一次确认。一旦确认完成，连接就彻底关闭了。</p>
+<h4 id="客户端状态转移过程">客户端状态转移过程</h4>
+<p>客户端通过connect系统调用主动与服务器建立连接。connect系统调用首先给服务器发送一个同步报文段，使连接转移到 <code>SYN_SENT</code> 状态。此后，connect系统调用可能因为如下两个原因失败返回：</p>
+<p>❑如果connect连接的目标端口不存在（未被任何进程监听），或者该端口仍被处于TIME_WAIT状态的连接所占用（见后文），则服务器将给客户端发送一个复位报文段，connect调用失败。</p>
+<p>❑如果目标端口存在，但connect在超时时间内未收到服务器的确认报文段，则connect调用失败。</p>
+<p>connect调用失败将使连接立即返回到初始的CLOSED状态。如果客户端成功收到服务器的同步报文段和确认，则connect调用成功返回，连接转移至 <code>ESTABLISHED</code> 状态。</p>
+<p>当客户端执行主动关闭时，它将向服务器发送一个结束报文段，同时连接进入 <code>FIN_WAIT_1</code> 状态。若此时客户端收到服务器专门用于确认目的的确认报文段（比如图3-6中的TCP报文段5），则连接转移至 <code>FIN_WAIT_2</code> 状态。当客户端处于 <code>FIN_WAIT_2</code> 状态时，服务器处于 <code>CLOSE_WAIT</code> 状态，<strong>这一对状态是可能发生半关闭的状态</strong>。此时如果服务器也关闭连接（发送结束报文段），则客户端将给予确认并进入TIME_WAIT状态。</p>
+<p>图3-8还给出了客户端从 <code>FIN_WAIT_1</code> 状态直接进入 <code>TIME_WAIT</code> 状态的一条线路（不经过 <code>FIN_WAIT_2</code> 状态），前提是处于<code>FIN_WAIT_1</code> 状态的服务器直接收到带确认信息的结束报文段（而不是先收到确认报文段，再收到结束报文段）。这种情况对应于图3-6中的服务器不发送TCP报文段5。</p>
+<p>前面说过，处于 <code>FIN_WAIT_2</code> 状态的客户端需要等待服务器发送结束报文段，才能转移至 <code>TIME_WAIT</code> 状态，否则它将一直停留在这个状态。如果不是为了在半关闭状态下继续接收数据，连接长时间地停留在 <code>FIN_WAIT_2</code> 状态并无益处（所以客户端处于 <code>FIN_WAIT_2</code>  服务端处于 <code>CLOSE_WAIT</code> 状态时一般是为了保持半关闭状态）。</p>
+<p><strong>那么问题来了</strong>：客户端执行半关闭后，未等服务器关闭连接就强行退出了。此时客户端连接由内核来接管，可称之为孤儿连接（和孤儿进程类似）。Linux为了防止孤儿连接长时间存留在内核中，定义了两个内核变量：/proc/sys/net/ipv4/tcp_max_orphans和/proc/sys/net/ipv4/tcp_fin_timeout。前者指定内核能接管的孤儿连接数目，后者指定孤儿连接在内核中生存的时间。</p>
+<blockquote>
+<p>至此，我们简单地讨论了服务器和客户端程序的典型TCP状态转移路线。对应于图3-6所示的TCP连接的建立与断开过程，客户端和服务器的状态转移如图3-9所示。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/6b40509c260b4af28a279915eea5f24a.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/6b40509c260b4af28a279915eea5f24a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/6b40509c260b4af28a279915eea5f24a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/6b40509c260b4af28a279915eea5f24a.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/6b40509c260b4af28a279915eea5f24a.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="带状态的连接和断开过程" /></p>
+</blockquote>
+<h3 id="time_wait状态">TIME_WAIT状态</h3>
+<p>客户端处于 <code>TIME_WAIT</code> 状态。在这个状态，客户端连接要等待一段长为2MSL（Maximum Segment Life，报文段最大生存时间）的时间，才能完全关闭。MSL是TCP报文段在网络中的最大生存时间，标准文档RFC 1122的建议值是2 min。</p>
+<p><code>TIME_WAIT</code> 状态存在的原因有两点：</p>
+<p>❑可靠地终止TCP连接。</p>
+<p>❑保证让迟来的TCP报文段有足够的时间被识别并丢弃。</p>
+<p>第一个原因很好理解。假设图3-9中用于确认服务器结束报文段6的TCP报文段7丢失，那么服务器将重发结束报文段。因此客户端需要停留在某个状态以处理重复收到的结束报文段（即向服务器发送确认报文段）。否则，客户端将以复位报文段来回应服务器，服务器则认为这是一个错误，因为它期望的是一个像TCP报文段7那样的确认报文段。</p>
+<h4 id="time_wait状态持续2msl的原因">TIME_WAIT状态持续2MSL的原因</h4>
+<p>在Linux系统上，一个TCP端口不能被同时打开多次（两次及以上）。当一个TCP连接处于 <code>TIME_WAIT</code> 状态时，我们将无法立即使用该连接占用着的端口来建立一个新连接。反过来思考，<strong>如果不存在 <code>TIME_WAIT</code> 状态，则应用程序能够立即建立一个和刚关闭的连接相似的连接（这里说的相似，是指它们具有相同的IP地址和端口号）。这个新的、和原来相似的连接被称为原来的连接的化身（incarnation）。新的化身可能接收到属于原来的连接的、携带应用程序数据的TCP报文段（迟到的报文段），这显然是不应该发生的</strong>。这就是TIME_WAIT状态存在的第二个原因。</p>
+<p>另外，因为TCP报文段的最大生存时间是MSL，所以坚持2MSL时间的TIME_WAIT状态能够确保网络上两个传输方向上尚未被接收到的、迟到的TCP报文段都已经消失（被中转路由器丢弃）。</p>
+<p>因此，一个连接的新的化身可以在2MSL时间之后安全地建立，而绝对不会接收到属于原来连接的应用程序数据，<strong>这就是 <code>TIME_WAIT</code> 状态要持续2MSL时间的原因</strong>。</p>
+<h4 id="time_wait引发的端口占用问题">TIME_WAIT引发的端口占用问题</h4>
+<blockquote>
+<p>关于客户端</p>
+</blockquote>
+<p>既然一个客户端处于 <code>TIME_WAIT</code> 状态时会占用端口号，那我们下次重启程序不久没法再和服务端进行通信了？</p>
+<p>实际上客户端并不用担心这个问题，<strong>因为客户端一般使用系统自动分配的临时端口号来建立连接</strong>，而由于随机性，临时端口号一般和程序上一次使用的端口号（还处于TIME_WAIT状态的那个连接使用的端口号）不同，所以客户端程序一般可以立即重启。</p>
+<blockquote>
+<p>关于服务端</p>
+</blockquote>
+<p>但如果是<strong>服务器主动关闭连接后异常终止</strong>，则因为它总是使用同一个知名服务端口号，所以连接的 <code>TIME_WAIT</code> 状态将导致它不能立即重启。不过，我们可以通过socket选项SO_REUSEADDR来强制进程立即使用处于TIME_WAIT状态的连接占用的端口。（当然你也可以把这个端口号对应的进程杀死）</p>
+<h3 id="复位报文段">复位报文段</h3>
+<p>在某些特殊条件下，TCP连接的一端会向另一端发送携带RST标志的报文段，即复位报文段，以通知对方关闭连接或重新建立连接。</p>
+<p>我们讨论产生复位报文段的3种情况。</p>
+<h4 id="情况一访问不存在的端口">情况一：访问不存在的端口</h4>
+<p>抓包测试如下：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/e70ba63d9c234e83a512c90334b71f41.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/e70ba63d9c234e83a512c90334b71f41.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/e70ba63d9c234e83a512c90334b71f41.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/e70ba63d9c234e83a512c90334b71f41.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/e70ba63d9c234e83a512c90334b71f41.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="抓包输出结果" /></p>
+<p>由此可见，ernest-laptop针对Kongming20的连接请求（同步报文段）回应了一个复位报文段（tcpdump输出R标志）。因为复位报文段的接收通告窗口大小为0，所以可以预见：<strong>收到复位报文段的一端应该关闭连接或者重新连接，而不能回应这个复位报文段</strong>。</p>
+<blockquote>
+<p>实际上，当客户端程序向服务器的某个端口发起连接，而该端口仍被处于TIME_WAIT状态的连接所占用时，客户端程序也将收到复位报文段。</p>
+</blockquote>
+<h4 id="情况二异常终止连接">情况二：异常终止连接</h4>
+<p>前面讨论的连接终止方式都是正常的终止方式：数据交换完成之后，一方给另一方发送结束报文段。TCP提供了异常终止一个连接的方法，即给对方发送一个复位报文段。<strong>一旦发送了复位报文段，发送端所有排队等待发送的数据都将被丢弃</strong>。</p>
+<p>应用程序可以使用socket选项SO_LINGER来发送复位报文段，以异常终止一个连接。</p>
+<h4 id="情况三处理半打开连接">情况三：处理半打开连接</h4>
+<p>考虑下面的情况：服务器（或客户端）关闭或者异常终止了连接，而对方没有接收到结束报文段（比如发生了网络故障），此时，客户端（或服务器）还维持着原来的连接，而服务器（或客户端）即使重启，也已经没有该连接的任何信息了。<strong>我们将这种状态称为半打开状态，处于这种状态的连接称为半打开连接</strong>。如果客户端（或服务器）<strong>往处于半打开状态的连接写入数据，则对方将回应一个复位报文段</strong>。</p>
+<blockquote>
+<p>举例来说，我们在Kongming20上使用nc命令模拟一个服务器程序，使之监听12345端口，然后从ernest-laptop运行telnet命令登录到该端口上，接着拔掉ernest-laptop的网线，并在Kongming20上请求连接中断。显然，此时ernest-laptop上运行的telnet客户端程序维持着一个半打开连接。然后接上ernest-laptop的网线，并从客户端程序往半打开连接写入1字节的数据“a”。</p>
+</blockquote>
+<p>具体的实践抓包：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/588a5e712ce8449a810f4f07f73ab3b1.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/588a5e712ce8449a810f4f07f73ab3b1.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/588a5e712ce8449a810f4f07f73ab3b1.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/588a5e712ce8449a810f4f07f73ab3b1.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/588a5e712ce8449a810f4f07f73ab3b1.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="抓包结果" /></p>
+<p>该输出内容中，前3个TCP报文段是正常建立TCP连接的3次握手的过程。第4个TCP报文段由客户端发送给服务器，它携带了3字节的应用程序数据，这3字节依次是：字母“a”、回车符“\r”和换行符“\n”。不过因为服务器程序已经被中断，所以Kongming20对客户端发送的数据回应了一个复位报文段5。</p>
+<h2 id="tcp数据流">TCP数据流</h2>
+<p>TCP报文段所携带的应用程序数据按照长度分为两种：<strong>交互数据和成块数据</strong>。交互数据仅包含很少的字节。使用交互数据的应用程序（或协议）对实时性要求高，比如telnet、ssh等。成块数据的长度则通常为TCP报文段允许的最大数据长度。使用成块数据的应用程序（或协议）对传输效率要求高，比如ftp。</p>
+<h3 id="交互数据流抓包讲解">交互数据流抓包讲解</h3>
+<blockquote>
+<p>考虑如下情况：在ernest-laptop上执行telnet命令登录到本机，然后在shell命令提示符后执行ls命令，同时用tcpdump抓取这一过程中telnet客户端和telnet服务器交换的TCP报文段。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/f8113e20f93a40a5810c8f44eb8659ba.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/f8113e20f93a40a5810c8f44eb8659ba.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/f8113e20f93a40a5810c8f44eb8659ba.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/f8113e20f93a40a5810c8f44eb8659ba.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/f8113e20f93a40a5810c8f44eb8659ba.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP交互数据流抓包" /></p>
+<p>TCP报文段1由客户端发送给服务器，它携带1个字节的应用程序数据，即字母“l”。</p>
+<p>TCP报文段2是服务器对TCP报文段1的确认，同时回显字母“l”。</p>
+<p>TCP报文段3是客户端对TCP报文段2的确认。</p>
+<p>第4～6个TCP报文段是针对字母“s”的上述过程。</p>
+<p>TCP报文段7传送的2字节数据分别是：客户端键入的回车符和流结束符（EOF，本例中是0x00）。</p>
+<p>TCP报文段8携带服务器返回的客户查询的目录的内容（ls命令的输出），包括该目录下文件的文件名及其显示控制参数。</p>
+<p>TCP报文段9是客户端对TCP报文段8的确认。</p>
+<p>TCP报文段10携带的也是服务器返回给客户端的数据，包括一个回车符、一个换行符、客户端登录用户的PS1环境变量（第一级命令提示符）。</p>
+<p>TCP报文段11是客户端对TCP报文段10的确认。</p>
+<h4 id="延迟确认">延迟确认</h4>
+<p>在上述过程中，客户端针对服务器返回的数据所发送的确认报文段（TCP报文段6、9和11）都不携带任何应用程序数据（长度为0），而服务器每次发送的确认报文段（TCP报文段2、5、8和10）都包含它需要发送的应用程序数据。</p>
+<p>服务器的这种处理方式称为<strong>延迟确认</strong>，即它不马上确认上次收到的数据，而是在一段延迟时间后查看本端是否有数据需要发送，如果有，则和确认信息一起发出。因为服务器对客户请求处理得很快，所以它发送确认报文段的时候总是有数据一起发送。<strong>延迟确认可以减少发送TCP报文段的数量</strong>。而由于用户的输入速度明显慢于客户端程序的处理速度，所以客户端的确认报文段总是不携带任何应用程序数据。</p>
+<h4 id="nagle算法">Nagle算法</h4>
+<p>上例是在本地回路运行的结果，在局域网中也能得到基本相同的结果，但在广域网就未必如此了。广域网上的交互数据流可能经受很大的延迟，并且，携带交互数据的微小TCP报文段数量一般很多（一个按键输入就导致一个TCP报文段），这些因素都可能导致拥塞发生。解决该问题的一个简单有效的方法是使用Nagle算法。</p>
+<p>Nagle算法要求一个TCP连接的通信双方在任意时刻都最多只能发送一个未被确认的TCP报文段，<strong>在该TCP报文段的确认到达之前不能发送其他TCP报文段</strong>。另一方面，发送方在等待确认的同时收集本端需要发送的微量数据，并在确认到来时以一个TCP报文段将它们全部发出。这样就极大地减少了网络上的微小TCP报文段的数量。该算法的另一个<strong>优点在于其自适应性：确认到达得越快，数据也就发送得越快</strong>。</p>
+<h3 id="tcp成块数据流抓包讲解">TCP成块数据流抓包讲解</h3>
+<blockquote>
+<p>下面考虑用FTP协议传输一个大文件。在ernest-laptop上启动一个vsftpd服务器程序（升级的、安全版的ftp服务器程序），并执行ftp命令登录该服务器上，然后在ftp命令提示符后输入get命令，从服务器下载一个几百兆的大文件。</p>
+</blockquote>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/5c0a6b1a2bef48e78bc17073de9b419e.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/5c0a6b1a2bef48e78bc17073de9b419e.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/5c0a6b1a2bef48e78bc17073de9b419e.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/5c0a6b1a2bef48e78bc17073de9b419e.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/5c0a6b1a2bef48e78bc17073de9b419e.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP成块数据流抓包" /></p>
+<p>注意，客户端发送的最后两个TCP报文段17和18，它们分别是对TCP报文段2和16的确认（从序号值和确认值来判断）。由此可见，当传输大量大块数据的时候，发送方会连续发送多个TCP报文段，接收方可以一次确认所有这些报文段。那么发送方在收到上一次确认后，能连续发送多少个TCP报文段呢？这是由<strong>接收通告窗口（还需要考虑拥塞窗口，见后文）的大小决定的</strong>。TCP报文段17说明客户端还能接收30 084×64字节（本例中窗口扩大因子为6），即1 925 376字节的数据。而在TCP报文段18中，接收通告窗口大小为1 748 288字节，即客户端能接收的数据量变小了。这表明客户端的TCP接收缓冲区有更多的数据未被应用程序读取而停留在其中，这些数据都来自TCP报文段3～16中的一部分。服务器收到TCP报文段18后，它至少（因为接收通告窗口可能扩大）还能连续发送的未被确认的报文段数量是1 748 288/16 384个，即106个（但一般不会连续发送这么多）。其中，16 384是成块数据的长度（见TCP报文段1～16的length值），很显然它小于但接近MSS规定的16 396字节。</p>
+<p>另外一个值得注意的地方是，服务器每发送4个TCP报文段就传送一个PSH标志（tcpdump输出标志P）给客户端，以通知客户端的应用程序尽快读取数据。不过这对服务器来说显然不是必需的，因为它知道客户端的TCP接收缓冲区中还有空闲空间（接收通告窗口大小不为0）。</p>
+<h3 id="带外数据">带外数据</h3>
+<p>有些传输层协议具有带外（Out Of Band，OOB）数据的概念，用于迅速通告对方本端发生的重要事件。因此，带外数据比普通数据（也称为带内数据）有更高的优先级，它应该总是立即被发送，而不论发送缓冲区中是否有排队等待发送的普通数据。</p>
+<p>带外数据的传输可以使用一条独立的传输层连接，也可以映射到传输普通数据的连接中。</p>
+<p>UDP没有实现带外数据传输，TCP也没有真正的带外数据。不过TCP利用其头部中的紧急指针标志和紧急指针两个字段，给应用程序提供了一种紧急方式。</p>
+<h4 id="tcp发送带外数据的过程">TCP发送带外数据的过程</h4>
+<blockquote>
+<p>假设一个进程已经往某个TCP连接的发送缓冲区中写入了N字节的普通数据，并等待其发送。在数据被发送前，该进程又向这个连接写入了3字节的带外数据“abc”。</p>
+</blockquote>
+<p>此时，待发送的TCP报文段的头部将被设置URG标志，并且紧急指针被设置为指向最后一个带外数据的下一字节（进一步减去当前TCP报文段的序号值得到其头部中的紧急偏移值），如图3-10所示。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/383015e4d55646bdb2cf34b855aefc5f.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/383015e4d55646bdb2cf34b855aefc5f.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/383015e4d55646bdb2cf34b855aefc5f.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/383015e4d55646bdb2cf34b855aefc5f.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/383015e4d55646bdb2cf34b855aefc5f.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="TCP发送缓冲区的紧急数据" /></p>
+<p>由图3-10可见，发送端一次发送的多字节的带外数据中只有最后一字节被当作带外数据（字母c），而其他数据（字母a和b）被当成了普通数据。</p>
+<p>如果TCP模块以多个TCP报文段来发送图3-10所示TCP发送缓冲区中的内容，则每个TCP报文段都将设置URG标志，并且它们的紧急指针指向同一个位置（数据流中带外数据的下一个位置），<strong>但只有一个TCP报文段真正携带带外数据</strong>。</p>
+<h4 id="tcp接收带外数据的过程">TCP接收带外数据的过程</h4>
+<p>TCP接收端只有在接收到紧急指针标志时才检查紧急指针，然后根据紧急指针所指的位置确定带外数据的位置，并将它读入一个特殊的缓存中。这个缓存只有1字节，称为带外缓存。如果上层应用程序没有及时将带外数据从带外缓存中读出，则后续的带外数据（如果有的话）将覆盖它。</p>
+<p>前面讨论的带外数据的接收过程是TCP模块接收带外数据的默认方式。如果我们给TCP连接设置了 <code>SO_OOBINLINE</code> 选项，则带外数据将和普通数据一样被TCP模块存放在TCP接收缓冲区中。此时应用程序需要像读取普通数据一样来读取带外数据。那么这种情况下如何区分带外数据和普通数据呢？显然，紧急指针可以用来指出带外数据的位置，socket编程接口也提供了系统调用来识别带外数据。</p>
+<h2 id="tcp数据流的控制拥塞控制">TCP数据流的控制（拥塞控制）</h2>
+<h3 id="超时重传机制">超时重传机制</h3>
+<blockquote>
+<p>在正式进入拥塞控制之前，先聊聊超时重传机制。</p>
+</blockquote>
+<p>抓包截图就省略了，直接开始分析：</p>
+<p>观察TCP报文段6～11被发送的时间间隔，它们分别为0.2 s、0.4 s、0.8 s、1.6 s和3.2 s。由此可见，TCP一共执行5次重传，每次重传超时时间都增加一倍（因此，和TCP超时重连的策略相似）。在5次重传均失败的情况下，底层的IP和ARP开始接管，直到telnet客户端放弃连接为止。</p>
+<p>Linux有两个重要的内核参数与TCP超时重传相关：/proc/sys/net/ipv4/tcp_retries1和/proc/sys/net/ipv4/tcp_retries2。前者指定在底层IP接管之前TCP最少执行的重传次数，默认值是3。后者指定连接放弃前TCP最多可以执行的重传次数，默认值是15（一般对应13～30 min）。在我们的实例中，TCP超时重传发生了5次，连接坚持的时间是15 min（可以用date命令来测量）。</p>
+<p>虽然超时会导致TCP报文段重传，但TCP报文段的重传可以发生在超时之前，即快速重传（接收到重复的确认报文段）。</p>
+<h3 id="拥塞控制">拥塞控制</h3>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/5dadfcdbeae3455c8aaca9ca6df99c36.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/5dadfcdbeae3455c8aaca9ca6df99c36.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/5dadfcdbeae3455c8aaca9ca6df99c36.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/5dadfcdbeae3455c8aaca9ca6df99c36.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/5dadfcdbeae3455c8aaca9ca6df99c36.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="总览图" /></p>
+<p>拥塞控制算法在Linux下有多种实现，比如reno算法、vegas算法和cubic算法等。它们或者部分或者全部实现了上述四个部分。/proc/sys/net/ipv4/tcp_congestion_control文件指示机器当前所使用的拥塞控制算法。</p>
+<p>拥塞控制的最终受控变量是发送端向网络一次连续写入（收到其中第一个数据的确认之前）的数据量，我们称为SWND（Send Window，发送窗口[1]）。不过，发送端最终以TCP报文段来发送数据，所以<strong>SWND限定了发送端能连续发送的TCP报文段数量</strong>。这些TCP报文段的最大长度（仅指数据部分）称为SMSS（SenderMaximum Segment Size，发送者最大段大小），其值一般等于MSS。</p>
+<p><strong>发送端需要合理地选择SWND的大小。如果SWND太小，会引起明显的网络延迟；反之，如果SWND太大，则容易导致网络拥塞</strong>。前文提到，接收方可通过其接收通告窗口（RWND）来控制发送端的SWND。但这显然不够，所以发送端引入了一个称为拥塞窗口（Congestion Window，CWND）的状态变量。实际的SWND值是RWND和CWND中的较小者。图3-11显示了拥塞控制的输入和输出（可见，它是一个闭环反馈控制）。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/4c2b6325de8a4ba6a9218914df1b74b5.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/4c2b6325de8a4ba6a9218914df1b74b5.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/4c2b6325de8a4ba6a9218914df1b74b5.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/4c2b6325de8a4ba6a9218914df1b74b5.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/4c2b6325de8a4ba6a9218914df1b74b5.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="拥塞控制流程图" /></p>
+<h4 id="慢启动和拥塞避免">慢启动和拥塞避免</h4>
+<p>TCP连接建立好之后，CWND将被设置成初始值IW（Initial Window），其大小为2～4个SMSS。但新的Linux内核提高了该初始值，以减小传输滞后。此时发送端最多能发送IW字节的数据。此后发送端每收到接收端的一个确认，其CWND就按照式（3-1）增加：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/bad0bd3d069d4a3790ec9d757de2342b.png"
+        data-srcset="https://img-blog.csdnimg.cn/bad0bd3d069d4a3790ec9d757de2342b.png, https://img-blog.csdnimg.cn/bad0bd3d069d4a3790ec9d757de2342b.png 1.5x, https://img-blog.csdnimg.cn/bad0bd3d069d4a3790ec9d757de2342b.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/bad0bd3d069d4a3790ec9d757de2342b.png"
+        title="指数形式增大的公式" /></p>
+<p>其中N是此次确认中包含的之前未被确认的字节数。这样一来，CWND将按照指数形式扩大，这就是所谓的慢启动。<strong>慢启动算法的理由是，TCP模块刚开始发送数据时并不知道网络的实际情况，需要用一种试探的方式平滑地增加CWND的大小</strong>。</p>
+<p>但是如果不施加其他手段，慢启动必然使得CWND很快膨胀（可见慢启动其实不慢）并最终导致网络拥塞。因此TCP拥塞控制中定义了另一个重要的状态变量：慢启动门限（slow start threshold size，ssthresh）。<strong>当CWND的大小超过该值时，TCP拥塞控制将进入拥塞避免阶段</strong>。</p>
+<p>拥塞避免算法使得CWND按照线性方式增加，从而减缓其扩大。RFC 5681中提到了如下两种实现方式：</p>
+<p>❑每个RTT时间内按照式（3-1）计算新的CWND，而不论该RTT时间内发送端收到多少个确认。</p>
+<p>❑每收到一个对新数据的确认报文段，就按照式（3-2）来更新CWND。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/7d8a3411a88e4ebb9dfd443c099d69a5.png"
+        data-srcset="https://img-blog.csdnimg.cn/7d8a3411a88e4ebb9dfd443c099d69a5.png, https://img-blog.csdnimg.cn/7d8a3411a88e4ebb9dfd443c099d69a5.png 1.5x, https://img-blog.csdnimg.cn/7d8a3411a88e4ebb9dfd443c099d69a5.png 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/7d8a3411a88e4ebb9dfd443c099d69a5.png"
+        title="线性形式增大的公式" /></p>
+<blockquote>
+<p>图3-12粗略地描述了慢启动和拥塞避免发生的时机和区别。该图中，我们以SMSS为单位来显示CWND（实际上它是以字节为单位的），以次数为单位来显示RTT，这只是为了方便讨论问题。此外，我们假设当前的ssthresh是16SMSS大小（当然，实际的ssthresh显然远不止这么大）。</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/c03ff8d502ff46df8a1d4c6984500035.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/c03ff8d502ff46df8a1d4c6984500035.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/c03ff8d502ff46df8a1d4c6984500035.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/c03ff8d502ff46df8a1d4c6984500035.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/c03ff8d502ff46df8a1d4c6984500035.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="整个慢启动和拥塞避免状态的转移图" /></p>
+</blockquote>
+<h4 id="判断拥塞是否发生">判断拥塞是否发生</h4>
+<p>以上我们讨论了发送端在未检测到拥塞时所采用的积极避免拥塞的方法。接下来介绍拥塞发生时（可能发生在慢启动阶段或者拥塞避免阶段）拥塞控制的行为。不过我们先要搞清楚发送端是如何判断拥塞已经发生的。发送端判断拥塞发生的依据有如下两个：</p>
+<p>❑传输超时，或者说TCP重传定时器溢出。</p>
+<p>❑接收到重复的确认报文段。</p>
+<p>拥塞控制对这两种情况有不同的处理方式。对第一种情况仍然使用慢启动和拥塞避免。对第二种情况则使用快速重传和快速恢复（如果是真的发生拥塞的话），这种情况将在后面讨论。注意，第二种情况如果发生在重传定时器溢出之后，则也被拥塞控制当成第一种情况来对待。</p>
+<p>如果发送端检测到拥塞发生是由于传输超时，即上述第一种情况，那么它将执行重传并做如下调整：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://img-blog.csdnimg.cn/61ab061f8f864b3383dea7f58b43b7df.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        data-srcset="https://img-blog.csdnimg.cn/61ab061f8f864b3383dea7f58b43b7df.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16, https://img-blog.csdnimg.cn/61ab061f8f864b3383dea7f58b43b7df.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 1.5x, https://img-blog.csdnimg.cn/61ab061f8f864b3383dea7f58b43b7df.png?x-oss-process=image/watermark%2ctype_d3F5LXplbmhlaQ%2cshadow_50%2ctext_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=%2csize_20%2ccolor_FFFFFF%2ct_70%2cg_se%2cx_16 2x"
+        data-sizes="auto"
+        alt="https://img-blog.csdnimg.cn/61ab061f8f864b3383dea7f58b43b7df.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAQysrKysrKysrKysrKysrKysrKys=,size_20,color_FFFFFF,t_70,g_se,x_16"
+        title="拥塞发生的数值调整" /></p>
+<h4 id="快速重传和快速恢复">快速重传和快速恢复</h4>
+<p>在很多情况下，发送端都可能接收到重复的确认报文段，比如TCP报文段丢失，或者接收端收到乱序TCP报文段并重排之等。<strong>拥塞控制算法需要判断当收到重复的确认报文段时，网络是否真的发生了拥塞，或者说TCP报文段是否真的丢失了</strong>。具体做法是：发送端如果连续收到3个重复的确认报文段，就认为是拥塞发生了。然后它启用快速重传和快速恢复算法来处理拥塞，过程如下：</p>
+<p>1）当收到第3个重复的确认报文段时，按照式（3-3）计算ssthresh，然后立即重传丢失的报文段，并按照以下式子设置CWND。</p>
+<p>$$CWND=ssthresh+3*SMSS$$</p>
+<p>2）每次收到1个重复的确认时，设置CWND=CWND+SMSS。此时发送端可以发送新的TCP报文段（如果新的CWND允许的话）。</p>
+<p>3）当收到新数据的确认时，设置CWND=ssthresh（ssthresh是新的慢启动门限值，由第一步计算得到）。</p>
+<p>快速重传和快速恢复完成之后，拥塞控制将恢复到拥塞避免阶段，这一点由第3步操作可得知。</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info"><div class="post-info-tag"><span><a href="/tags/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/">TCP协议详解</a>
+                </span></div><div class="post-info-line"><div class="post-info-mod">
+                <span>更新于 2022-02-21</span>
+            </div><div class="post-info-mod"></div>
+        </div><div class="post-info-share">
+            <span><a href="javascript:void(0);" title="分享到 Twitter" data-sharer="twitter" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解" data-hashtags="TCP协议详解"><i class="fab fa-twitter fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Facebook" data-sharer="facebook" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-hashtag="TCP协议详解"><i class="fab fa-facebook-square fa-fw"></i></a><a href="javascript:void(0);" title="分享到 WhatsApp" data-sharer="whatsapp" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解" data-web><i class="fab fa-whatsapp fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Line" data-sharer="line" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解"><i class="fab fa-line fa-fw"></i></a><a href="javascript:void(0);" title="分享到 微博" data-sharer="weibo" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解" data-image="https://img-blog.csdnimg.cn/img_convert/2729ae8b8d3a403affb81167fb3b1604.png#pic_center"><i class="fab fa-weibo fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Myspace" data-sharer="myspace" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解" data-description="TCP协议详解"><i data-svg-src="/lib/simple-icons/icons/myspace.min.svg"></i></a><a href="javascript:void(0);" title="分享到 Blogger" data-sharer="blogger" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解" data-description="TCP协议详解"><i class="fab fa-blogger fa-fw"></i></a><a href="javascript:void(0);" title="分享到 Evernote" data-sharer="evernote" data-url="https://acking-you.github.io/posts/tcp%E5%8D%8F%E8%AE%AE%E8%AF%A6%E8%A7%A3/" data-title="TCP协议详解"><i class="fab fa-evernote fa-fw"></i></a></span>
+        </div></div><div class="post-nav"><a href="/posts/1bit%E4%B8%8E2bit%E5%AD%97%E7%AC%A6%E7%AE%80%E5%8D%95%E6%A8%A1%E6%8B%9F%E9%A2%98/" class="prev" rel="prev" title="1bit与2bit字符——简单模拟题"><i class="fas fa-angle-left fa-fw"></i>Previous Post</a>
+            <a href="/posts/k%E7%AB%99%E4%B8%AD%E8%BD%AC%E5%86%85%E6%9C%80%E4%BE%BF%E5%AE%9C%E7%9A%84%E8%88%AA%E7%8F%AD-bellmanford%E7%AE%97%E6%B3%95%E5%92%8Cspfa%E7%AE%97%E6%B3%95%E7%9A%84%E6%94%B9%E9%80%A0/" class="next" rel="next" title="k站中转内最便宜的航班--BellmanFord算法和SPFA算法的改造">Next Post<i class="fas fa-angle-right fa-fw"></i></a></div></div>
+</div></article></div>
+            </main>
+            <footer class="footer"><div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.86.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/khusika/FeelIt" target="_blank" rel="noopener noreffer" title="FeelIt 1.0.1"><i class="fas fa-hand-holding-heart fa-fw"></i> FeelIt</a>
+        </div><div class="footer-line" itemscope itemtype="http://schema.org/CreativeWork"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2023</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="/"></a></span></div>
+</div>
+</footer>
+        </div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-chevron-up fa-fw"></i>
+            </a></div><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><link rel="stylesheet" href="/lib/katex/katex.min.css"><link rel="stylesheet" href="/lib/katex/copy-tex.min.css"><script src="/lib/autocomplete/autocomplete.min.js"></script><script src="/lib/lunr/lunr.min.js"></script><script src="/lib/lunr/lunr.stemmer.support.min.js"></script><script src="/lib/lunr/lunr.zh.min.js"></script><script src="/lib/lazysizes/lazysizes.min.js"></script><script src="/lib/clipboard/clipboard.min.js"></script><script src="/lib/sharer/sharer.min.js"></script><script src="/lib/katex/katex.min.js"></script><script src="/lib/katex/auto-render.min.js"></script><script src="/lib/katex/copy-tex.min.js"></script><script src="/lib/katex/mhchem.min.js"></script><script>window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":200},"comment":{},"math":{"delimiters":[{"display":true,"left":"$$","right":"$$"},{"display":true,"left":"\\[","right":"\\]"},{"display":false,"left":"$","right":"$"},{"display":false,"left":"\\(","right":"\\)"}],"strict":false},"search":{"highlightTag":"em","lunrIndexURL":"/index.json","lunrLanguageCode":"zh","lunrSegmentitURL":"/lib/lunr/lunr.segmentit.js","maxResultLength":100,"noResultsFound":"没有找到结果","snippetLength":50,"type":"lunr"}};</script><script src="/js/theme.min.js"></script></body></html>
