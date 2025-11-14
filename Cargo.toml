@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "frontend",
+    # "backend",    # Week 2
+    # "cli-tool",   # Week 2
+    # "shared",     # Week 2
+]
+
+# Workspace 级别的依赖版本管理
+[workspace.dependencies]
+# 通用依赖
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+anyhow = "1.0"
+thiserror = "2.0"
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP 客户端
+reqwest = { version = "0.12", features = ["json"] }
+
+# Frontend 特定
+yew = { version = "0.21", features = ["csr"] }
+yew-router = "0.18"
+gloo-net = "0.6"
+wasm-bindgen = "0.2"
+web-sys = "0.3"
+js-sys = "0.3"
+pulldown-cmark = "0.13"
+
+# Backend 特定（暂时注释，Week 2 启用）
+# axum = "0.7"
+# tower = "0.4"
+# tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+# sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono"] }
+# meilisearch-sdk = "0.25"
+
+# CLI 特定（暂时注释，Week 2 启用）
+# clap = { version = "4.4", features = ["derive"] }
+# notify = "6.1"
+# walkdir = "2.4"
+
+# Workspace 级别的编译优化配置
+[profile.release]
+opt-level = "z"   # 优化体积（WASM 重要）
+lto = true        # 链接时优化
+codegen-units = 1 # 单一代码生成单元，更好的优化
+panic = "abort"   # Panic 时直接中止，减小体积
+strip = true      # 移除调试符号
+
+[profile.dev]
+opt-level = 0 # 开发模式不优化，编译快
+debug = true  # 保留调试信息
+
+# 针对依赖的优化（开发时依赖用 release 优化，加快运行）
+[profile.dev.package."*"]
+opt-level = 2

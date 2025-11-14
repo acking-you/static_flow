@@ -1,0 +1,16 @@
+# Trunk configuration for StaticFlow frontend
+
+# Build settings
+target = "index.html"
+dist = "dist"
+public_url = "/"
+filehash = true
+release = true
+
+[serve]
+port = 8080
+open = false
+# Uncomment when backend is ready (Week 2)
+# proxy_backend = "http://localhost:3000"
+# proxy_ws = true
+

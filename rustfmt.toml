@@ -1,0 +1,52 @@
+# Rust 代码格式化配置
+# 运行 `cargo fmt` 时会自动应用这些规则
+
+# === 基础设置 ===
+edition = "2021"
+max_width = 100                    # 单行最大宽度
+hard_tabs = false                  # 使用空格而非 Tab
+tab_spaces = 4                     # 缩进空格数
+
+# === 导入排序 ===
+imports_granularity = "Crate"      # 按 crate 分组导入
+group_imports = "StdExternalCrate" # std -> 外部 crate -> 本地模块
+reorder_imports = true             # 自动排序 import
+
+# === 代码风格 ===
+use_small_heuristics = "Max"       # 尽量保持紧凑
+fn_single_line = false             # 函数签名不强制单行
+where_single_line = false          # where 子句不强制单行
+struct_lit_single_line = false     # 结构体字面量不强制单行
+
+# === 格式化细节 ===
+trailing_comma = "Vertical"        # 垂直列表添加尾随逗号
+match_block_trailing_comma = true  # match 块添加尾随逗号
+
+# === 注释和文档 ===
+normalize_comments = true          # 规范化注释格式
+normalize_doc_attributes = true    # 规范化文档属性
+wrap_comments = true               # 自动换行注释
+comment_width = 80                 # 注释最大宽度
+
+# === 空格和换行 ===
+spaces_around_ranges = false       # 范围操作符周围无空格 (0..10)
+space_before_colon = false         # 冒号前无空格
+space_after_colon = true           # 冒号后有空格
+blank_lines_upper_bound = 2        # 最多连续 2 个空行
+blank_lines_lower_bound = 0        # 最少 0 个空行
+
+# === 链式调用 ===
+chain_width = 60                   # 链式调用超过此宽度则换行
+overflow_delimited_expr = true     # 允许分隔符表达式溢出
+
+# === 宏和属性 ===
+format_macro_matchers = true       # 格式化宏匹配器
+format_macro_bodies = true         # 格式化宏体
+format_strings = true              # 格式化字符串字面量
+
+# === 其他 ===
+merge_derives = true               # 合并连续的 #[derive(...)]
+use_try_shorthand = true           # 使用 ? 而非 try!
+use_field_init_shorthand = true    # 使用字段初始化简写 (foo: foo => foo)
+force_explicit_abi = true          # 强制显式 ABI (extern "C")
+newline_style = "Unix"             # 使用 Unix 换行符 (LF)

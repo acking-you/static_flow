@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>StaticFlow</title>
+
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+    <!-- KaTeX for math rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous" />
+
+    <!-- Highlight.js for syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" media="(prefers-color-scheme: light)" />
+
+    <!-- Mermaid for diagrams -->
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+      window.mermaid = mermaid;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+      });
+    </script>
+
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
+    <link rel="icon" href="/static/favicon.ico" />
+    <link rel="manifest" href="/static/site.webmanifest" />
+    <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2d96bd" />
+    <meta name="msapplication-TileColor" content="#161209" />
+    <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
+
+    <!-- Trunk will compile Rust to WASM and include it. -->
+    <!-- Optimize for size and apply wasm-opt level 'z'. -->
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+
+    <!-- Copy entire static directory -->
+    <link data-trunk rel="copy-dir" href="static" />
+
+    <script>
+      // Theme bootstrap: set initial theme from localStorage or prefers-color-scheme
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme');
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var theme = stored || (prefersDark ? 'dark' : 'light');
+          document.documentElement.setAttribute('data-theme', theme);
+          // expose a tiny toggle helper for quick demos
+          window.__toggleTheme = function () {
+            var current = document.documentElement.getAttribute('data-theme') || 'light';
+            var next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            try { localStorage.setItem('theme', next); } catch (_) {}
+          };
+        } catch (_) {
+          // noop
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <!-- WASM app will render here -->
+    <noscript>本应用需要启用 JavaScript。</noscript>
+
+    <!-- KaTeX and Highlight.js scripts -->
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <!-- Common languages for highlight.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/toml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
+
+    <script>
+      // Initialize markdown rendering features
+      window.initMarkdownRendering = function() {
+        // Convert mermaid code blocks to mermaid divs
+        document.querySelectorAll('pre code.language-mermaid').forEach((block) => {
+          const pre = block.parentElement;
+          const mermaidDiv = document.createElement('div');
+          mermaidDiv.className = 'mermaid';
+          mermaidDiv.textContent = block.textContent;
+          pre.replaceWith(mermaidDiv);
+        });
+
+        // Syntax highlighting for code blocks (skip mermaid)
+        document.querySelectorAll('pre code:not(.language-mermaid)').forEach((block) => {
+          hljs.highlightElement(block);
+        });
+
+        // Render Mermaid diagrams
+        if (window.mermaid) {
+          window.mermaid.run({
+            querySelector: '.mermaid',
+            suppressErrors: true
+          }).then(() => {
+            // Add copy buttons to mermaid diagrams after rendering
+            addCopyButtonsToMermaid();
+          });
+        }
+
+        // Add copy buttons to code blocks
+        addCopyButtonsToCodeBlocks();
+
+        // Math formula rendering with KaTeX
+        if (window.renderMathInElement) {
+          renderMathInElement(document.body, {
+            delimiters: [
+              {left: '$$', right: '$$', display: true},
+              {left: '$', right: '$', display: false},
+              {left: '\\[', right: '\\]', display: true},
+              {left: '\\(', right: '\\)', display: false}
+            ],
+            throwOnError: false,
+            strict: false
+          });
+        }
+
+        // Generate table of contents
+        generateTOC();
+
+        // Initialize back to top button
+        initBackToTop();
+      };
+
+      // Add copy buttons to code blocks
+      function addCopyButtonsToCodeBlocks() {
+        document.querySelectorAll('pre:not(.code-wrapper)').forEach((pre) => {
+          // Skip if already wrapped
+          if (pre.parentElement.classList.contains('code-wrapper')) {
+            return;
+          }
+
+          // Create wrapper
+          const wrapper = document.createElement('div');
+          wrapper.className = 'code-wrapper';
+          pre.parentNode.insertBefore(wrapper, pre);
+          wrapper.appendChild(pre);
+
+          // Create copy button
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'copy-button';
+          copyBtn.innerHTML = '<i class="far fa-copy"></i>';
+          copyBtn.title = '复制代码';
+
+          copyBtn.addEventListener('click', async () => {
+            const code = pre.querySelector('code');
+            const text = code ? code.textContent : pre.textContent;
+
+            try {
+              await navigator.clipboard.writeText(text);
+              copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+              copyBtn.classList.add('copied');
+              setTimeout(() => {
+                copyBtn.innerHTML = '<i class="far fa-copy"></i>';
+                copyBtn.classList.remove('copied');
+              }, 2000);
+            } catch (err) {
+              console.error('Failed to copy:', err);
+              copyBtn.innerHTML = '<i class="fas fa-times"></i>';
+              setTimeout(() => {
+                copyBtn.innerHTML = '<i class="far fa-copy"></i>';
+              }, 2000);
+            }
+          });
+
+          wrapper.appendChild(copyBtn);
+        });
+      }
+
+      // Add copy buttons to mermaid diagrams
+      function addCopyButtonsToMermaid() {
+        document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+          // Skip if already has a wrapper with button
+          if (mermaidDiv.parentElement && mermaidDiv.parentElement.classList.contains('mermaid-wrapper')) {
+            return;
+          }
+
+          // Create wrapper
+          const wrapper = document.createElement('div');
+          wrapper.className = 'mermaid-wrapper';
+          mermaidDiv.parentNode.insertBefore(wrapper, mermaidDiv);
+          wrapper.appendChild(mermaidDiv);
+
+          // Create download button
+          const downloadBtn = document.createElement('button');
+          downloadBtn.className = 'copy-button';
+          downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+          downloadBtn.title = '下载图表';
+          downloadBtn.setAttribute('type', 'button');
+
+          downloadBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const svg = mermaidDiv.querySelector('svg');
+            if (!svg) {
+              console.error('No SVG found in mermaid diagram');
+              downloadBtn.innerHTML = '<i class="fas fa-times"></i>';
+              setTimeout(() => {
+                downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+              }, 2000);
+              return;
+            }
+
+            try {
+              // Clone SVG and set white background
+              const svgClone = svg.cloneNode(true);
+              const svgData = new XMLSerializer().serializeToString(svgClone);
+
+              // Create canvas and draw
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+
+              // Get SVG dimensions
+              const svgWidth = svg.width.baseVal.value || svg.viewBox.baseVal.width || 800;
+              const svgHeight = svg.height.baseVal.value || svg.viewBox.baseVal.height || 600;
+
+              canvas.width = svgWidth;
+              canvas.height = svgHeight;
+
+              // Draw white background
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+              // Create image from SVG
+              const img = new Image();
+              const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+              const url = URL.createObjectURL(svgBlob);
+
+              img.onload = () => {
+                try {
+                  ctx.drawImage(img, 0, 0);
+                  URL.revokeObjectURL(url);
+
+                  // Convert canvas to blob and download
+                  canvas.toBlob((blob) => {
+                    if (!blob) {
+                      console.error('Failed to create blob');
+                      downloadSvgDirectly(svgData);
+                      return;
+                    }
+
+                    // Create download link
+                    const downloadUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = `mermaid-diagram-${Date.now()}.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(downloadUrl);
+
+                    // Success feedback
+                    downloadBtn.innerHTML = '<i class="fas fa-check"></i>';
+                    downloadBtn.classList.add('copied');
+                    setTimeout(() => {
+                      downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+                      downloadBtn.classList.remove('copied');
+                    }, 2000);
+                  }, 'image/png');
+                } catch (err) {
+                  console.error('Canvas tainted, falling back to SVG download:', err);
+                  URL.revokeObjectURL(url);
+                  downloadSvgDirectly(svgData);
+                }
+              };
+
+              img.onerror = () => {
+                console.error('Failed to load image, falling back to SVG download');
+                URL.revokeObjectURL(url);
+                downloadSvgDirectly(svgData);
+              };
+
+              img.src = url;
+            } catch (err) {
+              console.error('Failed to download diagram:', err);
+              downloadBtn.innerHTML = '<i class="fas fa-times"></i>';
+              setTimeout(() => {
+                downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+              }, 2000);
+            }
+          });
+
+          // Helper function: download SVG directly
+          function downloadSvgDirectly(svgData) {
+            const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `mermaid-diagram-${Date.now()}.svg`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            downloadBtn.innerHTML = '<i class="fas fa-check"></i>';
+            downloadBtn.classList.add('copied');
+            downloadBtn.title = '已下载 SVG';
+            setTimeout(() => {
+              downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+              downloadBtn.classList.remove('copied');
+              downloadBtn.title = '下载图表';
+            }, 2000);
+          }
+
+          wrapper.appendChild(downloadBtn);
+
+          // Create fullscreen button
+          const fullscreenBtn = document.createElement('button');
+          fullscreenBtn.className = 'copy-button fullscreen-button';
+          fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i>';
+          fullscreenBtn.title = '全屏查看';
+          fullscreenBtn.setAttribute('type', 'button');
+
+          fullscreenBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openMermaidFullscreen(mermaidDiv);
+          });
+
+          wrapper.appendChild(fullscreenBtn);
+        });
+      }
+
+      // Fullscreen view for Mermaid diagrams
+      function openMermaidFullscreen(mermaidDiv) {
+        const svg = mermaidDiv.querySelector('svg');
+        if (!svg) {
+          console.error('No SVG found in mermaid div');
+          return;
+        }
+
+        console.log('Opening fullscreen for mermaid:', svg);
+
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'mermaid-fullscreen-overlay';
+
+        // Create content container
+        const content = document.createElement('div');
+        content.className = 'mermaid-fullscreen-content';
+
+        // Create a new div and clone SVG directly
+        const clonedMermaid = document.createElement('div');
+        clonedMermaid.className = 'mermaid mermaid-fullscreen';
+
+        // Clone SVG with all its children
+        const clonedSvg = svg.cloneNode(true);
+        clonedMermaid.appendChild(clonedSvg);
+
+        content.appendChild(clonedMermaid);
+
+        console.log('Cloned mermaid:', clonedMermaid);
+        console.log('Cloned SVG:', clonedSvg);
+
+        // Create close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'mermaid-fullscreen-close';
+        closeBtn.innerHTML = '<i class="fas fa-times"></i>';
+        closeBtn.title = '关闭';
+        closeBtn.setAttribute('type', 'button');
+
+        // Close on button click
+        closeBtn.addEventListener('click', () => {
+          overlay.classList.remove('open');
+          setTimeout(() => {
+            document.body.removeChild(overlay);
+            document.body.style.overflow = '';
+          }, 300);
+        });
+
+        // Close on overlay click (but not on content click)
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) {
+            closeBtn.click();
+          }
+        });
+
+        // Close on ESC key
+        const handleEsc = (e) => {
+          if (e.key === 'Escape') {
+            closeBtn.click();
+            document.removeEventListener('keydown', handleEsc);
+          }
+        };
+        document.addEventListener('keydown', handleEsc);
+
+        overlay.appendChild(content);
+        overlay.appendChild(closeBtn);
+        document.body.appendChild(overlay);
+
+        // Prevent body scroll
+        document.body.style.overflow = 'hidden';
+
+        // Trigger open animation
+        setTimeout(() => {
+          overlay.classList.add('open');
+        }, 10);
+      }
+
+      // Generate table of contents from article headings
+      function generateTOC() {
+        // Check if we're on an article detail page
+        const articleContent = document.querySelector('.article-content');
+        if (!articleContent) return;
+
+        // Find all headings (h1-h6)
+        const headings = articleContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        if (headings.length === 0) return;
+
+        // Add IDs to headings if they don't have one
+        headings.forEach((heading, index) => {
+          if (!heading.id) {
+            heading.id = `heading-${index}`;
+          }
+        });
+
+        // Create TOC container
+        const tocContainer = document.createElement('aside');
+        tocContainer.className = 'article-toc';
+
+        // Create TOC header with close button for mobile
+        const tocHeader = document.createElement('div');
+        tocHeader.className = 'article-toc-header';
+        tocHeader.innerHTML = `
+          <h3 class="article-toc-title">目录</h3>
+          <button class="toc-close-btn" type="button" aria-label="关闭目录">
+            <i class="fas fa-times"></i>
+          </button>
+        `;
+
+        // Create TOC list
+        const tocList = document.createElement('ul');
+        tocList.className = 'article-toc-list';
+
+        headings.forEach((heading) => {
+          const level = parseInt(heading.tagName.substring(1)); // h1 → 1, h2 → 2, etc.
+          const text = heading.textContent;
+          const id = heading.id;
+
+          const li = document.createElement('li');
+          li.className = `toc-item toc-level-${level}`;
+
+          const a = document.createElement('a');
+          a.href = `#${id}`;
+          a.textContent = text;
+          a.className = 'toc-link';
+
+          // Smooth scroll on click
+          a.addEventListener('click', (e) => {
+            e.preventDefault();
+            const target = document.getElementById(id);
+            if (target) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              // Update active state
+              document.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+              a.classList.add('active');
+              // Close mobile TOC drawer
+              tocContainer.classList.remove('mobile-open');
+            }
+          });
+
+          li.appendChild(a);
+          tocList.appendChild(li);
+        });
+
+        tocContainer.appendChild(tocHeader);
+        tocContainer.appendChild(tocList);
+
+        // Insert TOC before article
+        const article = document.querySelector('.article-detail');
+        if (article && article.parentNode) {
+          article.parentNode.insertBefore(tocContainer, article);
+        }
+
+        // Close button handler
+        const closeBtn = tocContainer.querySelector('.toc-close-btn');
+        closeBtn.addEventListener('click', () => {
+          tocContainer.classList.remove('mobile-open');
+        });
+
+        // Create mobile TOC toggle button
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'toc-mobile-toggle';
+        toggleBtn.innerHTML = '<i class="fas fa-list"></i>';
+        toggleBtn.title = '显示目录';
+        toggleBtn.setAttribute('type', 'button');
+        toggleBtn.setAttribute('aria-label', '显示目录');
+
+        toggleBtn.addEventListener('click', () => {
+          tocContainer.classList.add('mobile-open');
+        });
+
+        document.body.appendChild(toggleBtn);
+
+        // Highlight current section on scroll
+        let ticking = false;
+        window.addEventListener('scroll', () => {
+          if (!ticking) {
+            window.requestAnimationFrame(() => {
+              updateActiveTOC(headings);
+              ticking = false;
+            });
+            ticking = true;
+          }
+        });
+
+        // Initial highlight
+        updateActiveTOC(headings);
+      }
+
+      // Update active TOC item based on scroll position
+      function updateActiveTOC(headings) {
+        const scrollY = window.scrollY + 100; // Offset for header
+
+        let currentHeading = null;
+        headings.forEach((heading) => {
+          const offsetTop = heading.offsetTop;
+          if (scrollY >= offsetTop) {
+            currentHeading = heading;
+          }
+        });
+
+        document.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+
+        if (currentHeading) {
+          const activeLink = document.querySelector(`.toc-link[href="#${currentHeading.id}"]`);
+          if (activeLink) {
+            activeLink.classList.add('active');
+          }
+        }
+      }
+
+      // Initialize back to top button
+      function initBackToTop() {
+        // Create button
+        const btn = document.createElement('button');
+        btn.className = 'back-to-top';
+        btn.innerHTML = '<i class="fas fa-arrow-up"></i>';
+        btn.title = '回到顶部';
+        btn.setAttribute('type', 'button');
+        btn.setAttribute('aria-label', '回到顶部');
+
+        // Add click handler
+        btn.addEventListener('click', () => {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        // Show/hide based on scroll position
+        let ticking = false;
+        window.addEventListener('scroll', () => {
+          if (!ticking) {
+            window.requestAnimationFrame(() => {
+              if (window.scrollY > 300) {
+                btn.classList.add('visible');
+              } else {
+                btn.classList.remove('visible');
+              }
+              ticking = false;
+            });
+            ticking = true;
+          }
+        });
+
+        // Add to page
+        document.body.appendChild(btn);
+      }
+
+      // Debug helper - expose to window for testing
+      window.debugMermaidCopy = function() {
+        console.log('=== Mermaid Download Debug ===');
+        console.log('Mermaid elements found:', document.querySelectorAll('.mermaid').length);
+        console.log('Mermaid wrappers found:', document.querySelectorAll('.mermaid-wrapper').length);
+        console.log('Download buttons found:', document.querySelectorAll('.mermaid-wrapper .copy-button').length);
+
+        const firstMermaid = document.querySelector('.mermaid');
+        if (firstMermaid) {
+          const svg = firstMermaid.querySelector('svg');
+          console.log('First mermaid has SVG:', !!svg);
+          if (svg) {
+            console.log('SVG dimensions:', svg.width.baseVal.value, 'x', svg.height.baseVal.value);
+          }
+          console.log('Has wrapper:', firstMermaid.parentElement?.classList.contains('mermaid-wrapper'));
+        }
+        console.log('============================');
+      };
+    </script>
+  </body>
+  
+</html>

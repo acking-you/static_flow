@@ -1,0 +1,66 @@
+# Rust 构建产物
+target/
+**/target/
+
+# Trunk 构建产物
+dist/
+**/dist/
+
+# Cargo 锁文件（workspace 根目录保留，子项目可选）
+# Cargo.lock
+
+# 调试和性能分析
+**/*.pdb
+flamegraph.svg
+perf.data
+perf.data.old
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 环境配置
+.env
+.env.local
+.env.*.local
+
+# 日志文件
+*.log
+
+# 备份文件
+*.bak
+*.tmp
+
+# 操作系统临时文件
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Meilisearch 数据（未来 backend 使用）
+data/meili_data/
+
+# SQLite 数据库（未来 backend 使用）
+*.db
+*.db-shm
+*.db-wal
+
+# Node.js（如果使用 TailwindCSS CLI）
+node_modules/
+package-lock.json
+yarn.lock
+
+# 测试覆盖率报告
+coverage/
+*.profdata
+*.profraw
+
+# 文档构建产物
+book/
+target-doc/

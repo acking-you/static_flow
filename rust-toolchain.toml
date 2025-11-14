@@ -1,0 +1,20 @@
+# Rust 工具链配置
+# 锁定项目使用的 Rust 版本，确保团队开发环境一致
+
+[toolchain]
+# 使用 nightly-2025-10-28 版本以支持所有 rustfmt 高级特性
+channel = "nightly-2025-10-28"
+
+# 添加 WebAssembly 编译目标（frontend 需要）
+targets = ["wasm32-unknown-unknown"]
+
+# 必要的组件
+components = [
+    "rustfmt",      # 代码格式化
+    "clippy",       # 代码检查
+    "rust-src",     # 源码（用于 IDE 补全）
+]
+
+# 配置说明：
+# - 使用 rust-toolchain.toml 后，项目目录下运行 cargo/rustc 会自动使用指定版本
+# - 如需更新版本，修改 channel 字段后运行 `rustup show` 自动安装
