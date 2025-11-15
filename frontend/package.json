@@ -1,0 +1,13 @@
+{
+  "name": "staticflow-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "StaticFlow frontend build dependencies",
+  "scripts": {
+    "tailwind": "tailwindcss -i input.css -o static/styles.css --minify",
+    "tailwind:watch": "tailwindcss -i input.css -o static/styles.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.17"
+  }
+}

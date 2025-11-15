@@ -2,14 +2,16 @@ use yew::prelude::*;
 
 #[function_component(Footer)]
 pub fn footer() -> Html {
+    // 混合使用保留在 @layer components 中的 .footer 语义样式与 Tailwind utility classes，示范混合使用模式
     html! {
         <footer class="footer">
-            <div class="container footer-inner">
-                <div class="footer-brand">
+            <div class="container mx-auto flex flex-col items-center justify-center gap-4 px-4 py-8 text-center text-[0.9rem] text-muted">
+                <div class="font-medium tracking-wide">
                     {"© 2024 L_B__. All rights reserved."}
                 </div>
-                <div class="footer-links" aria-label="社交媒体">
+                <div class="flex items-center gap-4" aria-label="社交媒体">
                     <a
+                        class="inline-flex h-[var(--hit-size)] w-[var(--hit-size)] items-center justify-center rounded-full text-muted transition-colors duration-200 hover:bg-black/5 hover:text-[var(--text)] dark:hover:bg-white/10"
                         href="https://github.com/ACking-you"
                         target="_blank"
                         rel="noopener noreferrer"
@@ -19,6 +21,7 @@ pub fn footer() -> Html {
                         <span class="visually-hidden">{ "GitHub" }</span>
                     </a>
                     <a
+                        class="inline-flex h-[var(--hit-size)] w-[var(--hit-size)] items-center justify-center rounded-full text-muted transition-colors duration-200 hover:bg-black/5 hover:text-[var(--text)] dark:hover:bg-white/10"
                         href="https://space.bilibili.com/24264499"
                         target="_blank"
                         rel="noopener noreferrer"

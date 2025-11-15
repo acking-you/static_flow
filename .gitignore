@@ -56,6 +56,9 @@ node_modules/
 package-lock.json
 yarn.lock
 
+# Tailwind CSS 生成文件
+frontend/static/styles.css
+
 # 测试覆盖率报告
 coverage/
 *.profdata

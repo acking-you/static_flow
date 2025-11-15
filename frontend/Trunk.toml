@@ -14,3 +14,7 @@ open = false
 # proxy_backend = "http://localhost:3000"
 # proxy_ws = true
 
+[[hooks]]
+stage = "pre_build"
+command = "npx"
+command_arguments = ["@tailwindcss/cli", "-i", "input.css", "-o", "static/styles.css", "--minify"]

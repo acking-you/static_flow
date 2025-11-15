@@ -15,6 +15,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
         id: article.id.clone(),
     };
 
+    // 组件类 + 内部工具类混合模式：复杂轮廓仍使用 article-card，内部简单元素改用 Tailwind utilities
     html! {
         <article class="article-card">
             {
@@ -28,39 +29,74 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                     html! {}
                 }
             }
-            <h3 class="article-title">
-                <Link<Route> to={detail_route.clone()} classes={classes!("article-title-link")}>
+            <h3 class="text-xl font-semibold leading-snug text-[var(--text)]">
+                <Link<Route>
+                    to={detail_route.clone()}
+                    classes={classes!(
+                        "text-[var(--text)]",
+                        "transition-colors",
+                        "duration-200",
+                        "hover:text-primary"
+                    )}
+                >
                     { &article.title }
                 </Link<Route>>
             </h3>
-            <div class="post-meta">
-                <span class="post-meta-item">
+            <div class="mb-1 flex flex-wrap items-center gap-3 text-sm text-muted">
+                <span class="inline-flex items-center gap-1.5">
                     <i class="fas fa-user-circle" aria-hidden="true"></i>
                     { &article.author }
                 </span>
-                <span class="post-meta-item">
+                <span class="inline-flex items-center gap-1.5">
                     <i class="far fa-calendar-alt" aria-hidden="true"></i>
                     { &article.date }
                 </span>
                 <Link<Route>
                     to={Route::CategoryDetail { category: article.category.clone() }}
-                    classes={classes!("post-meta-item", "post-category")}
+                    classes={classes!(
+                        "inline-flex",
+                        "items-center",
+                        "gap-1.5",
+                        "text-muted",
+                        "transition-colors",
+                        "duration-200",
+                        "hover:text-primary"
+                    )}
                 >
                     <i class="far fa-folder" aria-hidden="true"></i>
                     { &article.category }
                 </Link<Route>>
             </div>
-            <p class="article-excerpt">{ &article.summary }</p>
-            <div class="post-footer">
-                <ul class="post-tags">
+            <p class={classes!("article-excerpt", "text-base", "leading-relaxed", "text-muted")}>
+                { &article.summary }
+            </p>
+            <div class="mt-auto pt-4">
+                <ul class="m-0 flex list-none flex-wrap gap-2 p-0">
                     { for article.tags.iter().map(|tag| {
                         let tag_route = Route::TagDetail { tag: tag.clone() };
                         let tag_label = format!("#{}", tag);
                         html! {
-                            <li>
+                            <li class="m-0">
                                 <Link<Route>
                                     to={tag_route}
-                                    classes={classes!("tag-pill")}
+                                    classes={classes!(
+                                        "inline-flex",
+                                        "items-center",
+                                        "gap-1.5",
+                                        "rounded-full",
+                                        "border",
+                                        "border-border",
+                                        "px-3",
+                                        "py-1",
+                                        "text-sm",
+                                        "text-muted",
+                                        "transition-colors",
+                                        "duration-200",
+                                        "hover:border-primary",
+                                        "hover:bg-primary",
+                                        "hover:text-white",
+                                        "cursor-pointer"
+                                    )}
                                 >
                                     { tag_label }
                                 </Link<Route>>

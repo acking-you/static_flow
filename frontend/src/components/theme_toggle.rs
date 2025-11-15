@@ -10,6 +10,7 @@ fn is_dark_theme() -> bool {
         .unwrap_or(false)
 }
 
+// Tailwind migration demo component that illustrates utility-first styling.
 #[function_component(ThemeToggle)]
 pub fn theme_toggle() -> Html {
     let theme_state = use_state(is_dark_theme);
@@ -33,13 +34,59 @@ pub fn theme_toggle() -> Html {
     html! {
         <button
             type="button"
-            class="theme-toggle-btn"
+            class={classes!(
+                "group",
+                "fixed",
+                "bottom-4",
+                "right-4",
+                "z-50",
+                "inline-flex",
+                "h-12",
+                "w-12",
+                "items-center",
+                "justify-center",
+                "rounded-full",
+                "border",
+                "border-border",
+                "bg-surface",
+                "text-muted",
+                "shadow-lg",
+                "transition-all",
+                "duration-200",
+                "ease-out",
+                "hover:scale-110",
+                "hover:bg-surface-alt",
+                "hover:text-primary",
+                "focus-visible:outline-none",
+                "focus-visible:ring-2",
+                "focus-visible:ring-primary",
+                "focus-visible:ring-offset-2",
+                "focus-visible:ring-offset-surface",
+                "active:scale-95",
+                "sm:bottom-6",
+                "sm:right-6",
+                "dark:bg-surface-alt",
+                "dark:text-primary"
+            )}
             {onclick}
             aria-label={label}
             title={label}
         >
-            <i class="fas fa-adjust fa-fw" aria-hidden="true"></i>
-            <span class="visually-hidden">{ label }</span>
+            <i
+                class={classes!(
+                    "fas",
+                    "fa-adjust",
+                    "fa-fw",
+                    "text-xl",
+                    "text-primary",
+                    "transition-transform",
+                    "duration-200",
+                    "group-hover:rotate-12",
+                    "group-active:-rotate-6"
+                )}
+                aria-hidden="true"
+            ></i>
+            <span class="sr-only">{ label }</span>
         </button>
     }
 }

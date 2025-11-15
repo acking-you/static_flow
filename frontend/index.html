@@ -12,8 +12,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous" />
 
     <!-- Highlight.js for syntax highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" media="(prefers-color-scheme: light)" />
+    <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" />
+    <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" disabled />
 
     <!-- Mermaid for diagrams -->
     <script type="module">
@@ -44,16 +44,26 @@
     <script>
       // Theme bootstrap: set initial theme from localStorage or prefers-color-scheme
       (function () {
+        var setHighlightTheme = function (theme) {
+          var lightTheme = document.getElementById('hljs-light');
+          var darkTheme = document.getElementById('hljs-dark');
+          var useDark = theme === 'dark';
+          if (lightTheme) lightTheme.disabled = useDark;
+          if (darkTheme) darkTheme.disabled = !useDark;
+        };
+
         try {
           var stored = localStorage.getItem('theme');
           var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
           var theme = stored || (prefersDark ? 'dark' : 'light');
           document.documentElement.setAttribute('data-theme', theme);
+          setHighlightTheme(theme);
           // expose a tiny toggle helper for quick demos
           window.__toggleTheme = function () {
             var current = document.documentElement.getAttribute('data-theme') || 'light';
             var next = current === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', next);
+            setHighlightTheme(next);
             try { localStorage.setItem('theme', next); } catch (_) {}
           };
         } catch (_) {

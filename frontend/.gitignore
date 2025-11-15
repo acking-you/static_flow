@@ -1,0 +1,10 @@
+# Tailwind CLI 二进制（使用 npm 管理，无需提交）
+tailwindcss
+tailwindcss.exe
+
+# Node.js（构建时依赖）
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+

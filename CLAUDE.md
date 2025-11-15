@@ -126,6 +126,67 @@ trunk build --release
 
 Frontend dev server runs on `http://localhost:8080`
 
+### Tailwind CSS v4 Integration
+
+### 跨平台管理（npm 方式）
+
+项目使用 npm 管理 Tailwind CLI，自动支持 Linux/macOS/Windows：
+
+**首次克隆后的安装**：
+```bash
+cd frontend
+npm install      # 安装 Tailwind CLI（自动下载对应平台版本）
+# 或使用 pnpm（推荐，更快）
+pnpm install
+```
+
+**为什么使用 npm？**
+- Tailwind CSS v4 官方分发方式
+- 自动下载对应平台的二进制文件（linux-x64, macos-arm64, windows-x64 等）
+- 版本锁定在 package.json，团队协作一致
+- 无需提交大文件到 git（node_modules 已在 .gitignore）
+
+**无 Node.js 环境的备选方案**：
+如果需要在无 Node.js 的环境（如 CI/嵌入式设备）使用，可手动下载独立二进制：
+https://github.com/tailwindlabs/tailwindcss/releases/latest
+
+下载后放在 frontend/ 目录并修改 Trunk.toml 的 hook：
+```toml
+[[hooks]]
+stage = "pre_build"
+command = "./tailwindcss"  # 改回直接调用
+command_arguments = ["-i", "input.css", "-o", "static/styles.css", "--minify"]
+```
+StaticFlow 的前端已经集成 **Tailwind CSS v4.1.17**，通过 npm 管理 Tailwind CLI，由 Trunk 钩子在构建前自动调用。
+
+**混合使用策略**
+- 现有的视觉系统依旧全部维护在 `input.css` 的 `@layer components` 区块，确保历史样式不被破坏。
+- 新功能或结构简单的组件可以直接在 Yew 模板里写 Tailwind utility classes，加速迭代。
+- `src/components/theme_toggle.rs`、`footer.rs` 与 `article_card.rs` 展示了如何在保留组件样式基础上，通过 utility classes 叠加动态状态。
+
+**使用指南**
+- `input.css` 结构遵循 `@import "tailwindcss"; → @theme {…} → @layer components {…}`，其中 `@theme` 定义设计令牌，`@layer components` 存放遗留/复杂样式。
+- `Trunk.toml` 中的 `pre_build` hook 会在 `trunk build/serve` 前执行 `./tailwindcss -i input.css -o static/styles.css --minify`，因此无需单独运行 npm。
+- 在 Rust 组件里使用 Tailwind 时，应通过 `classes!` 宏传入：`classes!("flex", "items-center", conditional_class)`。每个类名必须是单独的字符串参数，避免 `"flex items-center"` 这种写法，以保证 v4 的按需提取准确。
+- 可将 `classes!` 返回值直接绑定到 `classes` 属性，或与 `attr!`/`html!` 组合，示例：`html! { <div class={classes!("bg-[var(--surface)]", "rounded-xl", extra)}>...</div> }`。
+
+**常用命令**：
+```bash
+# 开发模式（带热重载）
+trunk serve --open
+
+# 生产构建（Trunk 自动调用 npx）
+trunk build --release
+
+# 手动编译 Tailwind（可选）
+npm run tailwind         # 单次编译
+npm run tailwind:watch   # 监听模式
+```
+
+**设计令牌**
+- `@theme` 中声明了 `--color-*`、`--spacing-*`、`--shadow`、`--radius` 等 CSS 变量，可在组件样式和 Tailwind utility 中复用。
+- 在 Tailwind v4 中可直接书写 `bg-[var(--bg)]`、`text-[var(--text)]`、`shadow-[var(--shadow)]`、`rounded-[var(--radius)]` 等形式，把变量注入到类名里，实现与 `input.css` 设计令牌的一致性。
+
 ### CLI Tool
 ```bash
 cd cli-tool
