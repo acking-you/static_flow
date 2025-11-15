@@ -2,7 +2,7 @@ use static_flow_shared::ArticleListItem;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, window};
 use yew::prelude::*;
-use yew_router::prelude::Link;
+use yew_router::prelude::{Link, use_location};
 
 use crate::{
     components::{
@@ -40,6 +40,7 @@ pub fn home_page() -> Html {
     };
 
     let current_page = use_state(|| initial_page);
+    let route_location = use_location();
     let articles_scroll_ref = use_node_ref();
 
     let articles = use_state(|| Vec::<ArticleListItem>::new());
@@ -109,6 +110,84 @@ pub fn home_page() -> Html {
 
     let is_articles_page = matches!(*current_page, CurrentPage::Articles);
 
+    // Save scroll position and page number before navigating to article detail
+    let save_scroll_position = {
+        let articles_scroll_ref = articles_scroll_ref.clone();
+        let page_num = current_page_num;
+        Callback::from(move |_| {
+            if let Some(storage) = window()
+                .and_then(|w| w.session_storage().ok().flatten())
+            {
+                // Save current page number
+                let _ = storage.set_item("home_articles_page", &page_num.to_string());
+
+                // Save scroll position
+                if let Some(container) = articles_scroll_ref.cast::<Element>() {
+                    let scroll_top = container.scroll_top();
+                    let _ = storage.set_item("home_articles_scroll", &scroll_top.to_string());
+                }
+            }
+        })
+    };
+
+    // Restore scroll position and page number when switching to articles view or returning from article detail
+    {
+        let current_page = current_page.clone();
+        let articles_scroll_ref = articles_scroll_ref.clone();
+        let location_dep = route_location.clone();
+        let go_to_page_cb = go_to_page.clone();
+        use_effect_with((*current_page, location_dep), move |(page, _location)| {
+            if matches!(*page, CurrentPage::Articles) {
+                if let Some(storage) = window().and_then(|w| w.session_storage().ok().flatten()) {
+                    let has_saved_data = storage.get_item("home_articles_page").ok().flatten().is_some()
+                        || storage.get_item("home_articles_scroll").ok().flatten().is_some();
+
+                    if has_saved_data {
+                        // Restore page number first
+                        if let Some(saved_page) = storage.get_item("home_articles_page").ok().flatten() {
+                            if let Ok(page_num) = saved_page.parse::<usize>() {
+                                go_to_page_cb.emit(page_num);
+                            }
+                        }
+
+                        // Then restore scroll position
+                        let scroll_pos = storage
+                            .get_item("home_articles_scroll")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.parse::<i32>().ok())
+                            .unwrap_or(0);
+
+                        // Delay restore to ensure DOM is ready
+                        let container_ref = articles_scroll_ref.clone();
+                        if let Some(win) = window() {
+                            let callback = wasm_bindgen::closure::Closure::once(move || {
+                                if scroll_pos > 0 {
+                                    if let Some(container) = container_ref.cast::<Element>() {
+                                        container.set_scroll_top(scroll_pos);
+                                    }
+                                }
+                                // Always clear saved data after restoration attempt
+                                if let Some(storage) = window()
+                                    .and_then(|w| w.session_storage().ok().flatten())
+                                {
+                                    let _ = storage.remove_item("home_articles_scroll");
+                                    let _ = storage.remove_item("home_articles_page");
+                                }
+                            });
+                            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
+                                callback.as_ref().unchecked_ref(),
+                                100, // 100ms delay
+                            );
+                            callback.forget();
+                        }
+                    }
+                }
+            }
+            || ()
+        });
+    }
+
     let total_articles = articles.len();
     let stats = vec![
         ("📝".to_string(), total_articles.to_string(), Some("/posts".to_string())),
@@ -155,7 +234,7 @@ pub fn home_page() -> Html {
             <>
                 <div class="summary-card">
                     { for visible_articles.iter().map(|article| {
-                        html! { <ArticleCard article={article.clone()} /> }
+                        html! { <ArticleCard article={article.clone()} on_before_navigate={Some(save_scroll_position.clone())} /> }
                     }) }
                 </div>
                 { pagination_controls }
