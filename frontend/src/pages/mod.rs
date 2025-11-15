@@ -4,6 +4,7 @@ pub mod category_detail;
 pub mod home;
 pub mod not_found;
 pub mod posts;
+pub mod search;
 pub mod tag_detail;
 pub mod tags;
 

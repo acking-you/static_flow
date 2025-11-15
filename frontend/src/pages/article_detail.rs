@@ -1,9 +1,13 @@
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::window;
+use web_sys::{window, HtmlImageElement, KeyboardEvent};
 use yew::{prelude::*, virtual_dom::AttrValue};
 use yew_router::prelude::{use_route, Link};
+use static_flow_shared::Article;
 
-use crate::{models::get_mock_article_detail, router::Route, utils::markdown_to_html};
+use crate::{
+    router::Route,
+    utils::{image_url, markdown_to_html},
+};
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct ArticleDetailProps {
@@ -24,29 +28,165 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         })
         .unwrap_or_else(|| props.id.clone());
 
-    let article = {
+    let article = use_state(|| None::<Article>);
+
+    {
+        let article = article.clone();
         let article_id = article_id.clone();
-        use_memo(article_id, move |id| get_mock_article_detail(id.as_str()))
-    };
+        use_effect_with(article_id.clone(), move |id| {
+            let id = id.clone();
+            let article = article.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::api::fetch_article_detail(&id).await {
+                    Ok(data) => article.set(data),
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch article: {}", e).into());
+                    }
+                }
+            });
+            || ()
+        });
+    }
 
     let article_data = (*article).clone();
+    let is_lightbox_open = use_state(|| false);
+    let preview_image_url = use_state_eq(|| None::<String>);
 
-    // Initialize markdown rendering (syntax highlighting + math formulas) after
-    // content is rendered
-    use_effect_with(article_id.clone(), |_| {
-        if let Some(win) = window() {
-            if let Ok(init_fn) =
-                js_sys::Reflect::get(&win, &JsValue::from_str("initMarkdownRendering"))
-            {
-                if let Ok(func) = init_fn.dyn_into::<js_sys::Function>() {
-                    let _ = func.call0(&win);
+    let open_image_preview = {
+        let is_lightbox_open = is_lightbox_open.clone();
+        let preview_image_url = preview_image_url.clone();
+        Callback::from(move |src: String| {
+            preview_image_url.set(Some(src));
+            is_lightbox_open.set(true);
+        })
+    };
+
+    let close_lightbox_click = {
+        let is_lightbox_open = is_lightbox_open.clone();
+        let preview_image_url = preview_image_url.clone();
+        Callback::from(move |_| {
+            is_lightbox_open.set(false);
+            preview_image_url.set(None);
+        })
+    };
+
+    {
+        let is_lightbox_open = is_lightbox_open.clone();
+        use_effect_with(*is_lightbox_open, move |is_open| {
+            let keydown_listener_opt = if *is_open {
+                let handle = is_lightbox_open.clone();
+                let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
+                    if event.key() == "Escape" {
+                        handle.set(false);
+                    }
+                }) as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "keydown",
+                        listener.as_ref().unchecked_ref(),
+                    );
                 }
+                Some(listener)
+            } else {
+                None
+            };
+
+            move || {
+                if let Some(listener) = keydown_listener_opt {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "keydown",
+                            listener.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    // Initialize markdown rendering after content is loaded
+    use_effect_with(article_data.clone(), |article_opt| {
+        if article_opt.is_some() {
+            // Use setTimeout to ensure DOM is fully updated
+            if let Some(win) = window() {
+                let callback = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                    if let Some(win) = window() {
+                        if let Ok(init_fn) =
+                            js_sys::Reflect::get(&win, &JsValue::from_str("initMarkdownRendering"))
+                        {
+                            if let Ok(func) = init_fn.dyn_into::<js_sys::Function>() {
+                                let _ = func.call0(&win);
+                            }
+                        }
+                    }
+                }) as Box<dyn FnMut()>);
+
+                let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    callback.as_ref().unchecked_ref(),
+                    100,
+                );
+                callback.forget();
             }
         }
         || ()
     });
 
-    let body = if let Some(article) = article_data {
+    {
+        let open_image_preview = open_image_preview.clone();
+        use_effect_with(article_data.clone(), move |article_opt| {
+            let mut listeners: Vec<(
+                web_sys::Element,
+                wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>,
+            )> = Vec::new();
+
+            if article_opt.is_some() {
+                if let Some(document) = window().and_then(|win| win.document()) {
+                    if let Ok(node_list) = document.query_selector_all(".article-content img") {
+                        for idx in 0..node_list.length() {
+                            if let Some(node) = node_list.item(idx) {
+                                if let Ok(element) = node.dyn_into::<web_sys::Element>() {
+                                    let callback = open_image_preview.clone();
+                                    let listener = wasm_bindgen::closure::Closure::wrap(Box::new(
+                                        move |event: web_sys::Event| {
+                                            if let Some(target) = event.current_target() {
+                                                if let Ok(img) = target.dyn_into::<HtmlImageElement>() {
+                                                    if let Some(src) = img.get_attribute("src") {
+                                                        callback.emit(src);
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    )
+                                        as Box<dyn FnMut(_)>);
+
+                                    if let Err(err) = element.add_event_listener_with_callback(
+                                        "click",
+                                        listener.as_ref().unchecked_ref(),
+                                    ) {
+                                        web_sys::console::error_1(&err);
+                                    }
+
+                                    listeners.push((element, listener));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            move || {
+                for (element, listener) in listeners {
+                    let _ = element.remove_event_listener_with_callback(
+                        "click",
+                        listener.as_ref().unchecked_ref(),
+                    );
+                }
+            }
+        });
+    }
+
+    let body = if let Some(article) = article_data.clone() {
         let word_count = article
             .content
             .chars()
@@ -59,9 +199,30 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             <article class="article-detail">
                 {
                     if let Some(image) = article.featured_image.clone() {
+                        let image_src = image_url(&image);
+                        let open_featured_preview = {
+                            let open_image_preview = open_image_preview.clone();
+                            let image_src = image_src.clone();
+                            Callback::from(move |_| {
+                                open_image_preview.emit(image_src.clone());
+                            })
+                        };
                         html! {
-                            <div class="article-featured">
-                                <img src={image} alt={article.title.clone()} loading="lazy" />
+                            <div class="article-featured relative group">
+                                <img
+                                    class="cursor-zoom-in"
+                                    src={image_src.clone()}
+                                    alt={article.title.clone()}
+                                    loading="lazy"
+                                    onclick={open_featured_preview.clone()}
+                                />
+                                <button
+                                    type="button"
+                                    class="hidden md:inline-flex absolute bottom-4 right-4 rounded-full bg-black/70 px-4 py-2 text-sm text-white backdrop-blur hover:bg-black/80 dark:bg-white/20 dark:text-white"
+                                    onclick={open_featured_preview}
+                                >
+                                    { "查看原图" }
+                                </button>
                             </div>
                         }
                     } else {
@@ -146,6 +307,49 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             <div class="container">
                 { body }
             </div>
+            {
+                if *is_lightbox_open {
+                    html! {
+                        <div
+                            class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 text-white backdrop-blur-sm transition dark:bg-black/80"
+                            role="dialog"
+                            aria-modal="true"
+                            onclick={close_lightbox_click.clone()}
+                        >
+                            <button
+                                type="button"
+                                class="absolute right-4 top-4 rounded-full bg-black/70 px-3 py-1 text-lg leading-none text-white hover:bg-black"
+                                aria-label="关闭图片"
+                                onclick={close_lightbox_click.clone()}
+                            >
+                                { "X" }
+                            </button>
+                            <div class="max-h-full max-w-full cursor-pointer" onclick={close_lightbox_click.clone()}>
+                                {
+                                    if let Some(src) = (*preview_image_url).clone() {
+                                        let alt_text = article_data
+                                            .as_ref()
+                                            .map(|article| article.title.clone())
+                                            .unwrap_or_else(|| "文章图片".to_string());
+                                        html! {
+                                            <img
+                                                src={src}
+                                                alt={alt_text}
+                                                class="max-h-[90vh] max-w-[90vw] object-contain cursor-pointer"
+                                                loading="lazy"
+                                            />
+                                        }
+                                    } else {
+                                        html! {}
+                                    }
+                                }
+                            </div>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }
+            }
         </main>
     }
 }

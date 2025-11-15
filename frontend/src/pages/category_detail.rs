@@ -1,9 +1,7 @@
 use yew::prelude::*;
+use static_flow_shared::ArticleListItem;
 
-use crate::{
-    models::get_mock_articles,
-    pages::posts::{group_articles_by_year, render_timeline},
-};
+use crate::pages::posts::{group_articles_by_year, render_timeline};
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct CategoryDetailProps {
@@ -18,19 +16,26 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
         .clone()
         .unwrap_or_else(|| "未命名分类".to_string());
 
-    let articles = use_memo((), |_| {
-        let mut list = get_mock_articles();
-        list.sort_by(|a, b| b.date.cmp(&a.date));
-        list
-    });
+    let articles = use_state(|| Vec::<ArticleListItem>::new());
 
-    let mut filtered = (*articles).clone();
-    if let Some(category_value) = filter_value.as_ref() {
-        let category_lower = category_value.to_lowercase();
-        filtered.retain(|article| article.category.to_lowercase() == category_lower);
-    } else {
-        filtered.clear();
+    {
+        let articles = articles.clone();
+        let category = filter_value.clone();
+        use_effect_with(category.clone(), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                let category_ref = category.as_deref();
+                match crate::api::fetch_articles(None, category_ref).await {
+                    Ok(data) => articles.set(data),
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch articles: {}", e).into());
+                    }
+                }
+            });
+            || ()
+        });
     }
+
+    let filtered = (*articles).clone();
 
     let total_posts = filtered.len();
     let grouped_by_year = group_articles_by_year(&filtered);

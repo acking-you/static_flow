@@ -1,13 +1,12 @@
 use web_sys::HtmlInputElement;
 use yew::{events::InputEvent, prelude::*};
-use yew_router::prelude::Link;
+use yew_router::prelude::*;
 
 use crate::{components::theme_toggle::ThemeToggle, router::Route};
 
 #[function_component(Header)]
 pub fn header() -> Html {
     let mobile_menu_open = use_state(|| false);
-    let search_open = use_state(|| false);
     let search_query = use_state(String::new);
 
     let toggle_mobile_menu = {
@@ -18,11 +17,6 @@ pub fn header() -> Html {
     let close_mobile_menu = {
         let mobile_menu_open = mobile_menu_open.clone();
         Callback::from(move |_| mobile_menu_open.set(false))
-    };
-
-    let toggle_search = {
-        let search_open = search_open.clone();
-        Callback::from(move |_| search_open.set(!*search_open))
     };
 
     let on_search_input = {
@@ -39,10 +33,37 @@ pub fn header() -> Html {
         Callback::from(move |_| search_query.set(String::new()))
     };
 
-    let mut desktop_search_classes = classes!("header-search");
-    if *search_open {
-        desktop_search_classes.push("open");
-    }
+    // 执行搜索
+    let do_search = {
+        let search_query = search_query.clone();
+        Callback::from(move |_: MouseEvent| {
+            let query = (*search_query).trim();
+            if !query.is_empty() {
+                let encoded_query = urlencoding::encode(query);
+                let search_url = format!("/search?q={}", encoded_query);
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().set_href(&search_url);
+                }
+            }
+        })
+    };
+
+    // Enter键搜索
+    let on_search_keypress = {
+        let search_query = search_query.clone();
+        Callback::from(move |e: KeyboardEvent| {
+            if e.key() == "Enter" {
+                let query = (*search_query).trim();
+                if !query.is_empty() {
+                    let encoded_query = urlencoding::encode(query);
+                    let search_url = format!("/search?q={}", encoded_query);
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.location().set_href(&search_url);
+                    }
+                }
+            }
+        })
+    };
 
     let mut mobile_menu_classes = classes!("mobile-menu-overlay");
     if *mobile_menu_open {
@@ -80,20 +101,19 @@ pub fn header() -> Html {
                                 }
                             }) }
                         </nav>
-                        <div class={desktop_search_classes}>
+                        <div class="header-search">
                             <input
                                 type="text"
                                 placeholder="搜索文章标题或内容..."
                                 value={(*search_query).clone()}
                                 oninput={on_search_input.clone()}
+                                onkeypress={on_search_keypress.clone()}
                             />
                             <button
                                 class="search-toggle"
                                 type="button"
-                                aria-label="展开搜索"
-                                aria-pressed={(*search_open).to_string()}
-                                aria-expanded={(*search_open).to_string()}
-                                onclick={toggle_search.clone()}
+                                aria-label="搜索"
+                                onclick={do_search.clone()}
                             >
                                 {"搜索"}
                             </button>
@@ -152,7 +172,15 @@ pub fn header() -> Html {
                             placeholder="搜索文章标题或内容..."
                             value={(*search_query).clone()}
                             oninput={on_search_input}
+                            onkeypress={on_search_keypress}
                         />
+                        <button
+                            type="button"
+                            class="mobile-search-btn"
+                            onclick={do_search.clone()}
+                        >
+                            {"搜索"}
+                        </button>
                         <button
                             type="button"
                             class="mobile-search-clear"

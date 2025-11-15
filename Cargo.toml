@@ -2,9 +2,9 @@
 resolver = "2"
 members = [
     "frontend",
-    # "backend",    # Week 2
+    "shared",
+    "backend",
     # "cli-tool",   # Week 2
-    # "shared",     # Week 2
 ]
 
 # Workspace 级别的依赖版本管理
@@ -37,10 +37,10 @@ web-sys = "0.3"
 js-sys = "0.3"
 pulldown-cmark = "0.13"
 
-# Backend 特定（暂时注释，Week 2 启用）
-# axum = "0.7"
-# tower = "0.4"
-# tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+# Backend 特定
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 # sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono"] }
 # meilisearch-sdk = "0.25"
 

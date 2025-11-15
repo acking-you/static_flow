@@ -1,27 +1,32 @@
-use std::collections::BTreeMap;
-
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
-use crate::{models::get_mock_articles, router::Route};
+use crate::router::Route;
 
 #[function_component(TagsPage)]
 pub fn tags_page() -> Html {
-    let tag_stats = use_memo((), |_| {
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        for article in get_mock_articles() {
-            for tag in article.tags {
-                *counts.entry(tag).or_insert(0) += 1;
-            }
-        }
-        counts.into_iter().collect::<Vec<(String, usize)>>()
-    });
+    let tag_stats = use_state(|| Vec::<crate::api::TagInfo>::new());
+
+    {
+        let tag_stats = tag_stats.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::api::fetch_tags().await {
+                    Ok(data) => tag_stats.set(data),
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch tags: {}", e).into());
+                    }
+                }
+            });
+            || ()
+        });
+    }
 
     let total_tags = tag_stats.len();
-    let total_articles: usize = tag_stats.iter().map(|(_, count)| *count).sum();
+    let total_articles: usize = tag_stats.iter().map(|t| t.count).sum();
     let max_count = tag_stats
         .iter()
-        .map(|(_, count)| *count as f32)
+        .map(|t| t.count as f32)
         .fold(1.0, f32::max);
 
     html! {
@@ -43,16 +48,16 @@ pub fn tags_page() -> Html {
                     } else {
                         html! {
                             <div class="tag-cloud" role="list" aria-label="标签云">
-                                { for tag_stats.iter().map(|(tag, count)| {
-                                    let weight = (*count as f32 / max_count).max(0.35);
+                                { for tag_stats.iter().map(|tag_info| {
+                                    let weight = (tag_info.count as f32 / max_count).max(0.35);
                                     let style = format!("--tag-weight: {:.2}", weight);
                                     html! {
                                         <Link<Route>
-                                            to={Route::TagDetail { tag: tag.clone() }}
+                                            to={Route::TagDetail { tag: tag_info.name.clone() }}
                                             classes={classes!("tag-chip")}
                                         >
-                                            <span class="tag-label" style={style}>{ tag }</span>
-                                            <span class="tag-count">{ format!("{} 篇", count) }</span>
+                                            <span class="tag-label" style={style}>{ &tag_info.name }</span>
+                                            <span class="tag-count">{ format!("{} 篇", tag_info.count) }</span>
                                         </Link<Route>>
                                     }
                                 }) }

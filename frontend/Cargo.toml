@@ -11,6 +11,11 @@ yew-router = { workspace = true }
 gloo-net = { workspace = true }
 serde = { workspace = true }
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "KeyboardEvent", "HtmlImageElement", "NodeList"] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }
+urlencoding = "2.1"
+
+# Shared crate
+static-flow-shared = { path = "../shared" }

@@ -1,7 +1,7 @@
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
-use crate::{models::ArticleListItem, router::Route};
+use crate::{models::ArticleListItem, router::Route, utils::image_url};
 
 #[derive(Properties, PartialEq, Clone)]
 pub struct ArticleCardProps {
@@ -22,7 +22,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                 if let Some(image) = article.featured_image.as_ref() {
                     html! {
                         <Link<Route> to={detail_route.clone()} classes={classes!("featured-image")}>
-                            <img src={image.clone()} alt={article.title.clone()} loading="lazy" />
+                            <img src={image_url(&image)} alt={article.title.clone()} loading="lazy" />
                         </Link<Route>>
                     }
                 } else {

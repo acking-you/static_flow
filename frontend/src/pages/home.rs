@@ -1,11 +1,27 @@
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
-use crate::{components::article_card::ArticleCard, models::get_mock_articles, router::Route};
+use crate::{components::article_card::ArticleCard, router::Route};
+use static_flow_shared::ArticleListItem;
 
 #[function_component(HomePage)]
 pub fn home_page() -> Html {
-    let articles = use_memo((), |_| get_mock_articles());
+    let articles = use_state(|| Vec::<ArticleListItem>::new());
+
+    {
+        let articles = articles.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::api::fetch_articles(None, None).await {
+                    Ok(data) => articles.set(data),
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch articles: {}", e).into());
+                    }
+                }
+            });
+            || ()
+        });
+    }
 
     html! {
         <main class="main">
@@ -61,7 +77,7 @@ pub fn home_page() -> Html {
                 </section>
 
                 <section class="summary-card" aria-label="文章列表">
-                    { for (*articles).iter().map(|article| {
+                    { for articles.iter().map(|article| {
                         let id = article.id.clone();
                         html! {
                             <ArticleCard

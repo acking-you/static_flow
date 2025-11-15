@@ -22,6 +22,8 @@ pub enum Route {
     Categories,
     #[at("/categories/:category")]
     CategoryDetail { category: String },
+    #[at("/search")]
+    Search,
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -48,6 +50,7 @@ fn switch(route: Route) -> Html {
         } => {
             html! { <pages::category_detail::CategoryDetailPage category={category} /> }
         },
+        Route::Search => html! { <pages::search::SearchPage /> },
         Route::NotFound => html! { <pages::not_found::NotFoundPage /> },
     }
 }

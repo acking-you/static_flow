@@ -10,9 +10,10 @@ release = true
 [serve]
 port = 8080
 open = false
-# Uncomment when backend is ready (Week 2)
-# proxy_backend = "http://localhost:3000"
-# proxy_ws = true
+
+# API proxy to backend server
+[[proxy]]
+backend = "http://localhost:3000/api"
 
 [[hooks]]
 stage = "pre_build"

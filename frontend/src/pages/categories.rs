@@ -1,50 +1,26 @@
-use std::collections::BTreeMap;
-
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
-use crate::{models::get_mock_articles, router::Route};
-
-const CATEGORY_DESCRIPTIONS: &[(&str, &str)] = &[
-    ("Rust", "静态类型、零成本抽象与 Wasm 生态的实战笔记。"),
-    ("Web", "现代前端工程化与体验设计相关内容。"),
-    ("DevOps", "自动化、流水线与交付体验的工程思考。"),
-    ("Productivity", "效率、写作与自我管理的小实验与道具。"),
-    ("AI", "Prompt、LLM 与智能体的落地探索。"),
-];
-
-#[derive(Clone, PartialEq)]
-struct CategoryStat {
-    name: String,
-    count: usize,
-    description: String,
-}
+use crate::router::Route;
 
 #[function_component(CategoriesPage)]
 pub fn categories_page() -> Html {
-    let categories = use_memo((), |_| {
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        for article in get_mock_articles() {
-            *counts.entry(article.category).or_insert(0) += 1;
-        }
+    let categories = use_state(|| Vec::<crate::api::CategoryInfo>::new());
 
-        counts
-            .into_iter()
-            .map(|(name, count)| {
-                let description = CATEGORY_DESCRIPTIONS
-                    .iter()
-                    .find(|(key, _)| *key == name)
-                    .map(|(_, desc)| desc.to_string())
-                    .unwrap_or_else(|| "更多分类即将上线。".to_string());
-
-                CategoryStat {
-                    name,
-                    count,
-                    description,
+    {
+        let categories = categories.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::api::fetch_categories().await {
+                    Ok(data) => categories.set(data),
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch categories: {}", e).into());
+                    }
                 }
-            })
-            .collect::<Vec<CategoryStat>>()
-    });
+            });
+            || ()
+        });
+    }
 
     html! {
         <main class="main categories-page">

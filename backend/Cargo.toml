@@ -1,0 +1,33 @@
+[package]
+name = "static-flow-backend"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Shared models
+static-flow-shared = { path = "../shared" }
+
+# Markdown parsing with frontmatter support
+gray_matter = "0.2"
+
+# Async utilities
+futures = "0.3"

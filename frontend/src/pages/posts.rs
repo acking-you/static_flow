@@ -3,11 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use yew::prelude::*;
 use yew_router::prelude::{use_location, Link};
+use static_flow_shared::ArticleListItem;
 
-use crate::{
-    models::{get_mock_articles, ArticleListItem},
-    router::Route,
-};
+use crate::router::Route;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PostsQuery {
@@ -48,20 +46,30 @@ pub fn posts_page() -> Html {
         .unwrap_or_default()
         .normalized();
 
-    let articles = use_memo((), |_| {
-        let mut list = get_mock_articles();
-        list.sort_by(|a, b| b.date.cmp(&a.date));
-        list
-    });
+    let articles = use_state(|| Vec::<ArticleListItem>::new());
 
-    let mut filtered = (*articles).clone();
-    if let Some(tag) = query.tag.as_ref() {
-        let tag_lower = tag.to_lowercase();
-        filtered.retain(|article| article.tags.iter().any(|t| t.to_lowercase() == tag_lower));
+    {
+        let articles = articles.clone();
+        let tag = query.tag.clone();
+        let category = query.category.clone();
+
+        use_effect_with((tag.clone(), category.clone()), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                let tag_ref = tag.as_deref();
+                let category_ref = category.as_deref();
+
+                match crate::api::fetch_articles(tag_ref, category_ref).await {
+                    Ok(data) => articles.set(data),
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to fetch articles: {}", e).into());
+                    }
+                }
+            });
+            || ()
+        });
     }
-    if let Some(category) = query.category.as_ref() {
-        filtered.retain(|article| article.category.eq_ignore_ascii_case(category));
-    }
+
+    let filtered = (*articles).clone();
 
     let total_posts = filtered.len();
     let grouped_by_year = group_articles_by_year(&filtered);
