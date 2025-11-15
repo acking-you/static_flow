@@ -1,7 +1,10 @@
 use yew::prelude::*;
 use static_flow_shared::ArticleListItem;
 
-use crate::pages::posts::{group_articles_by_year, render_timeline};
+use crate::{
+    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    pages::posts::{group_articles_by_year, render_timeline},
+};
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct TagDetailProps {
@@ -17,17 +20,24 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
         .unwrap_or_else(|| "未命名标签".to_string());
 
     let articles = use_state(|| Vec::<ArticleListItem>::new());
+    let loading = use_state(|| true);
 
     {
         let articles = articles.clone();
         let tag = filter_value.clone();
+        let loading = loading.clone();
         use_effect_with(tag.clone(), move |_| {
+            loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let tag_ref = tag.as_deref();
                 match crate::api::fetch_articles(tag_ref, None).await {
-                    Ok(data) => articles.set(data),
+                    Ok(data) => {
+                        articles.set(data);
+                        loading.set(false);
+                    }
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch articles: {}", e).into());
+                        loading.set(false);
                     }
                 }
             });
@@ -65,7 +75,13 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
                     <p class="page-description">{ description }</p>
 
                     {
-                        if grouped_by_year.is_empty() {
+                        if *loading {
+                            html! {
+                                <div class="flex min-h-[40vh] items-center justify-center">
+                                    <LoadingSpinner size={SpinnerSize::Large} />
+                                </div>
+                            }
+                        } else if grouped_by_year.is_empty() {
                             html! { <p class="timeline-empty">{ empty_message }</p> }
                         } else {
                             render_timeline(&grouped_by_year)

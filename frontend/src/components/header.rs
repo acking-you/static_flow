@@ -82,6 +82,11 @@ pub fn header() -> Html {
 
     let nav_links = [("文章", Route::Posts), ("标签", Route::Tags), ("分类", Route::Categories)];
 
+    let mobile_search_input = on_search_input.clone();
+    let mobile_search_keypress = on_search_keypress.clone();
+    let mobile_do_search = do_search.clone();
+    let mobile_clear_search = clear_search.clone();
+
     html! {
         <>
             <header class="header">
@@ -155,40 +160,40 @@ pub fn header() -> Html {
             <div class={mobile_menu_classes}>
                 <div class="mobile-menu-backdrop" onclick={close_mobile_menu.clone()}></div>
                 <div class="mobile-menu-panel" role="dialog" aria-modal="true">
-                    <div class="mobile-menu-header">
-                        <span class="mobile-menu-title">{"导航"}</span>
-                        <button
-                            type="button"
-                            class="mobile-close"
-                            onclick={close_mobile_menu.clone()}
-                            aria-label="关闭菜单"
-                        >
-                            {"关闭"}
-                        </button>
-                    </div>
-                    <div class="mobile-search">
+                    <button
+                        type="button"
+                        class="mobile-close"
+                        onclick={close_mobile_menu.clone()}
+                        aria-label="关闭菜单"
+                    >
+                        {"关闭"}
+                    </button>
+                    <div class="mobile-search mobile-menu-search">
                         <input
                             type="text"
                             placeholder="搜索文章标题或内容..."
                             value={(*search_query).clone()}
-                            oninput={on_search_input}
-                            onkeypress={on_search_keypress}
+                            oninput={mobile_search_input.clone()}
+                            onkeypress={mobile_search_keypress.clone()}
                         />
                         <button
                             type="button"
                             class="mobile-search-btn"
-                            onclick={do_search.clone()}
+                            onclick={mobile_do_search.clone()}
                         >
                             {"搜索"}
                         </button>
                         <button
                             type="button"
                             class="mobile-search-clear"
-                            onclick={clear_search}
+                            onclick={mobile_clear_search.clone()}
                             disabled={search_query.is_empty()}
                         >
                             {"清空"}
                         </button>
+                    </div>
+                    <div class="mobile-menu-header">
+                        <span class="mobile-menu-title">{"导航"}</span>
                     </div>
                     <nav class="mobile-nav" aria-label="移动端导航">
                         { for nav_links.iter().map(|(label, route)| {

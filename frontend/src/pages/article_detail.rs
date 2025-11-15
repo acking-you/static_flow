@@ -5,6 +5,7 @@ use yew_router::prelude::{use_route, Link};
 use static_flow_shared::Article;
 
 use crate::{
+    components::loading_spinner::{LoadingSpinner, SpinnerSize},
     router::Route,
     utils::{image_url, markdown_to_html},
 };
@@ -29,18 +30,27 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         .unwrap_or_else(|| props.id.clone());
 
     let article = use_state(|| None::<Article>);
+    let loading = use_state(|| true);
 
     {
         let article = article.clone();
         let article_id = article_id.clone();
+        let loading = loading.clone();
         use_effect_with(article_id.clone(), move |id| {
             let id = id.clone();
             let article = article.clone();
+            let loading = loading.clone();
+            loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_article_detail(&id).await {
-                    Ok(data) => article.set(data),
+                    Ok(data) => {
+                        article.set(data);
+                        loading.set(false);
+                    }
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch article: {}", e).into());
+                        article.set(None);
+                        loading.set(false);
                     }
                 }
             });
@@ -186,7 +196,15 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         });
     }
 
-    let body = if let Some(article) = article_data.clone() {
+    let loading_view = html! {
+        <div class="flex min-h-[50vh] items-center justify-center">
+            <LoadingSpinner size={SpinnerSize::Large} />
+        </div>
+    };
+
+    let body = if *loading {
+        loading_view
+    } else if let Some(article) = article_data.clone() {
         let word_count = article
             .content
             .chars()

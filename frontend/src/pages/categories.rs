@@ -1,20 +1,30 @@
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
-use crate::router::Route;
+use crate::{
+    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    router::Route,
+};
 
 #[function_component(CategoriesPage)]
 pub fn categories_page() -> Html {
     let categories = use_state(|| Vec::<crate::api::CategoryInfo>::new());
+    let loading = use_state(|| true);
 
     {
         let categories = categories.clone();
+        let loading = loading.clone();
         use_effect_with((), move |_| {
+            loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_categories().await {
-                    Ok(data) => categories.set(data),
+                    Ok(data) => {
+                        categories.set(data);
+                        loading.set(false);
+                    }
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch categories: {}", e).into());
+                        loading.set(false);
                     }
                 }
             });
@@ -34,7 +44,13 @@ pub fn categories_page() -> Html {
                 </section>
 
                 {
-                    if categories.is_empty() {
+                    if *loading {
+                        html! {
+                            <div class="flex min-h-[40vh] items-center justify-center">
+                                <LoadingSpinner size={SpinnerSize::Large} />
+                            </div>
+                        }
+                    } else if categories.is_empty() {
                         html! {
                             <p class="empty-hint">{ "暂无分类" }</p>
                         }

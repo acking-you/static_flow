@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use yew::prelude::*;
@@ -47,6 +47,7 @@ pub fn posts_page() -> Html {
         .normalized();
 
     let articles = use_state(|| Vec::<ArticleListItem>::new());
+    let expanded_years = use_state(|| HashMap::<i32, bool>::new());
 
     {
         let articles = articles.clone();
@@ -93,6 +94,18 @@ pub fn posts_page() -> Html {
         format!("现在共有 {} 篇文章，按年份倒序排列。", total_posts)
     };
 
+    let toggle_year = {
+        let expanded_years = expanded_years.clone();
+        Callback::from(move |year: i32| {
+            expanded_years.set({
+                let mut map = (*expanded_years).clone();
+                let next = !map.get(&year).copied().unwrap_or(false);
+                map.insert(year, next);
+                map
+            });
+        })
+    };
+
     html! {
         <main class="main posts-page">
             <div class="container">
@@ -125,7 +138,7 @@ pub fn posts_page() -> Html {
                                 <p class="timeline-empty">{ "暂无文章可展示。" }</p>
                             }
                         } else {
-                            render_timeline(&grouped_by_year)
+                            render_expandable_timeline(&grouped_by_year, &*expanded_years, &toggle_year)
                         }
                     }
                 </div>
@@ -135,15 +148,47 @@ pub fn posts_page() -> Html {
 }
 
 pub(crate) fn render_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -> Html {
+    render_timeline_with_state(grouped_by_year, None, None)
+}
+
+pub(crate) fn render_expandable_timeline(
+    grouped_by_year: &[(i32, Vec<ArticleListItem>)],
+    expanded_years: &HashMap<i32, bool>,
+    toggle_year: &Callback<i32>,
+) -> Html {
+    render_timeline_with_state(grouped_by_year, Some(expanded_years), Some(toggle_year))
+}
+
+fn render_timeline_with_state(
+    grouped_by_year: &[(i32, Vec<ArticleListItem>)],
+    expanded_years: Option<&HashMap<i32, bool>>,
+    toggle_year: Option<&Callback<i32>>,
+) -> Html {
     html! {
         <>
             { for grouped_by_year.iter().map(|(year, posts)| {
                 let year_value = *year;
+                let total_count = posts.len();
+                let collapse_enabled = expanded_years.is_some() && toggle_year.is_some();
+                let should_collapse = collapse_enabled && total_count > 20;
+                let is_expanded = if collapse_enabled {
+                    expanded_years
+                        .and_then(|map| map.get(&year_value).copied())
+                        .unwrap_or(false)
+                } else {
+                    true
+                };
+                let visible_count = if should_collapse && !is_expanded {
+                    total_count.min(10)
+                } else {
+                    total_count
+                };
+                let remaining = total_count.saturating_sub(visible_count);
                 html! {
                     <>
                         <h3 class="group-title">{ year_value }</h3>
                         <div class="timeline">
-                            { for posts.iter().cloned().map(|article| {
+                            { for posts.iter().take(visible_count).cloned().map(|article| {
                                 let detail_route = Route::ArticleDetail { id: article.id.clone() };
                                 html! {
                                     <div class="circle">
@@ -161,6 +206,35 @@ pub(crate) fn render_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -
                                 }
                             }) }
                         </div>
+                        {
+                            if should_collapse {
+                                let button_label = if is_expanded {
+                                    "收起".to_string()
+                                } else {
+                                    format!("展开剩余 {} 篇", remaining)
+                                };
+                                if let Some(toggle_cb) = toggle_year {
+                                    let toggle_cb = toggle_cb.clone();
+                                    let year_for_toggle = year_value;
+                                    let onclick = Callback::from(move |_| toggle_cb.emit(year_for_toggle));
+                                    html! {
+                                        <button
+                                            type="button"
+                                            class={classes!("btn", "btn-soft", "btn-expand")}
+                                            {onclick}
+                                            aria-expanded={is_expanded.to_string()}
+                                            aria-label={format!("切换 {year_value} 年文章折叠状态")}
+                                        >
+                                            { button_label }
+                                        </button>
+                                    }
+                                } else {
+                                    Html::default()
+                                }
+                            } else {
+                                Html::default()
+                            }
+                        }
                     </>
                 }
             }) }

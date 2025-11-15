@@ -139,7 +139,7 @@ pub async fn fetch_categories() -> Result<Vec<CategoryInfo>, String> {
     Ok(json_response.categories)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SearchResult {
     pub id: String,
     pub title: String,

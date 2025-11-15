@@ -12,10 +12,11 @@ gloo-net = { workspace = true }
 serde = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = "0.4"
-web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "KeyboardEvent", "HtmlImageElement", "NodeList"] }
+web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "KeyboardEvent", "HtmlImageElement", "NodeList", "ScrollToOptions", "ScrollBehavior"] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }
 urlencoding = "2.1"
+yew-hooks = "0.3.4"
 
 # Shared crate
 static-flow-shared = { path = "../shared" }

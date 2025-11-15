@@ -1,20 +1,30 @@
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
-use crate::router::Route;
+use crate::{
+    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    router::Route,
+};
 
 #[function_component(TagsPage)]
 pub fn tags_page() -> Html {
     let tag_stats = use_state(|| Vec::<crate::api::TagInfo>::new());
+    let loading = use_state(|| true);
 
     {
         let tag_stats = tag_stats.clone();
+        let loading = loading.clone();
         use_effect_with((), move |_| {
+            loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_tags().await {
-                    Ok(data) => tag_stats.set(data),
+                    Ok(data) => {
+                        tag_stats.set(data);
+                        loading.set(false);
+                    }
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch tags: {}", e).into());
+                        loading.set(false);
                     }
                 }
             });
@@ -41,7 +51,13 @@ pub fn tags_page() -> Html {
                 </section>
 
                 {
-                    if tag_stats.is_empty() {
+                    if *loading {
+                        html! {
+                            <div class="flex min-h-[40vh] items-center justify-center">
+                                <LoadingSpinner size={SpinnerSize::Large} />
+                            </div>
+                        }
+                    } else if tag_stats.is_empty() {
                         html! {
                             <p class="empty-hint">{ "暂无标签，敬请期待。" }</p>
                         }

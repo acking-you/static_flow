@@ -1,6 +1,12 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
-use crate::{api::SearchResult, router::Route};
+
+use crate::{
+    api::SearchResult,
+    components::pagination::Pagination,
+    hooks::use_pagination,
+    router::Route,
+};
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct SearchPageProps {
@@ -19,6 +25,8 @@ pub fn search_page() -> Html {
     let keyword = query.clone().unwrap_or_default();
     let results = use_state(|| Vec::<SearchResult>::new());
     let loading = use_state(|| false);
+    let (visible_results, current_page, total_pages, go_to_page) =
+        use_pagination((*results).clone(), 15);
 
     {
         let results = results.clone();
@@ -27,27 +35,29 @@ pub fn search_page() -> Html {
 
         use_effect_with(keyword.clone(), move |kw| {
             if kw.trim().is_empty() {
+                loading.set(false);
                 results.set(vec![]);
-                return;
+            } else {
+                loading.set(true);
+                let results = results.clone();
+                let loading = loading.clone();
+                let query_text = kw.clone();
+
+                wasm_bindgen_futures::spawn_local(async move {
+                    match crate::api::search_articles(&query_text).await {
+                        Ok(data) => {
+                            results.set(data);
+                            loading.set(false);
+                        }
+                        Err(e) => {
+                            web_sys::console::error_1(&format!("Search failed: {}", e).into());
+                            loading.set(false);
+                        }
+                    }
+                });
             }
 
-            loading.set(true);
-            let results = results.clone();
-            let loading = loading.clone();
-            let kw = kw.clone();
-
-            wasm_bindgen_futures::spawn_local(async move {
-                match crate::api::search_articles(&kw).await {
-                    Ok(data) => {
-                        results.set(data);
-                        loading.set(false);
-                    }
-                    Err(e) => {
-                        web_sys::console::error_1(&format!("Search failed: {}", e).into());
-                        loading.set(false);
-                    }
-                }
-            });
+            || ()
         });
     }
 
@@ -83,9 +93,24 @@ pub fn search_page() -> Html {
                             { " 搜索中..." }
                         </div>
                     } else if !results.is_empty() {
-                        { for results.iter().map(|result| {
-                            render_search_result(result)
-                        }) }
+                        <>
+                            { for visible_results.iter().map(|result| render_search_result(result)) }
+                            {
+                                if total_pages > 1 {
+                                    html! {
+                                        <div class="mt-8 flex justify-center">
+                                            <Pagination
+                                                current_page={current_page}
+                                                total_pages={total_pages}
+                                                on_page_change={go_to_page.clone()}
+                                            />
+                                        </div>
+                                    }
+                                } else {
+                                    Html::default()
+                                }
+                            }
+                        </>
                     } else if !keyword.is_empty() {
                         <div class="empty-hint">
                             <p>{ "没有找到匹配的结果" }</p>

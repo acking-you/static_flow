@@ -22,7 +22,12 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                 if let Some(image) = article.featured_image.as_ref() {
                     html! {
                         <Link<Route> to={detail_route.clone()} classes={classes!("featured-image")}>
-                            <img src={image_url(&image)} alt={article.title.clone()} loading="lazy" />
+                            <img
+                                src={image_url(&image)}
+                                alt={article.title.clone()}
+                                loading="lazy"
+                                decoding="async"
+                            />
                         </Link<Route>>
                     }
                 } else {
@@ -79,24 +84,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                             <li class="m-0">
                                 <Link<Route>
                                     to={tag_route}
-                                    classes={classes!(
-                                        "inline-flex",
-                                        "items-center",
-                                        "gap-1.5",
-                                        "rounded-full",
-                                        "border",
-                                        "border-border",
-                                        "px-3",
-                                        "py-1",
-                                        "text-sm",
-                                        "text-muted",
-                                        "transition-colors",
-                                        "duration-200",
-                                        "hover:border-primary",
-                                        "hover:bg-primary",
-                                        "hover:text-white",
-                                        "cursor-pointer"
-                                    )}
+                                    classes="tag-pill"
                                 >
                                     { tag_label }
                                 </Link<Route>>
