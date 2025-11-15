@@ -2,9 +2,9 @@
 
 > A local-first, automation-driven blog system built with full-stack Rust. Write in Obsidian, auto-sync with AI, serve dynamically - bridging the gap between static simplicity and dynamic flexibility.
 
-**StaticFlow** 是一个以**本地创作为中心、自动化驱动**的现代博客系统。你可以继续使用 Obsidian 等工具在本地文件夹写 Markdown，本地服务自动检测文件变化，通过 AI 生成摘要和标签，实时同步到搜索引擎和数据库，最终通过 API 暴露给 WASM 前端 - 所有这些都基于全栈 Rust 实现。
+**StaticFlow** 是一个以**本地创作为中心、自动化驱动**的现代博客系统。你可以继续使用 Obsidian 等工具在本地文件夹写 Markdown，本地 AI Agent 自动检测文件变化，通过 LLM 生成摘要和标签，实时同步到 LanceDB 多模态数据库，最终通过 API 暴露给 WASM 前端 - 所有这些都基于全栈 Rust 实现。
 
-**StaticFlow** is a local-first, automation-driven blog system built entirely in Rust. Continue writing in your local folder with Obsidian, let the local service auto-detect changes, generate summaries and tags via LLM, sync to search engine and database in real-time, and serve everything through APIs to a WASM frontend - all powered by the Rust ecosystem.
+**StaticFlow** is a local-first, automation-driven blog system built entirely in Rust. Continue writing in your local folder with Obsidian, let the local AI agent auto-detect changes, generate summaries and tags via LLM, sync to LanceDB multimodal database in real-time, and serve everything through APIs to a WASM frontend - all powered by the Rust ecosystem.
 
 ## 📋 核心理念
 
@@ -18,15 +18,15 @@
    - 无需任何在线操作
 
 2. **智能自动化**:
-   - 本地 CLI 工具监控文件夹变化
-   - AI 自动生成文章摘要、标签、分类
-   - 图片路径自动映射和转换
-   - 实时同步到 Meilisearch 搜索引擎
+   - 本地 AI Agent 监控文件夹变化（基于 Rig 框架）
+   - LLM 自动生成文章摘要、标签、分类
+   - CLIP 模型自动生成图片向量 embedding
+   - 实时同步到 LanceDB 多模态数据库
 
 3. **动态服务**:
    - Axum 后端提供 RESTful API
    - Yew WASM 前端提供极致性能
-   - Meilisearch 提供毫秒级全文搜索
+   - LanceDB 提供全文搜索 + 向量搜索 + 图片存储
    - 支持内网穿透，随处访问
 
 ## ✨ 核心特性
@@ -38,15 +38,17 @@
 - 🔄 文件变化自动检测和同步
 
 ### 🤖 AI 驱动自动化
-- 🏷️ 自动生成文章标签
-- 📊 自动生成文章分类
-- 📄 自动生成文章摘要
-- 🎯 基于 LLM（本地或云端）
+- 🏷️ 自动生成文章标签（基于 LLM）
+- 📊 自动生成文章分类（基于 LLM）
+- 📄 自动生成文章摘要（基于 LLM）
+- 🖼️ 自动生成图片向量 embedding（基于 CLIP）
+- 🎯 支持本地（Ollama）或云端（OpenAI）AI 服务
 
 ### 🚀 现代技术栈
 - 🦀 **全栈 Rust**: 前后端共享代码，类型安全
 - ⚡ **WebAssembly**: 接近原生的浏览器性能
-- 🔍 **Meilisearch**: 快速、相关性高的全文搜索
+- 🔍 **LanceDB**: 多模态数据库（全文 + 向量 + 图片存储）
+- 🤖 **Rig Framework**: Rust 原生 AI Agent 框架
 - 🎨 **响应式设计**: 移动端和桌面端完美适配
 - 🔐 **安全设计**: 基于签名认证，无需账号系统
 
@@ -67,19 +69,20 @@ TailwindCSS (样式)
 ```
 Rust 1.75+
 Axum 0.7 (Web 框架)
-Meilisearch 1.5+ (全文搜索)
-SQLite (元数据存储)
+LanceDB (多模态数据库)
 tower-governor (限流)
 serde (序列化)
 tokio (异步运行时)
 ```
 
-### CLI Tool
+### AI Agent
 ```
 Rust 1.75+
-clap (命令行解析)
+Rig (AI Agent 框架)
+LanceDB (数据存储)
 notify (文件监控)
-reqwest (HTTP 客户端)
+clap (命令行解析)
+reqwest (LLM API 调用)
 ```
 
 ## 📦 项目结构
@@ -104,10 +107,10 @@ static-flow/
 │   │   ├── api/             # API 路由
 │   │   │   ├── articles.rs
 │   │   │   ├── search.rs
-│   │   │   └── resources.rs
+│   │   │   └── images.rs
 │   │   ├── models/          # 数据模型
 │   │   ├── services/        # 业务逻辑
-│   │   │   ├── meilisearch.rs
+│   │   │   ├── lancedb.rs   # LanceDB 客户端
 │   │   │   └── markdown.rs
 │   │   ├── middleware/      # 中间件
 │   │   │   ├── auth.rs
@@ -116,11 +119,13 @@ static-flow/
 │   ├── Cargo.toml
 │   └── Dockerfile
 │
-├── cli-tool/              # 本地管理工具
+├── agent/                 # AI Agent（本地自动化）
 │   ├── src/
 │   │   ├── watcher.rs       # 文件监控
-│   │   ├── processor.rs     # 内容处理
-│   │   ├── sync.rs          # 同步逻辑
+│   │   ├── processor.rs     # Markdown 解析
+│   │   ├── ai_generator.rs  # LLM 元数据生成
+│   │   ├── image_encoder.rs # 图片 embedding（CLIP）
+│   │   ├── lancedb_writer.rs # LanceDB 写入
 │   │   └── main.rs
 │   └── Cargo.toml
 │
@@ -139,20 +144,24 @@ static-flow/
 - Rust 1.75+ (`rustup install stable`)
 - wasm32 target (`rustup target add wasm32-unknown-unknown`)
 - Trunk (`cargo install trunk`)
-- Meilisearch 1.5+
+- Python 3.10+（可选，用于运行 CLIP embedding 服务）
 
-### 1. 安装 Meilisearch
+### 1. 初始化 LanceDB 数据库
 
 ```bash
-# macOS
-brew install meilisearch
+cd agent
 
-# 或使用 Docker
-docker run -d \
-  --name meilisearch \
-  -p 7700:7700 \
-  -v $(pwd)/data/meili_data:/meili_data \
-  getmeili/meilisearch:v1.5
+# 创建配置文件
+cp config.example.toml config.toml
+
+# 初始化 LanceDB schema
+cargo run -- init
+
+# 扫描并同步现有 Markdown 文件
+cargo run -- sync ~/my-blog-posts
+
+# 启动文件监控（实时同步）
+cargo run --release -- watch ~/my-blog-posts
 ```
 
 ### 2. 启动后端服务
@@ -162,9 +171,6 @@ cd backend
 
 # 创建配置文件
 cp .env.example .env
-
-# 初始化数据库
-cargo run --bin init-db
 
 # 启动服务
 cargo run --release
@@ -186,24 +192,6 @@ trunk serve --open
 
 前端将在 `http://localhost:8080` 运行，支持热重载
 
-### 4. 使用 CLI 工具同步内容
-
-```bash
-cd cli-tool
-
-# 构建工具
-cargo build --release
-
-# 初始化配置
-./target/release/static-flow-cli init
-
-# 同步 Markdown 文件
-./target/release/static-flow-cli sync ~/my-blog-posts
-
-# 监控目录（实时同步）
-./target/release/static-flow-cli watch ~/my-blog-posts
-```
-
 ## 📝 配置说明
 
 ### Backend `.env`
@@ -212,194 +200,160 @@ cargo build --release
 SERVER_HOST=0.0.0.0
 SERVER_PORT=3000
 
-# Meilisearch 配置
-MEILISEARCH_URL=http://localhost:7700
-MEILISEARCH_KEY=master_key_here
-
-# 数据库
-DATABASE_URL=sqlite://data/blog.db
-
-# 内容目录
-CONTENT_DIR=./content
-IMAGE_DIR=./content/images
+# LanceDB 配置
+LANCEDB_PATH=./data/lancedb
 
 # 限流配置
 RATE_LIMIT_PER_MINUTE=60
 ```
 
-### CLI Tool `config.toml`
+### AI Agent `config.toml`
 ```toml
 [watch]
 # 本地 Markdown 文件目录（如 Obsidian vault）
 content_dir = "/Users/yourname/Documents/MyBlog"
 image_dir = "/Users/yourname/Documents/MyBlog/images"
 
-[backend]
-api_url = "http://localhost:3000/api"
-# 后续添加认证 token
+[lancedb]
+# LanceDB 数据库路径
+db_path = "./data/lancedb"
 
 [ai]
-# AI 服务配置（用于生成摘要、标签、分类）
-provider = "openai"  # 或 "local" (ollama)
+# LLM 服务配置（用于生成摘要、标签、分类）
+provider = "openai"  # 或 "ollama"
 api_key = "sk-xxx"
 model = "gpt-4o-mini"
+
+# 图片 embedding 服务（CLIP）
+clip_service_url = "http://localhost:8000/embed"  # 可选，使用本地 Python 服务
 ```
 
 ## 🗺️ 开发路线图
 
-### ✅ Week 1: 前端界面复刻（Day 1-7）
+### ✅ Week 1: 前端界面复刻（Day 1-7） - 已完成
 
-**核心目标：使用 Yew + Rust 完全复刻旧博客的界面和样式，所有数据使用 Mock**
+前端 UI 已基本完成，使用 Yew + TailwindCSS v4 复刻旧博客界面。
 
-**Day 1-2: Yew 项目初始化 + 基础布局**
-- [ ] 创建 Yew 项目并配置 Trunk
-- [ ] 分析旧博客界面结构（参考 `old/` 目录）
-  - 顶部导航栏（桌面端 + 移动端）
-  - 首页布局（头像、标题、副标题、社交链接）
-  - 底部 Footer
-- [ ] 复刻 Header 组件
-  - Logo/标题区域
-  - 导航菜单（文章、标签、分类）
-  - 搜索框
-  - 主题切换按钮
-- [ ] 复刻响应式导航（移动端汉堡菜单）
+### 🚧 Phase 1: AI Agent 核心开发（优先级最高）
 
-**Day 3-4: 首页和文章列表页**
-- [ ] 复刻首页布局
-  - 个人简介区域（头像、标题、TypeIt 打字效果）
-  - 社交链接图标
-- [ ] 复刻文章列表卡片
-  - 特色图片
-  - 文章标题、摘要
-  - 发布日期、作者、分类
-  - 标签显示
-- [ ] 实现分页组件
-- [ ] Mock 文章列表数据（10-20 篇）
+**目标：构建基于 Rig + LanceDB 的本地自动化 Agent**
 
-**Day 5-6: 文章详情页和样式迁移**
-- [ ] 复刻文章详情页布局
-  - 文章头部信息
-  - Markdown 内容渲染（使用 pulldown-cmark）
-  - 代码高亮样式
-  - 图片展示
-- [ ] 迁移 CSS 样式
-  - 提取 `old/css/` 中的关键样式
-  - 适配到 Yew 组件
-  - 暗色主题支持
-- [ ] Mock 文章详情数据（3-5 篇完整文章）
+- [ ] **LanceDB Schema 设计**
+  - 定义 Article 表 schema（id, title, content, summary, tags, category, vector, timestamps）
+  - 定义 Image 表 schema（id, filename, image_data, thumbnail, vector, metadata）
+  - 创建全文索引和向量索引
 
-**Day 7: 搜索、标签、分类页面**
-- [ ] 实现搜索结果展示页面（Mock 数据）
-- [ ] 实现标签列表页
-- [ ] 实现分类列表页
-- [ ] 路由配置和页面跳转
-- [ ] 整体样式微调和优化
+- [ ] **Rig 框架集成**
+  - 初始化 Rig Agent 项目结构
+  - 配置 LLM provider（OpenAI/Ollama）
+  - 实现基础 prompt 模板（摘要、标签、分类生成）
 
-**里程碑检查点：**
-- ✅ 界面和旧博客视觉上高度一致
-- ✅ 响应式设计在移动端和桌面端表现良好
-- ✅ 所有页面使用 Mock 数据正常展示
-- ✅ 暗色/明亮主题切换正常
+- [ ] **Markdown 处理流水线**
+  - 文件扫描和监控（notify crate）
+  - Frontmatter 解析（yaml-rust）
+  - Markdown 正文提取
+  - 图片链接提取和解析
 
-### 🚧 Week 2: 后端服务 + 本地工具基础（Day 8-14）
+- [ ] **AI 元数据生成**
+  - LLM 调用：根据文章内容生成摘要（100-200 字）
+  - LLM 调用：提取 3-5 个关键标签
+  - LLM 调用：判断文章分类（Tech/Life/Thoughts 等）
+  - 生成文本 embedding（用于语义搜索）
 
-**Day 8-9: 后端基础框架**
-- [ ] Axum 项目初始化
-- [ ] Meilisearch 集成和配置
-  - 创建 articles 索引
-  - 配置搜索字段和排序
-- [ ] SQLite 数据库 schema 设计
-  - articles 表（id, title, content_path, summary, created_at, updated_at）
-  - tags 表
-  - categories 表
-  - images 表（filename, file_path）
-- [ ] 核心 API 实现（使用测试数据）
-  - `GET /api/articles` - 文章列表
-  - `GET /api/articles/:id` - 文章详情（实时 Markdown 渲染）
-  - `GET /api/search?q=keyword` - 搜索
+- [ ] **图片处理流水线**
+  - 图片文件扫描（支持 jpg/png/webp）
+  - 缩略图生成（200x200）
+  - 调用 CLIP 模型生成 embedding（512 维向量）
+  - 图片二进制存储优化
+
+- [ ] **LanceDB 写入逻辑**
+  - 批量插入 Article 记录
+  - 批量插入 Image 记录
+  - 增量更新机制（检测文件修改时间）
+  - 删除处理（文件被删除时同步到 DB）
+
+- [ ] **配置管理**
+  - config.toml 解析（watch 路径、AI API key、LanceDB 路径）
+  - 环境变量支持
+  - 日志系统（tracing + tracing-subscriber）
+
+**里程碑检查点**：
+- ✅ 本地 Markdown + 图片 → LanceDB 完整流程打通
+- ✅ AI 自动生成摘要、标签、分类
+- ✅ 图片 embedding 正确生成并存储
+- ✅ 文件变化能实时同步到 LanceDB
+
+### 🔮 Phase 2: Backend 重构（LanceDB 集成）
+
+**目标：Backend 从"处理层"变为"查询层"**
+
+- [ ] **移除旧依赖**
+  - 移除 Meilisearch 相关代码
+  - 移除 SQLite 相关代码
+  - 清理废弃的 API endpoint
+
+- [ ] **LanceDB Rust SDK 集成**
+  - 添加 lancedb crate 依赖
+  - 实现 LanceDB 连接池
+  - 封装查询接口
+
+- [ ] **API Endpoints 重构**
+  - `GET /api/articles` - 从 LanceDB 分页查询（支持 tag/category 过滤）
+  - `GET /api/articles/:id` - 根据 ID 精确查询
+  - `GET /api/search?q=keyword` - 全文搜索（LanceDB FTS）
+  - `GET /api/semantic-search?q=text` - 语义搜索（向量搜索）
+  - `GET /api/image/:id` - 返回图片二进制
+  - `GET /api/image/search?q=text` - 文本搜图（CLIP 向量搜索）
+  - `POST /api/image/search` - 以图搜图（上传图片查询相似图）
   - `GET /api/tags` - 标签列表
   - `GET /api/categories` - 分类列表
-  - `GET /api/image/:base64_filename` - 图片服务
 
-**Day 10-11: 前后端集成**
-- [ ] 创建 `shared` crate（共享数据模型）
-- [ ] 前端 API 客户端实现（gloo-net）
-- [ ] 替换 Mock 数据为真实 API 调用
-- [ ] CORS 配置
-- [ ] 错误处理和 Loading 状态
-- [ ] Markdown 图片链接转换测试
-  - 本地相对路径 → HTTP API 路径
+- [ ] **Markdown 渲染**
+  - 保留后端实时渲染 Markdown to HTML
+  - 图片链接转换（相对路径 → `/api/image/:id`）
+  - 代码高亮（syntect）
 
-**Day 12-13: CLI 工具核心功能**
-- [ ] CLI 项目初始化（clap 配置）
-- [ ] 文件监控实现（notify crate）
-  - 监控 `.md` 文件的创建、修改、删除
-  - 监控图片文件的变化
-- [ ] Markdown 文件解析
-  - 提取 frontmatter（如果有）
-  - 基于文件路径生成文章 ID
-  - 提取图片引用
-- [ ] 图片路径映射
-  - 建立 filename → full_path 映射
-  - 存储到后端数据库
-- [ ] 基础同步到后端
-  - 调用后端 API 添加/更新文章
-  - 同步到 Meilisearch
+- [ ] **性能优化**
+  - 结果缓存（moka）
+  - 分页查询优化
+  - 图片响应 ETag 支持
 
-**Day 14: 测试完整流程**
-- [ ] 端到端测试
-  1. 在本地文件夹创建 Markdown 文件
-  2. CLI 工具检测并同步
-  3. 前端刷新后能看到新文章
-  4. 搜索功能正常工作
-- [ ] Bug 修复和优化
+**里程碑检查点**：
+- ✅ 所有 API 从 LanceDB 正确读取数据
+- ✅ 全文搜索和向量搜索正常工作
+- ✅ 图片服务性能良好（<100ms 响应时间）
 
-**里程碑检查点：**
-- ✅ 本地文件 → 数据库 → 前端显示的完整流程打通
-- ✅ Meilisearch 搜索功能正常
-- ✅ 图片链接转换正确
-- ✅ 文件变化能实时同步
+### 🎨 Phase 3: Frontend 功能扩展
 
-### 🔮 Week 3+: AI 自动化和高级功能
+**目标：支持多模态搜索功能**
 
-**AI 内容生成**
-- [ ] 集成 LLM API（OpenAI / 本地 Ollama）
-- [ ] 实现自动摘要生成
-  - 分析文章内容
-  - 生成 2-3 句的摘要
-- [ ] 实现自动标签生成
-  - 基于文章内容提取关键词
-  - 生成 3-5 个相关标签
-- [ ] 实现自动分类
-  - 基于内容判断文章类型
-  - 分配到合适的分类
+- [ ] **语义搜索界面**
+  - 添加"智能搜索"模式切换（关键词 vs 语义）
+  - 语义搜索结果展示（相似度得分）
 
-**安全和部署**
-- [ ] 请求签名机制
-  - 前端公钥加密
-  - 后端私钥验证
-- [ ] IP + 设备指纹限流
-- [ ] 图片处理和优化
-  - 缩略图生成
-  - 图片压缩
-- [ ] Docker Compose 部署
-- [ ] Rathole 内网穿透配置
-- [ ] Nginx 反向代理
+- [ ] **以图搜图功能**
+  - 图片上传组件
+  - 相似图片结果展示（缩略图 + 相似度）
+  - 点击查看原图
 
-**扩展功能**
-- [ ] 音乐播放器界面
+- [ ] **搜索结果优化**
+  - 混合搜索（全文 + 向量结合）
+  - 搜索历史记录
+  - 热门搜索词
+
+**里程碑检查点**：
+- ✅ 用户可以通过语义搜索找到相关文章
+- ✅ 用户可以通过上传图片搜索相似内容
+- ✅ 搜索体验流畅
+
+### 🔮 Phase 4: 高级功能（Future）
+
+- [ ] 相关文章推荐（基于向量相似度）
+- [ ] 文章聚类和主题分析
+- [ ] RSS feed 生成
+- [ ] 阅读统计和热力图
 - [ ] GitHub 评论集成
-- [ ] RSS 订阅支持
-- [ ] 文章统计（阅读量、字数）
-
-### 🔮 Future (Week 3+)
-
-- [ ] 图片处理和 CDN
-- [ ] 音乐播放器界面
-- [ ] GitHub 评论集成
-- [ ] 高级安全认证（签名验证）
-- [ ] AI 内容生成（标题、摘要、标签）
-- [ ] 性能监控和日志
+- [ ] Docker Compose 一键部署
 - [ ] Rathole 内网穿透配置
 
 ## 📚 API 文档
@@ -448,7 +402,7 @@ GET /api/articles/:id
 }
 ```
 
-#### 搜索文章
+#### 搜索文章（全文搜索）
 ```http
 GET /api/search?q=keyword&limit=10
 ```
@@ -462,21 +416,69 @@ GET /api/search?q=keyword&limit=10
       "title": "文章标题",
       "summary": "匹配的摘要内容...",
       "tags": ["rust"],
-      "_formatted": {
-        "title": "文章<em>标题</em>"
-      }
+      "score": 0.95
     }
   ],
   "query": "keyword",
-  "processing_time_ms": 2
+  "total": 42
 }
 ```
 
-### 资源相关
+#### 语义搜索文章
+```http
+GET /api/semantic-search?q=Rust编程最佳实践&limit=10
+```
+
+响应：
+```json
+{
+  "hits": [
+    {
+      "id": "article-slug",
+      "title": "文章标题",
+      "summary": "文章摘要",
+      "similarity": 0.87
+    }
+  ],
+  "query": "Rust编程最佳实践",
+  "total": 15
+}
+```
+
+### 图片相关
 
 #### 获取图片
 ```http
-GET /api/image/:base64_filename
+GET /api/image/:id
+```
+
+#### 文本搜图
+```http
+GET /api/image/search?q=sunset&limit=10
+```
+
+响应：
+```json
+{
+  "images": [
+    {
+      "id": "img-001",
+      "filename": "sunset.jpg",
+      "thumbnail_url": "/api/image/img-001?size=thumbnail",
+      "similarity": 0.92
+    }
+  ]
+}
+```
+
+#### 以图搜图
+```http
+POST /api/image/search
+Content-Type: multipart/form-data
+
+{
+  "image": <binary>
+}
 ```
 
 ## 🎯 学习目标
@@ -487,11 +489,11 @@ GET /api/image/:base64_filename
 - [ ] WASM 与 JavaScript 互操作
 - [ ] WASM 性能优化和体积优化
 
-### Meilisearch
-- [x] 基础索引和搜索
-- [ ] Faceted search（标签筛选）
-- [ ] 相关性调优
-- [ ] 实时索引更新
+### LanceDB & Rig
+- [ ] LanceDB 多模态存储（向量 + 全文 + 二进制）
+- [ ] Rig 框架构建 AI Agent
+- [ ] CLIP 图片 embedding 生成
+- [ ] 向量相似度搜索优化
 
 ### Rust 全栈
 - [ ] 前后端代码共享
@@ -529,17 +531,19 @@ panic = "abort"     # 减小体积
 wasm-opt -Oz -o output_optimized.wasm output.wasm
 ```
 
-### Meilisearch 调试
+### LanceDB 调试
 
 ```bash
-# 查看索引信息
-curl http://localhost:7700/indexes
+# Python 交互式查询（需安装 lancedb）
+python
+>>> import lancedb
+>>> db = lancedb.connect("./data/lancedb")
+>>> table = db.open_table("articles")
+>>> table.count_rows()
+>>> table.head(5)
 
-# 查看文档数量
-curl http://localhost:7700/indexes/articles/stats
-
-# 手动搜索测试
-curl "http://localhost:7700/indexes/articles/search?q=rust"
+# 测试向量搜索
+>>> results = table.search([0.1] * 512).limit(10).to_list()
 ```
 
 ## 🚢 部署指南
@@ -550,28 +554,25 @@ curl "http://localhost:7700/indexes/articles/search?q=rust"
 # docker-compose.yml
 version: '3.8'
 services:
-  meilisearch:
-    image: getmeili/meilisearch:v1.5
-    ports:
-      - "7700:7700"
-    volumes:
-      - ./data/meili_data:/meili_data
-    environment:
-      - MEILI_MASTER_KEY=your_master_key
-
   backend:
     build: ./backend
     ports:
       - "3000:3000"
-    depends_on:
-      - meilisearch
+    volumes:
+      - ./data/lancedb:/app/data/lancedb  # 挂载 LanceDB 数据
     environment:
-      - MEILISEARCH_URL=http://meilisearch:7700
+      - LANCEDB_PATH=/app/data/lancedb
 
   frontend:
     build: ./frontend
     ports:
       - "8080:8080"
+
+  # 可选：CLIP embedding 服务（Python）
+  clip-service:
+    image: your-clip-service:latest
+    ports:
+      - "8000:8000"
 ```
 
 ```bash
@@ -605,15 +606,22 @@ MIT License
 - [Rust and WebAssembly Book](https://rustwasm.github.io/docs/book/)
 - [Trunk 文档](https://trunkrs.dev/)
 
-### Meilisearch
-- [Meilisearch 官方文档](https://www.meilisearch.com/docs)
-- [Rust SDK](https://github.com/meilisearch/meilisearch-rust)
+### LanceDB & Rig
+- [LanceDB 官方文档](https://lancedb.github.io/lancedb/)
+- [LanceDB Rust SDK](https://github.com/lancedb/lancedb/tree/main/rust)
+- [Rig 框架文档](https://github.com/0xPlaygrounds/rig)
+- [CLIP 模型介绍](https://openai.com/research/clip)
 
 ### Axum
 - [Axum 官方示例](https://github.com/tokio-rs/axum/tree/main/examples)
 
 ---
 
-**当前状态**: 🚧 积极开发中（MVP 阶段）
+**当前状态**: 🚧 积极开发中
 
-**下一步**: 完成 Week 1 的 MVP 功能，实现前后端数据流打通
+**架构状态**:
+- ✅ Frontend 基础 UI（Yew + TailwindCSS v4）
+- 🚧 AI Agent 开发中（Rig + LanceDB）
+- ⏳ Backend 待重构（LanceDB 集成）
+
+**下一步**: 完成 Phase 1 - AI Agent 核心开发，实现 Markdown/图片 → LanceDB 的完整流程

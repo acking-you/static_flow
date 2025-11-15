@@ -6,6 +6,7 @@
   --text: #1d1f23;
   --muted: #64748b;
   --surface: #ffffff;
+  --surface-rgb: 255, 255, 255;
   --surface-alt: #f8fafc;
   --border: #e2e8f0;
   --primary: #1d9ed8;
@@ -44,6 +45,7 @@
   --text: #f4f4f5;
   --muted: #94a3b8;
   --surface: #111826;
+  --surface-rgb: 17, 24, 38;
   --surface-alt: #0b1220;
   --border: #1f2735;
   --primary: #35b3ff;
@@ -76,6 +78,13 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #8d9199
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0
 }
 
 body {
@@ -689,8 +698,122 @@ a:hover {
   gap: 1rem
 }
 
+/* 首页横向滑动系统 */
+.home-page-viewport {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg)
+}
+
+.home-page-slider {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform
+}
+
+.home-page-slider--hero {
+  transform: translateX(0)
+}
+
+.home-page-slider--articles {
+  transform: translateX(-50%)
+}
+
+.home-page {
+  flex: 0 0 50%;
+  width: 50%;
+  height: 100%;
+  position: relative
+}
+
+.home-page-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch
+}
+
+/* 导航按钮 */
+.home-nav-button {
+  position: fixed;
+  bottom: 2rem;
+  z-index: 100;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 2rem;
+  border: none;
+  border-radius: 9999px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  cursor: pointer;
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12),
+              0 2px 8px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(8px)
+}
+
+.home-nav-button--forward {
+  right: 2rem;
+  background: linear-gradient(135deg, var(--primary) 0%, #0f7bbf 100%);
+  color: #fff
+}
+
+.home-nav-button--back {
+  left: 2rem;
+  background: rgba(var(--surface-rgb), 0.95);
+  color: var(--text);
+  border: 1px solid var(--border)
+}
+
+.home-nav-button:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16),
+              0 4px 12px rgba(0, 0, 0, 0.12)
+}
+
+.home-nav-button--forward:hover {
+  background: linear-gradient(135deg, #0f7bbf 0%, #0b5f93 100%)
+}
+
+.home-nav-button--back:hover {
+  background: var(--surface);
+  border-color: var(--primary)
+}
+
+.home-nav-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 2.5
+}
+
+@media (max-width: 640px) {
+  .home-nav-button {
+    bottom: 1.25rem;
+    padding: 0.85rem 1.5rem;
+    font-size: 0.95rem
+  }
+
+  .home-nav-button--forward {
+    right: 1.25rem
+  }
+
+  .home-nav-button--back {
+    left: 1.25rem
+  }
+}
+
 .hero-section {
-  margin-bottom: var(--space-xl);
+  /* 移除 margin-bottom，让分页效果更紧凑 */
+  margin-bottom: 0;
   padding: var(--space-2xl) 1rem 6rem;
   border-radius: calc(var(--radius) * 1.5);
   background-color: var(--bg);
@@ -790,6 +913,13 @@ a:hover {
   transform: translateY(-4px) scale(1.05)
 }
 
+.tech-logo {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  flex-shrink: 0
+}
+
 .stats-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -869,9 +999,10 @@ a:hover {
   flex-direction: column;
   gap: var(--space-md);
   margin-bottom: var(--space-xl);
-  margin-top: -4rem;
   position: relative;
-  z-index: 10
+  z-index: 10;
+  margin-top: 0;
+  padding-top: var(--space-lg)
 }
 
 .section-title-with-bg {
@@ -882,7 +1013,8 @@ a:hover {
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  gap: .35rem
+  gap: .35rem;
+  transition: var(--transition-base)
 }
 
 .section-title-with-bg h2 {
@@ -1041,7 +1173,8 @@ a:hover {
   }
 
   .article-list-section {
-    margin-top: -2rem
+    /* 移除负边距，保持分页效果 */
+    margin-top: 0
   }
 }
 
@@ -1214,6 +1347,65 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: .9rem
+}
+
+.article-back-button {
+  position: fixed;
+  top: calc(var(--header-height-mobile) + 1.5rem);
+  left: 1.5rem;
+  z-index: 90;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(var(--surface-rgb), 0.95);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: all 0.3s ease;
+  text-decoration: none
+}
+
+.article-back-button:hover {
+  background: var(--surface);
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateX(-4px);
+  box-shadow: var(--shadow-lg)
+}
+
+.article-back-button svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  stroke-width: 2.5
+}
+
+@media (min-width: 768px) {
+  .article-back-button {
+    top: calc(var(--header-height-desktop) + 2rem);
+    left: 2rem
+  }
+}
+
+@media (max-width: 640px) {
+  .article-back-button {
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem
+  }
+
+  .article-back-button span {
+    display: none
+  }
+
+  .article-back-button svg {
+    width: 1.25rem;
+    height: 1.25rem
+  }
 }
 
 .article-featured {
@@ -3080,4 +3272,57 @@ a:hover {
     font-size: 0.9rem;
   }
 }
+
+/* 回到顶部按钮 */
+.scroll-to-top {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow);
+  transition: var(--transition-base), transform 0.2s var(--ease-spring);
+  z-index: 1000;
+  opacity: 0;
+  animation: fadeInUp 0.3s ease forwards
+}
+
+.scroll-to-top:hover {
+  background: var(--link);
+  transform: translateY(-4px) scale(1.05);
+  box-shadow: var(--shadow-lg)
+}
+
+.scroll-to-top:active {
+  transform: translateY(-2px) scale(0.98)
+}
+
+@media (max-width: 768px) {
+  .scroll-to-top {
+    bottom: 1.5rem;
+    right: 1.5rem;
+    width: 2.75rem;
+    height: 2.75rem
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px)
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0)
+  }
+}
+
 }

@@ -2,7 +2,10 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    components::{
+        loading_spinner::{LoadingSpinner, SpinnerSize},
+        scroll_to_top_button::ScrollToTopButton,
+    },
     router::Route,
 };
 
@@ -78,6 +81,7 @@ pub fn categories_page() -> Html {
                     }
                 }
             </div>
+            <ScrollToTopButton />
         </main>
     }
 }

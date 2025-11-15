@@ -3,7 +3,10 @@ use yew_router::prelude::*;
 
 use crate::{
     api::SearchResult,
-    components::pagination::Pagination,
+    components::{
+        pagination::Pagination,
+        scroll_to_top_button::ScrollToTopButton,
+    },
     hooks::use_pagination,
     router::Route,
 };
@@ -119,6 +122,7 @@ pub fn search_page() -> Html {
                     }
                 </div>
             </div>
+            <ScrollToTopButton />
         </main>
     }
 }

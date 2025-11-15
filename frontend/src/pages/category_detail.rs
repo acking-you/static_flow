@@ -2,7 +2,10 @@ use yew::prelude::*;
 use static_flow_shared::ArticleListItem;
 
 use crate::{
-    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    components::{
+        loading_spinner::{LoadingSpinner, SpinnerSize},
+        scroll_to_top_button::ScrollToTopButton,
+    },
     pages::posts::{group_articles_by_year, render_timeline},
 };
 
@@ -89,6 +92,7 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                     }
                 </div>
             </div>
+            <ScrollToTopButton />
         </main>
     }
 }

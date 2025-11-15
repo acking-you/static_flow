@@ -1,5 +1,5 @@
 // 重新导出shared crate的数据模型
-pub use static_flow_shared::{Article, ArticleListItem, Category, Tag};
+pub use static_flow_shared::{Article, ArticleListItem};
 
 // =============== Mock 数据 ===============
 

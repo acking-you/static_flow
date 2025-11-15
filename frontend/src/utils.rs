@@ -1,4 +1,4 @@
-use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd, CowStr};
+use pulldown_cmark::{html, Event, Options, Parser, Tag, CowStr};
 
 const API_BASE: &str = "http://localhost:3000";
 

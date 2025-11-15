@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**StaticFlow** is a local-first, automation-driven blog system built entirely in Rust. It combines a Yew WebAssembly frontend, Axum backend API, Meilisearch full-text search, and a CLI tool for automated content synchronization from local Markdown files (Obsidian/Typora).
+**StaticFlow** is a local-first, automation-driven blog system built entirely in Rust. It combines a Yew WebAssembly frontend, Axum backend API, LanceDB multimodal database, and an AI Agent tool for automated content synchronization from local Markdown files (Obsidian/Typora).
 
 **Tech Stack:**
 - Frontend: Yew 0.21 + WebAssembly (compiled via Trunk)
-- Backend: Axum 0.7 + SQLite + Meilisearch 1.5+
-- CLI: Rust + notify (file watching) + reqwest
+- Backend: Axum 0.7 + LanceDB (multimodal database)
+- AI Agent: Rust + Rig framework + notify (file watching)
 - Shared: Common data models between frontend/backend
 
-**Current Status:** Project is in planning phase (Week 0). No code exists yet, only architectural design in README.md.
+**Current Status:** Frontend UI completed. Currently developing AI Agent (Phase 1).
 
 ## Architecture
 
@@ -24,19 +24,19 @@ The project is designed as a Cargo workspace with 4 main crates:
    - Client-side routing via yew-router
    - API calls via gloo-net
    - Markdown rendering via pulldown-cmark
-   - TailwindCSS for styling
+   - TailwindCSS v4 for styling
 
 2. **backend/** - Axum REST API server
-   - API routes: articles, search, resources (images)
-   - Services: Meilisearch integration, Markdown processing
+   - API routes: articles, search (full-text + vector), images
+   - Services: LanceDB integration, Markdown processing
    - Middleware: auth (signature-based), rate limiting
-   - Data: SQLite for metadata, Meilisearch for search
+   - Data: LanceDB for all data (metadata + vectors + images)
 
-3. **cli-tool/** - Local content management CLI
-   - File watcher for Markdown changes
-   - Image path mapping (filename → full path)
-   - Content processor (frontmatter extraction, AI metadata generation)
-   - Sync logic to backend API + Meilisearch
+3. **agent/** - AI Agent for local automation
+   - File watcher for Markdown/image changes (notify)
+   - AI metadata generation (Rig framework + LLM)
+   - Image embedding generation (CLIP model)
+   - Direct LanceDB writer (no backend dependency)
 
 4. **shared/** - Shared types and utilities
    - Data models used by both frontend and backend
@@ -50,19 +50,21 @@ The project is designed as a Cargo workspace with 4 main crates:
 - No online editor needed
 
 **AI-Driven Automation:**
-- Auto-generate article summaries via LLM
-- Auto-extract tags and categories
+- Auto-generate article summaries via LLM (Rig framework)
+- Auto-extract tags and categories via LLM
+- Auto-generate image embeddings via CLIP model
 - Configurable AI provider (OpenAI or local Ollama)
 
 **Image Path Mapping:**
 - Local images referenced in Markdown (e.g., `![](images/foo.png)`)
-- CLI builds filename → absolute path mapping
-- Backend serves images via `/api/image/:base64_filename`
+- Agent generates CLIP embeddings and stores full image binary in LanceDB
+- Backend serves images via `/api/image/:id`
 - Frontend transforms Markdown links to API endpoints
+- Support image similarity search (text-to-image, image-to-image)
 
 **Dynamic Serving:**
 - Backend renders Markdown to HTML on-demand (not pre-built)
-- Meilisearch provides instant full-text search
+- LanceDB provides full-text search + vector search (semantic)
 - API-driven architecture allows flexible frontend updates
 
 ## Development Commands
@@ -78,11 +80,8 @@ rustup target add wasm32-unknown-unknown
 # Install Trunk (WASM bundler)
 cargo install trunk
 
-# Install Meilisearch (macOS example)
-brew install meilisearch
-
-# Or use Docker
-docker run -d --name meilisearch -p 7700:7700 -v $(pwd)/data/meili_data:/meili_data getmeili/meilisearch:v1.5
+# Optional: Python for CLIP embedding service
+pip install lancedb pillow transformers torch
 ```
 
 ### Backend Development
@@ -92,10 +91,7 @@ cd backend
 # Copy environment config
 cp .env.example .env
 
-# Initialize database schema
-cargo run --bin init-db
-
-# Run development server
+# Run development server (will connect to LanceDB)
 cargo run
 
 # Run with release optimizations
@@ -103,6 +99,23 @@ cargo run --release
 ```
 
 Backend runs on `http://localhost:3000`
+
+### AI Agent Development
+```bash
+cd agent
+
+# Copy config
+cp config.example.toml config.toml
+
+# Initialize LanceDB schema
+cargo run -- init
+
+# One-time sync
+cargo run -- sync ~/my-blog-posts
+
+# Watch mode (real-time sync)
+cargo run --release -- watch ~/my-blog-posts
+```
 
 ### Frontend Development
 ```bash
@@ -189,19 +202,19 @@ npm run tailwind:watch   # 监听模式
 
 ### CLI Tool
 ```bash
-cd cli-tool
+cd agent
 
-# Build CLI
+# Build agent
 cargo build --release
 
 # Initialize configuration
-./target/release/static-flow-cli init
+./target/release/static-flow-agent init
 
 # One-time sync of Markdown directory
-./target/release/static-flow-cli sync ~/my-blog-posts
+./target/release/static-flow-agent sync ~/my-blog-posts
 
 # Watch directory for real-time sync
-./target/release/static-flow-cli watch ~/my-blog-posts
+./target/release/static-flow-agent watch ~/my-blog-posts
 ```
 
 ### Workspace Commands
@@ -234,17 +247,17 @@ wasm-opt -Oz -o dist/optimized.wasm dist/output.wasm
 
 ### Meilisearch Debugging
 ```bash
-# List all indexes
-curl http://localhost:7700/indexes
+# LanceDB Python debugging
+python
+>>> import lancedb
+>>> db = lancedb.connect("./data/lancedb")
+>>> articles = db.open_table("articles")
+>>> articles.count_rows()
+>>> articles.head(5)
 
-# Check articles index stats
-curl http://localhost:7700/indexes/articles/stats
-
-# Manual search test
-curl "http://localhost:7700/indexes/articles/search?q=rust"
-
-# Set master key (if needed)
-export MEILI_MASTER_KEY=your_master_key_here
+# Test vector search
+>>> query_vector = [0.1] * 512  # dummy vector
+>>> results = articles.search(query_vector).limit(10).to_list()
 ```
 
 ## API Design
@@ -253,41 +266,44 @@ export MEILI_MASTER_KEY=your_master_key_here
 ```
 GET  /api/articles              # List articles (pagination, filters)
 GET  /api/articles/:id          # Get article detail (rendered HTML)
-GET  /api/search?q=keyword      # Full-text search via Meilisearch
+GET  /api/search?q=keyword      # Full-text search (LanceDB FTS)
+GET  /api/semantic-search?q=text # Semantic search (vector)
 GET  /api/tags                  # List all tags
 GET  /api/categories            # List all categories
-GET  /api/image/:base64_filename # Serve image by filename
+GET  /api/image/:id             # Serve image by ID
+POST /api/image/search          # Image similarity search
 ```
 
 ### Data Models (Shared)
 Key types to define in `shared/src/models.rs`:
-- `Article` - id, title, summary, content_path, tags, category, timestamps
+- `Article` - id, title, content, summary, tags, category, vector (embedding), timestamps
 - `ArticleListItem` - lightweight version for list views
+- `Image` - id, filename, image_data, thumbnail, vector (CLIP embedding), metadata
 - `Tag` - name, count
 - `Category` - name, count
-- `SearchResult` - article hit with highlighted snippets
+- `SearchResult` - article/image hit with similarity scores
 
 ## Development Workflow
 
-### Phase 1: MVP Frontend (Week 1)
-1. Replicate old blog UI using Yew components
-2. Use mock data for all content
-3. Implement responsive design (desktop + mobile)
-4. Dark/light theme toggle
-5. Markdown rendering with syntax highlighting
+### Phase 1: AI Agent Core (Current Priority)
+1. Design LanceDB schemas (articles + images tables)
+2. Integrate Rig framework for LLM agent
+3. Implement Markdown file processing pipeline
+4. Implement image processing pipeline (CLIP embeddings)
+5. LanceDB batch writer
+6. File watcher for real-time sync
 
-### Phase 2: Backend + CLI Integration (Week 2)
-1. Implement Axum API endpoints
-2. SQLite schema + migrations
-3. Meilisearch index configuration
-4. Frontend API integration (replace mocks)
-5. CLI file watcher + basic sync
+### Phase 2: Backend Refactor (LanceDB Integration)
+1. Remove Meilisearch/SQLite dependencies
+2. Integrate LanceDB Rust SDK
+3. Refactor API endpoints to query LanceDB
+4. Implement full-text search (LanceDB FTS)
+5. Implement vector search (semantic + image similarity)
 
-### Phase 3: AI Automation (Week 3+)
-1. LLM integration (OpenAI or Ollama)
-2. Auto-generate summaries, tags, categories
-3. Batch processing for existing articles
-4. Configurable AI prompts
+### Phase 3: Frontend Extensions (Multimodal Search)
+1. Add semantic search UI
+2. Add image-to-image search UI
+3. Optimize search result display
 
 ### Phase 4: Security & Deployment (Future)
 1. Request signature authentication
@@ -299,11 +315,12 @@ Key types to define in `shared/src/models.rs`:
 ## Important Notes
 
 ### Image Handling Strategy
-The image path mapping is a core feature:
-1. CLI scans image files, builds `filename → full_path` map
-2. Map stored in backend DB (`images` table)
-3. Backend serves images via base64-encoded filename route
+The image handling is integrated into LanceDB:
+1. Agent scans image files, generates CLIP embeddings
+2. Stores both original image binary + thumbnail + vector in LanceDB
+3. Backend serves images via `/api/image/:id` route
 4. Frontend Markdown renderer transforms relative paths to API URLs
+5. Support multimodal search (text-to-image, image-to-image)
 
 Example transformation:
 ```markdown
@@ -311,7 +328,7 @@ Example transformation:
 ![screenshot](images/screenshot.png)
 
 <!-- Rendered in frontend -->
-<img src="http://localhost:3000/api/image/aW1hZ2VzL3NjcmVlbnNob3QucG5n">
+<img src="http://localhost:3000/api/image/img_12345">
 ```
 
 ### Workspace Dependencies
@@ -338,8 +355,8 @@ serde = { workspace = true }
 - E2E test: local file → CLI sync → backend → frontend display
 
 ### Configuration Files
-- Backend: `.env` (Meilisearch URL, SQLite path, content directories)
-- CLI: `config.toml` (watch paths, backend API URL, AI settings)
+- Backend: `.env` (LanceDB path, server config)
+- Agent: `config.toml` (watch paths, LanceDB path, AI settings, CLIP service URL)
 - Frontend: `Trunk.toml` (build settings, asset copying)
 
 ## Migration from Old Blog
@@ -359,12 +376,12 @@ The `old/` directory is reserved for static assets from the previous blog system
 **Backend:**
 - Enable `RUST_LOG=debug` for verbose logging
 - Use `tokio-console` for async task inspection
-- Check Meilisearch logs separately
+- Test LanceDB queries via Python REPL
 
-**CLI:**
+**Agent:**
 - Test file watcher with: `touch test.md` in watched directory
-- Verify API connectivity: `curl http://localhost:3000/api/articles`
-- Check sync status in backend SQLite DB
+- Verify LLM API connectivity: `curl https://api.openai.com/v1/models`
+- Check LanceDB writes via Python: `db.open_table("articles").count_rows()`
 
 ## Performance Considerations
 
@@ -373,13 +390,14 @@ The `old/` directory is reserved for static assets from the previous blog system
 - Use `wasm-opt` in CI/CD pipeline
 - Consider code splitting for large apps
 
-**Meilisearch Indexing:**
-- Batch updates when syncing multiple files
-- Use async indexing to avoid blocking CLI
-- Configure searchable/filterable attributes carefully
+**LanceDB Performance:**
+- Use columnar storage advantages for metadata queries
+- Batch vector searches when possible
+- Configure ANN index parameters (IVF-PQ for large datasets)
+- Monitor query latency with LanceDB built-in stats
 
 **Backend:**
-- Use SQLite connection pool (sqlx)
+- Use connection pooling for LanceDB clients
 - Cache rendered Markdown (optional, measure first)
 - Implement ETag headers for static resources
 

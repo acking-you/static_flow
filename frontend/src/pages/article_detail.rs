@@ -1,11 +1,14 @@
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{window, HtmlImageElement, KeyboardEvent};
 use yew::{prelude::*, virtual_dom::AttrValue};
-use yew_router::prelude::{use_route, Link};
+use yew_router::prelude::{use_route, use_navigator, Link};
 use static_flow_shared::Article;
 
 use crate::{
-    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    components::{
+        loading_spinner::{LoadingSpinner, SpinnerSize},
+        scroll_to_top_button::ScrollToTopButton,
+    },
     router::Route,
     utils::{image_url, markdown_to_html},
 };
@@ -19,6 +22,8 @@ pub struct ArticleDetailProps {
 #[function_component(ArticleDetailPage)]
 pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let route = use_route::<Route>();
+    let navigator = use_navigator();
+
     let article_id = route
         .as_ref()
         .and_then(|r| match r {
@@ -31,6 +36,32 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     let article = use_state(|| None::<Article>);
     let loading = use_state(|| true);
+
+    // Handle back navigation - use browser history
+    let handle_back = {
+        let navigator = navigator.clone();
+        Callback::from(move |e: MouseEvent| {
+            e.prevent_default();
+
+            // Try to go back in browser history
+            if let Some(win) = window() {
+                if let Ok(history) = win.history() {
+                    // Check if there's history to go back to
+                    if let Ok(length) = history.length() {
+                        if length > 1 {
+                            let _ = history.back();
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Fallback: navigate to posts page if no history
+            if let Some(nav) = navigator.as_ref() {
+                nav.push(&Route::Posts);
+            }
+        })
+    };
 
     {
         let article = article.clone();
@@ -82,12 +113,15 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     {
         let is_lightbox_open = is_lightbox_open.clone();
+        let preview_image_url = preview_image_url.clone();
         use_effect_with(*is_lightbox_open, move |is_open| {
             let keydown_listener_opt = if *is_open {
                 let handle = is_lightbox_open.clone();
+                let preview_url = preview_image_url.clone();
                 let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
                     if event.key() == "Escape" {
                         handle.set(false);
+                        preview_url.set(None);
                     }
                 }) as Box<dyn FnMut(_)>);
 
@@ -322,6 +356,21 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     html! {
         <main class="main">
+            // Fixed back button - hide when lightbox is open
+            if !*is_lightbox_open {
+                <button
+                    type="button"
+                    class="article-back-button"
+                    onclick={handle_back}
+                    aria-label="返回文章列表"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    <span>{ "返回" }</span>
+                </button>
+            }
+
             <div class="container">
                 { body }
             </div>
@@ -329,14 +378,14 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 if *is_lightbox_open {
                     html! {
                         <div
-                            class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 text-white backdrop-blur-sm transition dark:bg-black/80"
+                            class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 text-white backdrop-blur-sm transition dark:bg-black/80"
                             role="dialog"
                             aria-modal="true"
                             onclick={close_lightbox_click.clone()}
                         >
                             <button
                                 type="button"
-                                class="absolute right-4 top-4 rounded-full bg-black/70 px-3 py-1 text-lg leading-none text-white hover:bg-black"
+                                class="absolute right-4 top-4 z-[101] rounded-full bg-black/70 px-3 py-1 text-lg leading-none text-white hover:bg-black"
                                 aria-label="关闭图片"
                                 onclick={close_lightbox_click.clone()}
                             >
@@ -367,6 +416,10 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 } else {
                     html! {}
                 }
+            }
+            // Hide scroll-to-top button when lightbox is open
+            if !*is_lightbox_open {
+                <ScrollToTopButton />
             }
         </main>
     }

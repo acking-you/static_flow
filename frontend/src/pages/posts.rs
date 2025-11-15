@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use static_flow_shared::ArticleListItem;
 use yew::prelude::*;
 use yew_router::prelude::{use_location, Link};
-use static_flow_shared::ArticleListItem;
 
-use crate::router::Route;
+use crate::{components::scroll_to_top_button::ScrollToTopButton, router::Route};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PostsQuery {
@@ -143,6 +143,7 @@ pub fn posts_page() -> Html {
                     }
                 </div>
             </div>
+            <ScrollToTopButton />
         </main>
     }
 }
