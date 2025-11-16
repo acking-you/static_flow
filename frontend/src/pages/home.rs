@@ -92,8 +92,9 @@ pub fn home_page() -> Html {
             if let Some(win) = window() {
                 if let Ok(history) = win.history() {
                     // Use replaceState to avoid creating extra history entry
+                    let home_path = crate::config::route_path("/");
                     let _ =
-                        history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some("/"));
+                        history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&home_path));
                 }
             }
         })
