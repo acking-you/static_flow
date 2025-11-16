@@ -59,9 +59,25 @@ jobs:
       - name: Fix resource paths for GitHub Pages subpath
         working-directory: frontend/dist
         run: |
-          # Fix JS and WASM paths in index.html to include /static_flow/ prefix
-          sed -i 's|"/static-flow-frontend-|"/static_flow/static-flow-frontend-|g' index.html
-          sed -i 's|"/styles-|"/static_flow/styles-|g' index.html
+          echo "=== Before replacement ==="
+          grep -E "(static-flow-frontend-|styles-|from |module_or_path:)" index.html || true
+
+          echo ""
+          echo "=== Applying replacements ==="
+          # Fix JS and WASM paths - match various formats
+          sed -i \
+            -e 's|from "/static-flow-frontend-|from "/static_flow/static-flow-frontend-|g' \
+            -e 's|module_or_path: "/static-flow-frontend-|module_or_path: "/static_flow/static-flow-frontend-|g' \
+            -e 's|href="/static-flow-frontend-|href="/static_flow/static-flow-frontend-|g' \
+            -e 's|src="/static-flow-frontend-|src="/static_flow/static-flow-frontend-|g' \
+            -e 's|href="/styles-|href="/static_flow/styles-|g' \
+            index.html
+
+          echo ""
+          echo "=== After replacement ==="
+          grep -E "(static-flow-frontend-|styles-|from |module_or_path:)" index.html || true
+
+          echo ""
           echo "✓ Fixed resource paths in index.html"
 
       - name: Deploy to GitHub Pages
