@@ -64,9 +64,11 @@ jobs:
 
           echo ""
           echo "=== Applying replacements ==="
-          # Fix JS and WASM paths - match various formats
+          # Fix JS and WASM paths - match both single and double quotes
           sed -i \
+            -e "s|from '/static-flow-frontend-|from '/static_flow/static-flow-frontend-|g" \
             -e 's|from "/static-flow-frontend-|from "/static_flow/static-flow-frontend-|g' \
+            -e "s|module_or_path: '/static-flow-frontend-|module_or_path: '/static_flow/static-flow-frontend-|g" \
             -e 's|module_or_path: "/static-flow-frontend-|module_or_path: "/static_flow/static-flow-frontend-|g' \
             -e 's|href="/static-flow-frontend-|href="/static_flow/static-flow-frontend-|g' \
             -e 's|src="/static-flow-frontend-|src="/static_flow/static-flow-frontend-|g' \
