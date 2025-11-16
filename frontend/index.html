@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>StaticFlow</title>
 
-    <link rel="stylesheet" href="/static/styles.css" />
+    <!-- Trunk will inject assets here relative to public_url -->
+    <link data-trunk rel="css" href="static/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
     <!-- KaTeX for math rendering -->
@@ -25,14 +26,15 @@
       });
     </script>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
-    <link rel="icon" href="/static/favicon.ico" />
-    <link rel="manifest" href="/static/site.webmanifest" />
-    <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2d96bd" />
+    <link data-trunk rel="icon" type="image/png" sizes="180x180" href="static/apple-touch-icon.png" />
+    <link data-trunk rel="icon" type="image/png" sizes="32x32" href="static/favicon-32x32.png" />
+    <link data-trunk rel="icon" type="image/png" sizes="16x16" href="static/favicon-16x16.png" />
+    <link data-trunk rel="icon" href="static/favicon.ico" />
+    <!-- Note: manifest and mask-icon cannot use data-trunk, keep as copy-dir -->
+    <link rel="manifest" href="./site.webmanifest" />
+    <link rel="mask-icon" href="./safari-pinned-tab.svg" color="#2d96bd" />
     <meta name="msapplication-TileColor" content="#161209" />
-    <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
+    <meta name="msapplication-TileImage" content="./mstile-150x150.png" />
 
     <!-- Trunk will compile Rust to WASM -->
     <!-- Disable built-in wasm-opt, we'll optimize manually in post_build hook -->

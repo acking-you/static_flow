@@ -52,7 +52,7 @@ jobs:
 
       - name: Build frontend with mock data
         working-directory: frontend
-        run: trunk build --release --features mock --public-url /static_flow/
+        run: trunk build --release --features mock
         env:
           TRUNK_SKIP_VERSION_CHECK: "true"
 
