@@ -41,6 +41,15 @@ jobs:
         working-directory: frontend
         run: npm install
 
+      - name: Install wasm-opt (from binaryen)
+        run: |
+          wget https://github.com/WebAssembly/binaryen/releases/download/version_116/binaryen-version_116-x86_64-linux.tar.gz
+          tar -xzf binaryen-version_116-x86_64-linux.tar.gz
+          mkdir -p ~/.cache/trunk/wasm-opt-version_116/bin
+          cp binaryen-version_116/bin/wasm-opt ~/.cache/trunk/wasm-opt-version_116/bin/
+          chmod +x ~/.cache/trunk/wasm-opt-version_116/bin/wasm-opt
+          ~/.cache/trunk/wasm-opt-version_116/bin/wasm-opt --version
+
       - name: Build frontend with mock data
         working-directory: frontend
         run: trunk build --release --features mock --public-url /static_flow/
