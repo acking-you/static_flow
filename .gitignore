@@ -52,8 +52,8 @@ data/meili_data/
 *.db-wal
 
 # Node.js（如果使用 TailwindCSS CLI）
+# npm 依赖（保留 package-lock.json 以锁定版本）
 node_modules/
-package-lock.json
 yarn.lock
 
 # Tailwind CSS 生成文件

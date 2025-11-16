@@ -3,8 +3,8 @@ tailwindcss
 tailwindcss.exe
 
 # Node.js（构建时依赖）
+# 保留 package-lock.json 用于版本锁定和 CI 缓存
 node_modules/
-package-lock.json
 pnpm-lock.yaml
 yarn.lock
 
