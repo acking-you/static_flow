@@ -1,5 +1,6 @@
 mod api;
 mod components;
+mod config;
 pub mod hooks;
 mod models;
 mod pages;

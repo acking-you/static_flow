@@ -66,6 +66,9 @@ sed -i.bak \
   -e "s|href=\"/styles-|href=\"/static_flow/styles-|g" \
   -e "s|href=\"/apple-touch-icon-|href=\"/static_flow/apple-touch-icon-|g" \
   -e "s|href=\"/favicon-|href=\"/static_flow/favicon-|g" \
+  -e "s|src=\"/static/|src=\"/static_flow/static/|g" \
+  -e "s|href=\"/static/|href=\"/static_flow/static/|g" \
+  -e "s|url(/static/|url(/static_flow/static/|g" \
   "$HTML_FILE"
 
 rm -f "${HTML_FILE}.bak"

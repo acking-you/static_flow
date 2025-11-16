@@ -75,7 +75,7 @@ fn mock_articles_full() -> Vec<Article> {
         };
 
         let featured_image =
-            if i % 3 == 0 { Some(format!("/static/hero-{}.jpg", i % 5 + 1)) } else { None };
+            if i % 3 == 0 { Some(crate::config::asset_path(&format!("static/hero-{}.jpg", i % 5 + 1))) } else { None };
 
         items.push(Article {
             id,

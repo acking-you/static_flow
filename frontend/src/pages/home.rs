@@ -196,12 +196,12 @@ pub fn home_page() -> Html {
     ];
 
     let tech_stack = vec![
-        ("/static/logos/rust.svg", "Rust", "https://doc.rust-lang.org/book"),
-        ("/static/logos/yew.svg", "Yew", "https://yew.rs/docs/getting-started/introduction"),
-        ("/static/logos/tailwind.svg", "Tailwind", "https://tailwindcss.com/docs"),
-        ("/static/logos/lancedb.png", "LanceDB", "https://lancedb.com/docs/"),
+        (crate::config::asset_path("static/logos/rust.svg"), "Rust", "https://doc.rust-lang.org/book"),
+        (crate::config::asset_path("static/logos/yew.svg"), "Yew", "https://yew.rs/docs/getting-started/introduction"),
+        (crate::config::asset_path("static/logos/tailwind.svg"), "Tailwind", "https://tailwindcss.com/docs"),
+        (crate::config::asset_path("static/logos/lancedb.png"), "LanceDB", "https://lancedb.com/docs/"),
         (
-            "/static/logos/wasm.ico",
+            crate::config::asset_path("static/logos/wasm.ico"),
             "WebAssembly",
             "https://webassembly.org/getting-started/developers-guide",
         ),
@@ -266,7 +266,7 @@ pub fn home_page() -> Html {
                                             to={Route::Posts}
                                             classes={classes!("home-avatar-link")}
                                         >
-                                            <img src="/static/avatar.jpg" alt="作者头像" loading="lazy" />
+                                            <img src={crate::config::asset_path("static/avatar.jpg")} alt="作者头像" loading="lazy" />
                                             <span class="visually-hidden">{ "前往文章列表" }</span>
                                         </Link<Route>>
                                     </div>
@@ -319,7 +319,7 @@ pub fn home_page() -> Html {
                                     <div class="tech-stack-tags">
                                         { for tech_stack.iter().map(|(logo, name, href)| html! {
                                             <a class="tech-tag" href={(*href).to_string()} target="_blank" rel="noopener noreferrer" title={*name}>
-                                                <img src={*logo} alt={*name} class="tech-logo" loading="lazy" />
+                                                <img src={logo.clone()} alt={*name} class="tech-logo" loading="lazy" />
                                                 <span>{ *name }</span>
                                             </a>
                                         }) }
