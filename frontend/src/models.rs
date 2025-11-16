@@ -1,9 +1,16 @@
 // 重新导出shared crate的数据模型
+#[cfg_attr(not(feature = "mock"), allow(unused_imports))]
 pub use static_flow_shared::{Article, ArticleListItem};
+#[cfg(feature = "mock")]
+use std::collections::HashMap;
+
+#[cfg(feature = "mock")]
+use crate::api::{CategoryInfo, SearchResult, TagInfo};
 
 // =============== Mock 数据 ===============
 
 /// 返回 15 篇文章的列表（ArticleListItem）。
+#[cfg(feature = "mock")]
 pub fn get_mock_articles() -> Vec<ArticleListItem> {
     mock_articles_full()
         .into_iter()
@@ -12,11 +19,13 @@ pub fn get_mock_articles() -> Vec<ArticleListItem> {
 }
 
 /// 返回完整文章详情。包含 3-5 篇带 Markdown 正文内容的文章。
+#[cfg(feature = "mock")]
 pub fn get_mock_article_detail(id: &str) -> Option<Article> {
     mock_articles_full().into_iter().find(|a| a.id == id)
 }
 
 // 内部函数：构建 15 篇完整文章
+#[cfg(feature = "mock")]
 fn mock_articles_full() -> Vec<Article> {
     let md_samples = sample_markdowns();
 
@@ -85,6 +94,7 @@ fn mock_articles_full() -> Vec<Article> {
     items
 }
 
+#[cfg(feature = "mock")]
 fn sample_markdowns() -> Vec<&'static str> {
     vec![
         // 1
@@ -217,4 +227,105 @@ _自动化不是银弹，但值得持续投资。_"#,
 
 > 先把问题描述清楚，AI 的帮助才更稳定。"#,
     ]
+}
+
+/// 模拟标签统计
+#[cfg(feature = "mock")]
+pub fn mock_tags() -> Vec<TagInfo> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+
+    for article in mock_articles_full() {
+        for tag in article.tags {
+            *counts.entry(tag).or_insert(0) += 1;
+        }
+    }
+
+    let mut tags: Vec<TagInfo> = counts.into_iter().map(|(name, count)| TagInfo { name, count }).collect();
+    tags.sort_by(|a, b| a.name.cmp(&b.name));
+    tags
+}
+
+/// 模拟分类统计，包含描述
+#[cfg(feature = "mock")]
+pub fn mock_categories() -> Vec<CategoryInfo> {
+    // 与后端保持一致的描述
+    let descriptions: HashMap<&str, &str> = [
+        ("Rust", "静态类型、零成本抽象与 Wasm 生态的实战笔记。"),
+        ("Web", "现代前端工程化与体验设计相关内容。"),
+        ("DevOps", "自动化、流水线与交付体验的工程思考。"),
+        ("Productivity", "效率、写作与自我管理的小实验与道具。"),
+        ("AI", "Prompt、LLM 与智能体的落地探索。"),
+    ]
+    .into_iter()
+    .collect();
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for article in mock_articles_full() {
+        *counts.entry(article.category).or_insert(0) += 1;
+    }
+
+    let mut categories: Vec<CategoryInfo> = counts
+        .into_iter()
+        .map(|(name, count)| {
+            let description = descriptions.get(name.as_str()).copied().unwrap_or("").to_string();
+            CategoryInfo {
+                name,
+                count,
+                description,
+            }
+        })
+        .collect();
+
+    categories.sort_by(|a, b| a.name.cmp(&b.name));
+    categories
+}
+
+/// 模拟搜索结果
+#[cfg(feature = "mock")]
+pub fn mock_search(keyword: &str) -> Vec<SearchResult> {
+    let trimmed = keyword.trim();
+    if trimmed.is_empty() {
+        return vec![];
+    }
+
+    let keyword_lower = trimmed.to_lowercase();
+
+    mock_articles_full()
+        .into_iter()
+        .filter(|article| {
+            article.title.to_lowercase().contains(&keyword_lower)
+                || article.summary.to_lowercase().contains(&keyword_lower)
+        })
+        .map(|article| {
+            let highlight_html = highlight_snippet(trimmed, &article.summary);
+            SearchResult {
+                id: article.id,
+                title: article.title,
+                summary: article.summary,
+                category: article.category,
+                date: article.date,
+                highlight: highlight_html,
+                tags: article.tags,
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "mock")]
+fn highlight_snippet(keyword: &str, summary: &str) -> String {
+    if keyword.is_empty() {
+        return format!("<p>{}</p>", summary);
+    }
+
+    let highlighted = summary.replacen(
+        keyword,
+        &format!("<mark>{}</mark>", keyword),
+        1,
+    );
+
+    if highlighted == summary {
+        format!("<p>{} <mark>{}</mark></p>", summary, keyword)
+    } else {
+        format!("<p>{}</p>", highlighted)
+    }
 }

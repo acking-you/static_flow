@@ -1,0 +1,56 @@
+name: Deploy StaticFlow Frontend (Mock)
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Trunk 0.21.14
+        run: |
+          curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-musl.tar.gz -o trunk.tar.gz
+          tar -xzf trunk.tar.gz
+          chmod +x trunk
+          sudo mv trunk /usr/local/bin/trunk
+          trunk --version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Build frontend with mock data
+        working-directory: frontend
+        run: trunk build --release --features mock --public-url /static_flow/
+        env:
+          TRUNK_SKIP_VERSION_CHECK: "true"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: frontend/dist
+          publish_branch: gh-pages
+          force_orphan: true

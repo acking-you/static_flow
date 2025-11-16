@@ -20,3 +20,7 @@ yew-hooks = "0.3.4"
 
 # Shared crate
 static-flow-shared = { path = "../shared" }
+
+[features]
+default = []
+mock = []

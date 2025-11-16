@@ -34,9 +34,9 @@
     <meta name="msapplication-TileColor" content="#161209" />
     <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
 
-    <!-- Trunk will compile Rust to WASM and include it. -->
-    <!-- Optimize for size and apply wasm-opt level 'z'. -->
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- Trunk will compile Rust to WASM -->
+    <!-- Disable built-in wasm-opt, we'll optimize manually in post_build hook -->
+    <link data-trunk rel="rust" data-wasm-opt="0" />
 
     <!-- Copy entire static directory -->
     <link data-trunk rel="copy-dir" href="static" />

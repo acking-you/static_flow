@@ -19,3 +19,8 @@ backend = "http://localhost:3000/api"
 stage = "pre_build"
 command = "npx"
 command_arguments = ["@tailwindcss/cli", "-i", "input.css", "-o", "static/styles.css", "--minify"]
+
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["optimize-wasm.sh"]

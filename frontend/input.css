@@ -184,16 +184,48 @@ a:hover {
 }
 
 .brand-link {
-  color: var(--text);
-  font-size: 1.1rem;
-  letter-spacing: .15em;
+  /* 增大字号，从 1.1rem 提升到 1.75rem */
+  font-size: 1.75rem;
+  /* 加粗字体，使用 800 字重 */
+  font-weight: 800;
+  /* 保持字间距，增强辨识度 */
+  letter-spacing: .18em;
+  /* 添加渐变色效果，从主色到链接色 */
+  background: linear-gradient(135deg, var(--primary) 0%, var(--link) 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* 布局属性 */
   display: inline-flex;
   align-items: center;
-  min-height: var(--hit-size)
+  min-height: var(--hit-size);
+  /* 平滑过渡效果 */
+  transition: transform 0.3s var(--ease-spring), filter 0.3s ease;
+  /* 添加文本阴影增强可读性 */
+  filter: drop-shadow(0 2px 4px rgba(29, 158, 216, 0.15));
+  /* 确保文本不换行 */
+  white-space: nowrap;
 }
 
 .brand-link:hover {
-  color: var(--link)
+  /* hover 时放大并增强阴影 */
+  transform: scale(1.08);
+  filter: drop-shadow(0 4px 8px rgba(29, 158, 216, 0.3));
+}
+
+/* 深色主题下调整渐变 */
+[data-theme=dark] .brand-link,
+[theme=dark] .brand-link {
+  background: linear-gradient(135deg, var(--primary) 0%, #86d5ff 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 2px 6px rgba(53, 179, 255, 0.25));
+}
+
+[data-theme=dark] .brand-link:hover,
+[theme=dark] .brand-link:hover {
+  filter: drop-shadow(0 4px 10px rgba(53, 179, 255, 0.4));
 }
 
 .header-actions {
