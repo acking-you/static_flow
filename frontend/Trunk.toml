@@ -4,7 +4,7 @@
 target = "index.html"
 dist = "dist"
 # For GitHub Pages subpath deployment: https://acking-you.github.io/static_flow/
-# For local dev, Trunk.toml [serve] will override this with "/"
+# For local dev, use: trunk serve --public-url /
 public_url = "/static_flow/"
 filehash = true
 release = true
@@ -12,8 +12,8 @@ release = true
 [serve]
 port = 8080
 open = false
-# Override public_url for local development
-public_url = "/"
+# Note: DO NOT set public_url here, as it may override the build setting
+# Use --public-url / flag when running trunk serve for local development
 
 # API proxy to backend server
 [[proxy]]
