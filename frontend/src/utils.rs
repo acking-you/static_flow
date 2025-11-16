@@ -1,4 +1,4 @@
-use pulldown_cmark::{html, Event, Options, Parser, Tag, CowStr};
+use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 
 const API_BASE: &str = "http://localhost:3000";
 
@@ -31,7 +31,12 @@ pub fn markdown_to_html(content: &str) -> String {
 
     // Transform image paths
     let transformed_parser = parser.map(|event| match event {
-        Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => {
             // Check if image path is relative (starts with "images/")
             let new_url = if dest_url.starts_with("images/") {
                 // Extract filename after "images/"
@@ -45,9 +50,9 @@ pub fn markdown_to_html(content: &str) -> String {
                 link_type,
                 dest_url: new_url,
                 title,
-                id
+                id,
             })
-        }
+        },
         _ => event,
     });
 

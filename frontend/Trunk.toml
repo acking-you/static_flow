@@ -3,17 +3,18 @@
 # Build settings
 target = "index.html"
 dist = "dist"
-# For GitHub Pages subpath deployment: https://acking-you.github.io/static_flow/
-# For local dev, use: trunk serve --public-url /
-public_url = "/static_flow/"
+# Default public_url for normal builds (local dev)
+public_url = "/"
 filehash = true
 release = true
 
 [serve]
 port = 8080
 open = false
-# Note: DO NOT set public_url here, as it may override the build setting
-# Use --public-url / flag when running trunk serve for local development
+# For local testing to simulate GitHub Pages deployment:
+# trunk serve --features mock
+# DO NOT use --public-url flag for local testing! It will break routing.
+# The mock feature handles path prefixes via conditional compilation in router.rs
 
 # API proxy to backend server
 [[proxy]]
@@ -24,5 +25,6 @@ stage = "pre_build"
 command = "npx"
 command_arguments = ["@tailwindcss/cli", "-i", "input.css", "-o", "static/styles.css", "--minify"]
 
-# Note: post_build hook removed for local dev compatibility
-# Path fixing is done in GitHub Actions workflow instead
+# Note: post_build hook is NOT used for local dev
+# Path handling for GitHub Pages is done in GitHub Actions workflow via optimize-wasm.sh
+# which injects <base href="/static_flow/"> into the deployed index.html

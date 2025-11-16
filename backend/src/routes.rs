@@ -1,10 +1,7 @@
-use crate::handlers;
-use crate::state::AppState;
-use axum::{
-    routing::get,
-    Router,
-};
+use axum::{routing::get, Router};
 use tower_http::cors::{Any, CorsLayer};
+
+use crate::{handlers, state::AppState};
 
 pub fn create_router(state: AppState) -> Router {
     // Configure CORS

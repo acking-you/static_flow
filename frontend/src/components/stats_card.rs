@@ -1,11 +1,14 @@
 use yew::prelude::*;
+use yew_router::prelude::*;
+
+use crate::router::Route;
 
 #[derive(Properties, PartialEq, Clone)]
 pub struct StatsCardProps {
     pub icon: String,
     pub value: String,
     #[prop_or_default]
-    pub href: Option<String>,
+    pub route: Option<Route>,
 }
 
 #[function_component(StatsCard)]
@@ -17,11 +20,11 @@ pub fn stats_card(props: &StatsCardProps) -> Html {
         </>
     };
 
-    if let Some(href) = &props.href {
+    if let Some(route) = &props.route {
         html! {
-            <a class="stats-card" href={href.clone()}>
+            <Link<Route> to={route.clone()} classes={classes!("stats-card")}>
                 { content }
-            </a>
+            </Link<Route>>
         }
     } else {
         html! {

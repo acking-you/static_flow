@@ -1,5 +1,4 @@
-use yew::prelude::*;
-use yew::use_effect_with;
+use yew::{prelude::*, use_effect_with};
 use yew_hooks::prelude::use_timeout;
 
 #[derive(Properties, PartialEq)]

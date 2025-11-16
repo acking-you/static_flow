@@ -24,11 +24,11 @@ pub fn tags_page() -> Html {
                     Ok(data) => {
                         tag_stats.set(data);
                         loading.set(false);
-                    }
+                    },
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch tags: {}", e).into());
                         loading.set(false);
-                    }
+                    },
                 }
             });
             || ()
@@ -37,10 +37,7 @@ pub fn tags_page() -> Html {
 
     let total_tags = tag_stats.len();
     let total_articles: usize = tag_stats.iter().map(|t| t.count).sum();
-    let max_count = tag_stats
-        .iter()
-        .map(|t| t.count as f32)
-        .fold(1.0, f32::max);
+    let max_count = tag_stats.iter().map(|t| t.count as f32).fold(1.0, f32::max);
 
     html! {
         <main class="main tags-page">

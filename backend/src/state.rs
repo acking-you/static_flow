@@ -1,9 +1,10 @@
-use crate::markdown;
+use std::{collections::HashMap, sync::Arc};
+
 use anyhow::Result;
 use static_flow_shared::ArticleListItem;
-use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::RwLock;
+
+use crate::markdown;
 
 #[derive(Clone)]
 pub struct AppState {

@@ -1,9 +1,10 @@
-#[cfg(feature = "mock")]
-use crate::models;
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
+
+#[cfg(feature = "mock")]
+use crate::models;
 
 // API base URL - 开发环境直接连接后端
 #[cfg(not(feature = "mock"))]

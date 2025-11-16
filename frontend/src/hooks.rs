@@ -1,7 +1,6 @@
+use web_sys::{ScrollBehavior, ScrollToOptions};
 use yew::prelude::*;
 use yew_router::prelude::use_location;
-
-use web_sys::{ScrollBehavior, ScrollToOptions};
 
 /// Paginate arbitrary vectors inside a component.
 ///
@@ -78,10 +77,11 @@ pub fn use_pagination<T: Clone + PartialEq + 'static>(
     (visible_items, visible_page, total_pages, go_to_page)
 }
 
-/// Automatically scroll the viewport to the top whenever the current route changes.
+/// Automatically scroll the viewport to the top whenever the current route
+/// changes.
 ///
-/// Call this hook inside top-level pages (e.g. `HomePage`) to keep navigation consistent:
-/// ```rust
+/// Call this hook inside top-level pages (e.g. `HomePage`) to keep navigation
+/// consistent: ```rust
 /// #[function_component(HomePage)]
 /// fn home_page() -> Html {
 ///     use crate::hooks::{use_pagination, use_scroll_to_top};

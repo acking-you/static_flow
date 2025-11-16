@@ -1,8 +1,8 @@
 use static_flow_shared::ArticleListItem;
 use wasm_bindgen::JsCast;
-use web_sys::{Element, window};
+use web_sys::{window, Element};
 use yew::prelude::*;
-use yew_router::prelude::{Link, use_location};
+use yew_router::prelude::{use_location, Link};
 
 use crate::{
     components::{
@@ -92,7 +92,8 @@ pub fn home_page() -> Html {
             if let Some(win) = window() {
                 if let Ok(history) = win.history() {
                     // Use replaceState to avoid creating extra history entry
-                    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some("/"));
+                    let _ =
+                        history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some("/"));
                 }
             }
         })
@@ -115,9 +116,7 @@ pub fn home_page() -> Html {
         let articles_scroll_ref = articles_scroll_ref.clone();
         let page_num = current_page_num;
         Callback::from(move |_| {
-            if let Some(storage) = window()
-                .and_then(|w| w.session_storage().ok().flatten())
-            {
+            if let Some(storage) = window().and_then(|w| w.session_storage().ok().flatten()) {
                 // Save current page number
                 let _ = storage.set_item("home_articles_page", &page_num.to_string());
 
@@ -130,7 +129,8 @@ pub fn home_page() -> Html {
         })
     };
 
-    // Restore scroll position and page number when switching to articles view or returning from article detail
+    // Restore scroll position and page number when switching to articles view or
+    // returning from article detail
     {
         let current_page = current_page.clone();
         let articles_scroll_ref = articles_scroll_ref.clone();
@@ -139,12 +139,22 @@ pub fn home_page() -> Html {
         use_effect_with((*current_page, location_dep), move |(page, _location)| {
             if matches!(*page, CurrentPage::Articles) {
                 if let Some(storage) = window().and_then(|w| w.session_storage().ok().flatten()) {
-                    let has_saved_data = storage.get_item("home_articles_page").ok().flatten().is_some()
-                        || storage.get_item("home_articles_scroll").ok().flatten().is_some();
+                    let has_saved_data = storage
+                        .get_item("home_articles_page")
+                        .ok()
+                        .flatten()
+                        .is_some()
+                        || storage
+                            .get_item("home_articles_scroll")
+                            .ok()
+                            .flatten()
+                            .is_some();
 
                     if has_saved_data {
                         // Restore page number first
-                        if let Some(saved_page) = storage.get_item("home_articles_page").ok().flatten() {
+                        if let Some(saved_page) =
+                            storage.get_item("home_articles_page").ok().flatten()
+                        {
                             if let Ok(page_num) = saved_page.parse::<usize>() {
                                 go_to_page_cb.emit(page_num);
                             }
@@ -168,8 +178,8 @@ pub fn home_page() -> Html {
                                     }
                                 }
                                 // Always clear saved data after restoration attempt
-                                if let Some(storage) = window()
-                                    .and_then(|w| w.session_storage().ok().flatten())
+                                if let Some(storage) =
+                                    window().and_then(|w| w.session_storage().ok().flatten())
                                 {
                                     let _ = storage.remove_item("home_articles_scroll");
                                     let _ = storage.remove_item("home_articles_page");
@@ -190,16 +200,32 @@ pub fn home_page() -> Html {
 
     let total_articles = articles.len();
     let stats = vec![
-        ("📝".to_string(), total_articles.to_string(), Some("/posts".to_string())),
-        ("🏷️".to_string(), "12".to_string(), Some("/tags".to_string())),
-        ("📂".to_string(), "5".to_string(), Some("/categories".to_string())),
+        ("📝".to_string(), total_articles.to_string(), Some(Route::Posts)),
+        ("🏷️".to_string(), "12".to_string(), Some(Route::Tags)),
+        ("📂".to_string(), "5".to_string(), Some(Route::Categories)),
     ];
 
     let tech_stack = vec![
-        (crate::config::asset_path("static/logos/rust.svg"), "Rust", "https://doc.rust-lang.org/book"),
-        (crate::config::asset_path("static/logos/yew.svg"), "Yew", "https://yew.rs/docs/getting-started/introduction"),
-        (crate::config::asset_path("static/logos/tailwind.svg"), "Tailwind", "https://tailwindcss.com/docs"),
-        (crate::config::asset_path("static/logos/lancedb.png"), "LanceDB", "https://lancedb.com/docs/"),
+        (
+            crate::config::asset_path("static/logos/rust.svg"),
+            "Rust",
+            "https://doc.rust-lang.org/book",
+        ),
+        (
+            crate::config::asset_path("static/logos/yew.svg"),
+            "Yew",
+            "https://yew.rs/docs/getting-started/introduction",
+        ),
+        (
+            crate::config::asset_path("static/logos/tailwind.svg"),
+            "Tailwind",
+            "https://tailwindcss.com/docs",
+        ),
+        (
+            crate::config::asset_path("static/logos/lancedb.png"),
+            "LanceDB",
+            "https://lancedb.com/docs/",
+        ),
         (
             crate::config::asset_path("static/logos/wasm.ico"),
             "WebAssembly",
@@ -310,8 +336,8 @@ pub fn home_page() -> Html {
                                     </div>
                                 </div>
                                 <div class="hero-stats-grid">
-                                    { for stats.into_iter().map(|(icon, value, href)| html! {
-                                        <StatsCard icon={icon} value={value} href={href} />
+                                    { for stats.into_iter().map(|(icon, value, route)| html! {
+                                        <StatsCard icon={icon} value={value} route={route} />
                                     }) }
                                 </div>
                                 <div class="tech-stack">

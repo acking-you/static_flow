@@ -56,14 +56,6 @@ jobs:
         env:
           TRUNK_SKIP_VERSION_CHECK: "true"
 
-      - name: Optimize WASM and fix paths for subpath deployment
-        working-directory: frontend
-        run: |
-          # Set environment for the script
-          export DIST_DIR="dist"
-          chmod +x optimize-wasm.sh
-          ./optimize-wasm.sh
-
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:

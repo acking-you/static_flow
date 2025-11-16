@@ -24,11 +24,13 @@ pub fn categories_page() -> Html {
                     Ok(data) => {
                         categories.set(data);
                         loading.set(false);
-                    }
+                    },
                     Err(e) => {
-                        web_sys::console::error_1(&format!("Failed to fetch categories: {}", e).into());
+                        web_sys::console::error_1(
+                            &format!("Failed to fetch categories: {}", e).into(),
+                        );
                         loading.set(false);
-                    }
+                    },
                 }
             });
             || ()

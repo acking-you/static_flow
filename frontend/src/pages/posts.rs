@@ -62,8 +62,10 @@ pub fn posts_page() -> Html {
                 match crate::api::fetch_articles(tag_ref, category_ref).await {
                     Ok(data) => articles.set(data),
                     Err(e) => {
-                        web_sys::console::error_1(&format!("Failed to fetch articles: {}", e).into());
-                    }
+                        web_sys::console::error_1(
+                            &format!("Failed to fetch articles: {}", e).into(),
+                        );
+                    },
                 }
             });
             || ()

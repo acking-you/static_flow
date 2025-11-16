@@ -1,8 +1,9 @@
 // 重新导出shared crate的数据模型
-#[cfg_attr(not(feature = "mock"), allow(unused_imports))]
-pub use static_flow_shared::{Article, ArticleListItem};
 #[cfg(feature = "mock")]
 use std::collections::HashMap;
+
+#[cfg_attr(not(feature = "mock"), allow(unused_imports))]
+pub use static_flow_shared::{Article, ArticleListItem};
 
 #[cfg(feature = "mock")]
 use crate::api::{CategoryInfo, SearchResult, TagInfo};
@@ -74,8 +75,11 @@ fn mock_articles_full() -> Vec<Article> {
             )
         };
 
-        let featured_image =
-            if i % 3 == 0 { Some(crate::config::asset_path(&format!("static/hero-{}.jpg", i % 5 + 1))) } else { None };
+        let featured_image = if i % 3 == 0 {
+            Some(crate::config::asset_path(&format!("static/hero-{}.jpg", i % 5 + 1)))
+        } else {
+            None
+        };
 
         items.push(Article {
             id,
@@ -240,7 +244,13 @@ pub fn mock_tags() -> Vec<TagInfo> {
         }
     }
 
-    let mut tags: Vec<TagInfo> = counts.into_iter().map(|(name, count)| TagInfo { name, count }).collect();
+    let mut tags: Vec<TagInfo> = counts
+        .into_iter()
+        .map(|(name, count)| TagInfo {
+            name,
+            count,
+        })
+        .collect();
     tags.sort_by(|a, b| a.name.cmp(&b.name));
     tags
 }
@@ -267,7 +277,11 @@ pub fn mock_categories() -> Vec<CategoryInfo> {
     let mut categories: Vec<CategoryInfo> = counts
         .into_iter()
         .map(|(name, count)| {
-            let description = descriptions.get(name.as_str()).copied().unwrap_or("").to_string();
+            let description = descriptions
+                .get(name.as_str())
+                .copied()
+                .unwrap_or("")
+                .to_string();
             CategoryInfo {
                 name,
                 count,
@@ -317,11 +331,7 @@ fn highlight_snippet(keyword: &str, summary: &str) -> String {
         return format!("<p>{}</p>", summary);
     }
 
-    let highlighted = summary.replacen(
-        keyword,
-        &format!("<mark>{}</mark>", keyword),
-        1,
-    );
+    let highlighted = summary.replacen(keyword, &format!("<mark>{}</mark>", keyword), 1);
 
     if highlighted == summary {
         format!("<p>{} <mark>{}</mark></p>", summary, keyword)

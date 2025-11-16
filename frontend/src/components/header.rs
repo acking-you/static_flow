@@ -33,22 +33,33 @@ pub fn header() -> Html {
         Callback::from(move |_| search_query.set(String::new()))
     };
 
-    // 执行搜索
+    // 执行搜索 - 使用 history.pushState 避免页面重新加载
     let do_search = {
         let search_query = search_query.clone();
         Callback::from(move |_: MouseEvent| {
             let query = (*search_query).trim();
             if !query.is_empty() {
                 let encoded_query = urlencoding::encode(query);
-                let search_url = format!("/search?q={}", encoded_query);
+                let search_url = crate::config::route_path(&format!("/search?q={}", encoded_query));
                 if let Some(window) = web_sys::window() {
-                    let _ = window.location().set_href(&search_url);
+                    if let Ok(history) = window.history() {
+                        // 使用 pushState 改变 URL 但不触发页面加载
+                        let _ = history.push_state_with_url(
+                            &wasm_bindgen::JsValue::NULL,
+                            "",
+                            Some(&search_url),
+                        );
+                        // 触发 popstate 事件让 yew-router 响应
+                        if let Ok(event) = web_sys::Event::new("popstate") {
+                            let _ = window.dispatch_event(&event);
+                        }
+                    }
                 }
             }
         })
     };
 
-    // Enter键搜索
+    // Enter键搜索 - 使用 history.pushState 避免页面重新加载
     let on_search_keypress = {
         let search_query = search_query.clone();
         Callback::from(move |e: KeyboardEvent| {
@@ -56,9 +67,21 @@ pub fn header() -> Html {
                 let query = (*search_query).trim();
                 if !query.is_empty() {
                     let encoded_query = urlencoding::encode(query);
-                    let search_url = format!("/search?q={}", encoded_query);
+                    let search_url =
+                        crate::config::route_path(&format!("/search?q={}", encoded_query));
                     if let Some(window) = web_sys::window() {
-                        let _ = window.location().set_href(&search_url);
+                        if let Ok(history) = window.history() {
+                            // 使用 pushState 改变 URL 但不触发页面加载
+                            let _ = history.push_state_with_url(
+                                &wasm_bindgen::JsValue::NULL,
+                                "",
+                                Some(&search_url),
+                            );
+                            // 触发 popstate 事件让 yew-router 响应
+                            if let Ok(event) = web_sys::Event::new("popstate") {
+                                let _ = window.dispatch_event(&event);
+                            }
+                        }
                     }
                 }
             }

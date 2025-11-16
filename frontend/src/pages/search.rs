@@ -3,10 +3,7 @@ use yew_router::prelude::*;
 
 use crate::{
     api::SearchResult,
-    components::{
-        pagination::Pagination,
-        scroll_to_top_button::ScrollToTopButton,
-    },
+    components::{pagination::Pagination, scroll_to_top_button::ScrollToTopButton},
     hooks::use_pagination,
     router::Route,
 };
@@ -20,9 +17,7 @@ pub struct SearchPageProps {
 pub fn search_page() -> Html {
     let location = use_location();
     let query = location
-        .and_then(|loc| {
-            loc.query::<SearchPageQuery>().ok()
-        })
+        .and_then(|loc| loc.query::<SearchPageQuery>().ok())
         .and_then(|q| q.q);
 
     let keyword = query.clone().unwrap_or_default();
@@ -51,11 +46,11 @@ pub fn search_page() -> Html {
                         Ok(data) => {
                             results.set(data);
                             loading.set(false);
-                        }
+                        },
                         Err(e) => {
                             web_sys::console::error_1(&format!("Search failed: {}", e).into());
                             loading.set(false);
-                        }
+                        },
                     }
                 });
             }

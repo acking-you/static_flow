@@ -1,7 +1,7 @@
 #!/bin/bash
 # 1. Manually run wasm-opt with bulk-memory enabled
-# 2. Fix absolute paths for GitHub Pages subpath deployment
-# This script is called by Trunk's post_build hook
+# 2. Inject <base> tag for GitHub Pages subpath deployment
+# This script is called in GitHub Actions workflow
 
 set -e
 
@@ -42,37 +42,28 @@ else
 fi
 
 # ====================
-# Step 2: Fix Paths for Subpath Deployment
+# Step 2: Inject <base> tag for GitHub Pages subpath
 # ====================
 echo ""
-echo "=== Step 2: Path Fixing for /static_flow/ ==="
+echo "=== Step 2: Injecting <base> tag for subpath deployment ==="
 
 HTML_FILE="${DIST_DIR}/index.html"
 
 if [ ! -f "$HTML_FILE" ]; then
-  echo "Warning: $HTML_FILE not found, skipping path fixes"
+  echo "Warning: $HTML_FILE not found, skipping base tag injection"
   exit 0
 fi
 
-echo "Fixing absolute paths in index.html..."
+echo "Injecting <base href=\"/static_flow/\"> into index.html..."
 
-# Replace absolute paths with subpath-prefixed paths
-# This is needed because Trunk generates absolute paths like '/xxx.js'
-# but we need '/static_flow/xxx.js' for GitHub Pages subpath deployment
+# Inject <base> tag right after <head> opening tag
+# This tells the browser that all relative URLs should be resolved relative to /static_flow/
 sed -i.bak \
-  -e "s|from '/static-flow-frontend-|from '/static_flow/static-flow-frontend-|g" \
-  -e "s|module_or_path: '/static-flow-frontend-|module_or_path: '/static_flow/static-flow-frontend-|g" \
-  -e "s|href=\"/static-flow-frontend-|href=\"/static_flow/static-flow-frontend-|g" \
-  -e "s|href=\"/styles-|href=\"/static_flow/styles-|g" \
-  -e "s|href=\"/apple-touch-icon-|href=\"/static_flow/apple-touch-icon-|g" \
-  -e "s|href=\"/favicon-|href=\"/static_flow/favicon-|g" \
-  -e "s|src=\"/static/|src=\"/static_flow/static/|g" \
-  -e "s|href=\"/static/|href=\"/static_flow/static/|g" \
-  -e "s|url(/static/|url(/static_flow/static/|g" \
+  's|<head>|<head>\n    <base href="/static_flow/">|' \
   "$HTML_FILE"
 
 rm -f "${HTML_FILE}.bak"
 
-echo "✓ Fixed paths in index.html"
+echo "✓ Injected <base> tag into index.html"
 echo ""
 echo "=== Build Post-Processing Complete ==="

@@ -1,5 +1,4 @@
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::window;
 use yew::prelude::*;
 

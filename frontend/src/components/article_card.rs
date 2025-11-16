@@ -1,5 +1,5 @@
 use yew::prelude::*;
-use yew_router::prelude::{Link, use_navigator};
+use yew_router::prelude::{use_navigator, Link};
 
 use crate::{models::ArticleListItem, router::Route, utils::image_url};
 
@@ -44,7 +44,8 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
     // Handle image click
     let handle_image_click = handle_title_click.clone();
 
-    // 组件类 + 内部工具类混合模式：复杂轮廓仍使用 article-card，内部简单元素改用 Tailwind utilities
+    // 组件类 + 内部工具类混合模式：复杂轮廓仍使用 article-card，内部简单元素改用
+    // Tailwind utilities
     html! {
         <article class="article-card">
             {

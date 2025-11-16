@@ -3,8 +3,9 @@ mod markdown;
 mod routes;
 mod state;
 
-use anyhow::Result;
 use std::env;
+
+use anyhow::Result;
 use tracing_subscriber;
 
 #[tokio::main]

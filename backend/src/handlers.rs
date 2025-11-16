@@ -1,15 +1,16 @@
-use crate::markdown;
-use crate::state::AppState;
+use std::collections::HashMap;
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
-    response::{Json, IntoResponse, Response},
+    http::{header, StatusCode},
+    response::{IntoResponse, Json, Response},
 };
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
-use std::collections::HashMap;
 use tokio::fs;
+
+use crate::{markdown, state::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
@@ -101,11 +102,7 @@ pub async fn list_articles(
             // Filter by tag (case insensitive)
             if let Some(ref tag) = query.tag {
                 let tag_lower = tag.to_lowercase();
-                matches = matches
-                    && article
-                        .tags
-                        .iter()
-                        .any(|t| t.to_lowercase() == tag_lower);
+                matches = matches && article.tags.iter().any(|t| t.to_lowercase() == tag_lower);
             }
 
             // Filter by category (case insensitive)
@@ -171,11 +168,16 @@ pub async fn list_tags(State(state): State<AppState>) -> Json<TagsResponse> {
     // Sort by name
     let mut tags: Vec<TagInfo> = tag_counts
         .into_iter()
-        .map(|(name, count)| TagInfo { name, count })
+        .map(|(name, count)| TagInfo {
+            name,
+            count,
+        })
         .collect();
     tags.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Json(TagsResponse { tags })
+    Json(TagsResponse {
+        tags,
+    })
 }
 
 pub async fn list_categories(State(state): State<AppState>) -> Json<CategoriesResponse> {
@@ -208,7 +210,9 @@ pub async fn list_categories(State(state): State<AppState>) -> Json<CategoriesRe
     // Sort by name
     categories.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Json(CategoriesResponse { categories })
+    Json(CategoriesResponse {
+        categories,
+    })
 }
 
 pub async fn search_articles(

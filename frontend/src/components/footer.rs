@@ -2,7 +2,8 @@ use yew::prelude::*;
 
 #[function_component(Footer)]
 pub fn footer() -> Html {
-    // 混合使用保留在 @layer components 中的 .footer 语义样式与 Tailwind utility classes，示范混合使用模式
+    // 混合使用保留在 @layer components 中的 .footer 语义样式与 Tailwind utility
+    // classes，示范混合使用模式
     html! {
         <footer class="footer">
             <div class="container mx-auto flex flex-col items-center justify-center gap-4 px-4 py-8 text-center text-[0.9rem] text-muted">

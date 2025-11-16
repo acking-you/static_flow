@@ -8,24 +8,69 @@ use crate::{
 
 #[derive(Routable, Clone, PartialEq, Debug)]
 pub enum Route {
+    #[cfg(not(feature = "mock"))]
     #[at("/")]
     Home,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/")]
+    Home,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/posts")]
     Posts,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/posts")]
+    Posts,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/posts/:id")]
     ArticleDetail { id: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/posts/:id")]
+    ArticleDetail { id: String },
+
+    #[cfg(not(feature = "mock"))]
     #[at("/tags")]
     Tags,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/tags")]
+    Tags,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/tags/:tag")]
     TagDetail { tag: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/tags/:tag")]
+    TagDetail { tag: String },
+
+    #[cfg(not(feature = "mock"))]
     #[at("/categories")]
     Categories,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/categories")]
+    Categories,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/categories/:category")]
     CategoryDetail { category: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/categories/:category")]
+    CategoryDetail { category: String },
+
+    #[cfg(not(feature = "mock"))]
     #[at("/search")]
     Search,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/search")]
+    Search,
+
     #[not_found]
+    #[cfg(not(feature = "mock"))]
     #[at("/404")]
+    NotFound,
+    #[not_found]
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/404")]
     NotFound,
 }
 

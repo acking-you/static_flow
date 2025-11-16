@@ -1,8 +1,8 @@
+use static_flow_shared::Article;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{window, HtmlImageElement, KeyboardEvent};
 use yew::{prelude::*, virtual_dom::AttrValue};
-use yew_router::prelude::{use_route, use_navigator, Link};
-use static_flow_shared::Article;
+use yew_router::prelude::{use_navigator, use_route, Link};
 
 use crate::{
     components::{
@@ -77,12 +77,14 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     Ok(data) => {
                         article.set(data);
                         loading.set(false);
-                    }
+                    },
                     Err(e) => {
-                        web_sys::console::error_1(&format!("Failed to fetch article: {}", e).into());
+                        web_sys::console::error_1(
+                            &format!("Failed to fetch article: {}", e).into(),
+                        );
                         article.set(None);
                         loading.set(false);
-                    }
+                    },
                 }
             });
             || ()
@@ -118,12 +120,14 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             let keydown_listener_opt = if *is_open {
                 let handle = is_lightbox_open.clone();
                 let preview_url = preview_image_url.clone();
-                let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
-                    if event.key() == "Escape" {
-                        handle.set(false);
-                        preview_url.set(None);
-                    }
-                }) as Box<dyn FnMut(_)>);
+                let listener =
+                    wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
+                        if event.key() == "Escape" {
+                            handle.set(false);
+                            preview_url.set(None);
+                        }
+                    })
+                        as Box<dyn FnMut(_)>);
 
                 if let Some(win) = window() {
                     let _ = win.add_event_listener_with_callback(
@@ -164,7 +168,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             }
                         }
                     }
-                }) as Box<dyn FnMut()>);
+                })
+                    as Box<dyn FnMut()>);
 
                 let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
                     callback.as_ref().unchecked_ref(),
@@ -194,7 +199,9 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     let listener = wasm_bindgen::closure::Closure::wrap(Box::new(
                                         move |event: web_sys::Event| {
                                             if let Some(target) = event.current_target() {
-                                                if let Ok(img) = target.dyn_into::<HtmlImageElement>() {
+                                                if let Ok(img) =
+                                                    target.dyn_into::<HtmlImageElement>()
+                                                {
                                                     if let Some(src) = img.get_attribute("src") {
                                                         callback.emit(src);
                                                     }
