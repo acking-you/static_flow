@@ -56,6 +56,14 @@ jobs:
         env:
           TRUNK_SKIP_VERSION_CHECK: "true"
 
+      - name: Fix resource paths for GitHub Pages subpath
+        working-directory: frontend/dist
+        run: |
+          # Fix JS and WASM paths in index.html to include /static_flow/ prefix
+          sed -i 's|"/static-flow-frontend-|"/static_flow/static-flow-frontend-|g' index.html
+          sed -i 's|"/styles-|"/static_flow/styles-|g' index.html
+          echo "✓ Fixed resource paths in index.html"
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
