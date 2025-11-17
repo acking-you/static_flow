@@ -141,8 +141,7 @@
         // Generate table of contents
         generateTOC();
 
-        // Initialize back to top button
-        initBackToTop();
+        // Back to top button is now managed by Yew ScrollToTopButton component
       };
 
       // Add copy buttons to code blocks
@@ -543,40 +542,7 @@
         }
       }
 
-      // Initialize back to top button
-      function initBackToTop() {
-        // Create button
-        const btn = document.createElement('button');
-        btn.className = 'back-to-top';
-        btn.innerHTML = '<i class="fas fa-arrow-up"></i>';
-        btn.title = '回到顶部';
-        btn.setAttribute('type', 'button');
-        btn.setAttribute('aria-label', '回到顶部');
-
-        // Add click handler
-        btn.addEventListener('click', () => {
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
-
-        // Show/hide based on scroll position
-        let ticking = false;
-        window.addEventListener('scroll', () => {
-          if (!ticking) {
-            window.requestAnimationFrame(() => {
-              if (window.scrollY > 300) {
-                btn.classList.add('visible');
-              } else {
-                btn.classList.remove('visible');
-              }
-              ticking = false;
-            });
-            ticking = true;
-          }
-        });
-
-        // Add to page
-        document.body.appendChild(btn);
-      }
+      // Back to top button is now managed by Yew ScrollToTopButton component
 
       // Debug helper - expose to window for testing
       window.debugMermaidCopy = function() {
