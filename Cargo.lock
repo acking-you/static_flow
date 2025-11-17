@@ -1365,6 +1365,7 @@ name = "static-flow-frontend"
 version = "0.1.0"
 dependencies = [
  "gloo-net 0.6.0",
+ "gloo-timers 0.3.0",
  "js-sys",
  "pulldown-cmark",
  "serde",

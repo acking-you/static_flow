@@ -2,6 +2,11 @@ use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::window;
 use yew::prelude::*;
 
+use crate::components::{
+    icons::IconName,
+    tooltip::{TooltipIconButton, TooltipPosition},
+};
+
 #[function_component(ScrollToTopButton)]
 pub fn scroll_to_top_button() -> Html {
     let show = use_state(|| false);
@@ -38,9 +43,7 @@ pub fn scroll_to_top_button() -> Html {
         });
     }
 
-    let onclick = Callback::from(|e: MouseEvent| {
-        e.prevent_default();
-
+    let onclick = Callback::from(|_: MouseEvent| {
         if let Some(window) = window() {
             let options = web_sys::ScrollToOptions::new();
             options.set_behavior(web_sys::ScrollBehavior::Smooth);
@@ -53,26 +56,15 @@ pub fn scroll_to_top_button() -> Html {
 
     if *show {
         html! {
-            <button
-                class="scroll-to-top"
-                onclick={onclick}
-                aria-label="回到顶部"
-                title="回到顶部"
-            >
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                >
-                    <polyline points="18 15 12 9 6 15"></polyline>
-                </svg>
-            </button>
+            <div class="scroll-to-top">
+                <TooltipIconButton
+                    icon={IconName::ArrowUp}
+                    tooltip="回到顶部"
+                    position={TooltipPosition::Top}
+                    onclick={onclick}
+                    size={20}
+                />
+            </div>
         }
     } else {
         html! {}

@@ -2,7 +2,14 @@ use web_sys::HtmlInputElement;
 use yew::{events::InputEvent, prelude::*};
 use yew_router::prelude::*;
 
-use crate::{components::theme_toggle::ThemeToggle, router::Route};
+use crate::{
+    components::{
+        icons::IconName,
+        theme_toggle::ThemeToggle,
+        tooltip::{TooltipIconButton, TooltipPosition},
+    },
+    router::Route,
+};
 
 #[function_component(Header)]
 pub fn header() -> Html {
@@ -136,23 +143,27 @@ pub fn header() -> Html {
                                 value={(*search_query).clone()}
                                 oninput={on_search_input.clone()}
                                 onkeypress={on_search_keypress.clone()}
+                                class="header-search-input"
                             />
-                            <button
-                                class="search-toggle"
-                                type="button"
-                                aria-label="搜索"
-                                onclick={do_search.clone()}
-                            >
-                                {"搜索"}
-                            </button>
-                            <button
-                                type="button"
-                                aria-label="清空搜索"
-                                class={clear_button_classes.clone()}
-                                onclick={clear_search.clone()}
-                            >
-                                {"清空"}
-                            </button>
+                            <div class="header-search-actions">
+                                <TooltipIconButton
+                                    icon={IconName::Search}
+                                    tooltip="搜索"
+                                    position={TooltipPosition::Bottom}
+                                    onclick={do_search.clone()}
+                                    size={20}
+                                    class="header-search-btn"
+                                />
+                                <TooltipIconButton
+                                    icon={IconName::X}
+                                    tooltip="清空"
+                                    position={TooltipPosition::Bottom}
+                                    onclick={clear_search.clone()}
+                                    size={18}
+                                    class="header-search-clear"
+                                    disabled={search_query.is_empty()}
+                                />
+                            </div>
                         </div>
                         <div class="header-theme-toggle">
                             <ThemeToggle />
@@ -183,14 +194,16 @@ pub fn header() -> Html {
             <div class={mobile_menu_classes}>
                 <div class="mobile-menu-backdrop" onclick={close_mobile_menu.clone()}></div>
                 <div class="mobile-menu-panel" role="dialog" aria-modal="true">
-                    <button
-                        type="button"
-                        class="mobile-close"
-                        onclick={close_mobile_menu.clone()}
-                        aria-label="关闭菜单"
-                    >
-                        {"关闭"}
-                    </button>
+                    <div class="mobile-close">
+                        <TooltipIconButton
+                            icon={IconName::ArrowLeft}
+                            tooltip="关闭菜单"
+                            position={TooltipPosition::Bottom}
+                            onclick={close_mobile_menu.clone()}
+                            size={20}
+                            class="mobile-close-btn"
+                        />
+                    </div>
                     <div class="mobile-search mobile-menu-search">
                         <input
                             type="text"
@@ -198,22 +211,27 @@ pub fn header() -> Html {
                             value={(*search_query).clone()}
                             oninput={mobile_search_input.clone()}
                             onkeypress={mobile_search_keypress.clone()}
+                            class="mobile-search-input"
                         />
-                        <button
-                            type="button"
-                            class="mobile-search-btn"
-                            onclick={mobile_do_search.clone()}
-                        >
-                            {"搜索"}
-                        </button>
-                        <button
-                            type="button"
-                            class="mobile-search-clear"
-                            onclick={mobile_clear_search.clone()}
-                            disabled={search_query.is_empty()}
-                        >
-                            {"清空"}
-                        </button>
+                        <div class="mobile-search-actions">
+                            <TooltipIconButton
+                                icon={IconName::Search}
+                                tooltip="搜索"
+                                position={TooltipPosition::Bottom}
+                                onclick={mobile_do_search.clone()}
+                                size={20}
+                                class="mobile-search-btn"
+                            />
+                            <TooltipIconButton
+                                icon={IconName::X}
+                                tooltip="清空"
+                                position={TooltipPosition::Bottom}
+                                onclick={mobile_clear_search.clone()}
+                                size={18}
+                                class="mobile-search-clear"
+                                disabled={search_query.is_empty()}
+                            />
+                        </div>
                     </div>
                     <div class="mobile-menu-header">
                         <span class="mobile-menu-title">{"导航"}</span>

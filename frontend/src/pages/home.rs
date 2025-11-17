@@ -1,15 +1,17 @@
 use static_flow_shared::ArticleListItem;
 use wasm_bindgen::JsCast;
-use web_sys::{window, Element};
+use web_sys::{window, Element, TouchEvent};
 use yew::prelude::*;
 use yew_router::prelude::{use_location, Link};
 
 use crate::{
     components::{
         article_card::ArticleCard,
+        icons::IconName,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         pagination::Pagination,
         stats_card::StatsCard,
+        tooltip::{TooltipIconButton, TooltipPosition},
     },
     hooks::use_pagination,
     router::Route,
@@ -42,6 +44,13 @@ pub fn home_page() -> Html {
     let current_page = use_state(|| initial_page);
     let route_location = use_location();
     let articles_scroll_ref = use_node_ref();
+
+    // 手势滑动状态
+    let touch_start_x = use_state(|| 0.0f64);
+    let touch_start_y = use_state(|| 0.0f64);
+    let touch_offset_x = use_state(|| 0.0f64);
+    let is_swiping = use_state(|| false);
+    let slider_ref = use_node_ref();
 
     let articles = use_state(|| Vec::<ArticleListItem>::new());
     let loading = use_state(|| true);
@@ -106,6 +115,118 @@ pub fn home_page() -> Html {
             e.prevent_default();
             if let Some(container) = articles_scroll_ref.cast::<Element>() {
                 container.set_scroll_top(0);
+            }
+        })
+    };
+
+    // 触摸开始：记录初始位置
+    let on_touch_start = {
+        let touch_start_x = touch_start_x.clone();
+        let touch_start_y = touch_start_y.clone();
+        let is_swiping = is_swiping.clone();
+        Callback::from(move |e: TouchEvent| {
+            if let Some(touch) = e.touches().item(0) {
+                touch_start_x.set(touch.client_x() as f64);
+                touch_start_y.set(touch.client_y() as f64);
+                is_swiping.set(false);
+            }
+        })
+    };
+
+    // 触摸移动：计算偏移并实时更新
+    let on_touch_move = {
+        let touch_start_x = touch_start_x.clone();
+        let touch_start_y = touch_start_y.clone();
+        let touch_offset_x = touch_offset_x.clone();
+        let is_swiping = is_swiping.clone();
+        let slider_ref = slider_ref.clone();
+        let current_page = current_page.clone();
+        Callback::from(move |e: TouchEvent| {
+            if let Some(touch) = e.touches().item(0) {
+                let delta_x = touch.client_x() as f64 - *touch_start_x;
+                let delta_y = (touch.client_y() as f64 - *touch_start_y).abs();
+
+                // 只有横向滑动超过阈值且纵向偏移不大时才处理
+                if delta_x.abs() > 10.0 && delta_y < 30.0 {
+                    if !*is_swiping {
+                        is_swiping.set(true);
+                    }
+
+                    // 边界限制
+                    let offset = match *current_page {
+                        CurrentPage::Hero if delta_x > 0.0 => 0.0, // 主页不能右滑
+                        CurrentPage::Articles if delta_x < 0.0 => 0.0, // 文章页不能左滑
+                        _ => delta_x,
+                    };
+
+                    touch_offset_x.set(offset);
+
+                    // 实时更新 transform
+                    if let Some(slider) = slider_ref.cast::<web_sys::HtmlElement>() {
+                        let base_offset = match *current_page {
+                            CurrentPage::Hero => 0.0,
+                            CurrentPage::Articles => -100.0,
+                        };
+                        let percent_offset = (offset / slider.client_width() as f64) * 100.0;
+                        let total_offset = base_offset + percent_offset;
+                        let _ = slider.style().set_property(
+                            "transform",
+                            &format!("translateX({}%)", total_offset),
+                        );
+                    }
+
+                    e.prevent_default();
+                }
+            }
+        })
+    };
+
+    // 触摸结束：判断是否切换页面
+    let on_touch_end = {
+        let touch_offset_x = touch_offset_x.clone();
+        let is_swiping = is_swiping.clone();
+        let current_page = current_page.clone();
+        let slider_ref = slider_ref.clone();
+        Callback::from(move |_: TouchEvent| {
+            if *is_swiping {
+                let threshold = 50.0; // 滑动阈值（像素）
+                let offset = *touch_offset_x;
+
+                // 判断是否触发切换
+                let should_switch = match *current_page {
+                    CurrentPage::Hero => offset < -threshold, // 左滑切换到文章页
+                    CurrentPage::Articles => offset > threshold, // 右滑切换到主页
+                };
+
+                if should_switch {
+                    // 触发页面切换
+                    if matches!(*current_page, CurrentPage::Hero) {
+                        current_page.set(CurrentPage::Articles);
+                        if let Some(win) = window() {
+                            let location = win.location();
+                            let _ = location.set_hash("articles");
+                        }
+                    } else {
+                        current_page.set(CurrentPage::Hero);
+                        if let Some(win) = window() {
+                            if let Ok(history) = win.history() {
+                                let home_path = crate::config::route_path("/");
+                                let _ = history.replace_state_with_url(
+                                    &wasm_bindgen::JsValue::NULL,
+                                    "",
+                                    Some(&home_path),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // 重置状态并移除 inline transform
+                if let Some(slider) = slider_ref.cast::<web_sys::HtmlElement>() {
+                    let _ = slider.style().remove_property("transform");
+                }
+                touch_offset_x.set(0.0);
+                is_swiping.set(false);
             }
         })
     };
@@ -201,9 +322,9 @@ pub fn home_page() -> Html {
 
     let total_articles = articles.len();
     let stats = vec![
-        ("📝".to_string(), total_articles.to_string(), Some(Route::Posts)),
-        ("🏷️".to_string(), "12".to_string(), Some(Route::Tags)),
-        ("📂".to_string(), "5".to_string(), Some(Route::Categories)),
+        (IconName::FileText, total_articles.to_string(), "文章".to_string(), Some(Route::Posts)),
+        (IconName::Hash, "12".to_string(), "标签".to_string(), Some(Route::Tags)),
+        (IconName::Folder, "5".to_string(), "分类".to_string(), Some(Route::Categories)),
     ];
 
     let tech_stack = vec![
@@ -278,7 +399,14 @@ pub fn home_page() -> Html {
 
     html! {
         <div class="home-page-viewport">
-            <div class={slider_class}>
+            <div
+                class={slider_class}
+                ref={slider_ref}
+                ontouchstart={on_touch_start}
+                ontouchmove={on_touch_move}
+                ontouchend={on_touch_end.clone()}
+                ontouchcancel={on_touch_end}
+            >
                 // Hero Page
                 <div class="home-page">
                     <div class="home-page-scroll">
@@ -337,8 +465,8 @@ pub fn home_page() -> Html {
                                     </div>
                                 </div>
                                 <div class="hero-stats-grid">
-                                    { for stats.into_iter().map(|(icon, value, route)| html! {
-                                        <StatsCard icon={icon} value={value} route={route} />
+                                    { for stats.into_iter().map(|(icon, value, label, route)| html! {
+                                        <StatsCard icon={icon} value={value} label={label} route={route} />
                                     }) }
                                 </div>
                                 <div class="tech-stack">
@@ -347,7 +475,7 @@ pub fn home_page() -> Html {
                                         { for tech_stack.iter().map(|(logo, name, href)| html! {
                                             <a class="tech-tag" href={(*href).to_string()} target="_blank" rel="noopener noreferrer" title={*name}>
                                                 <img src={logo.clone()} alt={*name} class="tech-logo" loading="lazy" />
-                                                <span>{ *name }</span>
+                                                <span class="tech-tag-name">{ *name }</span>
                                             </a>
                                         }) }
                                     </div>
@@ -378,53 +506,42 @@ pub fn home_page() -> Html {
                 </div>
             </div>
 
-            // Navigation Button
+            // Navigation Buttons - 回到主页在左侧，查看文章在右侧
             if is_articles_page {
-                <button
-                    class="home-nav-button home-nav-button--back"
-                    onclick={switch_to_hero}
-                    aria-label="回到主页"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M19 12H5M12 19l-7-7 7-7"/>
-                    </svg>
-                    <span>{ "回到主页" }</span>
-                </button>
+                <div class="home-nav-button-container home-nav-button-container--left">
+                    <TooltipIconButton
+                        icon={IconName::ChevronLeft}
+                        tooltip="回到主页"
+                        position={TooltipPosition::Right}
+                        onclick={switch_to_hero}
+                        size={24}
+                        class="home-nav-button home-nav-button--back"
+                    />
+                </div>
             } else {
-                <button
-                    class="home-nav-button home-nav-button--forward"
-                    onclick={switch_to_articles}
-                    aria-label="查看文章"
-                >
-                    <span>{ "查看文章" }</span>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M5 12h14M12 5l7 7-7 7"/>
-                    </svg>
-                </button>
+                <div class="home-nav-button-container home-nav-button-container--right">
+                    <TooltipIconButton
+                        icon={IconName::ChevronRight}
+                        tooltip="查看文章"
+                        position={TooltipPosition::Left}
+                        onclick={switch_to_articles}
+                        size={24}
+                        class="home-nav-button home-nav-button--forward"
+                    />
+                </div>
             }
 
             // Scroll to Top Button (only on articles page)
             if is_articles_page {
-                <button
-                    class="scroll-to-top"
-                    onclick={scroll_to_top}
-                    aria-label="回到顶部"
-                    title="回到顶部"
-                >
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="24"
-                        height="24"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                    >
-                        <polyline points="18 15 12 9 6 15"></polyline>
-                    </svg>
-                </button>
+                <div class="scroll-to-top">
+                    <TooltipIconButton
+                        icon={IconName::ArrowUp}
+                        tooltip="回到顶部"
+                        position={TooltipPosition::Top}
+                        onclick={scroll_to_top}
+                        size={20}
+                    />
+                </div>
             }
         </div>
     }

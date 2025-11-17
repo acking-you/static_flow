@@ -502,19 +502,8 @@
           tocContainer.classList.remove('mobile-open');
         });
 
-        // Create mobile TOC toggle button
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'toc-mobile-toggle';
-        toggleBtn.innerHTML = '<i class="fas fa-list"></i>';
-        toggleBtn.title = '显示目录';
-        toggleBtn.setAttribute('type', 'button');
-        toggleBtn.setAttribute('aria-label', '显示目录');
-
-        toggleBtn.addEventListener('click', () => {
-          tocContainer.classList.add('mobile-open');
-        });
-
-        document.body.appendChild(toggleBtn);
+        // Mobile TOC toggle button is now managed by Yew TocButton component
+        // This prevents the bug where the button persisted after leaving article pages
 
         // Highlight current section on scroll
         let ticking = false;

@@ -1,12 +1,16 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-use crate::router::Route;
+use crate::{
+    components::icons::{Icon, IconName},
+    router::Route,
+};
 
 #[derive(Properties, PartialEq, Clone)]
 pub struct StatsCardProps {
-    pub icon: String,
+    pub icon: IconName,
     pub value: String,
+    pub label: String, // 添加文字标签用于tooltip
     #[prop_or_default]
     pub route: Option<Route>,
 }
@@ -15,8 +19,11 @@ pub struct StatsCardProps {
 pub fn stats_card(props: &StatsCardProps) -> Html {
     let content = html! {
         <>
-            <span class="stats-card-icon" aria-hidden="true">{ props.icon.clone() }</span>
+            <span class="stats-card-icon" aria-hidden="true">
+                <Icon name={props.icon} size={32} />
+            </span>
             <strong class="stats-card-value">{ props.value.clone() }</strong>
+            <span class="stats-card-label">{ props.label.clone() }</span>
         </>
     };
 
@@ -28,7 +35,7 @@ pub fn stats_card(props: &StatsCardProps) -> Html {
         }
     } else {
         html! {
-            <div class="stats-card" role="status">
+            <div class="stats-card" role="status" title={props.label.clone()}>
                 { content }
             </div>
         }

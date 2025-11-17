@@ -9,10 +9,16 @@ publish = false
 yew = { workspace = true }
 yew-router = { workspace = true }
 gloo-net = { workspace = true }
+gloo-timers = "0.3"
 serde = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = "0.4"
-web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "KeyboardEvent", "HtmlImageElement", "NodeList", "ScrollToOptions", "ScrollBehavior"] }
+web-sys = { workspace = true, features = [
+  "Window", "Storage", "Document", "Element", "KeyboardEvent",
+  "HtmlImageElement", "NodeList", "ScrollToOptions", "ScrollBehavior",
+  "HtmlElement", "CssStyleDeclaration", "TouchEvent", "TouchList", "Touch", "History",
+  "DomTokenList"
+] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }
 urlencoding = "2.1"

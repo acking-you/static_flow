@@ -6,8 +6,11 @@ use yew_router::prelude::{use_navigator, use_route, Link};
 
 use crate::{
     components::{
+        icons::IconName,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
+        toc_button::TocButton,
+        tooltip::{TooltipIconButton, TooltipPosition},
     },
     router::Route,
     utils::{image_url, markdown_to_html},
@@ -365,17 +368,15 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         <main class="main">
             // Fixed back button - hide when lightbox is open
             if !*is_lightbox_open {
-                <button
-                    type="button"
-                    class="article-back-button"
-                    onclick={handle_back}
-                    aria-label="返回文章列表"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M19 12H5M12 19l-7-7 7-7"/>
-                    </svg>
-                    <span>{ "返回" }</span>
-                </button>
+                <div class="article-back-button">
+                    <TooltipIconButton
+                        icon={IconName::ArrowLeft}
+                        tooltip="返回"
+                        position={TooltipPosition::Right}
+                        onclick={handle_back}
+                        size={20}
+                    />
+                </div>
             }
 
             <div class="container">
@@ -424,9 +425,10 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     html! {}
                 }
             }
-            // Hide scroll-to-top button when lightbox is open
+            // Hide scroll-to-top button and TOC button when lightbox is open
             if !*is_lightbox_open {
                 <ScrollToTopButton />
+                <TocButton />
             }
         </main>
     }
