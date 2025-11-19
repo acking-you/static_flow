@@ -23,7 +23,7 @@ backend = "http://localhost:3000/api"
 [[hooks]]
 stage = "pre_build"
 command = "npx"
-command_arguments = ["@tailwindcss/cli", "-i", "input.css", "-o", "static/styles.css", "--minify"]
+command_arguments = ["@tailwindcss/cli", "-i", "input.css", "-o", "static/styles.css", "--minify", "--content", "src/**/*.rs"]
 
 # Note: post_build hook is NOT used for local dev
 # Path handling for GitHub Pages is done in GitHub Actions workflow via optimize-wasm.sh

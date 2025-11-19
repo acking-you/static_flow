@@ -2,6 +2,7 @@ pub mod article_detail;
 pub mod categories;
 pub mod category_detail;
 pub mod home;
+pub mod latest_articles;
 pub mod not_found;
 pub mod posts;
 pub mod search;

@@ -10,9 +10,17 @@ fn is_dark_theme() -> bool {
         .unwrap_or(false)
 }
 
-// Tailwind migration demo component that illustrates utility-first styling.
+#[derive(Properties, PartialEq)]
+pub struct ThemeToggleProps {
+    #[prop_or_default]
+    pub class: Classes,
+}
+
 #[function_component(ThemeToggle)]
-pub fn theme_toggle() -> Html {
+pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
+    let ThemeToggleProps {
+        class,
+    } = props;
     let theme_state = use_state(is_dark_theme);
 
     let onclick = {
@@ -31,58 +39,57 @@ pub fn theme_toggle() -> Html {
 
     let label = if *theme_state { "切换到亮色模式" } else { "切换到暗色模式" };
 
+    let icon_class = if *theme_state { "fa-sun" } else { "fa-moon" };
+
+    let button_class = classes!(
+        "group",
+        "inline-flex",
+        "items-center",
+        "justify-center",
+        "w-[var(--hit-size)]",
+        "h-[var(--hit-size)]",
+        "rounded-full",
+        "border",
+        "border-[var(--border)]",
+        "bg-[rgba(var(--surface-rgb),0.92)]",
+        "backdrop-blur",
+        "text-[var(--text)]",
+        "shadow-[var(--shadow-sm)]",
+        "transition-all",
+        "duration-300",
+        "ease-[var(--ease-spring)]",
+        "hover:-translate-y-0.5",
+        "hover:shadow-[var(--shadow)]",
+        "hover:bg-[var(--surface)]",
+        "focus-visible:outline-none",
+        "focus-visible:ring-2",
+        "focus-visible:ring-[var(--primary)]",
+        "focus-visible:ring-offset-2",
+        "focus-visible:ring-offset-[var(--bg)]",
+        "active:scale-95",
+        class.clone()
+    );
+
     html! {
         <button
             type="button"
-            class={classes!(
-                "group",
-                "fixed",
-                "bottom-4",
-                "right-4",
-                "z-50",
-                "inline-flex",
-                "h-12",
-                "w-12",
-                "items-center",
-                "justify-center",
-                "rounded-full",
-                "border",
-                "border-border",
-                "bg-surface",
-                "text-muted",
-                "shadow-lg",
-                "transition-all",
-                "duration-200",
-                "ease-out",
-                "hover:scale-110",
-                "hover:bg-surface-alt",
-                "hover:text-primary",
-                "focus-visible:outline-none",
-                "focus-visible:ring-2",
-                "focus-visible:ring-primary",
-                "focus-visible:ring-offset-2",
-                "focus-visible:ring-offset-surface",
-                "active:scale-95",
-                "sm:bottom-6",
-                "sm:right-6",
-                "dark:bg-surface-alt",
-                "dark:text-primary"
-            )}
+            class={button_class}
             {onclick}
             aria-label={label}
             title={label}
+            aria-pressed={(*theme_state).to_string()}
         >
             <i
                 class={classes!(
                     "fas",
-                    "fa-adjust",
-                    "fa-fw",
-                    "text-xl",
-                    "text-primary",
+                    icon_class,
+                    "fa-lg",
                     "transition-transform",
-                    "duration-200",
-                    "group-hover:rotate-12",
-                    "group-active:-rotate-6"
+                    "duration-300",
+                    "group-hover:scale-110",
+                    "group-active:scale-95",
+                    "text-[var(--text)]",
+                    "group-hover:text-[var(--primary)]"
                 )}
                 aria-hidden="true"
             ></i>

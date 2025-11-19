@@ -72,12 +72,15 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
     };
 
     html! {
-        <main class="main category-detail-page">
-            <div class="container">
-                <div class="page archive">
+        <main class={classes!("main", "category-detail-page", "mt-[var(--space-lg)]") }>
+            <div class={classes!("container") }>
+                <div class={classes!(
+                    "page",
+                    "archive"
+                )}>
                     <p class="page-kicker">{ "Categories" }</p>
-                    <h1 class="single-title">{ format!("分类: {}", display_category) }</h1>
-                    <p class="page-description">{ description }</p>
+                    <h1 class={classes!("single-title", "text-center")}>{ format!("分类: {}", display_category) }</h1>
+                    <p class={classes!("page-description", "max-w-3xl", "text-center")}>{ description }</p>
 
                     {
                         if *loading {

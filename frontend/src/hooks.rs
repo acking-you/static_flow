@@ -86,8 +86,8 @@ pub fn use_pagination<T: Clone + PartialEq + 'static>(
 /// fn home_page() -> Html {
 ///     use crate::hooks::{use_pagination, use_scroll_to_top};
 ///     use_scroll_to_top();
-///     let (items, page, total, go_to_page) = use_pagination(vec![1, 2, 3, 4], 2);
-///     html! { <div>{ format!("page {page}/{}", total) }</div> }
+///     let (items, page, total, go_to_page) = use_pagination(vec![1, 2, 3, 4],
+/// 2);     html! { <div>{ format!("page {page}/{}", total) }</div> }
 /// }
 /// ```
 #[hook]

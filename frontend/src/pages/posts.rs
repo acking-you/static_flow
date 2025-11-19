@@ -109,22 +109,90 @@ pub fn posts_page() -> Html {
     };
 
     html! {
-        <main class="main posts-page">
-            <div class="container">
-                <div class="page archive">
-                    <p class="page-kicker">{ "Posts" }</p>
-                    <h1 class="single-title">{ "文章时间线" }</h1>
-                    <p class="page-description">{ description }</p>
+        <main class={classes!(
+            "mt-[var(--space-lg)]",
+            "pt-12",
+            "pb-16"
+        )}>
+            <div class={classes!("container")}>
+                <div class={classes!(
+                    "bg-[var(--surface)]",
+                    "rounded-[var(--radius)]",
+                    "p-6",
+                    "md:p-12",
+                    "my-8",
+                    "mb-12",
+                    "shadow-[var(--shadow)]"
+                )}>
+                    <p class={classes!(
+                        "my-2",
+                        "text-[0.85rem]",
+                        "tracking-[0.3em]",
+                        "uppercase",
+                        "text-[var(--muted)]",
+                        "text-center"
+                    )}>{ "Posts" }</p>
+                    <h1 class={classes!(
+                        "m-0",
+                        "text-[2.15rem]",
+                        "text-center"
+                    )}>{ "文章时间线" }</h1>
+                    <p class={classes!(
+                        "mt-3",
+                        "mx-auto",
+                        "mb-0",
+                        "max-w-[40rem]",
+                        "text-[var(--muted)]",
+                        "leading-relaxed",
+                        "text-center"
+                    )}>{ description }</p>
 
                     {
                         if query.has_filters() {
                             html! {
-                                <div class="post-filter-bar">
-                                    <span class="filter-chip">
-                                        <i class="fas fa-filter" aria-hidden="true"></i>
+                                <div class={classes!(
+                                    "flex",
+                                    "flex-wrap",
+                                    "gap-3",
+                                    "items-center",
+                                    "my-4",
+                                    "mb-8"
+                                )}>
+                                    <span class={classes!(
+                                        "inline-flex",
+                                        "items-center",
+                                        "gap-2",
+                                        "border",
+                                        "border-dashed",
+                                        "border-[var(--border)]",
+                                        "rounded-full",
+                                        "px-4",
+                                        "py-2",
+                                        "text-[0.9rem]",
+                                        "text-[var(--muted)]"
+                                    )}>
+                                        <i class={classes!("fas", "fa-filter")} aria-hidden="true"></i>
                                         { format!("当前筛选：{}", filter_label) }
                                     </span>
-                                    <Link<Route> to={Route::Posts} classes={classes!("btn", "btn-soft")}>
+                                    <Link<Route> to={Route::Posts} classes={classes!(
+                                        "inline-flex",
+                                        "items-center",
+                                        "justify-center",
+                                        "gap-2",
+                                        "px-[1.1rem]",
+                                        "py-2",
+                                        "min-h-[var(--hit-size)]",
+                                        "rounded-xl",
+                                        "border",
+                                        "border-[var(--border)]",
+                                        "bg-[var(--surface)]",
+                                        "text-[var(--text)]",
+                                        "transition-all",
+                                        "hover:bg-black/5",
+                                        "hover:scale-105",
+                                        "active:scale-95",
+                                        "dark:hover:bg-white/6"
+                                    )}>
                                         { "清除筛选" }
                                     </Link<Route>>
                                 </div>
@@ -137,7 +205,11 @@ pub fn posts_page() -> Html {
                     {
                         if grouped_by_year.is_empty() {
                             html! {
-                                <p class="timeline-empty">{ "暂无文章可展示。" }</p>
+                                <p class={classes!(
+                                    "text-center",
+                                    "my-10",
+                                    "text-[var(--muted)]"
+                                )}>{ "暂无文章可展示。" }</p>
                             }
                         } else {
                             render_expandable_timeline(&grouped_by_year, &*expanded_years, &toggle_year)
@@ -189,19 +261,48 @@ fn render_timeline_with_state(
                 let remaining = total_count.saturating_sub(visible_count);
                 html! {
                     <>
-                        <h3 class="group-title">{ year_value }</h3>
-                        <div class="timeline">
+                        <h3 class={classes!(
+                            "mt-10",
+                            "mb-5",
+                            "text-[1.35rem]",
+                            "tracking-[0.18em]",
+                            "uppercase",
+                            "text-[var(--muted)]"
+                        )}>{ year_value }</h3>
+                        <div class={classes!("timeline")}>
                             { for posts.iter().take(visible_count).cloned().map(|article| {
                                 let detail_route = Route::ArticleDetail { id: article.id.clone() };
                                 html! {
-                                    <div class="circle">
-                                        <div class="item">
-                                            <Link<Route> to={detail_route} classes={classes!("item-link")}>
+                                    <div class={classes!("circle")}>
+                                        <div class={classes!(
+                                            "m-0",
+                                            "leading-relaxed",
+                                            "pl-[calc(var(--timeline-offset)+1rem)]"
+                                        )}>
+                                            <Link<Route> to={detail_route} classes={classes!(
+                                                "text-[1.1rem]",
+                                                "font-semibold",
+                                                "text-[var(--text)]",
+                                                "transition-colors",
+                                                "duration-200",
+                                                "hover:text-[var(--primary)]"
+                                            )}>
                                                 { article.title.clone() }
                                             </Link<Route>>
                                         </div>
-                                        <div class="item">
-                                            <span class="item-date">
+                                        <div class={classes!(
+                                            "m-0",
+                                            "leading-relaxed",
+                                            "pl-[calc(var(--timeline-offset)+1rem)]"
+                                        )}>
+                                            <span class={classes!(
+                                                "inline-block",
+                                                "mt-1",
+                                                "text-[0.9rem]",
+                                                "tracking-[0.2em]",
+                                                "uppercase",
+                                                "text-[var(--muted)]"
+                                            )}>
                                                 { format!("Published on {}", format_month_day(&article.date)) }
                                             </span>
                                         </div>
@@ -223,7 +324,28 @@ fn render_timeline_with_state(
                                     html! {
                                         <button
                                             type="button"
-                                            class={classes!("btn", "btn-soft", "btn-expand")}
+                                            class={classes!(
+                                                "inline-flex",
+                                                "items-center",
+                                                "justify-center",
+                                                "gap-2",
+                                                "px-6",
+                                                "py-2",
+                                                "min-h-[var(--hit-size)]",
+                                                "mt-3",
+                                                "rounded-xl",
+                                                "border",
+                                                "border-dashed",
+                                                "border-[var(--border)]",
+                                                "bg-[var(--surface)]",
+                                                "text-[var(--link)]",
+                                                "text-[0.95rem]",
+                                                "transition-all",
+                                                "hover:border-[var(--primary)]",
+                                                "hover:text-[var(--primary)]",
+                                                "hover:scale-105",
+                                                "active:scale-95"
+                                            )}
                                             {onclick}
                                             aria-expanded={is_expanded.to_string()}
                                             aria-label={format!("切换 {year_value} 年文章折叠状态")}

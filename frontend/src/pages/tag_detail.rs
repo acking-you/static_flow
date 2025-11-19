@@ -72,12 +72,15 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
     };
 
     html! {
-        <main class="main tag-detail-page">
-            <div class="container">
-                <div class="page archive">
+        <main class={classes!("main", "tag-detail-page", "mt-[var(--space-lg)]") }>
+            <div class={classes!("container") }>
+                <div class={classes!(
+                    "page",
+                    "archive"
+                )}>
                     <p class="page-kicker">{ "Tags" }</p>
-                    <h1 class="single-title">{ format!("标签: {}", display_tag) }</h1>
-                    <p class="page-description">{ description }</p>
+                    <h1 class={classes!("single-title", "text-center")}>{ format!("标签: {}", display_tag) }</h1>
+                    <p class={classes!("page-description", "max-w-3xl", "text-center")}>{ description }</p>
 
                     {
                         if *loading {

@@ -56,7 +56,17 @@ pub fn scroll_to_top_button() -> Html {
 
     if *show {
         html! {
-            <div class="scroll-to-top">
+            <div class={classes!(
+                "fixed", "right-8", "bottom-8", "z-50",
+                "w-12", "h-12", "rounded-full",
+                "bg-[var(--primary)]", "text-white",
+                "flex", "items-center", "justify-center",
+                "shadow-[var(--shadow)]",
+                "transition-all", "duration-300", "ease-[var(--ease-spring)]",
+                "hover:bg-[var(--link)]", "hover:-translate-y-1", "hover:scale-105", "hover:shadow-[var(--shadow-lg)]",
+                "active:-translate-y-0.5", "active:scale-95",
+                "max-md:bottom-6", "max-md:right-6", "max-md:w-11", "max-md:h-11"
+            )}>
                 <TooltipIconButton
                     icon={IconName::ArrowUp}
                     tooltip="回到顶部"

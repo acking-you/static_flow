@@ -44,15 +44,40 @@ pub fn pagination(props: &PaginationProps) -> Html {
         })
     };
 
-    let mut prev_classes = classes!("pagination-link");
-    if prev_disabled {
-        prev_classes.push("disabled");
-    }
+    let base_btn_classes = classes!(
+        "inline-flex",
+        "items-center",
+        "justify-center",
+        "min-w-[2.5rem]",
+        "h-10",
+        "px-3",
+        "rounded-lg",
+        "border",
+        "border-[var(--border)]",
+        "bg-[rgba(var(--surface-rgb),0.95)]",
+        "text-[var(--text)]",
+        "text-sm",
+        "font-semibold",
+        "ring-1",
+        "ring-[rgba(15,23,42,0.08)]",
+        "dark:ring-[rgba(255,255,255,0.08)]",
+        "shadow-sm",
+        "transition-all",
+        "duration-200",
+        "ease-[var(--ease-spring)]",
+        "hover:-translate-y-[1px]",
+        "hover:shadow-[var(--shadow)]",
+        "hover:border-[var(--primary)]",
+        "hover:text-[var(--primary)]",
+        "disabled:opacity-50",
+        "disabled:cursor-not-allowed",
+        "disabled:hover:translate-y-0",
+        "disabled:hover:shadow-none"
+    );
 
-    let mut next_classes = classes!("pagination-link");
-    if next_disabled {
-        next_classes.push("disabled");
-    }
+    let prev_classes = classes!(base_btn_classes.clone(), "min-w-[2.75rem]");
+
+    let next_classes = classes!(base_btn_classes.clone(), "min-w-[2.75rem]");
 
     html! {
         <nav class="flex flex-wrap items-center gap-3" aria-label="分页">
@@ -65,13 +90,18 @@ pub fn pagination(props: &PaginationProps) -> Html {
             >
                 {"<"}
             </button>
-            <div class="pagination-list">
+            <div class={classes!("flex", "flex-wrap", "items-center", "gap-2")}>
                 { for slots.into_iter().map(|slot| match slot {
                     PageSlot::Page(page) => {
-                        let mut page_classes = classes!("pagination-link");
-                        if page == current_page {
-                            page_classes.push("active");
-                        }
+                        let page_classes = classes!(
+                            base_btn_classes.clone(),
+                            "min-w-[2.75rem]",
+                            if page == current_page {
+                                "bg-[var(--primary)] text-white border-transparent ring-[rgba(var(--primary-rgb),0.45)] drop-shadow-[0_10px_25px_rgba(var(--primary-rgb),0.4)] cursor-default pointer-events-none"
+                            } else {
+                                ""
+                            }
+                        );
                         let onclick = {
                             let on_page_change = on_page_change.clone();
                             Callback::from(move |_| on_page_change.emit(page))
@@ -95,14 +125,23 @@ pub fn pagination(props: &PaginationProps) -> Html {
                             </button>
                         }
                     }
-                    PageSlot::Ellipsis(id) => html! {
-                        <span
-                            key={format!("ellipsis-{id}-{current_page}")}
-                            class="pagination-link disabled select-none"
-                            aria-hidden="true"
-                        >
-                            {"..."}
-                        </span>
+                    PageSlot::Ellipsis(id) => {
+                        let ellipsis_classes = classes!(
+                            base_btn_classes.clone(),
+                            "select-none",
+                            "cursor-default",
+                            "opacity-60",
+                            "pointer-events-none"
+                        );
+                        html! {
+                            <span
+                                key={format!("ellipsis-{id}-{current_page}")}
+                                class={ellipsis_classes}
+                                aria-hidden="true"
+                            >
+                                {"..."}
+                            </span>
+                        }
                     }
                 }) }
             </div>

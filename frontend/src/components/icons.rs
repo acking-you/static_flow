@@ -37,8 +37,13 @@ impl IconName {
             IconName::ArrowUp => "m18 15-6-6-6 6",
             IconName::Home => "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
 
-            IconName::FileText => "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
-            IconName::BookOpen => "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z",
+            IconName::FileText => {
+                "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 \
+                 17H8M10 9H8"
+            },
+            IconName::BookOpen => {
+                "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"
+            },
             IconName::List => "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
 
             IconName::Search => "m21 21-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0z",
@@ -47,7 +52,10 @@ impl IconName {
 
             IconName::Tag => "M12 2l8 8-10 10L2 12l10-10zM7 7h.01",
             IconName::Hash => "M4 9h16M4 15h16M10 3L8 21M16 3l-2 18",
-            IconName::Folder => "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z",
+            IconName::Folder => {
+                "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 \
+                 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"
+            },
         }
     }
 
@@ -73,14 +81,28 @@ pub struct IconProps {
 
 #[function_component(Icon)]
 pub fn icon(props: &IconProps) -> Html {
-    let IconProps { name, size, color, class } = props;
+    let IconProps {
+        name,
+        size,
+        color,
+        class,
+    } = props;
 
     let stroke_width = if *size <= 16 { 2.5 } else { 2.0 };
     let fill = if name.needs_fill() { "none" } else { "none" };
 
     html! {
         <svg
-            class={classes!("icon", class.clone())}
+            class={classes!(
+                "inline-flex",
+                "items-center",
+                "justify-center",
+                "shrink-0",
+                "transition-all",
+                "duration-200",
+                "ease-[var(--ease-spring)]",
+                class.clone()
+            )}
             width={size.to_string()}
             height={size.to_string()}
             viewBox="0 0 24 24"
@@ -116,12 +138,45 @@ pub struct IconButtonProps {
 
 #[function_component(IconButton)]
 pub fn icon_button(props: &IconButtonProps) -> Html {
-    let IconButtonProps { icon, size, onclick, class, disabled } = props;
+    let IconButtonProps {
+        icon,
+        size,
+        onclick,
+        class,
+        disabled,
+    } = props;
 
     let button_class = classes!(
-        "icon-button",
-        class.clone(),
-        disabled.then_some("disabled")
+        "relative",
+        "inline-flex",
+        "items-center",
+        "justify-center",
+        "w-[var(--hit-size)]",
+        "h-[var(--hit-size)]",
+        "min-w-[44px]",
+        "min-h-[44px]",
+        "rounded-full",
+        "border",
+        "border-[var(--border)]",
+        "bg-[rgba(var(--surface-rgb),0.85)]",
+        "backdrop-blur-[10px]",
+        "text-[var(--text)]",
+        "shadow-[var(--shadow-sm)]",
+        "transition-all",
+        "duration-200",
+        "ease-[var(--ease-spring)]",
+        "hover:bg-[var(--surface-alt)]",
+        "hover:-translate-y-[2px]",
+        "hover:scale-105",
+        "hover:shadow-[var(--shadow)]",
+        "active:translate-y-0",
+        "active:scale-95",
+        "disabled:opacity-40",
+        "disabled:cursor-not-allowed",
+        "disabled:hover:scale-100",
+        "disabled:hover:translate-y-0",
+        "disabled:hover:shadow-[var(--shadow-sm)]",
+        class.clone()
     );
 
     html! {

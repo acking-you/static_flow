@@ -16,6 +16,13 @@ pub enum Route {
     Home,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/latest")]
+    LatestArticles,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/latest")]
+    LatestArticles,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/posts")]
     Posts,
     #[cfg(feature = "mock")]
@@ -77,6 +84,7 @@ pub enum Route {
 fn switch(route: Route) -> Html {
     match route {
         Route::Home => html! { <pages::home::HomePage /> },
+        Route::LatestArticles => html! { <pages::latest_articles::LatestArticlesPage /> },
         Route::Posts => html! { <pages::PostsPage /> },
         Route::ArticleDetail {
             id,
@@ -104,9 +112,9 @@ fn switch(route: Route) -> Html {
 pub fn app_router() -> Html {
     html! {
         <BrowserRouter>
-            <div class="app-shell">
+            <div class="flex flex-col bg-[var(--bg)]" style="min-height: 100vh; min-height: 100svh;">
                 <Header />
-                <div class="app-content">
+                <div class="flex-1 pt-[var(--space-sm)]">
                     <Switch<Route> render={switch} />
                 </div>
                 <Footer />

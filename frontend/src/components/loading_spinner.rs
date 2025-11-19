@@ -36,8 +36,20 @@ pub fn loading_spinner(props: &LoadingSpinnerProps) -> Html {
             aria-live="polite"
             aria-busy="true"
         >
-            <div class="loading-spinner-ring" style={spinner_style}></div>
-            <span class="sr-only">{ "加载中..." }</span>
+            <div
+                style={spinner_style}
+                class={classes!(
+                    "w-[var(--spinner-size)]",
+                    "h-[var(--spinner-size)]",
+                    "rounded-full",
+                    "border-[3px]",
+                    "border-transparent",
+                    "bg-[conic-gradient(var(--primary),transparent)]",
+                    "[mask:radial-gradient(farthest-side,transparent_calc(100%-4px),#000_calc(100%-3px))]",
+                    "animate-[spin_0.9s_linear_infinite]"
+                )}
+            />
+            <span class={classes!("sr-only")}>{ "加载中..." }</span>
         </div>
     };
 

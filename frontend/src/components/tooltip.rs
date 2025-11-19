@@ -10,17 +10,6 @@ pub enum TooltipPosition {
     Right,
 }
 
-impl TooltipPosition {
-    pub fn class(&self) -> &'static str {
-        match self {
-            TooltipPosition::Top => "tooltip-top",
-            TooltipPosition::Bottom => "tooltip-bottom",
-            TooltipPosition::Left => "tooltip-left",
-            TooltipPosition::Right => "tooltip-right",
-        }
-    }
-}
-
 #[derive(Properties, PartialEq)]
 pub struct TooltipProps {
     pub text: String,
@@ -100,16 +89,51 @@ pub fn tooltip(props: &TooltipProps) -> Html {
         })
     };
 
+    let (position_classes, visible_transforms) = match position {
+        TooltipPosition::Top => (
+            classes!("bottom-[calc(100%+8px)]", "left-1/2", "-translate-x-1/2", "translate-y-1"),
+            classes!("translate-y-0"),
+        ),
+        TooltipPosition::Bottom => (
+            classes!("top-[calc(100%+8px)]", "left-1/2", "-translate-x-1/2", "-translate-y-1"),
+            classes!("translate-y-0"),
+        ),
+        TooltipPosition::Left => (
+            classes!("right-[calc(100%+8px)]", "top-1/2", "-translate-y-1/2", "translate-x-1"),
+            classes!("translate-x-0"),
+        ),
+        TooltipPosition::Right => (
+            classes!("left-[calc(100%+8px)]", "top-1/2", "-translate-y-1/2", "-translate-x-1"),
+            classes!("translate-x-0"),
+        ),
+    };
+
     let tooltip_class = classes!(
-        "tooltip-container",
-        position.class(),
-        visible.then_some("visible"),
-        class.clone()
+        "absolute",
+        "z-[999]",
+        "px-3",
+        "py-2",
+        "text-[0.8125rem]",
+        "font-medium",
+        "leading-snug",
+        "whitespace-nowrap",
+        "bg-[var(--text)]",
+        "text-[var(--bg)]",
+        "rounded-md",
+        "pointer-events-none",
+        "opacity-0",
+        "shadow-[0_4px_12px_rgba(0,0,0,0.15)]",
+        "transition-all",
+        "duration-200",
+        "ease-in-out",
+        position_classes,
+        class.clone(),
+        if *visible { classes!("opacity-100", visible_transforms) } else { Classes::new() }
     );
 
     html! {
         <div
-            class="tooltip-wrapper"
+            class={classes!("relative", "inline-flex")}
             onmouseenter={on_mouse_enter}
             onmouseleave={on_mouse_leave}
             ontouchstart={on_touch_start}

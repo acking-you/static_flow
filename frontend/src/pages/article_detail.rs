@@ -181,7 +181,18 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 callback.forget();
             }
         }
-        || ()
+        move || {
+            // Cleanup TOC on unmount or when switching away
+            if let Some(win) = window() {
+                if let Ok(cleanup_fn) =
+                    js_sys::Reflect::get(&win, &JsValue::from_str("cleanupTOC"))
+                {
+                    if let Ok(func) = cleanup_fn.dyn_into::<js_sys::Function>() {
+                        let _ = func.call0(&win);
+                    }
+                }
+            }
+        }
     });
 
     {
@@ -241,7 +252,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     }
 
     let loading_view = html! {
-        <div class="flex min-h-[50vh] items-center justify-center">
+        <div class={classes!("flex", "min-h-[50vh]", "items-center", "justify-center")}>
             <LoadingSpinner size={SpinnerSize::Large} />
         </div>
     };
@@ -258,7 +269,19 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         let content = Html::from_html_unchecked(AttrValue::from(render_html));
 
         html! {
-            <article class="article-detail">
+            <article class={classes!(
+                "bg-[var(--surface)]",
+                "border",
+                "border-[var(--border)]",
+                "rounded-[var(--radius)]",
+                "shadow-[var(--shadow)]",
+                "p-10",
+                "my-10",
+                "mx-auto",
+                "max-w-[820px]",
+                "sm:p-5",
+                "sm:my-6"
+            )}>
                 {
                     if let Some(image) = article.featured_image.clone() {
                         let image_src = image_url(&image);
@@ -270,9 +293,28 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             })
                         };
                         html! {
-                            <div class="article-featured relative group">
+                            <div class={classes!(
+                                "-mx-10",
+                                "-mt-10",
+                                "mb-8",
+                                "rounded-t-[calc(var(--radius)-2px)]",
+                                "overflow-hidden",
+                                "max-h-[420px]",
+                                "bg-[var(--surface-alt)]",
+                                "relative",
+                                "group",
+                                "sm:-mx-5",
+                                "sm:-mt-5",
+                                "sm:mb-5"
+                            )}>
                                 <img
-                                    class="cursor-zoom-in"
+                                    class={classes!(
+                                        "w-full",
+                                        "h-full",
+                                        "object-cover",
+                                        "block",
+                                        "cursor-zoom-in"
+                                    )}
                                     src={image_src.clone()}
                                     alt={article.title.clone()}
                                     loading="lazy"
@@ -280,7 +322,23 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                 />
                                 <button
                                     type="button"
-                                    class="hidden md:inline-flex absolute bottom-4 right-4 rounded-full bg-black/70 px-4 py-2 text-sm text-white backdrop-blur hover:bg-black/80 dark:bg-white/20 dark:text-white"
+                                    class={classes!(
+                                        "hidden",
+                                        "md:inline-flex",
+                                        "absolute",
+                                        "bottom-4",
+                                        "right-4",
+                                        "rounded-full",
+                                        "bg-black/70",
+                                        "px-4",
+                                        "py-2",
+                                        "text-sm",
+                                        "text-white",
+                                        "backdrop-blur",
+                                        "hover:bg-black/80",
+                                        "dark:bg-white/20",
+                                        "dark:text-white"
+                                    )}
                                     onclick={open_featured_preview}
                                 >
                                     { "查看原图" }
@@ -292,56 +350,138 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     }
                 }
 
-                <header class="article-header fade-in">
+                <header class={classes!(
+                    "flex",
+                    "flex-col",
+                    "gap-3",
+                    "mb-5",
+                    "fade-in"
+                )}>
                     <Link<Route>
                         to={Route::CategoryDetail { category: article.category.clone() }}
-                        classes={classes!("article-category")}
+                        classes={classes!(
+                            "m-0",
+                            "inline-flex",
+                            "items-center",
+                            "gap-[0.35rem]",
+                            "uppercase",
+                            "text-[0.85rem]",
+                            "tracking-[0.2em]",
+                            "text-[var(--primary)]",
+                            "no-underline",
+                            "cursor-pointer",
+                            "transition-[var(--transition-base)]",
+                            "hover:text-[var(--link)]"
+                        )}
                     >
                         { article.category.clone() }
                     </Link<Route>>
-                    <h1 class="article-title">
+                    <h1 class={classes!(
+                        "m-0",
+                        "text-[2.25rem]",
+                        "leading-[1.25]",
+                        "sm:text-[1.65rem]"
+                    )}>
                         { article.title.clone() }
                     </h1>
-                    <div class="article-meta" aria-label="文章元信息">
-                        <span class="article-meta-item">
-                            <i class="fas fa-user-circle" aria-hidden="true"></i>
+                    <div class={classes!(
+                        "flex",
+                        "flex-wrap",
+                        "gap-3",
+                        "text-[0.9rem]",
+                        "text-[var(--muted)]"
+                    )} aria-label="文章元信息">
+                        <span class={classes!(
+                            "inline-flex",
+                            "items-center",
+                            "gap-[0.35rem]"
+                        )}>
+                            <i class={classes!("fas", "fa-user-circle")} aria-hidden="true"></i>
                             { article.author.clone() }
                         </span>
-                        <span class="article-meta-item">
-                            <i class="far fa-calendar-alt" aria-hidden="true"></i>
+                        <span class={classes!(
+                            "inline-flex",
+                            "items-center",
+                            "gap-[0.35rem]"
+                        )}>
+                            <i class={classes!("far", "fa-calendar-alt")} aria-hidden="true"></i>
                             { article.date.clone() }
                         </span>
                         <Link<Route>
                             to={Route::CategoryDetail { category: article.category.clone() }}
-                            classes={classes!("article-meta-item")}
+                            classes={classes!(
+                                "inline-flex",
+                                "items-center",
+                                "gap-[0.35rem]"
+                            )}
                         >
-                            <i class="far fa-folder-open" aria-hidden="true"></i>
+                            <i class={classes!("far", "fa-folder-open")} aria-hidden="true"></i>
                             { article.category.clone() }
                         </Link<Route>>
-                        <span class="article-meta-item">
-                            <i class="far fa-file-alt" aria-hidden="true"></i>
+                        <span class={classes!(
+                            "inline-flex",
+                            "items-center",
+                            "gap-[0.35rem]"
+                        )}>
+                            <i class={classes!("far", "fa-file-alt")} aria-hidden="true"></i>
                             { format!("{} 字", word_count) }
                         </span>
-                        <span class="article-meta-item">
-                            <i class="far fa-clock" aria-hidden="true"></i>
+                        <span class={classes!(
+                            "inline-flex",
+                            "items-center",
+                            "gap-[0.35rem]"
+                        )}>
+                            <i class={classes!("far", "fa-clock")} aria-hidden="true"></i>
                             { format!("约 {} 分钟", article.read_time) }
                         </span>
                     </div>
                 </header>
 
-                <section class="article-content" aria-label="文章正文">
+                <section class={classes!("article-content")} aria-label="文章正文">
                     { content }
                 </section>
 
-                <footer class="article-footer">
-                    <h2 class="article-footer-title">{ "标签" }</h2>
-                    <ul class="article-tags">
+                <footer class={classes!(
+                    "mt-10",
+                    "border-t",
+                    "border-[var(--border)]",
+                    "pt-6"
+                )}>
+                    <h2 class={classes!(
+                        "m-0",
+                        "mb-4",
+                        "text-[1rem]",
+                        "text-[var(--muted)]",
+                        "tracking-[0.15em]",
+                        "uppercase"
+                    )}>{ "标签" }</h2>
+                    <ul class={classes!(
+                        "list-none",
+                        "flex",
+                        "flex-wrap",
+                        "gap-3",
+                        "m-0",
+                        "p-0"
+                    )}>
                         { for article.tags.iter().cloned().map(|tag| {
                             html! {
                                 <li>
                                     <Link<Route>
                                         to={Route::TagDetail { tag: tag.clone() }}
-                                        classes={classes!("article-tag-pill")}
+                                        classes={classes!(
+                                            "py-[0.4rem]",
+                                            "px-[1.1rem]",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "rounded-[6px]",
+                                            "text-[0.9rem]",
+                                            "text-[var(--muted)]",
+                                            "bg-[var(--surface)]",
+                                            "transition-[background-color_0.2s_var(--ease-spring),color_0.2s_var(--ease-spring),border-color_0.2s_var(--ease-spring)]",
+                                            "hover:bg-[var(--primary)]",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:text-white"
+                                        )}
                                     >
                                         { format!("#{}", tag) }
                                     </Link<Route>>
@@ -354,21 +494,65 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         }
     } else {
         html! {
-            <section class="article-detail not-found">
-                <div class="article-header fade-in">
-                    <p class="article-category">{ "404" }</p>
-                    <h1 class="article-title">{ "文章未找到" }</h1>
-                    <p class="article-empty">{ "抱歉，没有找到对应的文章，请返回列表重试。" }</p>
+            <section class={classes!(
+                "bg-[var(--surface)]",
+                "border",
+                "border-[var(--border)]",
+                "rounded-[var(--radius)]",
+                "shadow-[var(--shadow)]",
+                "p-10",
+                "my-10",
+                "mx-auto",
+                "max-w-[820px]",
+                "flex",
+                "flex-col",
+                "gap-[0.9rem]",
+                "sm:p-5",
+                "sm:my-6"
+            )}>
+                <div class={classes!(
+                    "flex",
+                    "flex-col",
+                    "gap-3",
+                    "fade-in"
+                )}>
+                    <p class={classes!(
+                        "m-0",
+                        "inline-flex",
+                        "items-center",
+                        "gap-[0.35rem]",
+                        "uppercase",
+                        "text-[0.85rem]",
+                        "tracking-[0.2em]",
+                        "text-[var(--primary)]"
+                    )}>{ "404" }</p>
+                    <h1 class={classes!(
+                        "m-0",
+                        "text-[2.25rem]",
+                        "leading-[1.25]",
+                        "sm:text-[1.65rem]"
+                    )}>{ "文章未找到" }</h1>
+                    <p class={classes!(
+                        "m-0",
+                        "text-[var(--muted)]"
+                    )}>{ "抱歉，没有找到对应的文章，请返回列表重试。" }</p>
                 </div>
             </section>
         }
     };
 
     html! {
-        <main class="main">
+        <main class={classes!("main", "mt-[var(--space-lg)]")}>
             // Fixed back button - hide when lightbox is open
             if !*is_lightbox_open {
-                <div class="article-back-button">
+                <div class={classes!(
+                    "fixed",
+                    "left-8",
+                    "top-[calc(var(--header-height-desktop)+2rem)]",
+                    "z-50",
+                    "max-sm:left-6",
+                    "max-sm:top-[calc(var(--header-height-mobile)+1.5rem)]"
+                )}>
                     <TooltipIconButton
                         icon={IconName::ArrowLeft}
                         tooltip="返回"
@@ -379,27 +563,53 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 </div>
             }
 
-            <div class="container">
+            <div class={classes!("container")}>
                 { body }
             </div>
             {
                 if *is_lightbox_open {
                     html! {
                         <div
-                            class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 text-white backdrop-blur-sm transition dark:bg-black/80"
+                            class={classes!(
+                                "fixed",
+                                "inset-0",
+                                "z-[100]",
+                                "flex",
+                                "items-center",
+                                "justify-center",
+                                "bg-black/80",
+                                "p-4",
+                                "text-white",
+                                "backdrop-blur-sm",
+                                "transition",
+                                "dark:bg-black/80"
+                            )}
                             role="dialog"
                             aria-modal="true"
                             onclick={close_lightbox_click.clone()}
                         >
                             <button
                                 type="button"
-                                class="absolute right-4 top-4 z-[101] rounded-full bg-black/70 px-3 py-1 text-lg leading-none text-white hover:bg-black"
+                                class={classes!(
+                                    "absolute",
+                                    "right-4",
+                                    "top-4",
+                                    "z-[101]",
+                                    "rounded-full",
+                                    "bg-black/70",
+                                    "px-3",
+                                    "py-1",
+                                    "text-lg",
+                                    "leading-none",
+                                    "text-white",
+                                    "hover:bg-black"
+                                )}
                                 aria-label="关闭图片"
                                 onclick={close_lightbox_click.clone()}
                             >
                                 { "X" }
                             </button>
-                            <div class="max-h-full max-w-full cursor-pointer" onclick={close_lightbox_click.clone()}>
+                            <div class={classes!("max-h-full", "max-w-full", "cursor-pointer")} onclick={close_lightbox_click.clone()}>
                                 {
                                     if let Some(src) = (*preview_image_url).clone() {
                                         let alt_text = article_data
@@ -410,7 +620,12 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                             <img
                                                 src={src}
                                                 alt={alt_text}
-                                                class="max-h-[90vh] max-w-[90vw] object-contain cursor-pointer"
+                                                class={classes!(
+                                                    "max-h-[90vh]",
+                                                    "max-w-[90vw]",
+                                                    "object-contain",
+                                                    "cursor-pointer"
+                                                )}
                                                 loading="lazy"
                                             />
                                         }

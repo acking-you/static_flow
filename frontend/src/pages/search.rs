@@ -60,18 +60,24 @@ pub fn search_page() -> Html {
     }
 
     html! {
-        <main class="main search-page">
-            <div class="container">
-                <section class="page-section">
-                    <p class="page-kicker">{ "搜索" }</p>
-                    <h1 class="page-title">
+        <main class={classes!(
+            "main",
+            "min-h-[60vh]",
+            "mt-[var(--space-lg)]",
+            "pt-10",
+            "pb-16"
+        )}>
+            <div class={classes!("container")}>
+                <section class={classes!("page-section", "flex", "flex-col", "items-center", "text-center") }>
+                    <p class={classes!("page-kicker")}>{ "搜索" }</p>
+                    <h1 class={classes!("page-title", "text-center")}>
                         if keyword.is_empty() {
                             { "搜索文章" }
                         } else {
                             { format!("搜索：{}", keyword) }
                         }
                     </h1>
-                    <p class="page-description">
+                    <p class={classes!("page-description", "text-center", "max-w-2xl") }>
                         if keyword.is_empty() {
                             { "请在上方搜索框输入关键词" }
                         } else if *loading {
@@ -84,10 +90,18 @@ pub fn search_page() -> Html {
                     </p>
                 </section>
 
-                <div class="search-results">
+                <div class={classes!("flex", "flex-col", "gap-6", "mt-8")}>
                     if *loading {
-                        <div class="loading-spinner">
-                            <i class="fas fa-spinner fa-spin"></i>
+                        <div class={classes!(
+                            "flex",
+                            "items-center",
+                            "justify-center",
+                            "gap-3",
+                            "py-12",
+                            "text-[var(--muted)]",
+                            "text-lg"
+                        )}>
+                            <i class={classes!("fas", "fa-spinner", "fa-spin", "text-2xl", "text-[var(--link)]")}></i>
                             { " 搜索中..." }
                         </div>
                     } else if !results.is_empty() {
@@ -96,7 +110,7 @@ pub fn search_page() -> Html {
                             {
                                 if total_pages > 1 {
                                     html! {
-                                        <div class="mt-8 flex justify-center">
+                        <div class={classes!("mt-8", "flex", "justify-center")}>
                                             <Pagination
                                                 current_page={current_page}
                                                 total_pages={total_pages}
@@ -110,9 +124,13 @@ pub fn search_page() -> Html {
                             }
                         </>
                     } else if !keyword.is_empty() {
-                        <div class="empty-hint">
-                            <p>{ "没有找到匹配的结果" }</p>
-                            <p class="empty-hint-sub">{ "试试其他关键词？" }</p>
+                        <div class={classes!(
+                            "text-center",
+                            "py-16",
+                            "text-[var(--muted)]"
+                        )}>
+                            <p class={classes!("text-xl", "mb-2")}>{ "没有找到匹配的结果" }</p>
+                            <p class={classes!("text-base", "opacity-70")}>{ "试试其他关键词？" }</p>
                         </div>
                     }
                 </div>
@@ -127,26 +145,84 @@ fn render_search_result(result: &SearchResult) -> Html {
     let highlight_html = Html::from_html_unchecked(AttrValue::from(result.highlight.clone()));
 
     html! {
-        <article class="search-result-item">
-            <Link<Route> to={Route::ArticleDetail { id: result.id.clone() }} classes={classes!("search-result-link")}>
-                <h2 class="search-result-title">{ &result.title }</h2>
-                <div class="search-result-meta">
-                    <span class="search-result-category">{ &result.category }</span>
-                    <span class="search-result-date">
-                        <i class="far fa-calendar"></i>
+        <article class={classes!(
+            "bg-[var(--surface)]",
+            "border",
+            "border-[var(--border)]",
+            "rounded-[var(--radius)]",
+            "p-6",
+            "transition-all",
+            "duration-300",
+            "shadow-[0_1px_3px_rgba(0,0,0,0.05)]",
+            "hover:border-[var(--link)]",
+            "hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)]",
+            "hover:-translate-y-0.5"
+        )}>
+            <Link<Route> to={Route::ArticleDetail { id: result.id.clone() }} classes={classes!("block", "text-inherit", "no-underline")}>
+                <h2 class={classes!(
+                    "text-2xl",
+                    "font-bold",
+                    "text-[var(--text)]",
+                    "mb-3",
+                    "leading-snug",
+                    "transition-colors",
+                    "duration-200",
+                    "hover:text-[var(--link)]"
+                )}>{ &result.title }</h2>
+                <div class={classes!(
+                    "flex",
+                    "items-center",
+                    "gap-4",
+                    "text-sm",
+                    "text-[var(--text-muted)]",
+                    "mb-4"
+                )}>
+                    <span class={classes!(
+                        "px-3",
+                        "py-1",
+                        "bg-[rgba(29,158,216,0.1)]",
+                        "text-[var(--link)]",
+                        "rounded-full",
+                        "font-semibold",
+                        "text-xs"
+                    )}>{ &result.category }</span>
+                    <span class={classes!("flex", "items-center", "gap-1.5")}>
+                        <i class={classes!("far", "fa-calendar")}></i>
                         { " " }
                         { &result.date }
                     </span>
                 </div>
-                <div class="search-result-highlight">
+                <div class={classes!(
+                    "text-base",
+                    "leading-relaxed",
+                    "text-[var(--text)]",
+                    "mb-4",
+                    "[&_mark]:bg-[rgba(255,235,59,0.4)]",
+                    "[&_mark]:text-inherit",
+                    "[&_mark]:px-1",
+                    "[&_mark]:py-0.5",
+                    "[&_mark]:rounded",
+                    "[&_mark]:font-semibold"
+                )}>
                     { highlight_html }
                 </div>
                 { if !result.tags.is_empty() {
                     html! {
-                        <div class="search-result-tags">
+                        <div class={classes!("flex", "flex-wrap", "gap-2")}>
                             { for result.tags.iter().map(|tag| {
                                 html! {
-                                    <span class="tag-badge">{ format!("#{}", tag) }</span>
+                                    <span class={classes!(
+                                        "text-xs",
+                                        "px-2.5",
+                                        "py-1",
+                                        "bg-[rgba(0,0,0,0.05)]",
+                                        "text-[var(--text-muted)]",
+                                        "rounded-full",
+                                        "transition-all",
+                                        "duration-200",
+                                        "hover:bg-[rgba(29,158,216,0.1)]",
+                                        "hover:text-[var(--link)]"
+                                    )}>{ format!("#{}", tag) }</span>
                                 }
                             }) }
                         </div>

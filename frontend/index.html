@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>StaticFlow</title>
 
-    <link rel="stylesheet" href="static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
     <!-- KaTeX for math rendering -->
@@ -25,14 +25,14 @@
       });
     </script>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="32x32" href="static/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="static/favicon-16x16.png" />
-    <link rel="icon" href="static/favicon.ico" />
-    <link rel="manifest" href="static/site.webmanifest" />
-    <link rel="mask-icon" href="static/safari-pinned-tab.svg" color="#2d96bd" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
+    <link rel="icon" href="/static/favicon.ico" />
+    <link rel="manifest" href="/static/site.webmanifest" />
+    <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2d96bd" />
     <meta name="msapplication-TileColor" content="#161209" />
-    <meta name="msapplication-TileImage" content="static/mstile-150x150.png" />
+    <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
 
     <!-- Trunk will compile Rust to WASM -->
     <!-- Disable built-in wasm-opt, we'll optimize manually in post_build hook -->
@@ -188,6 +188,21 @@
           wrapper.appendChild(copyBtn);
         });
       }
+
+      // Ensure TOC is removed when leaving article pages (for SPA navigation)
+      document.addEventListener('DOMContentLoaded', () => {
+        const removeOnNav = () => {
+          // Delay check so routing state updates first
+          setTimeout(() => {
+            const stillOnArticle = document.querySelector('.article-content');
+            if (!stillOnArticle) {
+              window.cleanupTOC?.();
+            }
+          }, 40);
+        };
+        window.addEventListener('popstate', removeOnNav);
+        window.addEventListener('hashchange', removeOnNav);
+      });
 
       // Add copy buttons to mermaid diagrams
       function addCopyButtonsToMermaid() {
@@ -422,6 +437,12 @@
 
       // Generate table of contents from article headings
       function generateTOC() {
+        // Remove existing TOC (avoid duplicates on re-render)
+        const existing = document.querySelector('.article-toc');
+        if (existing && existing.parentNode) {
+          existing.parentNode.removeChild(existing);
+        }
+
         // Check if we're on an article detail page
         const articleContent = document.querySelector('.article-content');
         if (!articleContent) return;
@@ -440,12 +461,17 @@
         // Create TOC container
         const tocContainer = document.createElement('aside');
         tocContainer.className = 'article-toc';
+        tocContainer.dataset.side = 'right';
+        tocContainer.setAttribute('role', 'complementary');
+        tocContainer.setAttribute('aria-label', '目录');
 
         // Create TOC header with close button for mobile
         const tocHeader = document.createElement('div');
         tocHeader.className = 'article-toc-header';
         tocHeader.innerHTML = `
-          <h3 class="article-toc-title">目录</h3>
+          <div class="article-toc-heading">
+            <h3 class="article-toc-title">目录</h3>
+          </div>
           <button class="toc-close-btn" type="button" aria-label="关闭目录">
             <i class="fas fa-times"></i>
           </button>
@@ -489,11 +515,15 @@
         tocContainer.appendChild(tocHeader);
         tocContainer.appendChild(tocList);
 
-        // Insert TOC before article
+        // Insert TOC into document (floating, so body is fine)
         const article = document.querySelector('.article-detail');
-        if (article && article.parentNode) {
-          article.parentNode.insertBefore(tocContainer, article);
+        const mountPoint = (article && article.parentNode) ? article.parentNode : document.body;
+        if (mountPoint) {
+          mountPoint.insertBefore(tocContainer, article || mountPoint.firstChild);
         }
+
+        // Enable floating drag & snap (desktop only)
+        setupFloatingTOC(tocContainer);
 
         // Close button handler
         const closeBtn = tocContainer.querySelector('.toc-close-btn');
@@ -542,6 +572,122 @@
         }
       }
 
+      // Floating TOC drag with long-press handle and side snapping
+      function setupFloatingTOC(tocContainer) {
+        const header = tocContainer.querySelector('.article-toc-header');
+        if (!header) return;
+
+        const isMobileView = () => window.innerWidth <= 1280;
+        const LONG_PRESS_DURATION = 280;
+        const SIDE_GAP = 24;
+        let longPressTimer = null;
+        let dragging = false;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        const clearTimer = () => {
+          if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+        };
+
+        const snapToClosestSide = () => {
+          const rect = tocContainer.getBoundingClientRect();
+          const distanceLeft = rect.left;
+          const distanceRight = window.innerWidth - rect.right;
+          const top = Math.min(window.innerHeight - rect.height - SIDE_GAP, Math.max(SIDE_GAP, rect.top));
+
+          tocContainer.style.top = `${top}px`;
+
+          if (distanceLeft <= distanceRight) {
+            tocContainer.dataset.side = 'left';
+            tocContainer.style.left = `${SIDE_GAP}px`;
+            tocContainer.style.right = 'auto';
+          } else {
+            tocContainer.dataset.side = 'right';
+            tocContainer.style.right = `${SIDE_GAP}px`;
+            tocContainer.style.left = 'auto';
+          }
+
+          tocContainer.classList.remove('dragging');
+          dragging = false;
+        };
+
+        const startDragAfterLongPress = (startX, startY) => {
+          const rect = tocContainer.getBoundingClientRect();
+          offsetX = startX - rect.left;
+          offsetY = startY - rect.top;
+          dragging = true;
+          tocContainer.classList.add('dragging');
+        };
+
+        const handleMove = (clientX, clientY) => {
+          if (!dragging) return;
+          const rect = tocContainer.getBoundingClientRect();
+          const maxLeft = window.innerWidth - rect.width - SIDE_GAP;
+          const maxTop = window.innerHeight - rect.height - SIDE_GAP;
+
+          const nextLeft = Math.min(maxLeft, Math.max(SIDE_GAP, clientX - offsetX));
+          const nextTop = Math.min(maxTop, Math.max(SIDE_GAP, clientY - offsetY));
+
+          tocContainer.style.left = `${nextLeft}px`;
+          tocContainer.style.right = 'auto';
+          tocContainer.style.top = `${nextTop}px`;
+        };
+
+        const stopDragging = () => {
+          clearTimer();
+          if (dragging) {
+            snapToClosestSide();
+          }
+          dragging = false;
+        };
+
+        const attachPointerHandlers = (getPointFromEvent, events) => {
+          const onStart = (event) => {
+            if (isMobileView()) return;
+            if (event.target.closest('.toc-close-btn')) return;
+            const point = getPointFromEvent(event);
+            if (!point) return;
+
+            clearTimer();
+            longPressTimer = setTimeout(() => {
+              startDragAfterLongPress(point.x, point.y);
+            }, LONG_PRESS_DURATION);
+
+            const moveHandler = (moveEvent) => {
+              const movePoint = getPointFromEvent(moveEvent);
+              if (!movePoint) return;
+              if (dragging) {
+                moveEvent.preventDefault?.();
+              }
+              handleMove(movePoint.x, movePoint.y);
+            };
+
+            const endHandler = () => {
+              stopDragging();
+              window.removeEventListener(events.move, moveHandler);
+              events.end.forEach((endEvent) => window.removeEventListener(endEvent, endHandler));
+            };
+
+            window.addEventListener(events.move, moveHandler, { passive: false });
+            events.end.forEach((endEvent) => window.addEventListener(endEvent, endHandler));
+          };
+
+          header.addEventListener(events.start, onStart, { passive: true });
+        };
+
+        const getMousePoint = (event) => ({ x: event.clientX, y: event.clientY });
+        const getTouchPoint = (event) => {
+          const touch = event.touches?.[0] || event.changedTouches?.[0];
+          return touch ? { x: touch.clientX, y: touch.clientY } : null;
+        };
+
+        attachPointerHandlers(getMousePoint, { start: 'mousedown', move: 'mousemove', end: ['mouseup', 'mouseleave'] });
+        attachPointerHandlers(getTouchPoint, { start: 'touchstart', move: 'touchmove', end: ['touchend', 'touchcancel'] });
+      }
+
       // Back to top button is now managed by Yew ScrollToTopButton component
 
       // Debug helper - expose to window for testing
@@ -561,6 +707,17 @@
           console.log('Has wrapper:', firstMermaid.parentElement?.classList.contains('mermaid-wrapper'));
         }
         console.log('============================');
+      };
+
+      // Expose TOC generator for components that may need to trigger it (e.g., mobile toggle)
+      window.generateTOC = generateTOC;
+
+      // Cleanup helper: remove existing TOC
+      window.cleanupTOC = function() {
+        const toc = document.querySelector('.article-toc');
+        if (toc && toc.parentNode) {
+          toc.parentNode.removeChild(toc);
+        }
       };
     </script>
   </body>
