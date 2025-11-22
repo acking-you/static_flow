@@ -30,7 +30,10 @@ async fn main() -> Result<()> {
     let app = routes::create_router(app_state);
 
     // Start server
-    let addr = format!("0.0.0.0:{}", port);
+    // Development: 0.0.0.0 for direct access
+    // Production with rathole: can use either 0.0.0.0 or 127.0.0.1
+    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let addr = format!("{}:{}", bind_addr, port);
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -93,22 +93,22 @@ pub fn tooltip(props: &TooltipProps) -> Html {
         TooltipPosition::Top => (
             classes!("bottom-[calc(100%+8px)]", "left-1/2", "-translate-x-1/2", "translate-y-1"),
             classes!("translate-y-0"),
-            classes!("top-full", "left-1/2", "-translate-x-1/2", "mt-1")
+            classes!("top-full", "left-1/2", "-translate-x-1/2", "mt-1"),
         ),
         TooltipPosition::Bottom => (
             classes!("top-[calc(100%+8px)]", "left-1/2", "-translate-x-1/2", "-translate-y-1"),
             classes!("translate-y-0"),
-            classes!("bottom-full", "left-1/2", "-translate-x-1/2", "-mb-1")
+            classes!("bottom-full", "left-1/2", "-translate-x-1/2", "-mb-1"),
         ),
         TooltipPosition::Left => (
             classes!("right-[calc(100%+8px)]", "top-1/2", "-translate-y-1/2", "translate-x-1"),
             classes!("translate-x-0"),
-            classes!("right-0", "top-1/2", "-translate-y-1/2", "translate-x-1/2")
+            classes!("right-0", "top-1/2", "-translate-y-1/2", "translate-x-1/2"),
         ),
         TooltipPosition::Right => (
             classes!("left-[calc(100%+8px)]", "top-1/2", "-translate-y-1/2", "-translate-x-1"),
             classes!("translate-x-0"),
-            classes!("left-0", "top-1/2", "-translate-y-1/2", "-translate-x-1/2")
+            classes!("left-0", "top-1/2", "-translate-y-1/2", "-translate-x-1/2"),
         ),
     };
 
@@ -129,7 +129,8 @@ pub fn tooltip(props: &TooltipProps) -> Html {
         "rounded",
         "pointer-events-none",
         "opacity-0",
-        "shadow-[var(--shadow-8),0_0_10px_rgba(var(--primary-rgb),0.1),inset_0_1px_1px_rgba(255,255,255,0.2)]",
+        "shadow-[var(--shadow-8),0_0_10px_rgba(var(--primary-rgb),0.1),inset_0_1px_1px_rgba(255,\
+         255,255,0.2)]",
         "[backdrop-filter:blur(50px)_saturate(var(--acrylic-saturate))]",
         "[-webkit-backdrop-filter:blur(50px)_saturate(var(--acrylic-saturate))]",
         "transition-all",

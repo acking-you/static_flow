@@ -1,14 +1,36 @@
-use axum::{routing::get, Router};
+use axum::{
+    http::{HeaderValue, Method},
+    routing::get,
+    Router,
+};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{handlers, state::AppState};
 
 pub fn create_router(state: AppState) -> Router {
-    // Configure CORS
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // Configure CORS based on environment
+    // Development: Allow all origins for local testing
+    // Production: Restrict to GitHub Pages origin only
+    let cors = match std::env::var("RUST_ENV").as_deref() {
+        Ok("production") => {
+            // Production: strict CORS
+            CorsLayer::new()
+                .allow_origin(
+                    "https://acking-you.github.io"
+                        .parse::<HeaderValue>()
+                        .unwrap(),
+                )
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers(Any)
+        },
+        _ => {
+            // Development: permissive CORS
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any)
+        },
+    };
 
     // Define routes
     Router::new()

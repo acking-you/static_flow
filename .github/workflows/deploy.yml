@@ -1,9 +1,10 @@
-name: Deploy StaticFlow Frontend (Mock)
+name: Deploy StaticFlow Frontend (Production)
 
 on:
   push:
     branches:
       - master
+  workflow_dispatch:  # 允许手动触发
 
 permissions:
   contents: write
@@ -50,42 +51,18 @@ jobs:
           chmod +x ~/.cache/trunk/wasm-opt-version_116/bin/wasm-opt
           ~/.cache/trunk/wasm-opt-version_116/bin/wasm-opt --version
 
-      - name: Build frontend with mock data
+      - name: Build frontend (production)
         working-directory: frontend
-        run: trunk build --release --features mock
+        run: trunk build --release
         env:
+          STATICFLOW_API_BASE: ${{ vars.STATICFLOW_API_BASE }}
           TRUNK_SKIP_VERSION_CHECK: "true"
 
-      - name: Fix resource paths for GitHub Pages subpath
-        working-directory: frontend/dist
-        run: |
-          echo "=== Before replacement ==="
-          grep -E "(static-flow-frontend-|styles-|from |module_or_path:)" index.html || true
-
-          echo ""
-          echo "=== Applying replacements ==="
-          # Fix JS and WASM paths - match both single and double quotes
-          sed -i \
-            -e "s|from '/static-flow-frontend-|from '/static_flow/static-flow-frontend-|g" \
-            -e 's|from "/static-flow-frontend-|from "/static_flow/static-flow-frontend-|g' \
-            -e "s|module_or_path: '/static-flow-frontend-|module_or_path: '/static_flow/static-flow-frontend-|g" \
-            -e 's|module_or_path: "/static-flow-frontend-|module_or_path: "/static_flow/static-flow-frontend-|g' \
-            -e 's|href="/static-flow-frontend-|href="/static_flow/static-flow-frontend-|g' \
-            -e 's|src="/static-flow-frontend-|src="/static_flow/static-flow-frontend-|g' \
-            -e 's|href="/styles-|href="/static_flow/styles-|g' \
-            index.html
-
-          echo ""
-          echo "=== After replacement ==="
-          grep -E "(static-flow-frontend-|styles-|from |module_or_path:)" index.html || true
-
-          echo ""
-          echo "✓ Fixed resource paths in index.html"
-
-      - name: Deploy to GitHub Pages
+      - name: Deploy to User Pages (acking-you.github.io)
         uses: peaceiris/actions-gh-pages@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          personal_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          external_repository: acking-you/acking-you.github.io
           publish_dir: frontend/dist
-          publish_branch: gh-pages
+          publish_branch: master
           force_orphan: true

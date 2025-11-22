@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Current Status:** Frontend UI completed. Currently developing AI Agent (Phase 1).
 
+**📘 For production deployment guide, see [DEPLOYMENT.md](./DEPLOYMENT.md)**
+
 ## Architecture
 
 ### Multi-Crate Workspace Structure

@@ -48,7 +48,9 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
         "border-[var(--border)]",
         "bg-transparent",
         "hover:bg-[var(--surface-alt)]",
-        "transition-all", "duration-100", "ease-[var(--ease-snap)]",
+        "transition-all",
+        "duration-100",
+        "ease-[var(--ease-snap)]",
         class.clone()
     );
 

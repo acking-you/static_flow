@@ -52,7 +52,7 @@ pub fn pagination(props: &PaginationProps) -> Html {
         "h-10",
         "rounded-full",
         "border-[1.5px]",
-        "border-[#a1a1aa]", // 明亮模式深边框（zinc-400）
+        "border-[#a1a1aa]",            // 明亮模式深边框（zinc-400）
         "dark:border-[var(--border)]", // 暗黑模式使用 CSS 变量
         "bg-[var(--surface)]",
         "text-sm",
@@ -78,10 +78,7 @@ pub fn pagination(props: &PaginationProps) -> Html {
         "text-[var(--text)]" // 使用 CSS 变量，自动适配 data-theme
     );
 
-    let next_classes = classes!(
-        base_btn_classes.clone(),
-        "text-[var(--text)]"
-    );
+    let next_classes = classes!(base_btn_classes.clone(), "text-[var(--text)]");
 
     html! {
         <nav class="flex flex-wrap items-center gap-2" aria-label="分页">

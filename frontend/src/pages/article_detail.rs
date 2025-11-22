@@ -184,8 +184,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         move || {
             // Cleanup TOC on unmount or when switching away
             if let Some(win) = window() {
-                if let Ok(cleanup_fn) =
-                    js_sys::Reflect::get(&win, &JsValue::from_str("cleanupTOC"))
+                if let Ok(cleanup_fn) = js_sys::Reflect::get(&win, &JsValue::from_str("cleanupTOC"))
                 {
                     if let Ok(func) = cleanup_fn.dyn_into::<js_sys::Function>() {
                         let _ = func.call0(&win);

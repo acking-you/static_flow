@@ -27,12 +27,7 @@ pub fn home_page() -> Html {
     }
 
     let stats = vec![
-        (
-            IconName::FileText,
-            total_articles.to_string(),
-            "文章".to_string(),
-            Some(Route::Posts),
-        ),
+        (IconName::FileText, total_articles.to_string(), "文章".to_string(), Some(Route::Posts)),
         (IconName::Hash, "12".to_string(), "标签".to_string(), Some(Route::Tags)),
         (IconName::Folder, "5".to_string(), "分类".to_string(), Some(Route::Categories)),
     ];

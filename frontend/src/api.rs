@@ -6,9 +6,13 @@ use static_flow_shared::{Article, ArticleListItem};
 #[cfg(feature = "mock")]
 use crate::models;
 
-// API base URL - 开发环境直接连接后端
+// API base URL - 编译时从环境变量读取，默认本地开发地址
+// 生产环境通过 workflow 设置 STATICFLOW_API_BASE 环境变量
 #[cfg(not(feature = "mock"))]
-const API_BASE: &str = "http://localhost:3000/api";
+const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
+    Some(url) => url,
+    None => "http://localhost:3000/api",
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TagInfo {

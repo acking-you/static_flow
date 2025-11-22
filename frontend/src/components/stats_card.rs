@@ -28,7 +28,10 @@ pub fn stats_card(props: &StatsCardProps) -> Html {
         "group",
         "relative",
         "bg-[var(--surface)]",
-        "border-t", "border-r", "border-b", "border-[var(--border)]",
+        "border-t",
+        "border-r",
+        "border-b",
+        "border-[var(--border)]",
         "border-l-[4px]",
         "border-l-[var(--primary)]",
         "rounded-lg",
@@ -58,12 +61,10 @@ pub fn stats_card(props: &StatsCardProps) -> Html {
         "text-[var(--primary)]"
     );
 
-    let value_classes = classes!("block", "text-3xl", "text-[var(--text)]", "font-bold", "leading-none");
+    let value_classes =
+        classes!("block", "text-3xl", "text-[var(--text)]", "font-bold", "leading-none");
 
-    let label_classes = classes!(
-        "text-sm",
-        "text-[var(--muted)]"
-    );
+    let label_classes = classes!("text-sm", "text-[var(--muted)]");
 
     // Ripple interaction with mouse position
     let on_card_click = {
@@ -126,8 +127,7 @@ pub fn stats_card(props: &StatsCardProps) -> Html {
                     let dx = e.client_x() as f64 - center_x;
                     let dy = e.client_y() as f64 - center_y;
                     let distance = (dx * dx + dy * dy).sqrt();
-                    let (magnetic_x, magnetic_y) = if distance < MAGNETIC_RADIUS && distance > 0.0
-                    {
+                    let (magnetic_x, magnetic_y) = if distance < MAGNETIC_RADIUS && distance > 0.0 {
                         let influence = (1.0 - distance / MAGNETIC_RADIUS).clamp(0.0, 1.0);
                         let dir_x = dx / distance;
                         let dir_y = dy / distance;
