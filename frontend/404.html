@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Redirecting...</title>
+    <script>
+        // GitHub Pages SPA Router Hack
+        // This script captures the current URL and redirects to index.html
+        // with the path encoded in the query string.
+
+        // Get the current path (everything after the domain)
+        var path = window.location.pathname;
+        var search = window.location.search;
+        var hash = window.location.hash;
+
+        // Redirect to index.html with the path encoded in sessionStorage
+        // This approach is more reliable than query string for complex URLs
+        sessionStorage.setItem('redirectPath', path + search + hash);
+
+        // Redirect to the root
+        window.location.replace('/');
+    </script>
+</head>
+<body>
+    <p>Redirecting to app...</p>
+</body>
+</html>

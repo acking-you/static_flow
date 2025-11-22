@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>StaticFlow</title>
 
+    <!-- GitHub Pages SPA Router: Restore original URL after 404 redirect -->
+    <script>
+      (function() {
+        var redirectPath = sessionStorage.getItem('redirectPath');
+        if (redirectPath) {
+          sessionStorage.removeItem('redirectPath');
+          history.replaceState(null, '', redirectPath);
+        }
+      })();
+    </script>
+
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
