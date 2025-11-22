@@ -3,7 +3,7 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{icons::IconName, stats_card::StatsCard},
+    components::{icons::IconName, image_with_loading::ImageWithLoading, stats_card::StatsCard},
     router::Route,
 };
 
@@ -125,6 +125,8 @@ pub fn home_page() -> Html {
     ];
 
     let avatar_hovered = use_state(|| false);
+    let avatar_loaded = use_state(|| false);
+
     let on_avatar_enter = {
         let avatar_hovered = avatar_hovered.clone();
         Callback::from(move |_| avatar_hovered.set(true))
@@ -132,6 +134,10 @@ pub fn home_page() -> Html {
     let on_avatar_leave = {
         let avatar_hovered = avatar_hovered.clone();
         Callback::from(move |_| avatar_hovered.set(false))
+    };
+    let on_avatar_load = {
+        let avatar_loaded = avatar_loaded.clone();
+        Callback::from(move |_: Event| avatar_loaded.set(true))
     };
 
     let avatar_container_class = classes!(
@@ -143,13 +149,14 @@ pub fn home_page() -> Html {
         "rounded-full",
         "border-[3px]",
         "border-[var(--surface)]",
-        "bg-[var(--surface)]",
         "overflow-hidden",
         "transition-[var(--transition-base)]",
         "shadow-[0_15px_35px_rgba(0,0,0,0.15)]",
         "no-underline",
         "text-inherit",
         "hero-avatar-trigger",
+        "relative",
+        if !*avatar_loaded { "bg-[var(--surface)]" } else { "bg-transparent" },
         if *avatar_hovered { "hero-avatar-trigger--hovered" } else { "" }
     );
 
@@ -160,6 +167,9 @@ pub fn home_page() -> Html {
         "rounded-[inherit]",
         "block",
         "hero-avatar",
+        "transition-opacity",
+        "duration-500",
+        if *avatar_loaded { "opacity-100" } else { "opacity-0" },
         if *avatar_hovered { "hero-avatar--spinning" } else { "" }
     );
 
@@ -208,11 +218,34 @@ pub fn home_page() -> Html {
                                     onmouseout={on_avatar_leave.clone()}
                                 >
                                     <div class={avatar_container_class.clone()}>
+                                        {
+                                            if !*avatar_loaded {
+                                                html! {
+                                                    <div class={classes!(
+                                                        "absolute",
+                                                        "inset-0",
+                                                        "rounded-full",
+                                                        "bg-gradient-to-br",
+                                                        "from-[var(--surface-alt)]",
+                                                        "to-[var(--surface)]",
+                                                        "animate-pulse"
+                                                    )} />
+                                                }
+                                            } else {
+                                                html! {}
+                                            }
+                                        }
                                         <Link<Route>
                                             to={Route::Posts}
                                             classes={classes!("inline-flex", "w-full", "h-full", "justify-center", "items-center")}
                                         >
-                                            <img src={crate::config::asset_path("static/avatar.jpg")} alt="作者头像" loading="lazy" class={avatar_image_class.clone()} />
+                                            <img
+                                                src={crate::config::asset_path("static/avatar.jpg")}
+                                                alt="作者头像"
+                                                loading="eager"
+                                                onload={on_avatar_load}
+                                                class={avatar_image_class.clone()}
+                                            />
                                             <span class={classes!("sr-only")}>{ "前往文章列表" }</span>
                                         </Link<Route>>
                                     </div>
@@ -364,11 +397,12 @@ pub fn home_page() -> Html {
                                             title={*name}
                                             aria-label={(*name).to_string()}
                                         >
-                                            <img
+                                            <ImageWithLoading
                                                 src={logo.clone()}
                                                 alt={*name}
+                                                loading={Some(AttrValue::from("lazy"))}
                                                 class="command-item-icon"
-                                                loading="lazy"
+                                                container_class={classes!("inline-flex")}
                                             />
                                             <span class="command-item-name">{ *name }</span>
                                             <span class="command-item-arrow">{ "→" }</span>

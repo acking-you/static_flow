@@ -155,6 +155,23 @@
           });
         }
 
+        // Add loading animation to images
+        document.querySelectorAll('.article-content img').forEach((img) => {
+          if (img.complete && img.naturalHeight !== 0) {
+            // Image already loaded
+            img.classList.add('loaded');
+          } else {
+            // Add load event listener
+            img.addEventListener('load', () => {
+              img.classList.add('loaded');
+            });
+            // Handle error case
+            img.addEventListener('error', () => {
+              img.classList.add('loaded');
+            });
+          }
+        });
+
         // Generate table of contents
         generateTOC();
 

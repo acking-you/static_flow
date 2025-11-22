@@ -1,7 +1,12 @@
 use yew::prelude::*;
 use yew_router::prelude::{use_navigator, Link};
 
-use crate::{models::ArticleListItem, router::Route, utils::image_url};
+use crate::{
+    components::image_with_loading::ImageWithLoading,
+    models::ArticleListItem,
+    router::Route,
+    utils::image_url,
+};
 
 #[derive(Properties, PartialEq, Clone)]
 pub struct ArticleCardProps {
@@ -77,16 +82,15 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                                 "block",
                                 "aspect-video",
                                 "overflow-hidden",
-                                "bg-[var(--surface-alt)]",
                                 "relative"
                             )}
                             onclick={handle_image_click}
                         >
-                            <img
+                            <ImageWithLoading
                                 src={image_url_val}
                                 alt={title}
-                                loading="lazy"
-                                decoding="async"
+                                loading={Some(AttrValue::from("lazy"))}
+                                decoding={Some(AttrValue::from("async"))}
                                 class={classes!(
                                     "w-full",
                                     "h-full",
@@ -96,6 +100,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                                     "ease-out",
                                     "group-hover:scale-105"
                                 )}
+                                container_class={classes!("w-full", "h-full")}
                             />
                         </a>
                     }

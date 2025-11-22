@@ -5,6 +5,7 @@ pub mod error_banner;
 pub mod footer;
 pub mod header;
 pub mod icons;
+pub mod image_with_loading;
 pub mod loading_spinner;
 pub mod pagination;
 pub mod scroll_to_top_button;

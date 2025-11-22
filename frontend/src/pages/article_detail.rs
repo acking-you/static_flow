@@ -7,6 +7,7 @@ use yew_router::prelude::{use_navigator, use_route, Link};
 use crate::{
     components::{
         icons::IconName,
+        image_with_loading::ImageWithLoading,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
         toc_button::TocButton,
@@ -299,14 +300,17 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                 "rounded-t-[calc(var(--radius)-2px)]",
                                 "overflow-hidden",
                                 "max-h-[420px]",
-                                "bg-[var(--surface-alt)]",
                                 "relative",
                                 "group",
                                 "sm:-mx-5",
                                 "sm:-mt-5",
                                 "sm:mb-5"
                             )}>
-                                <img
+                                <ImageWithLoading
+                                    src={image_src.clone()}
+                                    alt={article.title.clone()}
+                                    loading={Some(AttrValue::from("lazy"))}
+                                    onclick={Some(open_featured_preview.clone())}
                                     class={classes!(
                                         "w-full",
                                         "h-full",
@@ -314,10 +318,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                         "block",
                                         "cursor-zoom-in"
                                     )}
-                                    src={image_src.clone()}
-                                    alt={article.title.clone()}
-                                    loading="lazy"
-                                    onclick={open_featured_preview.clone()}
+                                    container_class={classes!("w-full", "h-full")}
                                 />
                                 <button
                                     type="button"

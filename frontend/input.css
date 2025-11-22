@@ -1415,7 +1415,24 @@ a:hover {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-2);
-  transition: transform 0.3s var(--ease-snap), box-shadow 0.3s var(--ease-snap), border-color 0.3s var(--ease-snap);
+  transition: transform 0.3s var(--ease-snap), box-shadow 0.3s var(--ease-snap), border-color 0.3s var(--ease-snap), opacity 0.5s ease;
+  opacity: 0;
+  background: linear-gradient(110deg, var(--surface-alt) 0%, var(--surface) 100%);
+  animation: image-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes image-pulse {
+  0%, 100% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+}
+
+.article-content img.loaded {
+  opacity: 1;
+  animation: none;
 }
 
 .article-content img:hover {
