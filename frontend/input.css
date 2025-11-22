@@ -1531,6 +1531,7 @@ a:hover {
 }
 
 .article-content pre {
+  position: relative;
   margin: 1.4em 0;
   padding: 1rem 1.15rem;
   background: var(--surface-alt);
@@ -1539,6 +1540,95 @@ a:hover {
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   line-height: 1.6;
+}
+
+/* Code block collapsible wrapper */
+.code-block-wrapper {
+  position: relative;
+  margin: 1.4em 0;
+}
+
+.code-block-wrapper pre {
+  margin: 0;
+  transition: max-height 0.3s ease-out;
+}
+
+/* Collapsed state - show only ~10 lines (approx 200px) */
+.code-block-wrapper.collapsed pre {
+  max-height: 200px;
+  overflow: hidden;
+}
+
+/* Fade gradient at bottom when collapsed */
+.code-block-wrapper.collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 40px;
+  left: 0;
+  right: 0;
+  height: 60px;
+  background: linear-gradient(to bottom, transparent, var(--surface-alt));
+  pointer-events: none;
+  border-radius: 0 0 12px 12px;
+}
+
+/* Toggle button */
+.code-toggle-btn {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  z-index: 10;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  opacity: 0;
+  backdrop-filter: blur(4px);
+}
+
+.code-block-wrapper:hover .code-toggle-btn {
+  opacity: 1;
+}
+
+.code-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+  transform: scale(1.05);
+}
+
+.code-toggle-btn:active {
+  transform: scale(0.95);
+}
+
+/* Icon in toggle button */
+.code-toggle-btn i {
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+/* Dark theme adaptation */
+[data-theme="dark"] .code-toggle-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+[data-theme="dark"] .code-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Mobile: always visible */
+@media (max-width: 768px) {
+  .code-toggle-btn {
+    opacity: 1;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
+  }
 }
 
 .article-content img {

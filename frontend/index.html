@@ -138,6 +138,9 @@
         // Add copy buttons to code blocks
         addCopyButtonsToCodeBlocks();
 
+        // Add collapsible functionality to long code blocks
+        makeCodeBlocksCollapsible();
+
         // Math formula rendering with KaTeX
         if (window.renderMathInElement) {
           renderMathInElement(document.body, {
@@ -200,6 +203,57 @@
           });
 
           wrapper.appendChild(copyBtn);
+        });
+      }
+
+      // Make long code blocks collapsible
+      function makeCodeBlocksCollapsible() {
+        const MIN_LINES_TO_COLLAPSE = 15; // 最少行数才启用折叠
+
+        document.querySelectorAll('.article-content .code-wrapper').forEach((wrapper) => {
+          // Skip if already processed
+          if (wrapper.classList.contains('code-block-wrapper')) {
+            return;
+          }
+
+          const pre = wrapper.querySelector('pre');
+          if (!pre) return;
+
+          const code = pre.querySelector('code');
+          if (!code) return;
+
+          // Count lines in code block
+          const text = code.textContent || '';
+          const lineCount = text.split('\n').length;
+
+          // Only make collapsible if it has enough lines
+          if (lineCount < MIN_LINES_TO_COLLAPSE) {
+            return;
+          }
+
+          // Add collapsible wrapper class
+          wrapper.classList.add('code-block-wrapper', 'collapsed');
+
+          // Create toggle button
+          const toggleBtn = document.createElement('button');
+          toggleBtn.className = 'code-toggle-btn';
+          toggleBtn.setAttribute('type', 'button');
+          toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> 展开代码 (' + lineCount + ' 行)';
+
+          // Toggle collapse state
+          toggleBtn.addEventListener('click', () => {
+            const isCollapsed = wrapper.classList.contains('collapsed');
+
+            if (isCollapsed) {
+              wrapper.classList.remove('collapsed');
+              toggleBtn.innerHTML = '<i class="fas fa-chevron-up"></i> 收起代码';
+            } else {
+              wrapper.classList.add('collapsed');
+              toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> 展开代码 (' + lineCount + ' 行)';
+            }
+          });
+
+          wrapper.appendChild(toggleBtn);
         });
       }
 
