@@ -43,30 +43,12 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
 
     let button_class = classes!(
         "group",
-        "inline-flex",
-        "items-center",
-        "justify-center",
-        "w-[var(--hit-size)]",
-        "h-[var(--hit-size)]",
-        "rounded-full",
+        "btn-fluent-icon",
         "border",
         "border-[var(--border)]",
-        "bg-[rgba(var(--surface-rgb),0.92)]",
-        "backdrop-blur",
-        "text-[var(--text)]",
-        "shadow-[var(--shadow-sm)]",
-        "transition-all",
-        "duration-300",
-        "ease-[var(--ease-spring)]",
-        "hover:-translate-y-0.5",
-        "hover:shadow-[var(--shadow)]",
-        "hover:bg-[var(--surface)]",
-        "focus-visible:outline-none",
-        "focus-visible:ring-2",
-        "focus-visible:ring-[var(--primary)]",
-        "focus-visible:ring-offset-2",
-        "focus-visible:ring-offset-[var(--bg)]",
-        "active:scale-95",
+        "bg-transparent",
+        "hover:bg-[var(--surface-alt)]",
+        "transition-all", "duration-100", "ease-[var(--ease-snap)]",
         class.clone()
     );
 
@@ -84,10 +66,9 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
                     "fas",
                     icon_class,
                     "fa-lg",
-                    "transition-transform",
-                    "duration-300",
-                    "group-hover:scale-110",
-                    "group-active:scale-95",
+                    "transition-all",
+                    "duration-100",
+                    "ease-[var(--ease-snap)]",
                     "text-[var(--text)]",
                     "group-hover:text-[var(--primary)]"
                 )}

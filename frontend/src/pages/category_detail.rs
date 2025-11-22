@@ -1,12 +1,14 @@
 use static_flow_shared::ArticleListItem;
 use yew::prelude::*;
+use yew_router::prelude::Link;
 
 use crate::{
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
     },
-    pages::posts::{group_articles_by_year, render_timeline},
+    pages::posts::group_articles_by_year,
+    router::Route,
 };
 
 #[derive(Properties, Clone, PartialEq)]
@@ -55,49 +57,370 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
     let total_posts = filtered.len();
     let grouped_by_year = group_articles_by_year(&filtered);
 
-    let description = if let Some(category_value) = filter_value.as_ref() {
-        if total_posts == 0 {
-            format!("分类“{}”下暂时没有文章。", category_value)
-        } else {
-            format!("该分类共收录 {} 篇文章。", total_posts)
-        }
-    } else {
-        "未提供有效分类，无法展示对应文章。".to_string()
-    };
-
     let empty_message = if let Some(category_value) = filter_value.as_ref() {
-        format!("分类“{}”下暂无文章，换个分类看看？", category_value)
+        format!("分类「{}」下暂无文章，换个分类看看？", category_value)
     } else {
         "请输入有效的分类名称。".to_string()
     };
 
     html! {
-        <main class={classes!("main", "category-detail-page", "mt-[var(--space-lg)]") }>
-            <div class={classes!("container") }>
-                <div class={classes!(
-                    "page",
-                    "archive"
+        <main class={classes!(
+            "category-detail-page",
+            "min-h-screen",
+            "pt-24",
+            "pb-20",
+            "px-4",
+            "md:px-8"
+        )}>
+            <div class={classes!(
+                "max-w-5xl",
+                "mx-auto"
+            )}>
+                // Header Section with Structured Style
+                <header class={classes!(
+                    "category-header",
+                    "mb-16",
+                    "text-center",
+                    "relative"
                 )}>
-                    <p class="page-kicker">{ "Categories" }</p>
-                    <h1 class={classes!("single-title", "text-center")}>{ format!("分类: {}", display_category) }</h1>
-                    <p class={classes!("page-description", "max-w-3xl", "text-center")}>{ description }</p>
+                    <div class={classes!(
+                        "category-badge",
+                        "inline-flex",
+                        "items-center",
+                        "gap-2",
+                        "px-4",
+                        "py-2",
+                        "mb-6",
+                        "rounded-lg",
+                        "bg-gradient-to-r",
+                        "from-[var(--primary)]/10",
+                        "to-sky-500/10",
+                        "border",
+                        "border-[var(--primary)]/30",
+                        "text-[var(--primary)]",
+                        "dark:text-sky-400",
+                        "font-medium",
+                        "text-sm",
+                        "tracking-wider",
+                        "uppercase"
+                    )}>
+                        <i class="fas fa-folder-open"></i>
+                        <span>{ "Category Collection" }</span>
+                    </div>
 
-                    {
-                        if *loading {
-                            html! {
-                                <div class="flex min-h-[40vh] items-center justify-center">
-                                    <LoadingSpinner size={SpinnerSize::Large} />
-                                </div>
-                            }
-                        } else if grouped_by_year.is_empty() {
-                            html! { <p class="timeline-empty">{ empty_message }</p> }
+                    <h1 class={classes!(
+                        "category-title",
+                        "text-5xl",
+                        "md:text-7xl",
+                        "font-bold",
+                        "mb-4",
+                        "leading-tight"
+                    )}>
+                        { &display_category }
+                    </h1>
+
+                    <p class={classes!(
+                        "category-count",
+                        "text-xl",
+                        "text-[var(--muted)]",
+                        "font-light"
+                    )}>
+                        if total_posts > 0 {
+                            { format!("{} 篇精选内容", total_posts) }
                         } else {
-                            render_timeline(&grouped_by_year)
+                            { "暂无内容" }
                         }
+                    </p>
+
+                    // Decorative corner brackets
+                    <div class={classes!(
+                        "category-brackets",
+                        "flex",
+                        "justify-center",
+                        "gap-8",
+                        "mt-8"
+                    )}>
+                        <div class={classes!(
+                            "w-12",
+                            "h-1",
+                            "bg-gradient-to-r",
+                            "from-[var(--primary)]",
+                            "to-sky-500",
+                            "rounded-full"
+                        )}></div>
+                        <div class={classes!(
+                            "w-2",
+                            "h-2",
+                            "bg-gradient-to-br",
+                            "from-[var(--primary)]",
+                            "to-sky-500",
+                            "rounded-full",
+                            "mt-[-2px]"
+                        )}></div>
+                        <div class={classes!(
+                            "w-12",
+                            "h-1",
+                            "bg-gradient-to-l",
+                            "from-[var(--primary)]",
+                            "to-sky-500",
+                            "rounded-full"
+                        )}></div>
+                    </div>
+                </header>
+
+                // Content Section
+                {
+                    if *loading {
+                        html! {
+                            <div class={classes!(
+                                "flex",
+                                "min-h-[40vh]",
+                                "items-center",
+                                "justify-center"
+                            )}>
+                                <LoadingSpinner size={SpinnerSize::Large} />
+                            </div>
+                        }
+                    } else if grouped_by_year.is_empty() {
+                        html! {
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-16",
+                                "px-8",
+                                "rounded-2xl",
+                                "bg-[var(--surface)]/50",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!(
+                                    "fas",
+                                    "fa-inbox",
+                                    "text-5xl",
+                                    "text-[var(--muted)]",
+                                    "mb-4"
+                                )}></i>
+                                <p class={classes!(
+                                    "text-lg",
+                                    "text-[var(--muted)]"
+                                )}>
+                                    { empty_message }
+                                </p>
+                            </div>
+                        }
+                    } else {
+                        render_category_timeline(&grouped_by_year)
                     }
-                </div>
+                }
             </div>
             <ScrollToTopButton />
         </main>
+    }
+}
+
+// Category-style timeline rendering with geometric design
+fn render_category_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -> Html {
+    html! {
+        <div class={classes!("category-timeline")}>
+            { for grouped_by_year.iter().map(|(year, posts)| {
+                html! {
+                    <section class={classes!("timeline-year-section", "mb-16")} key={*year}>
+                        // Year Header with Geometric Style
+                        <div class={classes!(
+                            "year-header-geometric",
+                            "relative",
+                            "mb-8",
+                            "pb-4",
+                            "border-b-2",
+                            "border-gradient-to-r",
+                            "from-[var(--primary)]/30",
+                            "via-sky-500/50",
+                            "to-transparent"
+                        )}>
+                            <div class={classes!(
+                                "flex",
+                                "items-center",
+                                "gap-4"
+                            )}>
+                                // Geometric year badge
+                                <div class={classes!(
+                                    "year-badge-geometric",
+                                    "relative",
+                                    "px-6",
+                                    "py-3",
+                                    "bg-gradient-to-br",
+                                    "from-[var(--primary)]/10",
+                                    "to-sky-500/10",
+                                    "border-l-4",
+                                    "border-[var(--primary)]",
+                                    "rounded-r-lg",
+                                    "shadow-lg"
+                                )}>
+                                    <span class={classes!(
+                                        "text-3xl",
+                                        "md:text-4xl",
+                                        "font-bold",
+                                        "text-[var(--text)]"
+                                    )}>
+                                        { year }
+                                    </span>
+                                    // Corner accent
+                                    <div class={classes!(
+                                        "absolute",
+                                        "top-0",
+                                        "right-0",
+                                        "w-2",
+                                        "h-2",
+                                        "bg-[var(--primary)]",
+                                        "rounded-bl-full"
+                                    )}></div>
+                                </div>
+
+                                <div class={classes!(
+                                    "text-sm",
+                                    "text-[var(--muted)]",
+                                    "font-medium"
+                                )}>
+                                    { format!("{} 篇文章", posts.len()) }
+                                </div>
+                            </div>
+                        </div>
+
+                        // Article Cards Grid
+                        <div class={classes!(
+                            "articles-grid",
+                            "grid",
+                            "gap-4",
+                            "md:gap-6"
+                        )}>
+                            { for posts.iter().map(|article| {
+                                let detail_route = Route::ArticleDetail { id: article.id.clone() };
+                                render_category_card(article, detail_route)
+                            }) }
+                        </div>
+                    </section>
+                }
+            }) }
+        </div>
+    }
+}
+
+fn render_category_card(article: &ArticleListItem, route: Route) -> Html {
+    html! {
+        <Link<Route>
+            to={route}
+            classes={classes!("category-card")}
+        >
+            <article class={classes!(
+                "relative",
+                "group",
+                "p-6",
+                "rounded-xl",
+                "bg-[var(--surface)]/90",
+                "backdrop-blur-sm",
+                "border-l-4",
+                "border-[var(--primary)]/50",
+                "shadow-md",
+                "transition-all",
+                "duration-300",
+                "hover:shadow-2xl",
+                "hover:border-[var(--primary)]",
+                "hover:translate-x-2"
+            )}>
+                // Side accent glow
+                <div class={classes!(
+                    "absolute",
+                    "left-0",
+                    "top-0",
+                    "bottom-0",
+                    "w-1",
+                    "bg-gradient-to-b",
+                    "from-[var(--primary)]",
+                    "to-sky-500",
+                    "opacity-0",
+                    "group-hover:opacity-100",
+                    "transition-opacity",
+                    "duration-300",
+                    "rounded-l-xl"
+                )}></div>
+
+                <div class={classes!("relative", "z-10")}>
+                    <h3 class={classes!(
+                        "category-card-title",
+                        "text-xl",
+                        "md:text-2xl",
+                        "font-bold",
+                        "text-[var(--text)]",
+                        "mb-3",
+                        "group-hover:text-[var(--primary)]",
+                        "dark:group-hover:text-sky-400",
+                        "transition-colors",
+                        "duration-200"
+                    )}>
+                        { &article.title }
+                    </h3>
+
+                    <div class={classes!(
+                        "article-meta",
+                        "flex",
+                        "items-center",
+                        "gap-4",
+                        "text-sm",
+                        "text-[var(--muted)]"
+                    )}>
+                        <time class={classes!(
+                            "flex",
+                            "items-center",
+                            "gap-2"
+                        )}>
+                            <i class="far fa-calendar"></i>
+                            { &article.date }
+                        </time>
+
+                        <span class={classes!(
+                            "flex",
+                            "items-center",
+                            "gap-2"
+                        )}>
+                            <i class="far fa-user"></i>
+                            { &article.author }
+                        </span>
+                    </div>
+                </div>
+
+                // Chevron indicator
+                <div class={classes!(
+                    "absolute",
+                    "right-6",
+                    "top-1/2",
+                    "-translate-y-1/2",
+                    "text-[var(--primary)]",
+                    "opacity-0",
+                    "group-hover:opacity-100",
+                    "group-hover:translate-x-2",
+                    "transition-all",
+                    "duration-300"
+                )}>
+                    <i class="fas fa-chevron-right"></i>
+                </div>
+
+                // Corner decoration
+                <div class={classes!(
+                    "absolute",
+                    "bottom-0",
+                    "right-0",
+                    "w-8",
+                    "h-8",
+                    "bg-gradient-to-tl",
+                    "from-[var(--primary)]/10",
+                    "to-transparent",
+                    "rounded-tl-full",
+                    "opacity-0",
+                    "group-hover:opacity-100",
+                    "transition-opacity",
+                    "duration-300"
+                )}></div>
+            </article>
+        </Link<Route>>
     }
 }

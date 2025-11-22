@@ -40,7 +40,7 @@ pub fn header() -> Html {
         Callback::from(move |_| search_query.set(String::new()))
     };
 
-    // 执行搜索 - 使用 history.pushState 避免页面重新加载
+    // 执行搜索
     let do_search = {
         let search_query = search_query.clone();
         Callback::from(move |_: MouseEvent| {
@@ -50,13 +50,11 @@ pub fn header() -> Html {
                 let search_url = crate::config::route_path(&format!("/search?q={}", encoded_query));
                 if let Some(window) = web_sys::window() {
                     if let Ok(history) = window.history() {
-                        // 使用 pushState 改变 URL 但不触发页面加载
                         let _ = history.push_state_with_url(
                             &wasm_bindgen::JsValue::NULL,
                             "",
                             Some(&search_url),
                         );
-                        // 触发 popstate 事件让 yew-router 响应
                         if let Ok(event) = web_sys::Event::new("popstate") {
                             let _ = window.dispatch_event(&event);
                         }
@@ -66,7 +64,7 @@ pub fn header() -> Html {
         })
     };
 
-    // Enter键搜索 - 使用 history.pushState 避免页面重新加载
+    // Enter键搜索
     let on_search_keypress = {
         let search_query = search_query.clone();
         Callback::from(move |e: KeyboardEvent| {
@@ -78,13 +76,11 @@ pub fn header() -> Html {
                         crate::config::route_path(&format!("/search?q={}", encoded_query));
                     if let Some(window) = web_sys::window() {
                         if let Ok(history) = window.history() {
-                            // 使用 pushState 改变 URL 但不触发页面加载
                             let _ = history.push_state_with_url(
                                 &wasm_bindgen::JsValue::NULL,
                                 "",
                                 Some(&search_url),
                             );
-                            // 触发 popstate 事件让 yew-router 响应
                             if let Ok(event) = web_sys::Event::new("popstate") {
                                 let _ = window.dispatch_event(&event);
                             }
@@ -112,25 +108,23 @@ pub fn header() -> Html {
     let mobile_panel_classes = classes!(
         "absolute",
         "inset-0",
-        "bg-[var(--surface)]",
-        "dark:bg-[#0b1220]",
+                                "bg-[var(--acrylic-bg-light)]",
+                                "[.dark_&]:bg-[var(--acrylic-bg-dark)]",
         "text-[var(--text)]",
-        "dark:text-[#eef2ff]",
         "p-[4.5rem_1.5rem_2rem]",
         "flex",
         "flex-col",
         "gap-5",
         "overflow-y-auto",
-        "backdrop-blur-[20px]",
-        "shadow-[0_20px_50px_rgba(15,23,42,0.2)]",
-        "[.dark_&]:shadow-[0_25px_70px_rgba(0,0,0,0.7)]",
+        "[backdrop-filter:blur(50px)_saturate(var(--acrylic-saturate))]",
+        "shadow-[var(--shadow-16)]",
+        "rounded-tr-lg", "rounded-br-lg",
         "transition-all",
         "duration-[350ms]",
         "ease-[var(--ease-spring)]",
         if *mobile_menu_open { "translate-y-0 opacity-100" } else { "-translate-y-4 opacity-0" }
     );
 
-    // Hamburger button + animated lines
     let hamburger_classes = classes!(
         "w-12",
         "h-12",
@@ -138,17 +132,19 @@ pub fn header() -> Html {
         "min-h-[3rem]",
         "border",
         "border-[var(--border)]",
-        "rounded-full",
+        "rounded-lg",
         "bg-[var(--surface)]",
+        "text-[var(--text)]",
         "flex",
         "flex-col",
         "justify-center",
         "items-center",
         "gap-[0.35rem]",
         "cursor-pointer",
-        "transition-all",
-        "duration-[280ms]",
-        "ease-in-out"
+        "transition-colors",
+        "duration-100",
+        "ease-[var(--ease-snap)]",
+        "hover:bg-[var(--surface-alt)]"
     );
 
     let hamburger_line = classes!(
@@ -162,11 +158,12 @@ pub fn header() -> Html {
         "ease-in-out"
     );
 
-    let nav_links = [
-        ("最新", Route::LatestArticles),
-        ("文章", Route::Posts),
-        ("标签", Route::Tags),
-        ("分类", Route::Categories),
+    // Icon-based navigation
+    let nav_items = [
+        ("最新", Route::LatestArticles, "fa-clock"),
+        ("文章", Route::Posts, "fa-file-lines"),
+        ("标签", Route::Tags, "fa-tag"),
+        ("分类", Route::Categories, "fa-folder-open"),
     ];
 
     let mobile_search_input = on_search_input.clone();
@@ -178,94 +175,107 @@ pub fn header() -> Html {
         <>
             // Header container - sticky at top
             <header class={classes!(
+                "header-minimal",
                 "sticky", "top-0", "left-0", "right-0", "z-[80]", "w-full",
-                "backdrop-blur-md", "bg-[var(--header-bg)]",
-                "border-b", "border-[var(--border)]",
-                "shadow-[0_12px_35px_rgba(0,0,0,0.08)]",
-                "transition-all", "duration-[280ms]", "ease-in-out"
+                "shadow-[0_1px_0_rgba(var(--primary-rgb),0.08)]",
+                "transition-all", "duration-200", "ease-[var(--ease-snap)]"
             )}>
-                // Desktop header - hidden on mobile
+                // Desktop header
                 <div class={classes!(
                     "desktop-header",
-                    "items-center", "gap-3",
+                    "items-center", "gap-4",
                     "min-h-[var(--header-height-mobile)]", "md:min-h-[var(--header-height-desktop)]",
                     "max-w-7xl", "mx-auto", "px-4", "sm:px-6", "lg:px-8"
                 )}>
-                    // Brand section
-                    <div class={classes!("font-bold", "tracking-[0.2em]", "uppercase")}>
-                        <Link<Route> to={Route::Home} classes={classes!(
-                            "inline-flex", "items-center", "min-h-[var(--hit-size)]",
-                            "text-[1.75rem]", "font-extrabold", "tracking-[0.18em]",
-                            "bg-gradient-to-br", "from-[var(--primary)]", "to-[var(--link)]",
-                            "bg-clip-text", "text-transparent",
-                            "transition-all", "duration-300", "ease-[cubic-bezier(0.34,1.56,0.64,1)]",
-                            "drop-shadow-[0_2px_4px_rgba(29,158,216,0.15)]",
-                            "whitespace-nowrap",
-                            "hover:scale-110", "hover:drop-shadow-[0_4px_8px_rgba(29,158,216,0.3)]"
-                        )}>
+                    // Brand
+                    <div>
+                        <Link<Route> to={Route::Home} classes="brand-logo">
+                            <span class="brand-logo-shine"></span>
                             {"L_B__"}
+                            <span class="brand-logo-cursor"></span>
                         </Link<Route>>
                     </div>
 
-                    // Actions section - right-aligned
-                    <div class={classes!("ml-auto", "flex", "items-center", "gap-3")}>
-                        // Navigation links
-                        <nav class={classes!("flex", "items-center", "gap-2")} aria-label="主导航">
-                            { for nav_links.iter().map(|(label, route)| {
+                    // Actions - right-aligned
+                    <div class={classes!("ml-auto", "flex", "items-center", "gap-2")}>
+                        // Icon navigation
+                        <nav class={classes!("flex", "items-center", "gap-1")} aria-label="主导航">
+                            { for nav_items.iter().map(|(label, route, icon)| {
                                 html! {
                                     <Link<Route> to={route.clone()} classes={classes!(
-                                        "px-[0.9rem]", "rounded-full", "font-medium",
-                                        "text-[var(--text)]", "bg-transparent",
+                                        "nav-icon-btn",
+                                        "w-10", "h-10",
+                                        "rounded-lg",
                                         "inline-flex", "items-center", "justify-center",
-                                        "min-h-[var(--hit-size)]",
-                                        "transition-all", "duration-[280ms]", "ease-in-out",
-                                        "hover:bg-[rgba(0,0,0,0.05)]",
-                                        "[.dark_&]:hover:bg-[rgba(255,255,255,0.08)]"
+                                        "text-[var(--muted)]",
+                                        "transition-all", "duration-200",
+                                        "hover:text-[var(--primary)]",
+                                        "hover:bg-[var(--surface-alt)]",
+                                        "hover:scale-110"
                                     )}>
-                                        { *label }
+                                        <i class={classes!("fas", *icon, "text-[1.1rem]")} title={*label}></i>
                                     </Link<Route>>
                                 }
                             }) }
                         </nav>
 
-                        // Search section
-                        <div class={classes!("flex", "items-center", "gap-[0.35rem]", "relative")}>
+                        // Search
+                        <div class={classes!("flex", "items-center", "gap-1")}>
                             <input
                                 type="text"
-                                placeholder="搜索文章标题或内容..."
+                                placeholder="搜索..."
                                 value={(*search_query).clone()}
                                 oninput={on_search_input.clone()}
                                 onkeypress={on_search_keypress.clone()}
                                 class={classes!(
-                                    "w-[220px]", "lg:w-[260px]",
-                                    "opacity-100", "pointer-events-auto",
-                                    "border", "border-[var(--border)]", "rounded-full",
-                                    "px-[0.95rem]", "h-[var(--hit-size)]",
+                                    "search-minimal",
+                                    "w-[180px]", "lg:w-[220px]",
+                                    "border", "border-[var(--border)]", "rounded-lg",
+                                    "px-3", "h-10",
                                     "bg-[var(--surface)]", "text-[var(--text)]",
-                                    "transition-all", "duration-[250ms]", "ease-[cubic-bezier(0.34,1.56,0.64,1)]",
-                                    "focus:outline-[2px]", "focus:outline-[var(--primary)]", "focus:outline-offset-[3px]",
-                                    "focus:border-transparent", "focus:shadow-[0_0_0_4px_rgba(29,158,216,0.15)]"
+                                    "text-sm",
+                                    "transition-all", "duration-200",
+                                    "focus:outline-none",
+                                    "focus:border-[var(--primary)]",
+                                    "focus:w-[220px]", "lg:focus:w-[280px]"
                                 )}
                             />
-                            <div class={classes!("flex", "items-center", "gap-[0.25rem]")}>
-                                <TooltipIconButton
-                                    icon={IconName::Search}
-                                    tooltip="搜索"
-                                    position={TooltipPosition::Bottom}
-                                    onclick={do_search.clone()}
-                                    size={20}
-                                    class={classes!("w-[2.25rem]", "h-[2.25rem]")}
-                                />
-                                <TooltipIconButton
-                                    icon={IconName::X}
-                                    tooltip="清空"
-                                    position={TooltipPosition::Bottom}
-                                    onclick={clear_search.clone()}
-                                    size={18}
-                                    class={classes!("w-[2.25rem]", "h-[2.25rem]", "disabled:opacity-30")}
-                                    disabled={search_query.is_empty()}
-                                />
-                            </div>
+                            <button
+                                type="button"
+                                onclick={do_search.clone()}
+                                class={classes!(
+                                    "icon-btn",
+                                    "w-10", "h-10",
+                                    "rounded-lg",
+                                    "inline-flex", "items-center", "justify-center",
+                                    "text-[var(--muted)]",
+                                    "transition-all", "duration-200",
+                                    "hover:text-[var(--primary)]",
+                                    "hover:bg-[var(--surface-alt)]"
+                                )}
+                                aria-label="搜索"
+                            >
+                                <i class="fas fa-search"></i>
+                            </button>
+                            <button
+                                type="button"
+                                onclick={clear_search.clone()}
+                                disabled={search_query.is_empty()}
+                                class={classes!(
+                                    "icon-btn",
+                                    "w-10", "h-10",
+                                    "rounded-lg",
+                                    "inline-flex", "items-center", "justify-center",
+                                    "text-[var(--muted)]",
+                                    "transition-all", "duration-200",
+                                    "hover:text-[var(--primary)]",
+                                    "hover:bg-[var(--surface-alt)]",
+                                    "disabled:opacity-30", "disabled:pointer-events-none"
+                                )}
+                                aria-label="清空"
+                            >
+                                <i class="fas fa-times text-sm"></i>
+                            </button>
                         </div>
 
                         // Theme toggle
@@ -275,7 +285,7 @@ pub fn header() -> Html {
                     </div>
                 </div>
 
-                // Mobile header - visible on mobile only
+                // Mobile header
                 <div class={classes!(
                     "mobile-header",
                     "items-center",
@@ -288,23 +298,16 @@ pub fn header() -> Html {
                     "sm:px-6",
                     "lg:px-8"
                 )}>
-                    // Brand section
-                    <div class={classes!("font-bold", "tracking-[0.2em]", "uppercase")}>
-                        <Link<Route> to={Route::Home} classes={classes!(
-                            "inline-flex", "items-center", "min-h-[var(--hit-size)]",
-                            "text-[1.75rem]", "font-extrabold", "tracking-[0.18em]",
-                            "bg-gradient-to-br", "from-[var(--primary)]", "to-[var(--link)]",
-                            "bg-clip-text", "text-transparent",
-                            "transition-all", "duration-300", "ease-[cubic-bezier(0.34,1.56,0.64,1)]",
-                            "drop-shadow-[0_2px_4px_rgba(29,158,216,0.15)]",
-                            "whitespace-nowrap",
-                            "hover:scale-110", "hover:drop-shadow-[0_4px_8px_rgba(29,158,216,0.3)]"
-                        )}>
+                    // Brand
+                    <div>
+                        <Link<Route> to={Route::Home} classes="brand-logo">
+                            <span class="brand-logo-shine"></span>
                             {"L_B__"}
+                            <span class="brand-logo-cursor"></span>
                         </Link<Route>>
                     </div>
 
-                    // Hamburger button with animated lines
+                    // Hamburger
                     <button
                         type="button"
                         class={hamburger_classes}
@@ -345,7 +348,6 @@ pub fn header() -> Html {
                         "backdrop-blur-[12px]",
                         "transition-opacity",
                         "duration-300",
-                        "ease-[cubic-bezier(0.34,1.56,0.64,1)]",
                         if *mobile_menu_open { "opacity-100" } else { "opacity-0" }
                     )}
                     onclick={close_mobile_menu.clone()}
@@ -361,97 +363,87 @@ pub fn header() -> Html {
                     <div class={classes!("absolute", "right-5", "top-5", "z-10")}>
                         <TooltipIconButton
                             icon={IconName::ArrowLeft}
-                            tooltip="关闭菜单"
+                            tooltip="关闭"
                             position={TooltipPosition::Bottom}
                             onclick={close_mobile_menu.clone()}
                             size={20}
                             class={classes!(
                                 "!bg-[var(--surface)]",
-                                "!border-2",
+                                "!border",
                                 "!border-[var(--border)]",
-                                "!shadow-[var(--shadow-sm)]"
+                                "!rounded-lg",
+                                "!shadow-[var(--shadow-2)]"
                             )}
                         />
                     </div>
 
                     // Mobile search
-                    <div class={classes!("flex", "gap-2", "items-center", "order-0", "mb-3")}>
+                    <div class={classes!("flex", "gap-2", "items-center", "mb-3")}>
                         <input
                             type="text"
-                            placeholder="搜索文章标题或内容..."
+                            placeholder="搜索..."
                             value={(*search_query).clone()}
                             oninput={mobile_search_input.clone()}
                             onkeypress={mobile_search_keypress.clone()}
                             class={classes!(
                                 "flex-1",
-                                "border", "border-[var(--border)]", "rounded-[0.85rem]",
-                                "px-4",
-                                "bg-[var(--surface-alt)]",
+                                "border", "border-[var(--border)]", "rounded-lg",
+                                "px-4", "h-12",
+                                "bg-[var(--surface)]",
                                 "text-[var(--text)]",
-                                "text-[0.95rem]", "min-h-[3rem]", "h-12", "leading-[3rem]",
-                                "transition-all", "duration-[250ms]", "ease-[cubic-bezier(0.34,1.56,0.64,1)]",
-                                "focus:outline-[2px]", "focus:outline-[var(--primary)]", "focus:outline-offset-2",
-                                "focus:border-transparent", "focus:shadow-[0_0_0_4px_rgba(29,158,216,0.15)]",
-                                "placeholder:text-[var(--muted)]"
+                                "focus:outline-none",
+                                "focus:border-[var(--primary)]"
                             )}
                         />
-                        <div class={classes!("flex", "gap-[0.375rem]")}>
-                            <TooltipIconButton
-                                icon={IconName::Search}
-                                tooltip="搜索"
-                                position={TooltipPosition::Bottom}
-                                onclick={mobile_do_search.clone()}
-                                size={20}
-                                class={classes!("w-[2.5rem]", "h-[2.5rem]")}
-                            />
-                            <TooltipIconButton
-                                icon={IconName::X}
-                                tooltip="清空"
-                                position={TooltipPosition::Bottom}
-                                onclick={mobile_clear_search.clone()}
-                                size={18}
-                                class={classes!(
-                                    "w-[2.5rem]",
-                                    "h-[2.5rem]",
-                                    "disabled:opacity-50",
-                                    "disabled:cursor-not-allowed"
-                                )}
-                                disabled={search_query.is_empty()}
-                            />
-                        </div>
+                        <button
+                            type="button"
+                            onclick={mobile_do_search.clone()}
+                            class={classes!(
+                                "w-12", "h-12",
+                                "rounded-lg",
+                                "border", "border-[var(--border)]",
+                                "bg-[var(--surface)]",
+                                "text-[var(--muted)]",
+                                "hover:text-[var(--primary)]"
+                            )}
+                        >
+                            <i class="fas fa-search"></i>
+                        </button>
+                        <button
+                            type="button"
+                            onclick={mobile_clear_search.clone()}
+                            disabled={search_query.is_empty()}
+                            class={classes!(
+                                "w-12", "h-12",
+                                "rounded-lg",
+                                "border", "border-[var(--border)]",
+                                "bg-[var(--surface)]",
+                                "text-[var(--muted)]",
+                                "hover:text-[var(--primary)]",
+                                "disabled:opacity-30"
+                            )}
+                        >
+                            <i class="fas fa-times"></i>
+                        </button>
                     </div>
 
-                    // Menu header
-                    <div class={classes!(
-                        "flex", "items-center", "justify-between", "font-semibold"
-                    )}>
-                        <span class={classes!(
-                            "tracking-[0.15em]",
-                            "uppercase",
-                            "text-[var(--text)]",
-                            "dark:text-white"
-                        )}>{"导航"}</span>
-                    </div>
-
-                    // Navigation links
+                    // Navigation
                     <nav class={classes!("flex", "flex-col", "gap-3")} aria-label="移动端导航">
-                        { for nav_links.iter().map(|(label, route)| {
+                        { for nav_items.iter().map(|(label, route, icon)| {
                             let close_cb = close_mobile_menu.clone();
                             html! {
-                                <div
-                                    class={classes!("py-[0.2rem]", "active:opacity-85")}
-                                    onclick={close_cb}
-                                >
+                                <div onclick={close_cb}>
                                     <Link<Route> to={route.clone()} classes={classes!(
-                                        "block", "py-[0.85rem]", "px-4", "rounded-[0.85rem]",
-                                        "bg-[var(--surface-alt)]",
+                                        "mobile-nav-item",
+                                        "flex", "items-center", "gap-3",
+                                        "py-3", "px-4", "rounded-lg",
+                                        "bg-[var(--surface)]",
                                         "border", "border-[var(--border)]",
                                         "text-[var(--text)]",
-                                        "hover:bg-[rgba(var(--primary-rgb),0.12)]",
-                                        "hover:border-[var(--primary)]",
-                                        "text-base", "font-medium"
+                                        "hover:border-[var(--primary)]"
                                     )}>
-                                        { *label }
+                                        <i class={classes!("fas", *icon, "text-[var(--muted)]", "w-5")}></i>
+                                        <span class="font-medium">{ *label }</span>
                                     </Link<Route>>
                                 </div>
                             }
@@ -459,7 +451,7 @@ pub fn header() -> Html {
                     </nav>
 
                     // Theme toggle
-                    <div class={classes!("text-center")}>
+                    <div class={classes!("text-center", "mt-4")}>
                         <ThemeToggle />
                     </div>
                 </div>

@@ -48,39 +48,43 @@ pub fn pagination(props: &PaginationProps) -> Html {
         "inline-flex",
         "items-center",
         "justify-center",
-        "min-w-[2.5rem]",
+        "w-10",
         "h-10",
-        "px-3",
-        "rounded-lg",
-        "border",
-        "border-[var(--border)]",
-        "bg-[rgba(var(--surface-rgb),0.95)]",
-        "text-[var(--text)]",
+        "rounded-full",
+        "border-[1.5px]",
+        "border-[#a1a1aa]", // 明亮模式深边框（zinc-400）
+        "dark:border-[var(--border)]", // 暗黑模式使用 CSS 变量
+        "bg-[var(--surface)]",
         "text-sm",
         "font-semibold",
-        "ring-1",
-        "ring-[rgba(15,23,42,0.08)]",
-        "dark:ring-[rgba(255,255,255,0.08)]",
-        "shadow-sm",
         "transition-all",
-        "duration-200",
-        "ease-[var(--ease-spring)]",
-        "hover:-translate-y-[1px]",
-        "hover:shadow-[var(--shadow)]",
+        "duration-150",
+        "ease-[var(--ease-snap)]",
+        "hover:bg-[var(--primary)]",
+        "hover:text-white",
         "hover:border-[var(--primary)]",
-        "hover:text-[var(--primary)]",
+        "hover:shadow-[0_2px_8px_rgba(0,120,212,0.3)]",
         "disabled:opacity-50",
         "disabled:cursor-not-allowed",
-        "disabled:hover:translate-y-0",
+        "disabled:hover:bg-[var(--surface)]",
+        "disabled:hover:text-[#27272a]",
+        "disabled:hover:border-[#a1a1aa]",
         "disabled:hover:shadow-none"
     );
 
-    let prev_classes = classes!(base_btn_classes.clone(), "min-w-[2.75rem]");
+    // Prev/Next 按钮需要添加文字颜色
+    let prev_classes = classes!(
+        base_btn_classes.clone(),
+        "text-[var(--text)]" // 使用 CSS 变量，自动适配 data-theme
+    );
 
-    let next_classes = classes!(base_btn_classes.clone(), "min-w-[2.75rem]");
+    let next_classes = classes!(
+        base_btn_classes.clone(),
+        "text-[var(--text)]"
+    );
 
     html! {
-        <nav class="flex flex-wrap items-center gap-3" aria-label="分页">
+        <nav class="flex flex-wrap items-center gap-2" aria-label="分页">
             <button
                 type="button"
                 class={prev_classes}
@@ -93,15 +97,22 @@ pub fn pagination(props: &PaginationProps) -> Html {
             <div class={classes!("flex", "flex-wrap", "items-center", "gap-2")}>
                 { for slots.into_iter().map(|slot| match slot {
                     PageSlot::Page(page) => {
-                        let page_classes = classes!(
-                            base_btn_classes.clone(),
-                            "min-w-[2.75rem]",
-                            if page == current_page {
-                                "bg-[var(--primary)] text-white border-transparent ring-[rgba(var(--primary-rgb),0.45)] drop-shadow-[0_10px_25px_rgba(var(--primary-rgb),0.4)] cursor-default pointer-events-none"
-                            } else {
-                                ""
-                            }
-                        );
+                        let page_classes = if page == current_page {
+                            classes!(
+                                base_btn_classes.clone(),
+                                "!bg-[var(--primary)]",
+                                "!text-white",
+                                "!border-[var(--primary)]",
+                                "shadow-[var(--shadow-2)]",
+                                "cursor-default",
+                                "pointer-events-none"
+                            )
+                        } else {
+                            classes!(
+                                base_btn_classes.clone(),
+                                "text-[var(--text)]"
+                            )
+                        };
                         let onclick = {
                             let on_page_change = on_page_change.clone();
                             Callback::from(move |_| on_page_change.emit(page))
@@ -118,7 +129,6 @@ pub fn pagination(props: &PaginationProps) -> Html {
                                 } else {
                                     None
                                 }}
-                                disabled={page == current_page}
                                 onclick={onclick}
                             >
                                 { page }
@@ -127,7 +137,14 @@ pub fn pagination(props: &PaginationProps) -> Html {
                     }
                     PageSlot::Ellipsis(id) => {
                         let ellipsis_classes = classes!(
-                            base_btn_classes.clone(),
+                            "inline-flex",
+                            "items-center",
+                            "justify-center",
+                            "w-10",
+                            "h-10",
+                            "rounded-full",
+                            "text-sm",
+                            "text-[var(--muted)]",
                             "select-none",
                             "cursor-default",
                             "opacity-60",

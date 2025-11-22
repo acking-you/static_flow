@@ -44,24 +44,27 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
     // Handle image click
     let handle_image_click = handle_title_click.clone();
 
-    // 完全使用 Tailwind utilities
+    // Editorial Magazine Style Card - 编辑性杂志风格卡片
     html! {
-        <article class={classes!(
+        <article
+          class={classes!(
+            "editorial-card",
             "bg-[var(--surface)]",
+            "liquid-glass",
             "border",
             "border-[var(--border)]",
-            "rounded-[var(--radius)]",
-            "shadow-[var(--shadow-sm)]",
-            "p-5",
+            "rounded-xl",
+            "overflow-hidden",
             "flex",
             "flex-col",
-            "gap-[var(--space-card-gap)]",
-            "overflow-hidden",
+            "h-full",
             "transition-all",
             "duration-300",
-            "ease-in-out",
-            "hover:shadow-[var(--shadow-lg)]",
-            "hover:-translate-y-1"
+            "ease-out",
+            "hover:shadow-[var(--shadow-8)]",
+            "hover:border-[var(--primary)]",
+            "hover:-translate-y-2",
+            "group"
         )}>
             {
                 if let Some(image) = article.featured_image.as_ref() {
@@ -73,12 +76,9 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                             class={classes!(
                                 "block",
                                 "aspect-video",
-                                "-m-5",
-                                "mb-4",
-                                "rounded-t-[calc(var(--radius)-2px)]",
                                 "overflow-hidden",
                                 "bg-[var(--surface-alt)]",
-                                "dark:bg-[#1f1f21]"
+                                "relative"
                             )}
                             onclick={handle_image_click}
                         >
@@ -92,9 +92,9 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                                     "h-full",
                                     "object-cover",
                                     "transition-transform",
-                                    "duration-300",
-                                    "ease-in-out",
-                                    "hover:scale-105"
+                                    "duration-500",
+                                    "ease-out",
+                                    "group-hover:scale-105"
                                 )}
                             />
                         </a>
@@ -103,87 +103,120 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                     html! {}
                 }
             }
-            <h3 class={classes!("m-0", "text-xl", "font-bold", "leading-snug")}>
-                <a
-                    href={format!("/article/{}", article.id)}
-                    class={classes!(
-                        "text-[var(--text)]",
-                        "transition-colors",
-                        "duration-200",
-                        "hover:text-[var(--primary)]"
-                    )}
-                    onclick={handle_title_click}
-                >
-                    { &article.title }
-                </a>
-            </h3>
-            <div class={classes!("mb-1", "flex", "flex-wrap", "items-center", "gap-3", "text-sm", "text-[var(--muted)]")}>
-                <span class={classes!("inline-flex", "items-center", "gap-1.5")}>
-                    <i class="fas fa-user-circle" aria-hidden="true"></i>
-                    { &article.author }
-                </span>
-                <span class={classes!("inline-flex", "items-center", "gap-1.5")}>
-                    <i class="far fa-calendar-alt" aria-hidden="true"></i>
+
+            <div class={classes!("p-6", "flex", "flex-col", "gap-3", "flex-1")}>
+                // Date badge - 日期徽章
+                <time class={classes!(
+                    "text-xs",
+                    "tracking-[0.2em]",
+                    "uppercase",
+                    "text-[var(--muted)]",
+                    "font-semibold"
+                )}>
                     { &article.date }
-                </span>
-                <Link<Route>
-                    to={Route::CategoryDetail { category: article.category.clone() }}
-                    classes={classes!(
-                        "inline-flex",
-                        "items-center",
-                        "gap-1.5",
-                        "text-[var(--muted)]",
-                        "transition-colors",
-                        "duration-200",
-                        "hover:text-[var(--primary)]"
-                    )}
-                >
-                    <i class="far fa-folder" aria-hidden="true"></i>
-                    { &article.category }
-                </Link<Route>>
-            </div>
-            <p class={classes!(
-                "m-0",
-                "text-base",
-                "leading-relaxed",
-                "text-[var(--muted)]",
-                "line-clamp-3"
-            )}>
-                { &article.summary }
-            </p>
-            <div class={classes!("mt-auto", "pt-4")}>
-                <ul class={classes!("m-0", "flex", "list-none", "flex-wrap", "gap-2", "p-0")}>
-                    { for article.tags.iter().map(|tag| {
-                        let tag_route = Route::TagDetail { tag: tag.clone() };
-                        let tag_label = format!("#{}", tag);
-                        html! {
-                            <li class={classes!("m-0")}>
-                                <Link<Route>
-                                    to={tag_route}
-                                    classes={classes!(
-                                        "inline-flex",
-                                        "items-center",
-                                        "px-4",
-                                        "py-1.5",
-                                        "border",
-                                        "border-[var(--border)]",
-                                        "rounded-md",
-                                        "text-sm",
-                                        "text-[var(--muted)]",
-                                        "transition-all",
-                                        "duration-200",
-                                        "cursor-pointer",
-                                        "hover:border-[var(--primary)]",
-                                        "hover:bg-[var(--primary)]",
-                                        "hover:text-white"
-                                    )}
-                                >
-                                    { tag_label }
-                                </Link<Route>>
-                            </li>
-                        }
-                    }) }
-                </ul>
+                </time>
+
+                // Title with Fraunces font - 使用 Fraunces 字体的标题
+                <h3 class={classes!("m-0", "leading-tight")}>
+                    <a
+                        href={format!("/article/{}", article.id)}
+                        class={classes!(
+                            "text-xl",
+                            "md:text-2xl",
+                            "font-bold",
+                            "text-[var(--text)]",
+                            "transition-colors",
+                            "duration-200",
+                            "hover:text-[var(--primary)]",
+                            "line-clamp-2"
+                        )}
+                        style="font-family: 'Fraunces', serif;"
+                        onclick={handle_title_click}
+                    >
+                        { &article.title }
+                    </a>
+                </h3>
+
+                // Metadata row - 元数据行
+                <div class={classes!(
+                    "flex",
+                    "flex-wrap",
+                    "items-center",
+                    "gap-3",
+                    "text-sm",
+                    "text-[var(--muted)]",
+                    "pb-3",
+                    "border-b",
+                    "border-[var(--border)]"
+                )}>
+                    <span class={classes!("inline-flex", "items-center", "gap-1.5")}>
+                        <i class="fas fa-user-circle" aria-hidden="true"></i>
+                        { &article.author }
+                    </span>
+                    <span class={classes!("text-[var(--border)]")}>{ "•" }</span>
+                    <Link<Route>
+                        to={Route::CategoryDetail { category: article.category.clone() }}
+                        classes={classes!(
+                            "inline-flex",
+                            "items-center",
+                            "gap-1.5",
+                            "text-[var(--muted)]",
+                            "transition-colors",
+                            "duration-200",
+                            "hover:text-[var(--primary)]"
+                        )}
+                    >
+                        <i class="far fa-folder" aria-hidden="true"></i>
+                        { &article.category }
+                    </Link<Route>>
+                </div>
+
+                // Summary - 摘要
+                <p class={classes!(
+                    "m-0",
+                    "text-base",
+                    "leading-relaxed",
+                    "text-[var(--muted)]",
+                    "line-clamp-3",
+                    "flex-1"
+                )}>
+                    { &article.summary }
+                </p>
+
+                // Tags - 标签
+                <div class={classes!("mt-auto", "pt-2")}>
+                    <ul class={classes!("m-0", "flex", "list-none", "flex-wrap", "gap-2", "p-0")}>
+                        { for article.tags.iter().take(3).map(|tag| {
+                            let tag_route = Route::TagDetail { tag: tag.clone() };
+                            let tag_label = format!("#{}", tag);
+                            html! {
+                                <li class={classes!("m-0")}>
+                                    <Link<Route>
+                                        to={tag_route}
+                                        classes={classes!(
+                                            "inline-flex",
+                                            "items-center",
+                                            "px-3",
+                                            "py-1",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "rounded-full",
+                                            "text-xs",
+                                            "text-[var(--muted)]",
+                                            "bg-[var(--surface-alt)]",
+                                            "transition-all",
+                                            "duration-200",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:text-[var(--primary)]"
+                                        )}
+                                    >
+                                        { tag_label }
+                                    </Link<Route>>
+                                </li>
+                            }
+                        }) }
+                    </ul>
+                </div>
             </div>
         </article>
     }

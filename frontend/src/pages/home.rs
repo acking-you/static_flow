@@ -31,41 +31,21 @@ pub fn home_page() -> Html {
             IconName::FileText,
             total_articles.to_string(),
             "文章".to_string(),
-            Some(Route::LatestArticles),
+            Some(Route::Posts),
         ),
         (IconName::Hash, "12".to_string(), "标签".to_string(), Some(Route::Tags)),
         (IconName::Folder, "5".to_string(), "分类".to_string(), Some(Route::Categories)),
     ];
 
     let social_button_class = classes!(
-        "inline-flex",
-        "justify-center",
-        "items-center",
-        "w-12",
-        "h-12",
-        "rounded-[1.1rem]",
+        "btn-fluent-icon",
         "border",
         "border-[var(--border)]",
-        "bg-[var(--surface)]",
-        "text-[var(--text)]",
-        "shadow-[var(--shadow-sm)]",
+        "hover:bg-[var(--surface-alt)]",
+        "hover:text-[var(--primary)]",
         "transition-all",
-        "duration-300",
-        "ease-[var(--ease-spring)]",
-        "relative",
-        "overflow-hidden",
-        "hover:-translate-y-1",
-        "hover:scale-110",
-        "hover:border-transparent",
-        "hover:bg-[var(--primary)]",
-        "hover:text-white",
-        "hover:shadow-[0_18px_40px_rgba(var(--primary-rgb),0.35)]",
-        "focus-visible:outline-none",
-        "focus-visible:ring-2",
-        "focus-visible:ring-[var(--primary)]",
-        "focus-visible:ring-offset-2",
-        "focus-visible:ring-offset-[var(--bg)]",
-        "active:scale-95"
+        "duration-100",
+        "ease-[var(--ease-snap)]"
     );
 
     let tech_chip_class = classes!(
@@ -73,29 +53,26 @@ pub fn home_page() -> Html {
         "inline-flex",
         "items-center",
         "gap-3",
-        "rounded-[1.1rem]",
+        "relative",
+        "overflow-hidden",
+        "rounded-lg",
         "border",
         "border-[var(--border)]",
         "bg-[var(--surface)]",
         "text-[var(--text)]",
         "px-4",
-        "py-2.5",
-        "shadow-[var(--shadow-sm)]",
+        "py-3",
+        "shadow-[var(--shadow-2)]",
+        "liquid-glass-subtle",
+        "shimmer-hover",
+        "transform-gpu",
         "transition-all",
-        "duration-300",
-        "ease-[var(--ease-spring)]",
-        "hover:-translate-y-1",
-        "hover:scale-105",
-        "hover:border-transparent",
-        "hover:bg-[var(--primary)]",
-        "hover:text-white",
-        "hover:shadow-[0_18px_40px_rgba(var(--primary-rgb),0.35)]",
-        "focus-visible:outline-none",
-        "focus-visible:ring-2",
-        "focus-visible:ring-[var(--primary)]",
-        "focus-visible:ring-offset-2",
-        "focus-visible:ring-offset-[var(--bg)]",
-        "active:scale-95"
+        "duration-200",
+        "ease-[var(--ease-snap)]",
+        "hover:bg-[var(--surface-alt)]",
+        "hover:text-[var(--primary)]",
+        "hover:shadow-[var(--shadow-4)]",
+        "hover:scale-105"
     );
 
     let tech_icon_wrapper_class = classes!(
@@ -104,24 +81,24 @@ pub fn home_page() -> Html {
         "justify-center",
         "w-9",
         "h-9",
-        "rounded-full",
-        "bg-[rgba(var(--surface-rgb),0.95)]",
-        "shadow-inner",
+        "rounded",
+        "bg-[var(--surface-alt)]",
+        "text-[var(--primary)]",
         "transition-all",
-        "duration-300",
-        "ease-[var(--ease-spring)]",
-        "group-hover:bg-white/90"
+        "duration-150",
+        "ease-[var(--ease-snap)]"
     );
 
     let tech_label_class = classes!(
         "text-sm",
         "font-semibold",
         "whitespace-nowrap",
-        "transition-all",
-        "duration-300",
+        "text-[var(--text)]",
+        "transition-colors",
+        "duration-150",
         "opacity-90",
         "group-hover:opacity-100",
-        "group-hover:text-white"
+        "group-hover:text-[var(--primary)]"
     );
 
     let tech_stack = vec![
@@ -197,51 +174,41 @@ pub fn home_page() -> Html {
             "w-full",
             "min-h-screen",
             "bg-[var(--bg)]",
-            "bg-[linear-gradient(rgba(29,158,216,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(29,158,216,0.05)_1px,transparent_1px)]",
-            "bg-[size:40px_40px]",
-            "dark:bg-[var(--surface-alt)]",
-            "dark:bg-[radial-gradient(circle_at_center,rgba(53,179,255,0.12)_2px,transparent_2px)]",
             "overflow-x-hidden",
-            "pb-2"
+            "pb-8"
         )}>
-            <div class={classes!("w-full", "pb-4") }>
+            <div class={classes!("w-full", "pb-6") }>
                 <section class={classes!(
                         "relative",
-                        "mb-0",
-                        "py-[var(--space-2xl)]",
+                        "py-20",
+                        "md:py-24",
                         "px-4",
-                        "pb-24",
                         "max-[767px]:pb-16",
-                        "rounded-[calc(var(--radius)*1.5)]",
-                        "overflow-hidden",
-                        "bg-[var(--bg)]",
-                        "bg-[linear-gradient(rgba(29,158,216,0.08)_1px,_transparent_1px),linear-gradient(90deg,_rgba(29,158,216,0.08)_1px,_transparent_1px)]",
-                        "bg-[size:40px_40px]",
-                        "dark:bg-[var(--surface-alt)]",
-                        "dark:bg-[radial-gradient(circle_at_center,rgba(53,179,255,0.15)_2px,_transparent_2px)]"
+                        "max-w-5xl",
+                        "mx-auto"
                     )}>
                         <div class={classes!(
-                            "pointer-events-none",
-                            "absolute",
-                            "w-[220px]",
-                            "h-[220px]",
-                            "-top-16",
-                            "-right-10",
-                            "bg-[radial-gradient(circle,rgba(29,158,216,0.25)_0%,transparent_60%)]",
-                            "blur-[8px]"
-                        )} />
-                        <svg class={classes!("pointer-events-none", "w-full", "h-[120px]", "absolute", "left-0", "top-0", "-translate-y-[60px]")} viewBox="0 0 1440 120" preserveAspectRatio="none" aria-hidden="true">
-                            <path d="M0,40 C240,120 360,0 720,60 C1080,120 1200,20 1440,60 L1440,0 L0,0 Z" fill="rgba(29, 158, 216, 0.08)" />
-                        </svg>
-                        <div class={classes!(
                             "w-full",
-                            "max-w-[80rem]",
                             "mx-auto",
-                            "px-[clamp(1rem,4vw,2.5rem)]"
+                            "px-[clamp(1rem,4vw,2rem)]"
                         )}>
-                            <div class={classes!("py-[var(--space-xl)]", "px-0", "pb-[var(--space-md)]", "flex", "flex-col", "items-center", "text-center", "gap-4")}>
+                            // Terminal Hero - Terminal Style Interface
+                            <div class="terminal-hero">
+                                // Terminal Header with macOS-style dots
+                                <div class="terminal-header">
+                                    <span class="terminal-dot terminal-dot-red"></span>
+                                    <span class="terminal-dot terminal-dot-yellow"></span>
+                                    <span class="terminal-dot terminal-dot-green"></span>
+                                    <span class="terminal-title">{ "system_info.sh" }</span>
+                                </div>
+
+                                // Avatar displayed as command output
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "cat ./profile/avatar.jpg" }</span>
+                                </div>
                                 <div
-                                    class={classes!("flex", "justify-center") }
+                                    class={classes!("flex", "justify-center", "my-6")}
                                     onmouseover={on_avatar_enter.clone()}
                                     onmouseout={on_avatar_leave.clone()}
                                 >
@@ -255,98 +222,60 @@ pub fn home_page() -> Html {
                                         </Link<Route>>
                                     </div>
                                 </div>
-                                <h1 class={classes!("my-4", "mx-0", "mb-[0.35rem]", "text-[1.9rem]", "font-semibold", "tracking-[0.03em]", "text-[#8a919c]", "text-center", "dark:text-[#dcdcdc]")}>
-                                    { "学习如逆水行舟，不进则退！" }
-                                </h1>
-                                <p class={classes!("m-0", "text-[var(--muted)]", "text-[1.1rem]", "max-w-[38rem]", "text-center")}>
-                                    { "本地优先的写作实验室,记录 Rust · 自动化 · 创作思考。" }
-                                </p>
+
+                                // Introduction as terminal commands
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "echo $MOTTO" }</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ "> " }</span>
+                                    <span class="terminal-content">{ "地球Online | Lv.0 → ∞ | \"Talk is cheap, show me the code.\" - Linus. Coding just for fun!" }</span>
+                                </div>
+
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "cat ./README.md" }</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ "> " }</span>
+                                    <span class="terminal-content">{ "全栈 Rust 小站，玩 WASM 玩 AI。代码、生活、随想，想记就记。" }</span>
+                                </div>
+
+                                // Quick navigation buttons styled as terminal commands
+                                <div class="terminal-line" style="margin-top: 1.5rem;">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "ls -l ./navigation/" }</span>
+                                </div>
                                 <div class={classes!(
-                                    "mt-6",
                                     "flex",
                                     "flex-wrap",
-                                    "items-center",
-                                    "justify-center",
-                                    "gap-3"
+                                    "gap-3",
+                                    "mt-4",
+                                    "ml-8"
                                 )}>
                                     <Link<Route>
                                         to={Route::LatestArticles}
-                                        classes={classes!(
-                                            "group",
-                                            "inline-flex",
-                                            "items-center",
-                                            "justify-center",
-                                            "gap-2",
-                                            "rounded-full",
-                                            "px-6",
-                                            "py-3",
-                                            "text-base",
-                                            "font-semibold",
-                                            "text-white",
-                                            "bg-[var(--primary)]",
-                                            "border",
-                                            "border-[var(--primary)]",
-                                            "shadow-[0_18px_35px_rgba(15,23,42,0.25)]",
-                                            "transition-all",
-                                            "duration-300",
-                                            "ease-[var(--ease-spring)]",
-                                            "hover:-translate-y-1",
-                                            "hover:bg-[var(--link)]",
-                                            "focus-visible:outline-none",
-                                            "focus-visible:ring-2",
-                                            "focus-visible:ring-[var(--link)]",
-                                            "focus-visible:ring-offset-2",
-                                            "focus-visible:ring-offset-[var(--surface)]",
-                                            "no-underline"
-                                        )}
+                                        classes={classes!("btn-fluent-primary", "!px-6", "!py-2.5", "!text-sm")}
                                     >
-                                        <span>{ "查看文章" }</span>
-                                        <i class={classes!(
-                                            "fas",
-                                            "fa-arrow-down",
-                                            "text-sm",
-                                            "transition-transform",
-                                            "duration-300",
-                                            "group-hover:translate-y-1"
-                                        )} aria-hidden="true"></i>
+                                        <i class="fas fa-arrow-right mr-2"></i>
+                                        { "查看文章" }
                                     </Link<Route>>
                                     <Link<Route>
                                         to={Route::Posts}
-                                        classes={classes!(
-                                            "inline-flex",
-                                            "items-center",
-                                            "gap-2",
-                                            "rounded-full",
-                                            "px-6",
-                                            "py-3",
-                                            "text-base",
-                                            "font-medium",
-                                            "text-[var(--text)]",
-                                            "border",
-                                            "border-[var(--border)]",
-                                            "bg-[rgba(var(--surface-rgb),0.8)]",
-                                            "backdrop-blur",
-                                            "shadow-[var(--shadow-sm)]",
-                                            "transition-all",
-                                            "duration-300",
-                                            "ease-[var(--ease-spring)]",
-                                            "hover:text-[var(--primary)]",
-                                            "hover:border-[var(--primary)]",
-                                            "hover:-translate-y-1",
-                                            "hover:shadow-[var(--shadow)]",
-                                            "focus-visible:outline-none",
-                                            "focus-visible:ring-2",
-                                            "focus-visible:ring-[var(--primary)]",
-                                            "focus-visible:ring-offset-2",
-                                            "focus-visible:ring-offset-[var(--bg)]",
-                                            "no-underline"
-                                        )}
+                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
                                     >
-                                        <span>{ "文章归档" }</span>
-                                        <i class={classes!("fas", "fa-arrow-up-right-from-square", "text-sm") } aria-hidden="true"></i>
+                                        <i class="fas fa-archive mr-2"></i>
+                                        { "文章归档" }
                                     </Link<Route>>
                                 </div>
-                                <div class={classes!("flex", "justify-center", "items-center", "gap-4", "mt-6", "text-center")} aria-label="社交链接">
+
+                                // Social links as terminal output
+                                <div class="terminal-line" style="margin-top: 1.5rem;">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "cat ./social_links.json" }</span>
+                                </div>
+                                <div class={classes!("flex", "gap-3", "mt-3", "ml-8")}>
                                     <a
                                         href="https://github.com/ACking-you"
                                         target="_blank"
@@ -354,7 +283,7 @@ pub fn home_page() -> Html {
                                         aria-label="GitHub"
                                         class={social_button_class.clone()}
                                     >
-                                        <i class={classes!("fa-brands", "fa-github-alt")} aria-hidden="true"></i>
+                                        <i class={classes!("fa-brands", "fa-github-alt", "text-lg")} aria-hidden="true"></i>
                                         <span class={classes!("sr-only")}>{ "GitHub" }</span>
                                     </a>
                                     <a
@@ -369,8 +298,8 @@ pub fn home_page() -> Html {
                                             role="img"
                                             aria-hidden="true"
                                             focusable="false"
-                                            width="22"
-                                            height="22"
+                                            width="20"
+                                            height="20"
                                         >
                                             <path
                                                 fill="currentColor"
@@ -380,48 +309,79 @@ pub fn home_page() -> Html {
                                         <span class={classes!("sr-only")}>{ "Bilibili" }</span>
                                     </a>
                                 </div>
+
+                                // Blinking cursor at the end
+                                <div class="terminal-line" style="margin-top: 1.5rem;">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-cursor"></span>
+                                </div>
                             </div>
-                            <div class={classes!("mt-8", "grid", "grid-cols-[repeat(auto-fit,minmax(180px,1fr))]", "gap-4", "w-full", "md:grid-cols-[repeat(auto-fit,minmax(140px,1fr))]", "max-[480px]:grid-cols-1")}>
-                                { for stats.into_iter().map(|(icon, value, label, route)| html! {
-                                    <StatsCard icon={icon} value={value} label={label} route={route} />
-                                }) }
+
+                            // System Info Panels (Stats as system metrics)
+                            <div class={classes!("mt-12", "w-full")}>
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "cat /proc/system/stats" }</span>
+                                </div>
+                                <div class={classes!(
+                                    "mt-4",
+                                    "grid",
+                                    "gap-5",
+                                    "grid-cols-1",
+                                    "md:grid-cols-3",
+                                    "w-full"
+                                )}>
+                                    { for stats.into_iter().map(|(icon, value, label, route)| {
+                                        let panel_content = html! {
+                                            <div class="system-panel">
+                                                <div class="system-panel-label">{ label.clone() }</div>
+                                                <div class="system-panel-value">{ value.clone() }</div>
+                                                <div class="system-panel-unit">{ "total" }</div>
+                                            </div>
+                                        };
+
+                                        if let Some(r) = route {
+                                            html! {
+                                                <Link<Route> to={r}>
+                                                    { panel_content }
+                                                </Link<Route>>
+                                            }
+                                        } else {
+                                            panel_content
+                                        }
+                                    }) }
+                                </div>
                             </div>
-                            <div class={classes!("mt-8", "w-full", "text-center")}>
-                                <p class={classes!("m-0", "mb-[0.65rem]", "text-[0.95rem]", "tracking-[0.05em]", "uppercase", "text-[var(--muted)]")}>{ "技术栈" }</p>
-                                <div class={classes!("flex", "flex-wrap", "justify-center", "gap-3")}>
+
+                            // Tech Stack as Command List
+                            <div class={classes!("mt-12", "w-full")}>
+                                <div class="command-list">
+                                    <div class="command-list-header">
+                                        <span class="terminal-prompt">{ "$ " }</span>
+                                        <span class="command-list-title">{ "POWERED BY" }</span>
+                                    </div>
                                     { for tech_stack.iter().map(|(logo, name, href)| html! {
                                         <a
-                                            class={tech_chip_class.clone()}
+                                            class="command-item"
                                             href={(*href).to_string()}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             title={*name}
                                             aria-label={(*name).to_string()}
                                         >
-                                            <span class={tech_icon_wrapper_class.clone()}>
-                                                <img
-                                                    src={logo.clone()}
-                                                    alt={*name}
-                                                    class={classes!(
-                                                        "object-contain",
-                                                        "w-5",
-                                                        "h-5",
-                                                        "transition-transform",
-                                                        "duration-300",
-                                                        "group-hover:scale-110"
-                                                    )}
-                                                    loading="lazy"
-                                                />
-                                            </span>
-                                            <span class={tech_label_class.clone()}>{ *name }</span>
+                                            <img
+                                                src={logo.clone()}
+                                                alt={*name}
+                                                class="command-item-icon"
+                                                loading="lazy"
+                                            />
+                                            <span class="command-item-name">{ *name }</span>
+                                            <span class="command-item-arrow">{ "→" }</span>
                                         </a>
                                     }) }
                                 </div>
                             </div>
                         </div>
-                        <svg class={classes!("pointer-events-none", "w-full", "h-[120px]", "absolute", "left-0", "bottom-0", "translate-y-[60px]")} viewBox="0 0 1440 120" preserveAspectRatio="none" aria-hidden="true">
-                            <path d="M0,80 C200,20 320,120 720,60 C1120,0 1240,80 1440,40 L1440,120 L0,120 Z" fill="var(--bg)" />
-                        </svg>
                     </section>
                 </div>
         </div>

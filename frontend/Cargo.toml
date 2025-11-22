@@ -17,7 +17,7 @@ web-sys = { workspace = true, features = [
   "Window", "Storage", "Document", "Element", "KeyboardEvent",
   "HtmlImageElement", "NodeList", "ScrollToOptions", "ScrollBehavior",
   "HtmlElement", "CssStyleDeclaration", "TouchEvent", "TouchList", "Touch", "History",
-  "DomTokenList"
+  "DomTokenList", "DomRect"
 ] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }

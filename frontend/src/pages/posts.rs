@@ -110,43 +110,53 @@ pub fn posts_page() -> Html {
 
     html! {
         <main class={classes!(
-            "mt-[var(--space-lg)]",
-            "pt-12",
-            "pb-16"
+            "mt-[var(--header-height-mobile)]",
+            "md:mt-[var(--header-height-desktop)]",
+            "pb-20"
         )}>
             <div class={classes!("container")}>
+                // Hero Section with Editorial Style
                 <div class={classes!(
-                    "bg-[var(--surface)]",
-                    "rounded-[var(--radius)]",
-                    "p-6",
-                    "md:p-12",
-                    "my-8",
-                    "mb-12",
-                    "shadow-[var(--shadow)]"
+                    "text-center",
+                    "py-16",
+                    "md:py-24",
+                    "px-4",
+                    "relative",
+                    "overflow-hidden"
                 )}>
                     <p class={classes!(
-                        "my-2",
-                        "text-[0.85rem]",
-                        "tracking-[0.3em]",
+                        "text-sm",
+                        "tracking-[0.4em]",
                         "uppercase",
                         "text-[var(--muted)]",
-                        "text-center"
-                    )}>{ "Posts" }</p>
-                    <h1 class={classes!(
-                        "m-0",
-                        "text-[2.15rem]",
-                        "text-center"
-                    )}>{ "文章时间线" }</h1>
-                    <p class={classes!(
-                        "mt-3",
-                        "mx-auto",
-                        "mb-0",
-                        "max-w-[40rem]",
-                        "text-[var(--muted)]",
-                        "leading-relaxed",
-                        "text-center"
-                    )}>{ description }</p>
+                        "mb-6",
+                        "font-semibold"
+                    )}>{ "Latest Articles" }</p>
 
+                    <h1 class={classes!(
+                        "text-5xl",
+                        "md:text-7xl",
+                        "font-bold",
+                        "mb-6",
+                        "leading-tight",
+                        "tag-title"
+                    )}
+                    style="font-family: 'Fraunces', serif;">
+                        { "时间线" }
+                    </h1>
+
+                    <p class={classes!(
+                        "text-lg",
+                        "md:text-xl",
+                        "text-[var(--muted)]",
+                        "max-w-2xl",
+                        "mx-auto",
+                        "leading-relaxed"
+                    )}>
+                        { description }
+                    </p>
+
+                    // Filter badge if active
                     {
                         if query.has_filters() {
                             html! {
@@ -155,45 +165,35 @@ pub fn posts_page() -> Html {
                                     "flex-wrap",
                                     "gap-3",
                                     "items-center",
-                                    "my-4",
-                                    "mb-8"
+                                    "justify-center",
+                                    "mt-8"
                                 )}>
                                     <span class={classes!(
+                                        "tag-badge",
                                         "inline-flex",
                                         "items-center",
                                         "gap-2",
-                                        "border",
-                                        "border-dashed",
-                                        "border-[var(--border)]",
+                                        "px-6",
+                                        "py-3",
+                                        "bg-gradient-to-r",
+                                        "from-[var(--primary)]",
+                                        "to-[var(--link)]",
+                                        "text-white",
                                         "rounded-full",
-                                        "px-4",
-                                        "py-2",
-                                        "text-[0.9rem]",
-                                        "text-[var(--muted)]"
+                                        "shadow-[var(--shadow-8)]",
+                                        "text-sm",
+                                        "font-semibold",
+                                        "tracking-wide"
                                     )}>
-                                        <i class={classes!("fas", "fa-filter")} aria-hidden="true"></i>
-                                        { format!("当前筛选：{}", filter_label) }
+                                        <i class={classes!("fas", "fa-filter")}></i>
+                                        { filter_label }
                                     </span>
                                     <Link<Route> to={Route::Posts} classes={classes!(
-                                        "inline-flex",
-                                        "items-center",
-                                        "justify-center",
-                                        "gap-2",
-                                        "px-[1.1rem]",
-                                        "py-2",
-                                        "min-h-[var(--hit-size)]",
-                                        "rounded-xl",
-                                        "border",
-                                        "border-[var(--border)]",
-                                        "bg-[var(--surface)]",
-                                        "text-[var(--text)]",
-                                        "transition-all",
-                                        "hover:bg-black/5",
-                                        "hover:scale-105",
-                                        "active:scale-95",
-                                        "dark:hover:bg-white/6"
+                                        "btn-fluent-secondary",
+                                        "!rounded-full"
                                     )}>
-                                        { "清除筛选" }
+                                        <i class={classes!("fas", "fa-times", "mr-1")}></i>
+                                        { "清除" }
                                     </Link<Route>>
                                 </div>
                             }
@@ -201,21 +201,239 @@ pub fn posts_page() -> Html {
                             html! {}
                         }
                     }
+                </div>
 
-                    {
-                        if grouped_by_year.is_empty() {
-                            html! {
-                                <p class={classes!(
-                                    "text-center",
-                                    "my-10",
-                                    "text-[var(--muted)]"
-                                )}>{ "暂无文章可展示。" }</p>
-                            }
-                        } else {
-                            render_expandable_timeline(&grouped_by_year, &*expanded_years, &toggle_year)
+                // Article Timeline Section
+                {
+                    if grouped_by_year.is_empty() {
+                        html! {
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-20",
+                                "px-4",
+                                "bg-[var(--surface)]",
+                                "liquid-glass",
+                                "rounded-2xl",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!("fas", "fa-inbox", "text-6xl", "text-[var(--muted)]", "mb-6")}></i>
+                                <p class={classes!("text-xl", "text-[var(--muted)]")}>
+                                    { "暂无文章可展示。" }
+                                </p>
+                            </div>
+                        }
+                    } else {
+                        html! {
+                            <div class={classes!("editorial-timeline")}>
+                                { for grouped_by_year.iter().map(|(year, posts)| {
+                                    let year_value = *year;
+                                    let total_count = posts.len();
+                                    let should_collapse = total_count > 20;
+                                    let is_expanded = (*expanded_years).get(&year_value).copied().unwrap_or(false);
+                                    let visible_count = if should_collapse && !is_expanded {
+                                        total_count.min(10)
+                                    } else {
+                                        total_count
+                                    };
+                                    let remaining = total_count.saturating_sub(visible_count);
+
+                                    html! {
+                                        <div class={classes!("timeline-year-section", "mb-16")}>
+                                            // Year Header
+                                            <div class={classes!(
+                                                "flex",
+                                                "items-center",
+                                                "gap-4",
+                                                "mb-8"
+                                            )}>
+                                                <div class={classes!(
+                                                    "year-label",
+                                                    "text-4xl",
+                                                    "md:text-5xl",
+                                                    "font-bold",
+                                                    "text-[var(--text)]",
+                                                    "tracking-tight"
+                                                )}
+                                                style="font-family: 'Fraunces', serif;">
+                                                    { year_value }
+                                                </div>
+                                                <div class={classes!(
+                                                    "flex-1",
+                                                    "h-[2px]",
+                                                    "bg-gradient-to-r",
+                                                    "from-[var(--border)]",
+                                                    "to-transparent"
+                                                )}></div>
+                                                <div class={classes!(
+                                                    "px-4",
+                                                    "py-1",
+                                                    "rounded-full",
+                                                    "bg-[var(--surface-alt)]",
+                                                    "text-[var(--muted)]",
+                                                    "text-sm",
+                                                    "font-medium"
+                                                )}>
+                                                    { format!("{} 篇", total_count) }
+                                                </div>
+                                            </div>
+
+                                            // Articles Grid
+                                            <div class={classes!(
+                                                "articles-grid",
+                                                "grid",
+                                                "grid-cols-1",
+                                                "md:grid-cols-2",
+                                                "lg:grid-cols-3",
+                                                "gap-6"
+                                            )}>
+                                                { for posts.iter().take(visible_count).cloned().map(|article| {
+                                                    let detail_route = Route::ArticleDetail { id: article.id.clone() };
+                                                    html! {
+                                                        <Link<Route>
+                                                            to={detail_route}
+                                                            classes={classes!("article-card-editorial", "block")}
+                                                        >
+                                                            <article class={classes!(
+                                                                "article-card",
+                                                                "bg-[var(--surface)]",
+                                                                "liquid-glass",
+                                                                "rounded-xl",
+                                                                "border",
+                                                                "border-[var(--border)]",
+                                                                "p-6",
+                                                                "h-full",
+                                                                "flex",
+                                                                "flex-col",
+                                                                "gap-3",
+                                                                "transition-all",
+                                                                "duration-300"
+                                                            )}>
+                                                                // Date badge
+                                                                <time class={classes!(
+                                                                    "text-xs",
+                                                                    "tracking-[0.2em]",
+                                                                    "uppercase",
+                                                                    "text-[var(--muted)]",
+                                                                    "font-semibold"
+                                                                )}>
+                                                                    { format_month_day(&article.date) }
+                                                                </time>
+
+                                                                // Title
+                                                                <h3 class={classes!(
+                                                                    "article-card-title",
+                                                                    "text-xl",
+                                                                    "font-bold",
+                                                                    "text-[var(--text)]",
+                                                                    "leading-tight",
+                                                                    "line-clamp-2"
+                                                                )}
+                                                                style="font-family: 'Fraunces', serif;">
+                                                                    { article.title.clone() }
+                                                                </h3>
+
+                                                                // Summary if exists
+                                                                {
+                                                                    if !article.summary.is_empty() {
+                                                                        html! {
+                                                                            <p class={classes!(
+                                                                                "text-sm",
+                                                                                "text-[var(--muted)]",
+                                                                                "leading-relaxed",
+                                                                                "line-clamp-3",
+                                                                                "flex-1"
+                                                                            )}>
+                                                                                { &article.summary }
+                                                                            </p>
+                                                                        }
+                                                                    } else {
+                                                                        html! {}
+                                                                    }
+                                                                }
+
+                                                                // Tags
+                                                                {
+                                                                    if !article.tags.is_empty() {
+                                                                        html! {
+                                                                            <div class={classes!(
+                                                                                "flex",
+                                                                                "flex-wrap",
+                                                                                "gap-2",
+                                                                                "mt-auto"
+                                                                            )}>
+                                                                                { for article.tags.iter().take(3).map(|tag| {
+                                                                                    html! {
+                                                                                        <span class={classes!(
+                                                                                            "text-xs",
+                                                                                            "px-2",
+                                                                                            "py-1",
+                                                                                            "rounded",
+                                                                                            "bg-[var(--surface-alt)]",
+                                                                                            "text-[var(--muted)]",
+                                                                                            "border",
+                                                                                            "border-[var(--border)]"
+                                                                                        )}>
+                                                                                            { format!("#{}", tag) }
+                                                                                        </span>
+                                                                                    }
+                                                                                }) }
+                                                                            </div>
+                                                                        }
+                                                                    } else {
+                                                                        html! {}
+                                                                    }
+                                                                }
+                                                            </article>
+                                                        </Link<Route>>
+                                                    }
+                                                }) }
+                                            </div>
+
+                                            // Expand/Collapse Button
+                                            {
+                                                if should_collapse {
+                                                    let button_label = if is_expanded {
+                                                        "收起".to_string()
+                                                    } else {
+                                                        format!("展开剩余 {} 篇", remaining)
+                                                    };
+                                                    let toggle_cb = toggle_year.clone();
+                                                    let year_for_toggle = year_value;
+                                                    let onclick = Callback::from(move |_| toggle_cb.emit(year_for_toggle));
+                                                    html! {
+                                                        <div class={classes!("text-center", "mt-8")}>
+                                                            <button
+                                                                type="button"
+                                                                class={classes!(
+                                                                    "btn-fluent-ghost",
+                                                                    "!rounded-full",
+                                                                    "px-8"
+                                                                )}
+                                                                {onclick}
+                                                                aria-expanded={is_expanded.to_string()}
+                                                            >
+                                                                { button_label }
+                                                                <i class={classes!(
+                                                                    "fas",
+                                                                    if is_expanded { "fa-chevron-up" } else { "fa-chevron-down" },
+                                                                    "ml-2"
+                                                                )}></i>
+                                                            </button>
+                                                        </div>
+                                                    }
+                                                } else {
+                                                    Html::default()
+                                                }
+                                            }
+                                        </div>
+                                    }
+                                }) }
+                            </div>
                         }
                     }
-                </div>
+                }
             </div>
             <ScrollToTopButton />
         </main>
@@ -258,17 +476,16 @@ fn render_timeline_with_state(
                 } else {
                     total_count
                 };
-                let remaining = total_count.saturating_sub(visible_count);
-                html! {
-                    <>
-                        <h3 class={classes!(
-                            "mt-10",
-                            "mb-5",
-                            "text-[1.35rem]",
-                            "tracking-[0.18em]",
-                            "uppercase",
-                            "text-[var(--muted)]"
-                        )}>{ year_value }</h3>
+                        let remaining = total_count.saturating_sub(visible_count);
+                        html! {
+                            <>
+                                <h3 class={classes!(
+                                    "mt-10",
+                                    "mb-5",
+                                    "text-2xl",
+                                    "font-bold",
+                                    "text-[var(--text)]"
+                                )}>{ year_value }</h3>
                         <div class={classes!("timeline")}>
                             { for posts.iter().take(visible_count).cloned().map(|article| {
                                 let detail_route = Route::ArticleDetail { id: article.id.clone() };
@@ -324,28 +541,7 @@ fn render_timeline_with_state(
                                     html! {
                                         <button
                                             type="button"
-                                            class={classes!(
-                                                "inline-flex",
-                                                "items-center",
-                                                "justify-center",
-                                                "gap-2",
-                                                "px-6",
-                                                "py-2",
-                                                "min-h-[var(--hit-size)]",
-                                                "mt-3",
-                                                "rounded-xl",
-                                                "border",
-                                                "border-dashed",
-                                                "border-[var(--border)]",
-                                                "bg-[var(--surface)]",
-                                                "text-[var(--link)]",
-                                                "text-[0.95rem]",
-                                                "transition-all",
-                                                "hover:border-[var(--primary)]",
-                                                "hover:text-[var(--primary)]",
-                                                "hover:scale-105",
-                                                "active:scale-95"
-                                            )}
+                                            class={classes!("btn-fluent-ghost", "mt-3")}
                                             {onclick}
                                             aria-expanded={is_expanded.to_string()}
                                             aria-label={format!("切换 {year_value} 年文章折叠状态")}

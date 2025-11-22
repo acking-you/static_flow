@@ -10,9 +10,9 @@ pub enum SpinnerSize {
 impl SpinnerSize {
     fn dimension(&self) -> u32 {
         match self {
-            SpinnerSize::Small => 24,
-            SpinnerSize::Medium => 40,
-            SpinnerSize::Large => 56,
+            SpinnerSize::Small => 16,
+            SpinnerSize::Medium => 32,
+            SpinnerSize::Large => 48,
         }
     }
 }
@@ -33,8 +33,7 @@ pub fn loading_spinner(props: &LoadingSpinnerProps) -> Html {
         <div
             class={classes!("flex", "items-center", "justify-center", "p-6")}
             role="status"
-            aria-live="polite"
-            aria-busy="true"
+            aria-label="Loading"
         >
             <div
                 style={spinner_style}
@@ -43,10 +42,9 @@ pub fn loading_spinner(props: &LoadingSpinnerProps) -> Html {
                     "h-[var(--spinner-size)]",
                     "rounded-full",
                     "border-[3px]",
-                    "border-transparent",
-                    "bg-[conic-gradient(var(--primary),transparent)]",
-                    "[mask:radial-gradient(farthest-side,transparent_calc(100%-4px),#000_calc(100%-3px))]",
-                    "animate-[spin_0.9s_linear_infinite]"
+                    "border-[var(--surface-alt)]",
+                    "border-t-[var(--primary)]",
+                    "animate-spin"
                 )}
             />
             <span class={classes!("sr-only")}>{ "加载中..." }</span>
@@ -64,8 +62,10 @@ pub fn loading_spinner(props: &LoadingSpinnerProps) -> Html {
                     "flex",
                     "items-center",
                     "justify-center",
-                    "bg-black/30",
-                    "dark:bg-black/60"
+                    "bg-[var(--acrylic-bg-light)]",
+                    "backdrop-blur",
+                    "[backdrop-filter:saturate(var(--acrylic-saturate))]",
+                    "dark:bg-black/40"
                 )}
             >
                 { spinner }

@@ -89,43 +89,52 @@ pub fn tooltip(props: &TooltipProps) -> Html {
         })
     };
 
-    let (position_classes, visible_transforms) = match position {
+    let (position_classes, visible_transforms, arrow_position) = match position {
         TooltipPosition::Top => (
             classes!("bottom-[calc(100%+8px)]", "left-1/2", "-translate-x-1/2", "translate-y-1"),
             classes!("translate-y-0"),
+            classes!("top-full", "left-1/2", "-translate-x-1/2", "mt-1")
         ),
         TooltipPosition::Bottom => (
             classes!("top-[calc(100%+8px)]", "left-1/2", "-translate-x-1/2", "-translate-y-1"),
             classes!("translate-y-0"),
+            classes!("bottom-full", "left-1/2", "-translate-x-1/2", "-mb-1")
         ),
         TooltipPosition::Left => (
             classes!("right-[calc(100%+8px)]", "top-1/2", "-translate-y-1/2", "translate-x-1"),
             classes!("translate-x-0"),
+            classes!("right-0", "top-1/2", "-translate-y-1/2", "translate-x-1/2")
         ),
         TooltipPosition::Right => (
             classes!("left-[calc(100%+8px)]", "top-1/2", "-translate-y-1/2", "-translate-x-1"),
             classes!("translate-x-0"),
+            classes!("left-0", "top-1/2", "-translate-y-1/2", "-translate-x-1/2")
         ),
     };
 
     let tooltip_class = classes!(
         "absolute",
-        "z-[999]",
+        "z-50",
         "px-3",
         "py-2",
-        "text-[0.8125rem]",
+        "text-xs",
         "font-medium",
         "leading-snug",
         "whitespace-nowrap",
-        "bg-[var(--text)]",
-        "text-[var(--bg)]",
-        "rounded-md",
+        "bg-[var(--surface)]",
+        "dark:bg-[var(--surface-alt)]",
+        "text-[var(--text)]",
+        "border",
+        "border-[var(--border)]",
+        "rounded",
         "pointer-events-none",
         "opacity-0",
-        "shadow-[0_4px_12px_rgba(0,0,0,0.15)]",
+        "shadow-[var(--shadow-8),0_0_10px_rgba(var(--primary-rgb),0.1),inset_0_1px_1px_rgba(255,255,255,0.2)]",
+        "[backdrop-filter:blur(50px)_saturate(var(--acrylic-saturate))]",
+        "[-webkit-backdrop-filter:blur(50px)_saturate(var(--acrylic-saturate))]",
         "transition-all",
-        "duration-200",
-        "ease-in-out",
+        "duration-150",
+        "ease-[var(--ease-snap)]",
         position_classes,
         class.clone(),
         if *visible { classes!("opacity-100", visible_transforms) } else { Classes::new() }
@@ -143,6 +152,21 @@ pub fn tooltip(props: &TooltipProps) -> Html {
             { for children.iter() }
             <div class={tooltip_class} role="tooltip">
                 { text }
+                <span
+                    class={classes!(
+                        "absolute",
+                        "w-2.5",
+                        "h-2.5",
+                        "rotate-45",
+                        "rounded-[2px]",
+                        "bg-[var(--surface)]",
+                        "dark:bg-[var(--surface-alt)]",
+                        "border",
+                        "border-[var(--border)]",
+                        arrow_position
+                    )}
+                    aria-hidden="true"
+                />
             </div>
         </div>
     }

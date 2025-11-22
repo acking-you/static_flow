@@ -130,62 +130,107 @@ pub fn latest_articles_page() -> Html {
         Html::default()
     };
 
-    let article_grid = if *loading {
-        html! {
-            <div class={classes!("flex", "items-center", "justify-center", "min-h-[400px]") }>
-                <LoadingSpinner size={SpinnerSize::Large} />
-            </div>
-        }
-    } else if visible_articles.is_empty() {
-        html! { <p class={classes!("text-center", "text-[var(--muted)]")}>{ "暂无文章" }</p> }
-    } else {
-        html! {
-            <>
-                <div class={classes!(
-                    "grid",
-                    "gap-[var(--space-card-gap)]",
-                    "mt-[var(--space-lg)]",
-                    "mb-0",
-                    "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))]",
-                    "lg:grid-cols-[repeat(3,minmax(0,1fr))]",
-                    "md:grid-cols-[repeat(2,minmax(0,1fr))]",
-                    "max-[767px]:grid-cols-1"
-                )}>
-                    { for visible_articles.iter().map(|article| {
-                        html! { <ArticleCard article={article.clone()} on_before_navigate={Some(save_scroll_position.clone())} /> }
-                    }) }
-                </div>
-                { pagination_controls }
-            </>
-        }
-    };
-
     html! {
         <main class={classes!(
-            "mt-[var(--space-lg)]",
-            "pt-10",
-            "pb-16",
-            "bg-[var(--bg)]"
-        ) }>
-            <div class={classes!("w-full", "max-w-[80rem]", "mx-auto", "px-[clamp(1rem,4vw,2.5rem)]") }>
-                <section class={classes!(
-                    "flex",
-                    "flex-col",
-                    "gap-[var(--space-md)]",
-                    "mb-[var(--space-lg)]",
+            "mt-[var(--header-height-mobile)]",
+            "md:mt-[var(--header-height-desktop)]",
+            "pb-20"
+        )}>
+            <div class={classes!("container")}>
+                // Hero Section with Editorial Style
+                <div class={classes!(
+                    "text-center",
+                    "py-16",
+                    "md:py-24",
+                    "px-4",
                     "relative",
-                    "z-10",
-                    "mt-0"
-                )} aria-label="文章列表">
-                    <div class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[calc(var(--radius)-4px)]", "p-5", "px-6", "shadow-[var(--shadow-sm)]", "transition-[var(--transition-base)]")}
-                    >
-                        <div>
-                            <h2 class={classes!("m-0", "text-[1.4rem]", "font-semibold")}>{ "最新文章" }</h2>
-                            <p class={classes!("m-0", "text-[var(--muted)]", "text-[0.95rem]")}>{ "甄选近期发布的内容，持续更新" }</p>
-                        </div>
-                    </div>
-                    { article_grid }
-                </section>
+                    "overflow-hidden"
+                )}>
+                    <p class={classes!(
+                        "text-sm",
+                        "tracking-[0.4em]",
+                        "uppercase",
+                        "text-[var(--muted)]",
+                        "mb-6",
+                        "font-semibold"
+                    )}>{ "Latest Articles" }</p>
+
+                    <h1 class={classes!(
+                        "text-5xl",
+                        "md:text-7xl",
+                        "font-bold",
+                        "mb-6",
+                        "leading-tight"
+                    )}
+                    style="font-family: 'Fraunces', serif;">
+                        { "最新文章" }
+                    </h1>
+
+                    <p class={classes!(
+                        "text-lg",
+                        "md:text-xl",
+                        "text-[var(--muted)]",
+                        "max-w-2xl",
+                        "mx-auto",
+                        "leading-relaxed"
+                    )}>
+                        { "甄选近期发布的内容，持续更新" }
+                    </p>
+                </div>
+
+                // Article Grid with Editorial Style
+                {
+                    if *loading {
+                        html! {
+                            <div class={classes!("flex", "items-center", "justify-center", "min-h-[400px]")}>
+                                <LoadingSpinner size={SpinnerSize::Large} />
+                            </div>
+                        }
+                    } else if visible_articles.is_empty() {
+                        html! {
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-20",
+                                "px-4",
+                                "bg-[var(--surface)]",
+                                "liquid-glass",
+                                "rounded-2xl",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!("fas", "fa-inbox", "text-6xl", "text-[var(--muted)]", "mb-6")}></i>
+                                <p class={classes!("text-xl", "text-[var(--muted)]")}>
+                                    { "暂无文章" }
+                                </p>
+                            </div>
+                        }
+                    } else {
+                        html! {
+                            <>
+                                <div class={classes!(
+                                    "articles-grid",
+                                    "grid",
+                                    "grid-cols-1",
+                                    "md:grid-cols-2",
+                                    "lg:grid-cols-3",
+                                    "gap-6",
+                                    "mb-12"
+                                )}>
+                                    { for visible_articles.iter().map(|article| {
+                                        html! {
+                                            <ArticleCard
+                                                article={article.clone()}
+                                                on_before_navigate={Some(save_scroll_position.clone())}
+                                            />
+                                        }
+                                    }) }
+                                </div>
+                                { pagination_controls }
+                            </>
+                        }
+                    }
+                }
             </div>
             <ScrollToTopButton />
         </main>

@@ -4,13 +4,13 @@ use yew::prelude::*;
 pub fn footer() -> Html {
     html! {
         <footer class={classes!(
-            "bg-[var(--surface)]",
-            "border-t",
-            "border-[var(--border)]",
+            "bg-[var(--surface-alt)]",
+            "dark:bg-[var(--surface)]",
+            "border-t", "border-[var(--border)]",
             "mt-8",
-            "py-8",
+            "py-12",
             "text-center",
-            "text-[0.9rem]",
+            "text-sm",
             "text-[var(--muted)]"
         )}>
             <div class={classes!(
@@ -20,7 +20,7 @@ pub fn footer() -> Html {
                 "flex-col",
                 "items-center",
                 "justify-center",
-                "gap-4",
+                "gap-6",
                 "px-4"
             )}>
                 <div class={classes!("font-medium", "tracking-wide")}>
@@ -34,13 +34,12 @@ pub fn footer() -> Html {
                             "w-[var(--hit-size)]",
                             "items-center",
                             "justify-center",
-                            "rounded-full",
-                            "text-[var(--muted)]",
+                            "rounded-lg",
+                            "text-[var(--primary)]",
                             "transition-colors",
-                            "duration-200",
-                            "hover:bg-black/5",
-                            "hover:text-[var(--text)]",
-                            "dark:hover:bg-white/10"
+                            "duration-100",
+                            "hover:bg-[var(--surface-alt)]",
+                            "hover:text-[var(--primary)]"
                         )}
                         href="https://github.com/ACking-you"
                         target="_blank"
@@ -57,13 +56,12 @@ pub fn footer() -> Html {
                             "w-[var(--hit-size)]",
                             "items-center",
                             "justify-center",
-                            "rounded-full",
+                            "rounded-lg",
                             "text-[var(--muted)]",
                             "transition-colors",
-                            "duration-200",
-                            "hover:bg-black/5",
-                            "hover:text-[var(--text)]",
-                            "dark:hover:bg-white/10"
+                            "duration-100",
+                            "hover:bg-[var(--surface-alt)]",
+                            "hover:text-[var(--primary)]"
                         )}
                         href="https://space.bilibili.com/24264499"
                         target="_blank"
@@ -88,7 +86,7 @@ pub fn footer() -> Html {
                 </div>
                 // 备案号占位，备案完成后可恢复下面的节点
                 // <a
-                //     class="text-[var(--muted)] hover:text-[var(--primary)] transition-colors"
+                //     class="text-[var(--primary)] hover:underline transition-colors duration-100"
                 //     href="https://beian.miit.gov.cn/"
                 //     target="_blank"
                 //     rel="noopener noreferrer"

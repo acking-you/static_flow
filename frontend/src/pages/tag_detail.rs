@@ -1,12 +1,14 @@
 use static_flow_shared::ArticleListItem;
 use yew::prelude::*;
+use yew_router::prelude::Link;
 
 use crate::{
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
     },
-    pages::posts::{group_articles_by_year, render_timeline},
+    pages::posts::group_articles_by_year,
+    router::Route,
 };
 
 #[derive(Properties, Clone, PartialEq)]
@@ -55,49 +57,304 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
     let total_posts = filtered.len();
     let grouped_by_year = group_articles_by_year(&filtered);
 
-    let description = if let Some(tag_value) = filter_value.as_ref() {
-        if total_posts == 0 {
-            format!("标签“{}”下暂时没有文章。", tag_value)
-        } else {
-            format!("该标签共收录 {} 篇文章。", total_posts)
-        }
-    } else {
-        "未提供有效标签，无法展示对应文章。".to_string()
-    };
-
     let empty_message = if let Some(tag_value) = filter_value.as_ref() {
-        format!("标签“{}”下暂无文章，换个标签看看？", tag_value)
+        format!("标签「{}」下暂无文章，换个标签看看？", tag_value)
     } else {
         "请输入有效的标签名称。".to_string()
     };
 
     html! {
-        <main class={classes!("main", "tag-detail-page", "mt-[var(--space-lg)]") }>
-            <div class={classes!("container") }>
-                <div class={classes!(
-                    "page",
-                    "archive"
+        <main class={classes!(
+            "tag-detail-page",
+            "min-h-screen",
+            "pt-24",
+            "pb-20",
+            "px-4",
+            "md:px-8"
+        )}>
+            <div class={classes!(
+                "max-w-5xl",
+                "mx-auto"
+            )}>
+                // Header Section with Editorial Style
+                <header class={classes!(
+                    "tag-header",
+                    "mb-16",
+                    "text-center",
+                    "relative"
                 )}>
-                    <p class="page-kicker">{ "Tags" }</p>
-                    <h1 class={classes!("single-title", "text-center")}>{ format!("标签: {}", display_tag) }</h1>
-                    <p class={classes!("page-description", "max-w-3xl", "text-center")}>{ description }</p>
+                    <div class={classes!(
+                        "tag-badge",
+                        "inline-flex",
+                        "items-center",
+                        "gap-2",
+                        "px-4",
+                        "py-2",
+                        "mb-6",
+                        "rounded-full",
+                        "bg-gradient-to-r",
+                        "from-[var(--primary)]/10",
+                        "to-purple-500/10",
+                        "border",
+                        "border-[var(--primary)]/30",
+                        "text-[var(--primary)]",
+                        "font-medium",
+                        "text-sm",
+                        "tracking-wider",
+                        "uppercase"
+                    )}>
+                        <i class="fas fa-tag"></i>
+                        <span>{ "Tag Archive" }</span>
+                    </div>
 
-                    {
-                        if *loading {
-                            html! {
-                                <div class="flex min-h-[40vh] items-center justify-center">
-                                    <LoadingSpinner size={SpinnerSize::Large} />
-                                </div>
-                            }
-                        } else if grouped_by_year.is_empty() {
-                            html! { <p class="timeline-empty">{ empty_message }</p> }
+                    <h1 class={classes!(
+                        "tag-title",
+                        "text-5xl",
+                        "md:text-7xl",
+                        "font-bold",
+                        "mb-4",
+                        "leading-tight"
+                    )}>
+                        { format!("#{}", display_tag) }
+                    </h1>
+
+                    <p class={classes!(
+                        "tag-count",
+                        "text-xl",
+                        "text-[var(--muted)]",
+                        "font-light"
+                    )}>
+                        if total_posts > 0 {
+                            { format!("{} 篇收录文章", total_posts) }
                         } else {
-                            render_timeline(&grouped_by_year)
+                            { "暂无文章" }
                         }
+                    </p>
+
+                    // Decorative gradient line
+                    <div class={classes!(
+                        "tag-divider",
+                        "w-24",
+                        "h-1",
+                        "mx-auto",
+                        "mt-8",
+                        "rounded-full",
+                        "bg-gradient-to-r",
+                        "from-transparent",
+                        "via-[var(--primary)]",
+                        "to-transparent",
+                        "opacity-50"
+                    )}></div>
+                </header>
+
+                // Content Section
+                {
+                    if *loading {
+                        html! {
+                            <div class={classes!(
+                                "flex",
+                                "min-h-[40vh]",
+                                "items-center",
+                                "justify-center"
+                            )}>
+                                <LoadingSpinner size={SpinnerSize::Large} />
+                            </div>
+                        }
+                    } else if grouped_by_year.is_empty() {
+                        html! {
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-16",
+                                "px-8",
+                                "rounded-2xl",
+                                "bg-[var(--surface)]/50",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!(
+                                    "fas",
+                                    "fa-folder-open",
+                                    "text-5xl",
+                                    "text-[var(--muted)]",
+                                    "mb-4"
+                                )}></i>
+                                <p class={classes!(
+                                    "text-lg",
+                                    "text-[var(--muted)]"
+                                )}>
+                                    { empty_message }
+                                </p>
+                            </div>
+                        }
+                    } else {
+                        render_editorial_timeline(&grouped_by_year)
                     }
-                </div>
+                }
             </div>
             <ScrollToTopButton />
         </main>
+    }
+}
+
+// Editorial-style timeline rendering
+fn render_editorial_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -> Html {
+    html! {
+        <div class={classes!("editorial-timeline")}>
+            { for grouped_by_year.iter().map(|(year, posts)| {
+                html! {
+                    <section class={classes!("timeline-year-section", "mb-16")} key={*year}>
+                        // Year Header with Decorative Style
+                        <div class={classes!(
+                            "year-header",
+                            "flex",
+                            "items-center",
+                            "gap-4",
+                            "mb-8"
+                        )}>
+                            <div class={classes!(
+                                "year-label",
+                                "text-3xl",
+                                "md:text-4xl",
+                                "font-bold",
+                                "text-[var(--text)]",
+                                "px-6",
+                                "py-2",
+                                "rounded-lg",
+                                "bg-gradient-to-br",
+                                "from-[var(--primary)]/10",
+                                "to-purple-500/10",
+                                "border-2",
+                                "border-[var(--primary)]/30",
+                                "shadow-lg"
+                            )}>
+                                { year }
+                            </div>
+                            <div class={classes!(
+                                "year-line",
+                                "flex-1",
+                                "h-[2px]",
+                                "bg-gradient-to-r",
+                                "from-[var(--primary)]/30",
+                                "to-transparent",
+                                "rounded-full"
+                            )}></div>
+                        </div>
+
+                        // Article Cards Grid
+                        <div class={classes!(
+                            "articles-grid",
+                            "grid",
+                            "gap-4",
+                            "md:gap-6"
+                        )}>
+                            { for posts.iter().map(|article| {
+                                let detail_route = Route::ArticleDetail { id: article.id.clone() };
+                                render_article_card(article, detail_route)
+                            }) }
+                        </div>
+                    </section>
+                }
+            }) }
+        </div>
+    }
+}
+
+fn render_article_card(article: &ArticleListItem, route: Route) -> Html {
+    html! {
+        <Link<Route>
+            to={route}
+            classes={classes!("article-card-editorial")}
+        >
+            <article class={classes!(
+                "relative",
+                "group",
+                "p-6",
+                "rounded-xl",
+                "bg-[var(--surface)]/80",
+                "backdrop-blur-sm",
+                "border",
+                "border-[var(--border)]",
+                "transition-all",
+                "duration-300",
+                "hover:shadow-xl",
+                "hover:border-[var(--primary)]/50",
+                "hover:-translate-y-1"
+            )}>
+                // Glow effect on hover
+                <div class={classes!(
+                    "absolute",
+                    "inset-0",
+                    "rounded-xl",
+                    "bg-gradient-to-br",
+                    "from-[var(--primary)]/0",
+                    "to-purple-500/0",
+                    "opacity-0",
+                    "group-hover:opacity-10",
+                    "transition-opacity",
+                    "duration-300",
+                    "pointer-events-none"
+                )}></div>
+
+                <div class={classes!("relative", "z-10")}>
+                    <h3 class={classes!(
+                        "article-card-title",
+                        "text-xl",
+                        "md:text-2xl",
+                        "font-bold",
+                        "text-[var(--text)]",
+                        "mb-3",
+                        "group-hover:text-[var(--primary)]",
+                        "transition-colors",
+                        "duration-200"
+                    )}>
+                        { &article.title }
+                    </h3>
+
+                    <div class={classes!(
+                        "article-meta",
+                        "flex",
+                        "items-center",
+                        "gap-4",
+                        "text-sm",
+                        "text-[var(--muted)]"
+                    )}>
+                        <time class={classes!(
+                            "flex",
+                            "items-center",
+                            "gap-2"
+                        )}>
+                            <i class="far fa-calendar"></i>
+                            { &article.date }
+                        </time>
+
+                        <span class={classes!(
+                            "flex",
+                            "items-center",
+                            "gap-2"
+                        )}>
+                            <i class="far fa-folder"></i>
+                            { &article.category }
+                        </span>
+                    </div>
+                </div>
+
+                // Arrow indicator
+                <div class={classes!(
+                    "absolute",
+                    "right-6",
+                    "top-1/2",
+                    "-translate-y-1/2",
+                    "text-[var(--primary)]",
+                    "opacity-0",
+                    "group-hover:opacity-100",
+                    "group-hover:translate-x-2",
+                    "transition-all",
+                    "duration-300"
+                )}>
+                    <i class="fas fa-arrow-right"></i>
+                </div>
+            </article>
+        </Link<Route>>
     }
 }

@@ -37,88 +37,261 @@ pub fn categories_page() -> Html {
         });
     }
 
-    html! {
-        <main class={classes!("main", "mt-[var(--space-lg)]", "py-12", "pb-16")}>
-            <div class={classes!("container")}>
-                <section class={classes!(
-                    "page-section",
-                    "flex",
-                    "flex-col",
-                    "items-center",
-                    "text-center",
-                    "gap-2"
-                )}>
-                    <p class={classes!("page-kicker")}>{ "分类" }</p>
-                    <h1 class={classes!("page-title")}>{ "知识图谱" }</h1>
-                    <p class={classes!(
-                        "page-description",
-                        "max-w-3xl",
-                        "mx-auto",
-                        "text-center"
-                    )}>
-                        { format!("当前整理 {} 个分类，持续更新中。点击卡片跳转到分类详情页并查看文章时间线。", categories.len()) }
-                    </p>
-                </section>
+    let total_categories = categories.len();
+    let total_articles: usize = categories.iter().map(|c| c.count).sum();
 
+    html! {
+        <main class={classes!(
+            "mt-[var(--header-height-mobile)]",
+            "md:mt-[var(--header-height-desktop)]",
+            "pb-20"
+        )}>
+            <div class={classes!("container")}>
+                // Hero Section with Geometric Art Deco Style
+                <div class={classes!(
+                    "text-center",
+                    "py-16",
+                    "md:py-24",
+                    "px-4",
+                    "relative",
+                    "overflow-hidden"
+                )}>
+                    <p class={classes!(
+                        "text-sm",
+                        "tracking-[0.4em]",
+                        "uppercase",
+                        "text-[var(--muted)]",
+                        "mb-6",
+                        "font-semibold"
+                    )}>{ "Category Index" }</p>
+
+                    <h1 class={classes!(
+                        "category-title",
+                        "text-5xl",
+                        "md:text-7xl",
+                        "font-bold",
+                        "mb-6",
+                        "leading-tight"
+                    )}
+                    style="font-family: 'Fraunces', serif;">
+                        { "知识图谱" }
+                    </h1>
+
+                    <p class={classes!(
+                        "text-lg",
+                        "md:text-xl",
+                        "text-[var(--muted)]",
+                        "max-w-2xl",
+                        "mx-auto",
+                        "leading-relaxed",
+                        "mb-8"
+                    )}>
+                        { format!("探索 {} 个领域，汇聚 {} 篇文章", total_categories, total_articles) }
+                    </p>
+
+                    // Geometric decorative brackets - 几何装饰括号
+                    <div class={classes!(
+                        "category-brackets",
+                        "flex",
+                        "items-center",
+                        "justify-center",
+                        "gap-6",
+                        "mt-8"
+                    )}>
+                        <div class={classes!(
+                            "w-12",
+                            "h-1",
+                            "bg-gradient-to-r",
+                            "from-[var(--primary)]",
+                            "via-sky-500/30",
+                            "to-transparent"
+                        )}></div>
+                        <div class={classes!(
+                            "category-badge",
+                            "inline-flex",
+                            "items-center",
+                            "gap-2",
+                            "px-6",
+                            "py-3",
+                            "bg-gradient-to-r",
+                            "from-[var(--primary)]/10",
+                            "to-sky-500/10",
+                            "border-2",
+                            "border-[var(--primary)]/30",
+                            "rounded-lg",
+                            "text-sm",
+                            "font-bold",
+                            "text-[var(--primary)]",
+                            "dark:text-sky-400"
+                        )}>
+                            <i class={classes!("fas", "fa-th-large")}></i>
+                            <span>{ format!("{} CATEGORIES", total_categories) }</span>
+                        </div>
+                        <div class={classes!(
+                            "w-12",
+                            "h-1",
+                            "bg-gradient-to-l",
+                            "from-[var(--primary)]",
+                            "via-sky-500/30",
+                            "to-transparent"
+                        )}></div>
+                    </div>
+                </div>
+
+                // Category Grid with Geometric Style
                 {
                     if *loading {
                         html! {
-                            <div class={classes!("flex", "min-h-[40vh]", "items-center", "justify-center")}>
+                            <div class={classes!(
+                                "flex",
+                                "items-center",
+                                "justify-center",
+                                "min-h-[400px]"
+                            )}>
                                 <LoadingSpinner size={SpinnerSize::Large} />
                             </div>
                         }
                     } else if categories.is_empty() {
                         html! {
-                            <p class={classes!("empty-hint")}>{ "暂无分类" }</p>
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-20",
+                                "px-4",
+                                "bg-[var(--surface)]",
+                                "liquid-glass",
+                                "rounded-2xl",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!(
+                                    "fas",
+                                    "fa-th-large",
+                                    "text-6xl",
+                                    "text-[var(--muted)]",
+                                    "mb-6"
+                                )}></i>
+                                <p class={classes!("text-xl", "text-[var(--muted)]")}>
+                                    { "暂无分类" }
+                                </p>
+                            </div>
                         }
                     } else {
                         html! {
-                            <section
-                                class={classes!(
-                                    "grid",
-                                    "grid-cols-[repeat(auto-fit,minmax(220px,1fr))]",
-                                    "gap-5",
-                                    "mt-6"
-                                )}
-                                aria-label="分类列表"
-                            >
+                            <div class={classes!(
+                                "category-grid",
+                                "grid",
+                                "grid-cols-1",
+                                "md:grid-cols-2",
+                                "lg:grid-cols-3",
+                                "gap-6",
+                                "mt-12"
+                            )}>
                                 { for categories.iter().map(|category| {
                                     html! {
                                         <Link<Route>
                                             to={Route::CategoryDetail { category: category.name.clone() }}
                                             classes={classes!(
-                                                "flex",
-                                                "flex-col",
-                                                "justify-between",
+                                                "category-card",
+                                                "block",
+                                                "group",
+                                                "relative",
+                                                "bg-[var(--surface)]",
                                                 "border",
                                                 "border-[var(--border)]",
-                                                "rounded-[var(--radius)]",
-                                                "p-5",
-                                                "bg-[var(--surface)]",
-                                                "text-[var(--text)]",
+                                                "border-l-[4px]",
+                                                "border-l-[var(--primary)]",
+                                                "rounded-lg",
+                                                "p-6",
                                                 "transition-all",
-                                                "duration-[280ms]",
-                                                "ease-[cubic-bezier(0.34,1.56,0.64,1)]",
+                                                "duration-300",
                                                 "hover:border-[var(--primary)]",
-                                                "hover:shadow-[var(--shadow)]",
-                                                "hover:-translate-y-0.5"
+                                                "hover:shadow-[0_4px_12px_rgba(var(--primary-rgb),0.4)]",
+                                                "hover:-translate-y-1",
+                                                "liquid-glass"
                                             )}
                                         >
-                                            <div class={classes!("flex-1")}>
-                                                <p class={classes!("m-0", "mb-2", "text-xl", "font-semibold", "text-[var(--text)]")}>
+                                            <div class={classes!("flex", "flex-col", "gap-3", "h-full")}>
+                                                // Category name with geometric styling
+                                                <h3 class={classes!(
+                                                    "m-0",
+                                                    "text-2xl",
+                                                    "font-bold",
+                                                    "text-[var(--text)]",
+                                                    "transition-colors",
+                                                    "duration-200",
+                                                    "group-hover:text-[var(--primary)]",
+                                                    "dark:group-hover:text-sky-400"
+                                                )}
+                                                style="font-family: 'Fraunces', serif;">
                                                     { &category.name }
-                                                </p>
-                                                <p class={classes!("m-0", "text-[0.95rem]", "leading-relaxed", "text-[var(--muted)]")}>
+                                                </h3>
+
+                                                // Description
+                                                <p class={classes!(
+                                                    "m-0",
+                                                    "text-base",
+                                                    "leading-relaxed",
+                                                    "text-[var(--muted)]",
+                                                    "flex-1"
+                                                )}>
                                                     { &category.description }
                                                 </p>
+
+                                                // Article count badge with geometric design
+                                                <div class={classes!(
+                                                    "flex",
+                                                    "items-center",
+                                                    "justify-between",
+                                                    "mt-auto",
+                                                    "pt-4",
+                                                    "border-t",
+                                                    "border-[var(--border)]"
+                                                )}>
+                                                    <span class={classes!(
+                                                        "inline-flex",
+                                                        "items-center",
+                                                        "gap-2",
+                                                        "px-3",
+                                                        "py-1.5",
+                                                        "bg-gradient-to-r",
+                                                        "from-[var(--primary)]/10",
+                                                        "to-sky-500/10",
+                                                        "border",
+                                                        "border-[var(--primary)]/30",
+                                                        "rounded-[6px]",
+                                                        "text-sm",
+                                                        "font-bold",
+                                                        "text-[var(--primary)]",
+                                                        "dark:text-sky-400",
+                                                        "transition-all",
+                                                        "duration-200",
+                                                        "group-hover:border-[var(--primary)]/50",
+                                                        "group-hover:bg-gradient-to-r",
+                                                        "group-hover:from-[var(--primary)]/20",
+                                                        "group-hover:to-sky-500/20"
+                                                    )}>
+                                                        <i class={classes!("far", "fa-file-alt")}></i>
+                                                        <span>{ format!("{} 篇", category.count) }</span>
+                                                    </span>
+
+                                                    // Arrow icon
+                                                    <i class={classes!(
+                                                        "fas",
+                                                        "fa-arrow-right",
+                                                        "text-[var(--muted)]",
+                                                        "transition-all",
+                                                        "duration-200",
+                                                        "group-hover:text-[var(--primary)]",
+                                                        "dark:group-hover:text-sky-400",
+                                                        "group-hover:translate-x-2"
+                                                    )}></i>
+                                                </div>
                                             </div>
-                                            <span class={classes!("mt-4", "font-semibold", "text-[var(--muted)]")}>
-                                                { format!("{} 篇", category.count) }
-                                            </span>
                                         </Link<Route>>
                                     }
                                 }) }
-                            </section>
+                            </div>
                         }
                     }
                 }

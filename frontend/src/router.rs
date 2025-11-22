@@ -2,7 +2,7 @@ use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::{
-    components::{footer::Footer, header::Header},
+    components::{footer::Footer, header::Header, spotlight::Spotlight},
     pages,
 };
 
@@ -112,13 +112,31 @@ fn switch(route: Route) -> Html {
 pub fn app_router() -> Html {
     html! {
         <BrowserRouter>
-            <div class="flex flex-col bg-[var(--bg)]" style="min-height: 100vh; min-height: 100svh;">
-                <Header />
-                <div class="flex-1 pt-[var(--space-sm)]">
-                    <Switch<Route> render={switch} />
-                </div>
-                <Footer />
-            </div>
+            <AppRouterInner />
         </BrowserRouter>
+    }
+}
+
+#[function_component(AppRouterInner)]
+fn app_router_inner() -> Html {
+    let location = use_location();
+
+    // 判断是否在文章详情页（不显示Spotlight）
+    let show_spotlight = location
+        .as_ref()
+        .map(|loc| !loc.path().contains("/posts/"))
+        .unwrap_or(true);
+
+    html! {
+        <div class="flex flex-col bg-[var(--bg)]" style="min-height: 100vh; min-height: 100svh;">
+            if show_spotlight {
+                <Spotlight />
+            }
+            <Header />
+            <div class="flex-1 pt-[var(--space-sm)]">
+                <Switch<Route> render={switch} />
+            </div>
+            <Footer />
+        </div>
     }
 }
