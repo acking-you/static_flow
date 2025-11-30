@@ -8,7 +8,7 @@ pub fn image_url(path: &str) -> String {
     if path.starts_with("images/") {
         // Extract filename after "images/"
         let filename = path.strip_prefix("images/").unwrap_or(path);
-        format!("{}/api/images/{}", API_BASE, filename)
+        format!("{}/images/{}", API_BASE, filename)
     } else {
         path.to_string()
     }
