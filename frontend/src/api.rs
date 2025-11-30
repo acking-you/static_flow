@@ -9,7 +9,7 @@ use crate::models;
 // API base URL - 编译时从环境变量读取，默认本地开发地址
 // 生产环境通过 workflow 设置 STATICFLOW_API_BASE 环境变量
 #[cfg(not(feature = "mock"))]
-const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
+pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
     Some(url) => url,
     None => "http://localhost:3000/api",
 };

@@ -1,0 +1,32 @@
+[Unit]
+Description=StaticFlow Backend API Service
+After=network.target
+Documentation=https://github.com/acking-you/static_flow
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/staticflow
+ExecStart=/bin/sh -c "CONTENT_DIR=/opt/staticflow/content/ IMAGES_DIR=/opt/staticflow/content/images/ PORT=9999 /opt/staticflow/static-flow-backend"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# 环境变量（优先级低于 .env 文件）
+Environment="RUST_LOG=info"
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/staticflow/content /opt/staticflow/logs
+
+# 资源限制
+LimitNOFILE=65535
+LimitNPROC=512
+
+[Install]
+WantedBy=multi-user.target

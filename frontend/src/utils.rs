@@ -1,6 +1,7 @@
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 
-const API_BASE: &str = "http://localhost:3000";
+use crate::api::API_BASE;
+
 
 /// Convert image path to API endpoint if it's a relative path
 pub fn image_url(path: &str) -> String {
