@@ -39,13 +39,7 @@ pub fn markdown_to_html(content: &str) -> String {
             id,
         }) => {
             // Check if image path is relative (starts with "images/")
-            let new_url = if dest_url.starts_with("images/") {
-                // Extract filename after "images/"
-                let filename = dest_url.strip_prefix("images/").unwrap_or(&dest_url); // Convert to API endpoint
-                CowStr::from(image_url(filename))
-            } else {
-                dest_url
-            };
+            let new_url = CowStr::from(image_url(&dest_url));
             Event::Start(Tag::Image {
                 link_type,
                 dest_url: new_url,
