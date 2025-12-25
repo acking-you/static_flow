@@ -258,7 +258,7 @@ pub fn home_page() -> Html {
                                 </div>
                                 <div class="terminal-line">
                                     <span class="terminal-prompt">{ "> " }</span>
-                                    <span class="terminal-content">{ "地球Online | Lv.0 → ∞ | \"Talk is cheap, show me the code.\" - Linus. Coding just for fun!" }</span>
+                                    <span class="terminal-content">{ "El Psy Kongroo | 世界线收束中... | Rustacean | Database 练习生，痴迷一切底层黑魔法" }</span>
                                 </div>
 
                                 <div class="terminal-line">
@@ -267,7 +267,7 @@ pub fn home_page() -> Html {
                                 </div>
                                 <div class="terminal-line">
                                     <span class="terminal-prompt">{ "> " }</span>
-                                    <span class="terminal-content">{ "全栈 Rust 小站，玩 WASM 玩 AI。代码、生活、随想，想记就记。" }</span>
+                                    <span class="terminal-content">{ "不造 agent，只写 skill。借 AI 之力高效学习创作，顺便记录技术与生活。" }</span>
                                 </div>
 
                                 // Quick navigation buttons styled as terminal commands
