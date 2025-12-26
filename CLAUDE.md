@@ -68,7 +68,8 @@ cargo fmt --all && cargo clippy --workspace
 | date | String | 发布日期 |
 | featured_image | String | 图片 ID 引用 |
 | read_time | i32 | 阅读时间（分钟） |
-| vector | Vector\<f32, 1536\> | 文本 embedding |
+| vector_en | Vector\<f32, 384\> (nullable) | fastembed 英文文本 embedding |
+| vector_zh | Vector\<f32, 512\> (nullable) | fastembed 中文文本 embedding |
 | created_at | Timestamp | 创建时间 |
 | updated_at | Timestamp | 更新时间 |
 
@@ -116,7 +117,10 @@ sf-cli write-article \
   --summary <text>        # 摘要（AI 生成）
   --tags <tag1,tag2>      # 标签列表（AI 生成）
   --category <name>       # 分类（AI 生成）
-  --vector <json>         # 可选，文本 embedding
+  --vector <json>         # 可选，文本 embedding（自动判断维度）
+  --vector-en <json>      # 可选，英文 embedding
+  --vector-zh <json>      # 可选，中文 embedding
+  --language <en|zh>      # 可选，自动 embedding 语言提示
 ```
 
 ### write-images 参数

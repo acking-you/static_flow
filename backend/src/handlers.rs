@@ -15,7 +15,9 @@ use lancedb::index::scalar::FullTextSearchQuery;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::Table;
 use serde::{Deserialize, Serialize};
-use static_flow_shared::embedding::embed_text;
+use static_flow_shared::embedding::{
+    detect_language, embed_text_with_language, TextEmbeddingLanguage,
+};
 use static_flow_shared::{Article, ArticleListItem};
 
 use crate::state::AppState;
@@ -313,12 +315,19 @@ pub async fn semantic_search(
         .await
         .map_err(|e| internal_error("Failed to open articles table", e))?;
 
-    let embedding = embed_text(keyword);
+    let language = detect_language(keyword);
+    let embedding = embed_text_with_language(keyword, language);
+    let vector_column = match language {
+        TextEmbeddingLanguage::English => "vector_en",
+        TextEmbeddingLanguage::Chinese => "vector_zh",
+    };
     let vector_query = table
         .query()
         .nearest_to(embedding.as_slice())
         .map_err(|e| internal_error("Failed to build semantic query", e))?;
     let batches = vector_query
+        .column(vector_column)
+        .only_if(format!("{vector_column} IS NOT NULL"))
         .limit(10)
         .select(Select::columns(&[
             "id",
@@ -378,8 +387,8 @@ pub async fn related_articles(
         .await
         .map_err(|e| internal_error("Failed to fetch article vector", e))?;
 
-    let vector = match vector {
-        Some(vector) => vector,
+    let (vector, vector_column) = match vector {
+        Some(result) => result,
         None => {
             return Ok(Json(ArticleListResponse {
                 articles: vec![],
@@ -388,12 +397,16 @@ pub async fn related_articles(
         },
     };
 
-    let filter = format!("id != '{}'", escape_literal(&id));
+    let filter = format!(
+        "{vector_column} IS NOT NULL AND id != '{}'",
+        escape_literal(&id)
+    );
     let vector_query = table
         .query()
         .nearest_to(vector.as_slice())
         .map_err(|e| internal_error("Failed to build related query", e))?;
     let batches = vector_query
+        .column(vector_column)
         .only_if(filter)
         .limit(4)
         .select(Select::columns(&[
@@ -610,18 +623,24 @@ async fn fetch_article_detail(table: &Table, id: &str) -> Result<Option<Article>
     Ok(batches_to_article_detail(&batch_list)?)
 }
 
-async fn fetch_article_vector(table: &Table, id: &str) -> Result<Option<Vec<f32>>> {
+async fn fetch_article_vector(table: &Table, id: &str) -> Result<Option<(Vec<f32>, &'static str)>> {
     let filter = format!("id = '{}'", escape_literal(id));
     let batches = table
         .query()
         .only_if(filter)
         .limit(1)
-        .select(Select::columns(&["vector"]))
+        .select(Select::columns(&["vector_en", "vector_zh"]))
         .execute()
         .await?;
 
     let batch_list = batches.try_collect::<Vec<_>>().await?;
-    Ok(extract_vector(&batch_list))
+    if let Some(vector) = extract_vector(&batch_list, "vector_en") {
+        return Ok(Some((vector, "vector_en")));
+    }
+    if let Some(vector) = extract_vector(&batch_list, "vector_zh") {
+        return Ok(Some((vector, "vector_zh")));
+    }
+    Ok(None)
 }
 
 async fn fetch_image_vector(table: &Table, id: &str) -> Result<Option<Vec<f32>>> {
@@ -635,7 +654,7 @@ async fn fetch_image_vector(table: &Table, id: &str) -> Result<Option<Vec<f32>>>
         .await?;
 
     let batch_list = batches.try_collect::<Vec<_>>().await?;
-    Ok(extract_vector(&batch_list))
+    Ok(extract_vector(&batch_list, "vector"))
 }
 
 async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResult>> {
@@ -812,16 +831,19 @@ fn batches_to_images(batches: &[RecordBatch]) -> Result<Vec<ImageInfo>> {
     Ok(images)
 }
 
-fn extract_vector(batches: &[RecordBatch]) -> Option<Vec<f32>> {
+fn extract_vector(batches: &[RecordBatch], column: &str) -> Option<Vec<f32>> {
     for batch in batches {
         if batch.num_rows() == 0 {
             continue;
         }
         let vector_array = batch
             .schema()
-            .index_of("vector")
+            .index_of(column)
             .ok()
             .and_then(|idx| batch.column(idx).as_any().downcast_ref::<FixedSizeListArray>())?;
+        if vector_array.is_null(0) {
+            return None;
+        }
         return Some(value_vector(vector_array, 0));
     }
     None

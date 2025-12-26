@@ -1,11 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "frontend",
-    "shared",
-    "backend",
-    "cli",
-]
+members = ["frontend", "shared", "backend", "cli"]
 
 # Workspace 级别的依赖版本管理
 [workspace.dependencies]
@@ -20,7 +15,7 @@ thiserror = "2.0"
 log = "0.4"
 env_logger = "0.11"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 时间处理
 chrono = { version = "0.4.42", features = ["serde"] }
@@ -70,6 +65,3 @@ debug = true  # 保留调试信息
 # 针对依赖的优化（开发时依赖用 release 优化，加快运行）
 [profile.dev.package."*"]
 opt-level = 2
-
-[patch.crates-io]
-arrow-arith = { path = "third_party/arrow-arith-53.4.0" }

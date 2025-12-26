@@ -67,3 +67,6 @@ coverage/
 # 文档构建产物
 book/
 target-doc/
+
+# Fastembed 缓存
+shared/.fastembed_cache/
