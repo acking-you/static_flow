@@ -2,10 +2,15 @@ use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::{
-    api::SearchResult,
-    components::{pagination::Pagination, scroll_to_top_button::ScrollToTopButton},
+    api::{fetch_images, search_images_by_id, semantic_search_articles, ImageInfo, SearchResult},
+    components::{
+        image_with_loading::ImageWithLoading,
+        pagination::Pagination,
+        scroll_to_top_button::ScrollToTopButton,
+    },
     hooks::use_pagination,
     router::Route,
+    utils::image_url,
 };
 
 #[derive(Properties, Clone, PartialEq)]
@@ -16,13 +21,24 @@ pub struct SearchPageProps {
 #[function_component(SearchPage)]
 pub fn search_page() -> Html {
     let location = use_location();
-    let query = location
-        .and_then(|loc| loc.query::<SearchPageQuery>().ok())
-        .and_then(|q| q.q);
-
-    let keyword = query.clone().unwrap_or_default();
+    let query = location.and_then(|loc| loc.query::<SearchPageQuery>().ok());
+    let keyword = query.as_ref().and_then(|q| q.q.clone()).unwrap_or_default();
+    let mode = query
+        .as_ref()
+        .and_then(|q| q.mode.clone())
+        .unwrap_or_else(|| "keyword".to_string())
+        .to_lowercase();
+    let mode = if matches!(mode.as_str(), "semantic" | "image") {
+        mode
+    } else {
+        "keyword".to_string()
+    };
     let results = use_state(|| Vec::<SearchResult>::new());
     let loading = use_state(|| false);
+    let image_catalog = use_state(|| Vec::<ImageInfo>::new());
+    let image_results = use_state(|| Vec::<ImageInfo>::new());
+    let image_loading = use_state(|| false);
+    let selected_image_id = use_state(|| None::<String>);
     let (visible_results, current_page, total_pages, go_to_page) =
         use_pagination((*results).clone(), 15);
 
@@ -30,9 +46,13 @@ pub fn search_page() -> Html {
         let results = results.clone();
         let loading = loading.clone();
         let keyword = keyword.clone();
+        let mode = mode.clone();
 
-        use_effect_with(keyword.clone(), move |kw| {
-            if kw.trim().is_empty() {
+        use_effect_with((keyword.clone(), mode.clone()), move |(kw, mode)| {
+            if mode == "image" {
+                loading.set(false);
+                results.set(vec![]);
+            } else if kw.trim().is_empty() {
                 loading.set(false);
                 results.set(vec![]);
             } else {
@@ -40,9 +60,16 @@ pub fn search_page() -> Html {
                 let results = results.clone();
                 let loading = loading.clone();
                 let query_text = kw.clone();
+                let use_semantic = mode == "semantic";
 
                 wasm_bindgen_futures::spawn_local(async move {
-                    match crate::api::search_articles(&query_text).await {
+                    let response = if use_semantic {
+                        semantic_search_articles(&query_text).await
+                    } else {
+                        crate::api::search_articles(&query_text).await
+                    };
+
+                    match response {
                         Ok(data) => {
                             results.set(data);
                             loading.set(false);
@@ -58,6 +85,96 @@ pub fn search_page() -> Html {
             || ()
         });
     }
+
+    {
+        let image_catalog = image_catalog.clone();
+        let image_loading = image_loading.clone();
+        let selected_image_id = selected_image_id.clone();
+        let image_results = image_results.clone();
+        let mode = mode.clone();
+
+        use_effect_with(mode.clone(), move |mode| {
+            if mode == "image" {
+                image_loading.set(true);
+                let image_catalog = image_catalog.clone();
+                let image_loading = image_loading.clone();
+                let selected_image_id = selected_image_id.clone();
+                let image_results = image_results.clone();
+
+                wasm_bindgen_futures::spawn_local(async move {
+                    match fetch_images().await {
+                        Ok(data) => {
+                            image_catalog.set(data);
+                            image_loading.set(false);
+                            selected_image_id.set(None);
+                            image_results.set(vec![]);
+                        },
+                        Err(e) => {
+                            web_sys::console::error_1(
+                                &format!("Failed to fetch images: {}", e).into(),
+                            );
+                            image_loading.set(false);
+                        },
+                    }
+                });
+            }
+
+            || ()
+        });
+    }
+
+    let on_image_select = {
+        let image_results = image_results.clone();
+        let image_loading = image_loading.clone();
+        let selected_image_id = selected_image_id.clone();
+
+        Callback::from(move |id: String| {
+            selected_image_id.set(Some(id.clone()));
+            image_loading.set(true);
+
+            let image_results = image_results.clone();
+            let image_loading = image_loading.clone();
+
+            wasm_bindgen_futures::spawn_local(async move {
+                match search_images_by_id(&id).await {
+                    Ok(data) => {
+                        image_results.set(data);
+                        image_loading.set(false);
+                    },
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Image search failed: {}", e).into(),
+                        );
+                        image_loading.set(false);
+                    },
+                }
+            });
+        })
+    };
+
+    let encoded_query = urlencoding::encode(&keyword);
+    let keyword_href = crate::config::route_path(&format!("/search?q={}", encoded_query));
+    let semantic_href =
+        crate::config::route_path(&format!("/search?mode=semantic&q={}", encoded_query));
+    let image_href = crate::config::route_path("/search?mode=image");
+
+    let hero_label = if mode == "image" {
+        "IMAGE SEARCH".to_string()
+    } else if keyword.is_empty() {
+        "SEARCH".to_string()
+    } else {
+        keyword.clone()
+    };
+    let selected_image = (*selected_image_id).clone();
+    let mode_button_base = classes!(
+        "px-4",
+        "py-2",
+        "rounded-full",
+        "border",
+        "text-sm",
+        "font-semibold",
+        "transition-all"
+    );
 
     html! {
         <main class={classes!(
@@ -104,11 +221,7 @@ pub fn search_page() -> Html {
                         "opacity-75"
                     )}
                     style="font-family: 'Space Mono', monospace;">
-                        if keyword.is_empty() {
-                            <span>{ "SEARCH" }</span>
-                        } else {
-                            <span>{ &keyword }</span>
-                        }
+                        <span>{ hero_label }</span>
                     </h1>
 
                     <p class={classes!(
@@ -121,7 +234,9 @@ pub fn search_page() -> Html {
                         "mb-8",
                         "opacity-80"
                     )}>
-                        if keyword.is_empty() {
+                        if mode == "image" {
+                            { "请选择一张图片开始相似图片搜索" }
+                        } else if keyword.is_empty() {
                             { "请在上方搜索框输入关键词" }
                         } else if *loading {
                             <span class={classes!("search-status-loading")}>
@@ -174,7 +289,15 @@ pub fn search_page() -> Html {
                         )}>
                             <i class={classes!("fas", "fa-search")}></i>
                             <span style="font-family: 'Space Mono', monospace;">
-                                if keyword.is_empty() {
+                                if mode == "image" {
+                                    if *image_loading {
+                                        { "SCANNING" }
+                                    } else if selected_image_id.is_some() {
+                                        { format!("{} RESULTS", image_results.len()) }
+                                    } else {
+                                        { "READY" }
+                                    }
+                                } else if keyword.is_empty() {
                                     { "READY" }
                                 } else if *loading {
                                     { "SCANNING" }
@@ -193,11 +316,245 @@ pub fn search_page() -> Html {
                             "to-transparent"
                         )}></div>
                     </div>
+
+                    // Mode switches
+                    <div class={classes!("flex", "items-center", "justify-center", "gap-3", "mt-8")}>
+                        <a
+                            href={keyword_href}
+                            class={classes!(
+                                mode_button_base.clone(),
+                                if mode == "keyword" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                if mode == "keyword" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                if mode == "keyword" { "bg-[var(--primary)]/10" } else { "" },
+                                if mode != "keyword" { "hover:text-[var(--primary)]" } else { "" },
+                                if mode != "keyword" { "hover:border-[var(--primary)]/60" } else { "" }
+                            )}
+                        >
+                            { "Keyword" }
+                        </a>
+                        <a
+                            href={semantic_href}
+                            class={classes!(
+                                mode_button_base.clone(),
+                                if mode == "semantic" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                if mode == "semantic" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                if mode == "semantic" { "bg-[var(--primary)]/10" } else { "" },
+                                if mode != "semantic" { "hover:text-[var(--primary)]" } else { "" },
+                                if mode != "semantic" { "hover:border-[var(--primary)]/60" } else { "" }
+                            )}
+                        >
+                            { "Semantic" }
+                        </a>
+                        <a
+                            href={image_href}
+                            class={classes!(
+                                mode_button_base.clone(),
+                                if mode == "image" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                if mode == "image" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                if mode == "image" { "bg-[var(--primary)]/10" } else { "" },
+                                if mode != "image" { "hover:text-[var(--primary)]" } else { "" },
+                                if mode != "image" { "hover:border-[var(--primary)]/60" } else { "" }
+                            )}
+                        >
+                            { "Image" }
+                        </a>
+                    </div>
                 </div>
 
                 // Search Results
                 <div class={classes!("search-results", "flex", "flex-col", "gap-6", "mt-8")}>
-                    if *loading {
+                    if mode == "image" {
+                        <>
+                            <div class={classes!(
+                                "text-sm",
+                                "text-[var(--muted)]",
+                                "uppercase",
+                                "tracking-[0.3em]",
+                                "font-semibold"
+                            )} style="font-family: 'Space Mono', monospace;">
+                                { "IMAGE CATALOG" }
+                            </div>
+
+                            if *image_loading && image_catalog.is_empty() {
+                                <div class={classes!(
+                                    "flex",
+                                    "items-center",
+                                    "justify-center",
+                                    "gap-3",
+                                    "py-12",
+                                    "text-[var(--muted)]",
+                                    "text-lg"
+                                )}>
+                                    <i class={classes!(
+                                        "fas",
+                                        "fa-spinner",
+                                        "fa-spin",
+                                        "text-2xl",
+                                        "text-[var(--primary)]"
+                                    )}></i>
+                                    <span style="font-family: 'Space Mono', monospace;">{ "加载图片中..." }</span>
+                                </div>
+                            } else if image_catalog.is_empty() {
+                                <div class={classes!(
+                                    "search-empty",
+                                    "text-center",
+                                    "py-12",
+                                    "px-4",
+                                    "bg-[var(--surface)]",
+                                    "liquid-glass",
+                                    "rounded-2xl",
+                                    "border",
+                                    "border-[var(--primary)]/30"
+                                )}>
+                                    <p class={classes!(
+                                        "text-base",
+                                        "text-[var(--muted)]"
+                                    )}>
+                                        { "暂无图片，请先运行 sf-cli write-images." }
+                                    </p>
+                                </div>
+                            } else {
+                                <div class={classes!(
+                                    "grid",
+                                    "grid-cols-2",
+                                    "md:grid-cols-4",
+                                    "gap-4"
+                                )}>
+                                    { for image_catalog.iter().map(|image| {
+                                        let image_id = image.id.clone();
+                                        let filename = image.filename.clone();
+                                        let selected = selected_image
+                                            .as_ref()
+                                            .map(|current| current == &image_id)
+                                            .unwrap_or(false);
+                                        let url = image_url(&format!("images/{}", filename));
+                                        let on_image_select = on_image_select.clone();
+                                        let card_class = classes!(
+                                            "relative",
+                                            "overflow-hidden",
+                                            "rounded-xl",
+                                            "border",
+                                            "transition-all",
+                                            "duration-200",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:shadow-[var(--shadow-8)]",
+                                            if selected { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                            if selected { "ring-2" } else { "" },
+                                            if selected { "ring-[var(--primary)]/40" } else { "" }
+                                        );
+                                        html! {
+                                            <button
+                                                class={card_class}
+                                                onclick={Callback::from(move |_| on_image_select.emit(image_id.clone()))}
+                                            >
+                                                <ImageWithLoading
+                                                    src={url}
+                                                    alt={filename}
+                                                    class={classes!("w-full", "h-32", "object-cover")}
+                                                    container_class={classes!("w-full", "h-32")}
+                                                />
+                                            </button>
+                                        }
+                                    }) }
+                                </div>
+                            }
+
+                            if let Some(_) = &*selected_image_id {
+                                <div class={classes!(
+                                    "mt-8",
+                                    "text-sm",
+                                    "text-[var(--muted)]",
+                                    "uppercase",
+                                    "tracking-[0.3em]",
+                                    "font-semibold"
+                                )} style="font-family: 'Space Mono', monospace;">
+                                    { "SIMILAR IMAGES" }
+                                </div>
+
+                                if *image_loading {
+                                    <div class={classes!(
+                                        "flex",
+                                        "items-center",
+                                        "justify-center",
+                                        "gap-3",
+                                        "py-8",
+                                        "text-[var(--muted)]",
+                                        "text-lg"
+                                    )}>
+                                        <i class={classes!(
+                                            "fas",
+                                            "fa-spinner",
+                                            "fa-spin",
+                                            "text-2xl",
+                                            "text-[var(--primary)]"
+                                        )}></i>
+                                        <span style="font-family: 'Space Mono', monospace;">{ "检索相似图片..." }</span>
+                                    </div>
+                                } else if image_results.is_empty() {
+                                    <div class={classes!(
+                                        "search-empty",
+                                        "text-center",
+                                        "py-10",
+                                        "px-4",
+                                        "bg-[var(--surface)]",
+                                        "liquid-glass",
+                                        "rounded-2xl",
+                                        "border",
+                                        "border-[var(--primary)]/30"
+                                    )}>
+                                        <p class={classes!("text-base", "text-[var(--muted)]")}>
+                                            { "暂无相似图片结果" }
+                                        </p>
+                                    </div>
+                                } else {
+                                    <div class={classes!(
+                                        "grid",
+                                        "grid-cols-2",
+                                        "md:grid-cols-4",
+                                        "gap-4"
+                                    )}>
+                                        { for image_results.iter().map(|image| {
+                                            let filename = image.filename.clone();
+                                            let url = image_url(&format!("images/{}", filename));
+                                            html! {
+                                                <div
+                                                    class={classes!(
+                                                        "overflow-hidden",
+                                                        "rounded-xl",
+                                                        "border",
+                                                        "border-[var(--border)]"
+                                                    )}
+                                                >
+                                                    <ImageWithLoading
+                                                        src={url}
+                                                        alt={filename}
+                                                        class={classes!("w-full", "h-32", "object-cover")}
+                                                        container_class={classes!("w-full", "h-32")}
+                                                    />
+                                                </div>
+                                            }
+                                        }) }
+                                    </div>
+                                }
+                            } else {
+                                <div class={classes!(
+                                    "search-empty",
+                                    "text-center",
+                                    "py-10",
+                                    "px-4",
+                                    "bg-[var(--surface)]",
+                                    "liquid-glass",
+                                    "rounded-2xl",
+                                    "border",
+                                    "border-[var(--primary)]/30"
+                                )}>
+                                    <p class={classes!("text-base", "text-[var(--muted)]")}>
+                                        { "点击上方图片开始搜索相似图片" }
+                                    </p>
+                                </div>
+                            }
+                        </>
+                    } else if *loading {
                         <div class={classes!(
                             "search-loading",
                             "flex",
@@ -208,7 +565,13 @@ pub fn search_page() -> Html {
                             "text-[var(--muted)]",
                             "text-lg"
                         )}>
-                            <i class={classes!("fas", "fa-spinner", "fa-spin", "text-2xl", "text-[var(--primary)]")}></i>
+                            <i class={classes!(
+                                "fas",
+                                "fa-spinner",
+                                "fa-spin",
+                                "text-2xl",
+                                "text-[var(--primary)]"
+                            )}></i>
                             <span style="font-family: 'Space Mono', monospace;">{ "正在扫描..." }</span>
                         </div>
                     } else if !results.is_empty() {
@@ -434,4 +797,5 @@ fn render_search_result(result: &SearchResult) -> Html {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct SearchPageQuery {
     q: Option<String>,
+    mode: Option<String>,
 }

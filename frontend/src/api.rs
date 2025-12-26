@@ -218,6 +218,27 @@ struct SearchResponse {
     query: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ImageInfo {
+    pub id: String,
+    pub filename: String,
+}
+
+#[cfg(not(feature = "mock"))]
+#[derive(Debug, Deserialize)]
+struct ImageListResponse {
+    images: Vec<ImageInfo>,
+    total: usize,
+}
+
+#[cfg(not(feature = "mock"))]
+#[derive(Debug, Deserialize)]
+struct ImageSearchResponse {
+    images: Vec<ImageInfo>,
+    total: usize,
+    query_id: String,
+}
+
 /// 搜索文章
 pub async fn search_articles(keyword: &str) -> Result<Vec<SearchResult>, String> {
     if keyword.trim().is_empty() {
@@ -248,5 +269,138 @@ pub async fn search_articles(keyword: &str) -> Result<Vec<SearchResult>, String>
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
         Ok(json_response.results)
+    }
+}
+
+/// Semantic search articles (vector search).
+pub async fn semantic_search_articles(keyword: &str) -> Result<Vec<SearchResult>, String> {
+    if keyword.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    #[cfg(feature = "mock")]
+    {
+        return Ok(models::mock_search(keyword));
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/semantic-search?q={}",
+            API_BASE,
+            urlencoding::encode(keyword)
+        );
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        let json_response: SearchResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+
+        Ok(json_response.results)
+    }
+}
+
+/// Fetch related articles for a given article id.
+pub async fn fetch_related_articles(id: &str) -> Result<Vec<ArticleListItem>, String> {
+    #[cfg(feature = "mock")]
+    {
+        let articles = models::get_mock_articles();
+        return Ok(articles.into_iter().filter(|a| a.id != id).take(3).collect());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/articles/{}/related", API_BASE, id);
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        let json_response: ArticleListResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+
+        Ok(json_response.articles)
+    }
+}
+
+/// Fetch all images for image-to-image search.
+pub async fn fetch_images() -> Result<Vec<ImageInfo>, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(vec![]);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/images", API_BASE);
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        let json_response: ImageListResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+
+        Ok(json_response.images)
+    }
+}
+
+/// Search images by an existing image id.
+pub async fn search_images_by_id(image_id: &str) -> Result<Vec<ImageInfo>, String> {
+    if image_id.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    #[cfg(feature = "mock")]
+    {
+        return Ok(vec![]);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/image-search?id={}",
+            API_BASE,
+            urlencoding::encode(image_id)
+        );
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        let json_response: ImageSearchResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+
+        Ok(json_response.images)
     }
 }

@@ -1,0 +1,23 @@
+[package]
+name = "sf-cli"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+gray_matter = "0.2"
+image = { workspace = true }
+lancedb = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+static-flow-shared = { path = "../shared" }
+tokio = { workspace = true }
+walkdir = { workspace = true }
+futures = "0.3"

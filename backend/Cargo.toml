@@ -26,8 +26,12 @@ tracing-subscriber = { workspace = true }
 # Shared models
 static-flow-shared = { path = "../shared" }
 
-# Markdown parsing with frontmatter support
-gray_matter = "0.2"
-
 # Async utilities
 futures = "0.3"
+
+# LanceDB + Arrow
+lancedb = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+arrow = { workspace = true }
+chrono = { workspace = true }

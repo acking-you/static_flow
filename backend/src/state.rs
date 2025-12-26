@@ -1,53 +1,31 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Result;
-use static_flow_shared::ArticleListItem;
-use tokio::sync::RwLock;
-
-use crate::markdown;
+use lancedb::{connect, Connection, Table};
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Cached article list
-    articles: Arc<RwLock<Vec<ArticleListItem>>>,
-    /// Content directory path
-    content_dir: String,
-    /// Images directory path
-    images_dir: String,
-    /// Article ID to file path mapping
-    id_to_path: Arc<RwLock<HashMap<String, String>>>,
+    /// LanceDB connection shared across handlers.
+    db: Arc<Connection>,
+    articles_table: String,
+    images_table: String,
 }
 
 impl AppState {
-    pub async fn new(content_dir: &str, images_dir: &str) -> Result<Self> {
-        let (articles, id_to_path) = markdown::scan_articles(content_dir).await?;
-
+    pub async fn new(db_uri: &str) -> Result<Self> {
+        let db = connect(db_uri).execute().await?;
         Ok(Self {
-            articles: Arc::new(RwLock::new(articles)),
-            content_dir: content_dir.to_string(),
-            images_dir: images_dir.to_string(),
-            id_to_path: Arc::new(RwLock::new(id_to_path)),
+            db: Arc::new(db),
+            articles_table: "articles".to_string(),
+            images_table: "images".to_string(),
         })
     }
 
-    pub async fn get_articles(&self) -> Vec<ArticleListItem> {
-        self.articles.read().await.clone()
+    pub async fn articles_table(&self) -> Result<Table> {
+        Ok(self.db.open_table(&self.articles_table).execute().await?)
     }
 
-    pub async fn get_article_path(&self, id: &str) -> Option<String> {
-        self.id_to_path.read().await.get(id).cloned()
-    }
-
-    pub fn article_count(&self) -> usize {
-        // Using blocking read for initialization logging
-        futures::executor::block_on(async { self.articles.read().await.len() })
-    }
-
-    pub fn content_dir(&self) -> &str {
-        &self.content_dir
-    }
-
-    pub fn images_dir(&self) -> &str {
-        &self.images_dir
+    pub async fn images_table(&self) -> Result<Table> {
+        Ok(self.db.open_table(&self.images_table).execute().await?)
     }
 }

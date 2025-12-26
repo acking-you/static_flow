@@ -1,5 +1,4 @@
 mod handlers;
-mod markdown;
 mod routes;
 mod state;
 
@@ -15,16 +14,13 @@ async fn main() -> Result<()> {
 
     // Load environment variables
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let content_dir = env::var("CONTENT_DIR").unwrap_or_else(|_| "../content".to_string());
-    let images_dir = env::var("IMAGES_DIR").unwrap_or_else(|_| "../content/images".to_string());
+    let db_uri = env::var("LANCEDB_URI").unwrap_or_else(|_| "../data/lancedb".to_string());
 
     tracing::info!("Starting StaticFlow backend server");
-    tracing::info!("Content directory: {}", content_dir);
-    tracing::info!("Images directory: {}", images_dir);
+    tracing::info!("LanceDB URI: {}", db_uri);
 
     // Initialize application state
-    let app_state = state::AppState::new(&content_dir, &images_dir).await?;
-    tracing::info!("Loaded {} articles", app_state.article_count());
+    let app_state = state::AppState::new(&db_uri).await?;
 
     // Build router
     let app = routes::create_router(app_state);

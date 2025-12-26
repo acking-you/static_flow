@@ -166,6 +166,7 @@ pub fn header() -> Html {
         ("标签", Route::Tags, "fa-tag"),
         ("分类", Route::Categories, "fa-folder-open"),
     ];
+    let image_search_href = crate::config::route_path("/search?mode=image");
 
     let mobile_search_input = on_search_input.clone();
     let mobile_search_keypress = on_search_keypress.clone();
@@ -218,6 +219,26 @@ pub fn header() -> Html {
                                     </Link<Route>>
                                 }
                             }) }
+                            <a
+                                href={image_search_href.clone()}
+                                class={classes!(
+                                    "nav-icon-btn",
+                                    "w-10",
+                                    "h-10",
+                                    "rounded-lg",
+                                    "inline-flex",
+                                    "items-center",
+                                    "justify-center",
+                                    "text-[var(--muted)]",
+                                    "transition-all",
+                                    "duration-200",
+                                    "hover:text-[var(--primary)]",
+                                    "hover:bg-[var(--surface-alt)]",
+                                    "hover:scale-110"
+                                )}
+                            >
+                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title="图片搜索"></i>
+                            </a>
                         </nav>
 
                         // Search
@@ -449,6 +470,28 @@ pub fn header() -> Html {
                                 </div>
                             }
                         }) }
+                        <div onclick={close_mobile_menu.clone()}>
+                            <a
+                                href={image_search_href.clone()}
+                                class={classes!(
+                                    "mobile-nav-item",
+                                    "flex",
+                                    "items-center",
+                                    "gap-3",
+                                    "py-3",
+                                    "px-4",
+                                    "rounded-lg",
+                                    "bg-[var(--surface)]",
+                                    "border",
+                                    "border-[var(--border)]",
+                                    "text-[var(--text)]",
+                                    "hover:border-[var(--primary)]"
+                                )}
+                            >
+                                <i class={classes!("fas", "fa-image", "text-[var(--muted)]", "w-5")}></i>
+                                <span class="font-medium">{ "图片搜索" }</span>
+                            </a>
+                        </div>
                     </nav>
 
                     // Theme toggle

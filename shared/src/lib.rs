@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod embedding;
+
 // 完整文章数据模型
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Article {

@@ -1,11 +1,13 @@
-use static_flow_shared::Article;
+use static_flow_shared::{Article, ArticleListItem};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{window, HtmlImageElement, KeyboardEvent};
 use yew::{prelude::*, virtual_dom::AttrValue};
 use yew_router::prelude::{use_navigator, use_route, Link};
 
 use crate::{
+    api::fetch_related_articles,
     components::{
+        article_card::ArticleCard,
         icons::IconName,
         image_with_loading::ImageWithLoading,
         loading_spinner::{LoadingSpinner, SpinnerSize},
@@ -40,6 +42,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     let article = use_state(|| None::<Article>);
     let loading = use_state(|| true);
+    let related_articles = use_state(|| Vec::<ArticleListItem>::new());
+    let related_loading = use_state(|| false);
 
     // Handle back navigation - use browser history
     let handle_back = {
@@ -88,6 +92,34 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         );
                         article.set(None);
                         loading.set(false);
+                    },
+                }
+            });
+            || ()
+        });
+    }
+
+    {
+        let related_articles = related_articles.clone();
+        let related_loading = related_loading.clone();
+        let article_id = article_id.clone();
+        use_effect_with(article_id.clone(), move |id| {
+            let id = id.clone();
+            related_loading.set(true);
+            related_articles.set(vec![]);
+            let related_articles = related_articles.clone();
+            let related_loading = related_loading.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_related_articles(&id).await {
+                    Ok(data) => {
+                        related_articles.set(data);
+                        related_loading.set(false);
+                    },
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Failed to fetch related articles: {}", e).into(),
+                        );
+                        related_loading.set(false);
                     },
                 }
             });
@@ -490,6 +522,47 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         }) }
                     </ul>
                 </footer>
+
+                <section class={classes!(
+                    "mt-12",
+                    "pt-8",
+                    "border-t",
+                    "border-[var(--border)]"
+                )}>
+                    <h2 class={classes!(
+                        "m-0",
+                        "mb-6",
+                        "text-[1.1rem]",
+                        "text-[var(--muted)]",
+                        "tracking-[0.15em]",
+                        "uppercase"
+                    )}>{ "相关推荐" }</h2>
+                    if *related_loading {
+                        <div class={classes!(
+                            "flex",
+                            "items-center",
+                            "gap-3",
+                            "text-[var(--muted)]"
+                        )}>
+                            <LoadingSpinner size={SpinnerSize::Small} />
+                            <span>{ "加载相关推荐中..." }</span>
+                        </div>
+                    } else if related_articles.is_empty() {
+                        <p class={classes!("text-[var(--muted)]", "m-0")}>
+                            { "暂无相关推荐" }
+                        </p>
+                    } else {
+                        <div class={classes!(
+                            "grid",
+                            "gap-6",
+                            "md:grid-cols-2"
+                        )}>
+                            { for related_articles.iter().cloned().map(|article| {
+                                html! { <ArticleCard article={article} /> }
+                            }) }
+                        </div>
+                    }
+                </section>
             </article>
         }
     } else {
