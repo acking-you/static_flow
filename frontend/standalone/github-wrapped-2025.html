@@ -33,7 +33,7 @@
         --radius2: 18px;
         --blur: 14px;
 
-        --maxw: 1120px;
+        --maxw: clamp(1120px, 78vw, 1560px);
         --gutter: clamp(16px, 4vw, 44px);
 
         --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.55);
@@ -43,6 +43,12 @@
         --body: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
         --headline: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
         --display: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      }
+
+      @media (max-height: 820px) and (min-width: 981px) {
+        :root {
+          --gutter: clamp(14px, 2.8vw, 32px);
+        }
       }
 
       * {
@@ -296,6 +302,11 @@
 
       .btn-primary:hover {
         border-color: rgba(88, 166, 255, 0.75);
+      }
+
+      .btn-mini {
+        padding: 10px 12px;
+        font-size: 13px;
       }
 
       .kbd {
@@ -643,6 +654,88 @@
         pointer-events: auto;
       }
 
+      .badge-icon {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+        gap: 0;
+      }
+
+      .badge-icon svg {
+        width: 18px;
+        height: 18px;
+        color: rgba(234, 240, 255, 0.9);
+        opacity: 0.92;
+      }
+
+      .badge-icon .ico-exit {
+        display: none;
+      }
+
+      .badge-icon.is-fs .ico-enter {
+        display: none;
+      }
+
+      .badge-icon.is-fs .ico-exit {
+        display: block;
+      }
+
+      .badge-icon::after {
+        content: attr(data-tip);
+        position: absolute;
+        top: calc(100% + 10px);
+        right: 0;
+        transform: translateY(-4px);
+        opacity: 0;
+        pointer-events: none;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(234, 240, 255, 0.14);
+        background: rgba(13, 17, 23, 0.86);
+        backdrop-filter: blur(10px);
+        color: rgba(240, 246, 252, 0.9);
+        font-size: 12px;
+        white-space: nowrap;
+        box-shadow: 0 18px 52px rgba(0, 0, 0, 0.55);
+        transition: opacity 160ms var(--ease), transform 220ms var(--ease);
+        z-index: 70;
+      }
+
+      .badge-icon::before {
+        content: "";
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 16px;
+        width: 10px;
+        height: 10px;
+        opacity: 0;
+        pointer-events: none;
+        background: rgba(13, 17, 23, 0.86);
+        border-left: 1px solid rgba(234, 240, 255, 0.14);
+        border-top: 1px solid rgba(234, 240, 255, 0.14);
+        transform: rotate(45deg);
+        transition: opacity 160ms var(--ease);
+        z-index: 69;
+      }
+
+      .badge-icon:hover::after,
+      .badge-icon:focus-visible::after,
+      .badge-icon:active::after,
+      .badge-icon.tip-on::after {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .badge-icon:hover::before,
+      .badge-icon:focus-visible::before,
+      .badge-icon:active::before,
+      .badge-icon.tip-on::before {
+        opacity: 1;
+      }
+
       .navdots {
         position: fixed;
         top: 50%;
@@ -805,12 +898,1009 @@
         }
       }
 
-      @media (max-width: 620px) {
+      .m-only {
+        display: none !important;
+      }
+
+      .m-only-paged {
+        display: none !important;
+      }
+
+      .m-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      /* Mobile bottom-sheet modal (hidden by default; safe on desktop) */
+      .msheet {
+        position: fixed;
+        inset: 0;
+        z-index: 90;
+        display: none;
+        pointer-events: none;
+      }
+
+      .msheet.is-on {
+        display: block;
+        pointer-events: auto;
+      }
+
+      .msheet-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(8px);
+      }
+
+	      .msheet-panel {
+	        position: absolute;
+	        left: 0;
+	        right: 0;
+	        bottom: 0;
+	        height: min(86vh, calc(100vh - 70px));
+	        max-height: min(86vh, calc(100vh - 70px));
+	        display: flex;
+	        flex-direction: column;
+	        background: linear-gradient(180deg, rgba(13, 17, 23, 0.96), rgba(7, 10, 18, 0.92));
+	        border: 1px solid rgba(234, 240, 255, 0.12);
+	        border-bottom: none;
+        border-top-left-radius: 24px;
+        border-top-right-radius: 24px;
+        box-shadow: 0 -30px 90px rgba(0, 0, 0, 0.7);
+        transform: translateY(18px);
+        opacity: 0;
+	        transition: transform 260ms var(--ease), opacity 260ms var(--ease);
+	        overflow: hidden;
+	        touch-action: pan-y;
+	      }
+
+      .msheet.is-on .msheet-panel {
+        transform: translateY(0);
+        opacity: 1;
+      }
+
+      .msheet-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(234, 240, 255, 0.1);
+        background: rgba(7, 10, 18, 0.35);
+      }
+
+      .msheet-title {
+        font-family: var(--headline);
+        letter-spacing: 0.02em;
+        font-size: 16px;
+        color: rgba(240, 246, 252, 0.92);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .msheet-close {
+        width: 40px;
+        height: 40px;
+      }
+
+      .msheet-body {
+        padding: 14px 14px calc(16px + env(safe-area-inset-bottom, 0px)) 14px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        overflow-x: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-x pan-y;
+      }
+
+      .msheet-body .wrap {
+        width: 100%;
+        max-width: none;
+        height: auto;
+      }
+
+      #msheetSlot {
+        max-width: 100%;
+      }
+
+      #msheetSlot > * {
+        max-width: 100%;
+      }
+
+      /* Ensure moved-in content is visible (reveal system is scene-scoped). */
+      .msheet [data-reveal] {
+        opacity: 1 !important;
+        transform: none !important;
+        filter: none !important;
+        transition: none !important;
+      }
+
+      /* Some visuals depend on `.scene.is-active` selectors; make them readable in sheet. */
+      .msheet .bar .fill {
+        height: var(--h, 30%) !important;
+        transition: none !important;
+      }
+
+      /* Toast (tap feedback on touch devices) */
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%) translateY(8px);
+        z-index: 95;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(234, 240, 255, 0.14);
+        background: rgba(13, 17, 23, 0.86);
+        backdrop-filter: blur(10px);
+        color: rgba(240, 246, 252, 0.9);
+        box-shadow: 0 18px 58px rgba(0, 0, 0, 0.55);
+        max-width: min(92vw, 520px);
+        text-align: center;
+        font-size: 13px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms var(--ease), transform 220ms var(--ease);
+      }
+
+      .toast.is-on {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      @media (max-width: 620px) and (pointer: coarse) {
+        .m-only {
+          display: block !important;
+        }
+
+        #scroller[data-mode="paged"] .m-only-paged {
+          display: block !important;
+        }
+
+        #scroller[data-mode="free"] .m-only-paged {
+          display: none !important;
+        }
+
+        /* Hide heavy blocks in mobile paged mode (moved to sheet via msheet). */
+        #scroller[data-mode="paged"] [data-mhide~="paged"] {
+          display: none !important;
+        }
+
+        .m-actions .btn {
+          flex: 1 1 auto;
+          width: 100%;
+        }
+
+        .list.list-cols2,
+        .list.list-cols3 {
+          grid-template-columns: 1fr;
+        }
+
+		        :root {
+		          --m-fab: 46px;
+		          --m-fab-pad: 12px;
+		          --m-safe-top: 14px;
+	          --m-safe-bottom: calc(var(--m-fab) + var(--m-fab-pad) * 2);
+	          --m-safe-side: 12px;
+	        }
+
+		        /* Prevent page-level horizontal overflow on phones (allow inner scroll where needed). */
+		        #scroller {
+		          overflow-x: hidden;
+		        }
+
+		        /* Mobile paged: hard-disable native vertical scrolling/bounce (navigation handled by swipe). */
+		        #scroller[data-mode="paged"] {
+		          overscroll-behavior: none;
+		          touch-action: pan-x;
+		        }
+
+		        /* Mobile: hide scrollbars (keep scrolling where applicable). */
+		        #scroller,
+		        #scroller * {
+		          scrollbar-width: none;
+		        }
+
+		        #scroller::-webkit-scrollbar,
+		        #scroller *::-webkit-scrollbar {
+		          width: 0;
+		          height: 0;
+		        }
+
+		        .msheet-body {
+		          overflow-x: hidden;
+		          scrollbar-width: none;
+		        }
+
+		        .msheet-body::-webkit-scrollbar {
+		          width: 0;
+		          height: 0;
+		        }
+
+		        /* Mobile paged scenes: center the content block (less "stuck to the top"). */
+		        #scroller[data-mode="paged"] .scene {
+		          place-items: center;
+		          padding:
+	            calc(var(--m-safe-top) + env(safe-area-inset-top, 0px))
+            var(--m-safe-side)
+            calc(var(--m-safe-bottom) + env(safe-area-inset-bottom, 0px))
+            var(--m-safe-side);
+          overflow: hidden;
+        }
+
+	        #scroller[data-mode="paged"] .wrap {
+	          width: 100%;
+	          max-width: none;
+	          overflow-x: hidden;
+	        }
+
+	        /* Also make free-mode scenes width-safe on phones. */
+	        #scroller[data-mode="free"] .wrap {
+	          width: 100%;
+	          max-width: none;
+	          overflow-x: hidden;
+	        }
+
+			        /* Heavy scenes can opt into top alignment. */
+			        #scroller[data-mode="paged"] #s4.scene {
+			          place-items: center;
+			        }
+
+				        /* Scene 4: keep content away from pinned kicker. */
+				        #scroller[data-mode="paged"] #s4 .wrap {
+				          padding-top: 38px;
+				          width: min(520px, 92vw);
+				          margin: 0 auto;
+				        }
+
+				        #scroller[data-mode="paged"] #s4 .title {
+				          text-align: center;
+				        }
+
+	        /* Mobile typography + spacing */
+	        .kicker {
+	          padding: 8px 10px;
+	          gap: 8px;
+	          font-size: 12px;
+	        }
+
+	        /* Mobile paged: keep the page tag pinned to the true top-left (out of content flow). */
+	        #scroller[data-mode="paged"] .scene .kicker {
+	          position: absolute;
+	          top: calc(env(safe-area-inset-top, 0px) + 10px);
+	          left: calc(env(safe-area-inset-left, 0px) + 10px);
+	          margin: 0;
+	          z-index: 4;
+	          max-width: calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+	          min-width: 0;
+	          white-space: nowrap;
+	          overflow: hidden;
+	          text-overflow: ellipsis;
+	          pointer-events: none;
+	        }
+
+        .title {
+          margin-top: 10px;
+          font-size: clamp(22px, 6.2vw, 30px);
+          line-height: 1.12;
+          overflow-wrap: anywhere;
+        }
+
+	        .lead {
+	          margin-top: 8px;
+	          font-size: 12.5px;
+	          line-height: 1.52;
+	          max-width: none;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+	          overflow: hidden;
+	          overflow-wrap: anywhere;
+	        }
+
+	        /* Paged mode: keep narration compact; details live in sheets. */
+	        #scroller[data-mode="paged"] .lead {
+	          -webkit-line-clamp: 1;
+	        }
+
+	        .card-inner {
+	          padding: 14px 14px;
+	        }
+
+        .mega {
+          font-size: clamp(36px, 10vw, 58px);
+        }
+
+        .mega-sub {
+          margin-top: 10px;
+          gap: 8px;
+        }
+
+        .pill {
+          padding: 7px 10px;
+          gap: 8px;
+          max-width: 100%;
+          white-space: normal;
+          flex-wrap: wrap;
+          overflow-wrap: anywhere;
+        }
+
+        .chip {
+          padding: 7px 10px;
+          font-size: 12px;
+          letter-spacing: 0.04em;
+        }
+
+	        .note {
+	          font-size: 12px;
+	          line-height: 1.55;
+	          overflow-wrap: anywhere;
+	        }
+
+	        /* Long provenance/code blocks: wrap instead of forcing page overflow. */
+	        .drawer-body {
+	          overflow-x: auto;
+	          overflow-wrap: anywhere;
+	          word-break: break-word;
+	        }
+
+	        .drawer-body code {
+	          overflow-wrap: anywhere;
+	          word-break: break-word;
+	        }
+
+	        .list {
+	          margin-top: 12px;
+	          gap: 8px;
+	        }
+
+	        .item {
+	          padding: 10px 12px;
+	        }
+
+	        /* Lists/buttons: never overflow horizontally on phones. */
+	        #scroller[data-mode="paged"] .item {
+	          max-width: 100%;
+	          overflow: hidden;
+	        }
+
+	        #scroller[data-mode="paged"] .item .meta {
+	          overflow-wrap: anywhere;
+	          word-break: break-word;
+	        }
+
+	        /* Default: keep lists short in paged mobile scenes (full list available via sheet). */
+	        #scroller[data-mode="paged"] .scene .list .item:nth-child(n + 3) {
+	          display: none;
+	        }
+
+	        /* Tighten common module spacing on phones. */
+	        #scroller[data-mode="paged"] .grid2 {
+	          margin-top: 12px !important;
+	          gap: 12px;
+	        }
+
+	        #scroller[data-mode="paged"] .heatmap,
+	        #scroller[data-mode="paged"] .tower,
+	        #scroller[data-mode="paged"] .catgrid,
+	        #scroller[data-mode="paged"] .radar,
+	        #scroller[data-mode="paged"] .share {
+	          margin-top: 12px;
+	        }
+
+	        .chip {
+	          padding: 6px 10px;
+	          font-size: 11px;
+	          max-width: 100%;
+	          overflow: hidden;
+	        }
+
+        /* Mobile: floating controls (draggable via JS) */
         .music-player {
           top: auto;
-          bottom: 18px;
+          bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+          left: calc(12px + env(safe-area-inset-left, 0px));
+          touch-action: none;
         }
-      }
+
+        .music-player.is-dragging {
+          transform: scale(1.02);
+          border-color: rgba(88, 166, 255, 0.7);
+        }
+
+        /* Mobile HUD: keep ONLY the mode toggle (icon-only) */
+        .hud {
+          inset: auto calc(12px + env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) auto;
+          justify-content: flex-end;
+        }
+
+        .hud-left {
+          display: none;
+        }
+
+        #toggleFullscreen {
+          display: none !important;
+        }
+
+        #toggleMode.badge {
+          position: fixed;
+          right: calc(12px + env(safe-area-inset-right, 0px));
+          bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+          width: 46px;
+          height: 46px;
+          padding: 0;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          box-shadow: 0 18px 52px rgba(0, 0, 0, 0.55);
+          z-index: 60;
+          touch-action: none;
+        }
+
+        #toggleMode.is-dragging {
+          transform: scale(1.02);
+          border-color: rgba(88, 166, 255, 0.7);
+        }
+
+        #toggleMode span,
+        #toggleMode strong {
+          display: none;
+        }
+
+        #toggleMode::before {
+          content: "▦";
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-size: 18px;
+          opacity: 0.9;
+        }
+
+        #toggleMode[data-mode="free"]::before {
+          content: "≋";
+        }
+
+        /* Touch-first navigation: rely on swipe, hide tiny dots */
+        .navdots {
+          display: none;
+        }
+
+	        /* Dense grids: compact without becoming too tall */
+	        .statgrid {
+	          grid-template-columns: repeat(2, 1fr);
+	          gap: 10px;
+	          margin-top: 12px;
+	        }
+
+	        .stat {
+	          padding: 12px 12px;
+	        }
+
+	        .stat .n {
+	          font-size: 22px;
+	        }
+
+	        .stat .k {
+	          margin-top: 6px;
+	          font-size: 11px;
+	          letter-spacing: 0.05em;
+	        }
+
+        .city-bars {
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+          inset: 14px;
+        }
+
+	        /* Scene 2: prevent label overlaps + keep content compact. */
+	        #scroller[data-mode="paged"] #s2 .city {
+	          height: 176px;
+	        }
+
+        #scroller[data-mode="paged"] #s2 .bar .cap {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+        }
+
+        #scroller[data-mode="paged"] #s2 .bar .cap b {
+          font-size: 18px;
+        }
+
+        #scroller[data-mode="paged"] #s2 .bar .cap span {
+          font-size: 10px;
+          letter-spacing: 0.06em;
+        }
+
+        #scroller[data-mode="paged"] #s2 .mega-sub .pill:nth-child(n + 4) {
+          display: none;
+        }
+
+        /* Scene 3: keep heatmap header from horizontal overflow. */
+        #scroller[data-mode="paged"] #s3 .heatmap-head {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 10px;
+        }
+
+        #scroller[data-mode="paged"] #s3 .legend {
+          flex-wrap: wrap;
+          row-gap: 6px;
+        }
+
+		        /* Scene 4: tower month selector as compact grid + shorter sparkline. */
+		        #scroller[data-mode="paged"] #s4 .tower {
+		          margin-top: 10px;
+		          gap: 12px;
+		          grid-template-columns: 1fr;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .tower-left {
+		          padding: 10px;
+		          min-width: 0;
+		        }
+
+        #scroller[data-mode="paged"] #s4 .tower-right {
+          min-width: 0;
+        }
+
+		        /* Scene 4 (mobile): 12-key “elevator panel” (no horizontal overflow). */
+		        #scroller[data-mode="paged"] #s4 .floors {
+		          display: grid;
+		          grid-template-columns: repeat(4, minmax(0, 1fr));
+		          gap: 10px;
+		          padding: 2px;
+		          overflow: visible;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor {
+		          width: auto;
+		          padding: 12px 0;
+		          min-height: 46px;
+		          justify-content: center;
+		          position: relative;
+		          border-radius: 18px;
+		          border-color: rgba(234, 240, 255, 0.12);
+		          background:
+		            radial-gradient(180px 120px at 20% 10%, rgba(122, 167, 255, 0.14), transparent 62%),
+		            radial-gradient(160px 120px at 86% 30%, rgba(255, 79, 216, 0.11), transparent 64%),
+		            rgba(7, 10, 18, 0.34);
+		          box-shadow: inset 0 1px 0 rgba(240, 246, 252, 0.06), 0 10px 30px rgba(0, 0, 0, 0.35);
+		          transform: translateZ(0);
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor::after {
+		          content: "";
+		          position: absolute;
+		          top: 10px;
+		          right: 12px;
+		          width: 7px;
+		          height: 7px;
+		          border-radius: 999px;
+		          background: rgba(234, 240, 255, 0.16);
+		          box-shadow: 0 0 0 5px rgba(88, 166, 255, 0.06);
+		          opacity: 0.9;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor[data-lv="0"]::after {
+		          background: rgba(234, 240, 255, 0.12);
+		          box-shadow: 0 0 0 5px rgba(88, 166, 255, 0.04);
+		          opacity: 0.8;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor[data-lv="1"]::after {
+		          background: rgba(69, 247, 199, 0.32);
+		          box-shadow: 0 0 0 5px rgba(69, 247, 199, 0.08);
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor[data-lv="2"]::after {
+		          background: rgba(69, 247, 199, 0.46);
+		          box-shadow: 0 0 0 5px rgba(69, 247, 199, 0.12);
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor[data-lv="3"]::after {
+		          background: rgba(210, 153, 34, 0.58);
+		          box-shadow: 0 0 0 6px rgba(210, 153, 34, 0.14);
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor[data-lv="4"]::after {
+		          background: rgba(210, 153, 34, 0.88);
+		          box-shadow: 0 0 0 7px rgba(210, 153, 34, 0.16), 0 0 18px rgba(210, 153, 34, 0.18);
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor b {
+		          font-size: 16px;
+		          letter-spacing: 0.12em;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor:active {
+		          transform: translateY(1px);
+		          border-color: rgba(122, 167, 255, 0.32);
+		          background:
+		            radial-gradient(180px 120px at 20% 10%, rgba(122, 167, 255, 0.18), transparent 62%),
+		            radial-gradient(160px 120px at 86% 30%, rgba(255, 79, 216, 0.14), transparent 64%),
+		            rgba(7, 10, 18, 0.38);
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .floor.is-on {
+		          border-color: rgba(210, 153, 34, 0.48);
+		          background:
+		            radial-gradient(220px 160px at 50% 10%, rgba(210, 153, 34, 0.22), transparent 64%),
+		            radial-gradient(220px 160px at 70% 80%, rgba(188, 140, 255, 0.14), transparent 64%),
+		            rgba(7, 10, 18, 0.36);
+		          box-shadow: inset 0 1px 0 rgba(240, 246, 252, 0.06), 0 16px 44px rgba(0, 0, 0, 0.42);
+		        }
+
+	        #scroller[data-mode="paged"] #s4 .floor .meta {
+	          display: none;
+	        }
+
+	        /* Scene 4: keep it single-screen in paged mode. */
+	        #scroller[data-mode="paged"] #s4 .lead {
+	          display: none;
+	        }
+
+	        #scroller[data-mode="paged"] #s4 .tower-controls {
+	          display: none;
+	        }
+
+		        #scroller[data-mode="paged"] #s4 .tower-panel {
+		          padding: 10px;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .tower-panel h3 {
+		          font-size: 18px;
+		          margin-bottom: 8px;
+		          text-align: center;
+		        }
+
+			        #scroller[data-mode="paged"] #s4 #monthDesc {
+			          display: -webkit-box;
+			          -webkit-box-orient: vertical;
+			          -webkit-line-clamp: 1;
+			          overflow: hidden;
+			          text-align: center;
+			          font-size: 12px;
+			          color: rgba(234, 240, 255, 0.66);
+			        }
+
+		        #scroller[data-mode="paged"] #s4 .tower-panel .split {
+		          gap: 10px;
+		          grid-template-columns: 1fr 1fr;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .tower-panel .split .note {
+		          display: none;
+		        }
+
+		        #scroller[data-mode="paged"] #s4 .tower-panel .split .card-ghost .card-inner {
+		          padding: 12px 12px;
+		          display: flex;
+		          align-items: center;
+		          justify-content: center;
+		          min-height: 56px;
+		        }
+
+			        #scroller[data-mode="paged"] #s4 .tower-panel .split .chip {
+			          width: 100%;
+			          justify-content: center;
+			          padding: 10px 12px;
+			          border-color: rgba(234, 240, 255, 0.14);
+			          background: rgba(7, 10, 18, 0.28);
+			          gap: 10px;
+			        }
+
+			        #scroller[data-mode="paged"] #s4 .tower-panel .split .chip-ico .ico {
+			          display: block;
+			          width: 18px;
+			          height: 18px;
+			        }
+
+			        #scroller[data-mode="paged"] #s4 .tower-panel .split .chip-ico small {
+			          display: none;
+			        }
+
+			        #scroller[data-mode="paged"] #s4 .tower-panel .split .chip span {
+			          font-size: 16px;
+			          letter-spacing: 0.02em;
+			        }
+
+			        #scroller[data-mode="paged"] #s4 .m-actions .btn {
+			          border-radius: 18px;
+			          border-color: rgba(210, 153, 34, 0.32);
+			          background: linear-gradient(135deg, rgba(210, 153, 34, 0.16), rgba(88, 166, 255, 0.08));
+			          box-shadow: 0 18px 58px rgba(0, 0, 0, 0.42);
+			        }
+
+	        #scroller[data-mode="paged"] #s4 .floor b small {
+	          display: none;
+	        }
+
+		        #scroller[data-mode="paged"] #s4 .sparkline {
+		          height: 92px;
+		        }
+
+	        /* Scene 6: show 4 categories as a compact 2x2 grid in paged mode. */
+	        #scroller[data-mode="paged"] #s6 .catgrid {
+	          margin-top: 12px;
+	          grid-template-columns: repeat(2, 1fr);
+	          gap: 10px;
+	        }
+
+        #scroller[data-mode="paged"] #s6 .cat {
+          padding: 10px 10px;
+          border-radius: 18px;
+        }
+
+        #scroller[data-mode="paged"] #s6 .cat .desc {
+          display: none;
+        }
+
+		        #scroller[data-mode="paged"] #s6 .cat .label {
+		          font-size: 16px;
+		        }
+
+		        /* Scene 6: shorten category labels on phones (<= 3 chars). */
+	        #s6 .cat .label .full {
+	          display: none;
+	        }
+
+		        #s6 .cat .label .short {
+		          display: inline;
+		        }
+
+		        /* Scene 6: make the 2x2 blocks feel "solid" (avoid tiny cards). */
+		        #scroller[data-mode="paged"] #s6 .cat {
+		          min-height: 96px;
+		        }
+
+		        #scroller[data-mode="paged"] #s6 .cat .count {
+		          font-size: 13px;
+		          background: none;
+		          -webkit-background-clip: initial;
+		          background-clip: initial;
+		          color: rgba(234, 240, 255, 0.8);
+		        }
+
+		        #scroller[data-mode="paged"] #s6 .cat .count::before {
+		          content: "★";
+		          margin-right: 4px;
+		          color: rgba(210, 153, 34, 0.92);
+		        }
+
+		        /* Sheet: category details should wrap (no horizontal overflow). */
+		        .msheet #s6CatPanel .head {
+		          flex-wrap: wrap;
+		          align-items: flex-start;
+		        }
+
+		        .msheet #s6CatPanel .head .pill {
+		          padding: 6px 10px;
+		          font-size: 12px;
+		        }
+
+		        .msheet #s6CatPanel .head .pill span {
+		          display: none;
+		        }
+
+		        .msheet #s6CatPanel .head .pill b::before {
+		          content: "★ ";
+		          color: rgba(210, 153, 34, 0.92);
+		        }
+
+		        .msheet #s6CatPanel .item {
+		          align-items: flex-start;
+		        }
+
+		        .msheet #s6CatPanel .item .name {
+		          white-space: normal;
+		          overflow: visible;
+		          text-overflow: clip;
+		          overflow-wrap: anywhere;
+		          word-break: break-word;
+		        }
+
+		        .msheet #s6CatPanel .item .name a {
+		          overflow-wrap: anywhere;
+		          word-break: break-word;
+		        }
+
+		        .msheet #s6CatPanel .chip small {
+		          display: none;
+		        }
+
+	        /* Scene 5: reduce narrative density on phones. */
+	        #scroller[data-mode="paged"] #s5 #focusNote {
+	          display: none;
+	        }
+
+	        #scroller[data-mode="paged"] #s5 #topCommitList .meta {
+	          display: none;
+	        }
+
+        #scroller[data-mode="paged"] #s6 .catgrid .cat:nth-child(n + 5) {
+          display: none;
+        }
+
+        /* Scene 7: keep radar undistorted on phones. */
+        #scroller[data-mode="paged"] #s7 .radar-canvas {
+          height: auto;
+          aspect-ratio: 900 / 620;
+          max-height: 42vh;
+        }
+
+	        /* Scene 11: prevent terminal from consuming the whole viewport. */
+	        #scroller[data-mode="paged"] #s11 .terminal-body {
+	          max-height: 220px;
+	          overflow: hidden;
+	          -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent);
+	          mask-image: linear-gradient(to bottom, #000 78%, transparent);
+	        }
+
+		        /* Sheet: keep carousel "memory" cards within the viewport (no side overflow). */
+		        .msheet .carousel-body {
+		          padding: 14px;
+		        }
+
+		        /* Mobile: replace 3D wheel with selector + single detail card. */
+		        .carousel .wheel {
+		          display: none;
+		        }
+
+		        .carousel .mholiday {
+		          display: grid;
+		          gap: 12px;
+		        }
+
+		        .carousel-head h3 {
+		          font-size: 18px;
+		        }
+
+		        .carousel-head .iconbtn {
+		          width: 38px;
+		          height: 38px;
+		        }
+
+		        #holidayNote {
+		          display: none;
+		        }
+
+	        /* Scene 14: compact share controls on mobile (do not steal vertical space). */
+	        #scroller[data-mode="paged"] #s14 .title,
+	        #scroller[data-mode="paged"] #s14 .lead {
+	          display: none;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .share-controls {
+	          position: absolute;
+	          right: 8px;
+	          top: 8px;
+	          gap: 8px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .fab {
+	          width: 40px;
+	          height: 40px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .fab svg {
+	          width: 19px;
+	          height: 19px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .sharecard .card-inner {
+	          padding-top: 60px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .sharecard h3 {
+	          font-size: 20px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .sharebest .bestrepo {
+	          font-size: 17px;
+	        }
+
+		        /* Scene 10: reduce vertical crowding (details via sheet). */
+		        #scroller[data-mode="paged"] #s10 #topDaysList {
+		          margin-top: 12px;
+		        }
+
+		        #scroller[data-mode="paged"] #s10 #topDaysList .meta {
+		          display: none;
+		        }
+
+		        #scroller[data-mode="paged"] #s10 #topDaysList .item {
+		          padding: 9px 10px;
+		          border-radius: 16px;
+		        }
+
+		        #scroller[data-mode="paged"] #s10 #topDaysList .chip {
+		          padding: 6px 8px;
+		          font-size: 12px;
+		        }
+
+		        #scroller[data-mode="paged"] #s10 #topDaysList .item:nth-child(n + 4) {
+		          display: none;
+		        }
+
+	        #scroller[data-mode="paged"] #s10 .supernova p.note {
+	          display: none;
+	        }
+
+	        #scroller[data-mode="paged"] #s10 .mega-sub .pill:first-child {
+	          display: none;
+	        }
+
+	        #scroller[data-mode="paged"] #s10 .supernova .card-inner {
+	          padding: 12px 12px;
+	        }
+
+		        #scroller[data-mode="paged"] #s14 .sharestat {
+		          padding: 10px 10px;
+		          display: grid;
+		          gap: 6px;
+		          align-content: start;
+		        }
+
+		        #scroller[data-mode="paged"] #s14 .sharestat .stat-ico {
+		          display: block;
+		        }
+
+		        #scroller[data-mode="paged"] #s14 .sharestat span {
+		          display: none;
+		        }
+
+		        #scroller[data-mode="paged"] #s14 .sharestat b {
+		          font-size: 16px;
+		        }
+
+	        #scroller[data-mode="paged"] #s14 .sharestats {
+	          margin-top: 12px;
+	          gap: 8px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .sharebest {
+	          margin-top: 10px;
+	          padding: 12px 12px;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 #shareSubtitle {
+	          display: -webkit-box;
+	          -webkit-box-orient: vertical;
+	          -webkit-line-clamp: 1;
+	          overflow: hidden;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 #shareBestNote {
+	          display: none;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .sharecard .top .avatar-orb {
+	          width: 74px !important;
+	          height: 74px !important;
+	        }
+
+	        #scroller[data-mode="paged"] #s14 .sharecard .top .avatar {
+	          width: 56px !important;
+	          height: 56px !important;
+	        }
+	      }
+
+	      @media (max-width: 420px) {
+	        .sharestats {
+	          grid-template-columns: 1fr;
+	        }
+	      }
+
+	      /* Mobile paged mode: keep share stats compact even on very small screens. */
+	      @media (max-width: 420px) and (pointer: coarse) {
+	        #scroller[data-mode="paged"] #s14 .sharestats {
+	          grid-template-columns: repeat(2, 1fr);
+	        }
+	      }
 
       /* Visual modules */
       .statgrid {
@@ -1001,12 +2091,60 @@
       .heatmap-body {
         padding: 14px 16px 18px;
         overflow-x: auto;
+        position: relative;
       }
 
       .grid-heat {
         display: flex;
         gap: 3px;
         align-items: flex-start;
+        position: relative;
+        z-index: 2;
+      }
+
+      @media (min-width: 981px) {
+        .heatmap-body::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 1;
+          opacity: 0.9;
+          background:
+            radial-gradient(520px 360px at 84% 30%, rgba(188, 140, 255, 0.14), transparent 62%),
+            radial-gradient(480px 420px at 72% 78%, rgba(69, 247, 199, 0.11), transparent 66%),
+            radial-gradient(520px 420px at 96% 64%, rgba(88, 166, 255, 0.12), transparent 66%),
+            radial-gradient(2px 2px at 72% 22%, rgba(240, 246, 252, 0.62), transparent 60%),
+            radial-gradient(2px 2px at 82% 16%, rgba(188, 140, 255, 0.75), transparent 60%),
+            radial-gradient(2px 2px at 92% 24%, rgba(69, 247, 199, 0.7), transparent 60%),
+            radial-gradient(1px 1px at 77% 38%, rgba(240, 246, 252, 0.55), transparent 60%),
+            radial-gradient(1px 1px at 90% 42%, rgba(240, 246, 252, 0.5), transparent 60%),
+            radial-gradient(2px 2px at 86% 54%, rgba(88, 166, 255, 0.75), transparent 60%),
+            radial-gradient(1px 1px at 74% 62%, rgba(240, 246, 252, 0.5), transparent 60%),
+            radial-gradient(2px 2px at 94% 70%, rgba(188, 140, 255, 0.72), transparent 60%),
+            radial-gradient(1px 1px at 82% 76%, rgba(240, 246, 252, 0.45), transparent 60%),
+            radial-gradient(2px 2px at 90% 86%, rgba(69, 247, 199, 0.6), transparent 60%),
+            linear-gradient(135deg, rgba(240, 246, 252, 0.0), rgba(240, 246, 252, 0.04));
+          filter: saturate(1.05) contrast(1.02);
+          -webkit-mask-image: linear-gradient(90deg, transparent 0 54%, rgba(0, 0, 0, 0.55) 70%, #000 92%);
+          mask-image: linear-gradient(90deg, transparent 0 54%, rgba(0, 0, 0, 0.55) 70%, #000 92%);
+        }
+
+        .heatmap-body::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 1;
+          opacity: 0.32;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='420' viewBox='0 0 900 420'%3E%3Cg fill='none' stroke='%23eaf0ff' stroke-opacity='.22'%3E%3Cpath d='M640 90 L720 64 L794 100 L852 82' stroke-width='1.2'/%3E%3Cpath d='M662 238 L726 208 L782 236 L844 222 L880 252' stroke-width='1.1'/%3E%3Cpath d='M608 300 L684 320 L732 286 L792 312 L852 292' stroke-width='1.05'/%3E%3C/g%3E%3Cg fill='%23f0f6fc' fill-opacity='.45'%3E%3Ccircle cx='640' cy='90' r='2.2'/%3E%3Ccircle cx='720' cy='64' r='2.2'/%3E%3Ccircle cx='794' cy='100' r='2.2'/%3E%3Ccircle cx='852' cy='82' r='2.1'/%3E%3Ccircle cx='662' cy='238' r='2.1'/%3E%3Ccircle cx='726' cy='208' r='2.1'/%3E%3Ccircle cx='782' cy='236' r='2.1'/%3E%3Ccircle cx='844' cy='222' r='2.1'/%3E%3Ccircle cx='880' cy='252' r='2.1'/%3E%3Ccircle cx='608' cy='300' r='2.1'/%3E%3Ccircle cx='684' cy='320' r='2.1'/%3E%3Ccircle cx='732' cy='286' r='2.1'/%3E%3Ccircle cx='792' cy='312' r='2.1'/%3E%3Ccircle cx='852' cy='292' r='2.1'/%3E%3C/g%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-size: cover;
+          background-position: 78% 50%;
+          -webkit-mask-image: linear-gradient(90deg, transparent 0 54%, rgba(0, 0, 0, 0.55) 70%, #000 92%);
+          mask-image: linear-gradient(90deg, transparent 0 54%, rgba(0, 0, 0, 0.55) 70%, #000 92%);
+          filter: blur(0.2px);
+        }
       }
 
       .week {
@@ -1114,7 +2252,17 @@
         letter-spacing: 0.02em;
       }
 
-      .floor span {
+      .floor b small {
+        font-family: inherit;
+        font-size: inherit;
+        font-weight: inherit;
+        letter-spacing: inherit;
+        color: inherit;
+        margin-left: 6px;
+        opacity: 1;
+      }
+
+      .floor .meta {
         color: rgba(234, 240, 255, 0.66);
         font-size: 12px;
       }
@@ -1264,6 +2412,32 @@
         gap: 10px;
       }
 
+      .list.list-cols2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .list.list-cols3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .list.list-dense {
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .list.list-dense .item {
+        padding: 10px 12px;
+        border-radius: 16px;
+      }
+
+      .list.list-dense .item .meta {
+        margin-top: 4px;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+      }
+
       .item {
         border-radius: 18px;
         border: 1px solid rgba(234, 240, 255, 0.12);
@@ -1363,6 +2537,14 @@
         text-transform: uppercase;
       }
 
+      .chip-ico .ico {
+        display: none;
+        width: 16px;
+        height: 16px;
+        color: rgba(234, 240, 255, 0.9);
+        opacity: 0.92;
+      }
+
       .chip small {
         font-family: var(--body);
         font-weight: 600;
@@ -1377,6 +2559,49 @@
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 12px;
+      }
+
+      .s6-layout {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: 0.62fr 1fr;
+        gap: 14px;
+        align-items: start;
+      }
+
+      #s6 .s6-layout > .catgrid {
+        margin-top: 0;
+      }
+
+      @media (max-width: 980px) {
+        .s6-layout {
+          display: block;
+        }
+      }
+
+      @media (min-width: 981px) {
+        #s6 .s6-layout > .catgrid {
+          margin-top: 0;
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        #s6 .s6-layout > .catpanel {
+          margin-top: 0;
+        }
+
+        #s6 .s6-layout > .catgrid .cat {
+          padding: 12px 12px;
+          border-radius: 20px;
+        }
+
+        #s6 .s6-layout > .catgrid .cat .desc {
+          display: none;
+        }
+
+        #s6 .s6-layout > .catgrid .cat .label {
+          font-size: 18px;
+        }
       }
 
       @media (max-width: 980px) {
@@ -1447,6 +2672,10 @@
         letter-spacing: 0.02em;
       }
 
+      .cat .label .short {
+        display: none;
+      }
+
       .cat .count {
         font-family: var(--display);
         font-weight: 800;
@@ -1498,6 +2727,124 @@
 
       .catpanel .body {
         padding: 14px 16px 18px;
+      }
+
+      .s9-split {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .interest-board {
+        position: relative;
+        border-radius: 22px;
+        border: 1px solid rgba(234, 240, 255, 0.12);
+        background: linear-gradient(135deg, rgba(13, 17, 23, 0.46), rgba(13, 17, 23, 0.18));
+        padding: 14px 14px 12px;
+        overflow: hidden;
+      }
+
+      .interest-board::before {
+        content: "";
+        position: absolute;
+        inset: -40%;
+        background:
+          radial-gradient(700px 420px at 20% 10%, rgba(88, 166, 255, 0.14), transparent 62%),
+          radial-gradient(740px 520px at 90% 30%, rgba(188, 140, 255, 0.12), transparent 62%),
+          radial-gradient(820px 620px at 50% 90%, rgba(63, 185, 80, 0.11), transparent 66%);
+        opacity: 0.95;
+        pointer-events: none;
+      }
+
+      .interest-board.up::before {
+        background:
+          radial-gradient(720px 460px at 16% 16%, rgba(63, 185, 80, 0.16), transparent 62%),
+          radial-gradient(740px 520px at 86% 28%, rgba(88, 166, 255, 0.12), transparent 64%),
+          radial-gradient(820px 620px at 70% 92%, rgba(188, 140, 255, 0.08), transparent 66%);
+      }
+
+      .interest-board.lang::before {
+        background:
+          radial-gradient(700px 440px at 18% 18%, rgba(210, 153, 34, 0.14), transparent 62%),
+          radial-gradient(780px 520px at 92% 30%, rgba(188, 140, 255, 0.12), transparent 64%),
+          radial-gradient(820px 620px at 60% 92%, rgba(88, 166, 255, 0.1), transparent 66%);
+      }
+
+      .interest-board > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      .interest-board .pill {
+        background: rgba(7, 10, 18, 0.32);
+        border-color: rgba(234, 240, 255, 0.14);
+      }
+
+      .interest-note {
+        margin: 10px 0 0;
+        color: rgba(234, 240, 255, 0.62);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      @media (min-width: 981px) {
+        #s9 .list.list-dense .item .meta {
+          display: block;
+          -webkit-box-orient: initial;
+          -webkit-line-clamp: initial;
+          overflow: visible;
+        }
+      }
+
+      @media (min-width: 981px) {
+        #s9 .interest-board .list.list-dense {
+          gap: 10px;
+        }
+
+        #s9 .interest-board .item {
+          align-items: flex-start;
+        }
+
+        #s9 .interest-board .list.list-dense .item {
+          padding: 12px 14px;
+          background: rgba(7, 10, 18, 0.36);
+          border-color: rgba(234, 240, 255, 0.14);
+        }
+
+        #s9 .interest-board .item:hover {
+          background: rgba(7, 10, 18, 0.42);
+          border-color: rgba(234, 240, 255, 0.22);
+        }
+
+        #s9 .interest-board .item .name {
+          font-size: 15px;
+          letter-spacing: 0.01em;
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+          display: block;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          line-height: 1.25;
+        }
+
+        #s9 .interest-board .item .meta {
+          font-size: 13px;
+          color: rgba(234, 240, 255, 0.72);
+          line-height: 1.45;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        #s9 .interest-board .item .right {
+          padding-top: 2px;
+        }
+
+        #s9 .interest-board .chip {
+          font-size: 12px;
+          padding: 8px 12px;
+          letter-spacing: 0.05em;
+        }
       }
 
       /* Radar */
@@ -1842,6 +3189,8 @@
         justify-content: space-between;
         gap: 12px;
         border-bottom: 1px solid rgba(234, 240, 255, 0.08);
+        position: relative;
+        z-index: 5;
       }
 
       .carousel-head h3 {
@@ -1876,20 +3225,215 @@
 
       .carousel-body {
         padding: 16px;
+        position: relative;
+        z-index: 1;
       }
 
       .wheel {
         perspective: 1200px;
-        height: 260px;
+        height: 280px;
         position: relative;
+        overflow: hidden;
+        isolation: isolate;
       }
 
-      .wheel-inner {
-        position: absolute;
-        inset: 0;
-        transform-style: preserve-3d;
-        transition: transform 700ms var(--ease);
-      }
+	      .wheel-inner {
+	        position: absolute;
+	        inset: 0;
+	        transform-style: preserve-3d;
+	        transition: transform 700ms var(--ease);
+	      }
+
+	      /* Mobile-first holiday "roulette" (selector + single detail card). Hidden by default; enabled in mobile media query. */
+	      .mholiday {
+	        display: none;
+	      }
+
+	      .mholiday-strip {
+	        display: flex;
+	        gap: 10px;
+	        overflow-x: auto;
+	        overflow-y: hidden;
+	        padding: 2px 2px 10px;
+	        -webkit-overflow-scrolling: touch;
+	        scroll-snap-type: x mandatory;
+	      }
+
+	      .mholiday-strip::-webkit-scrollbar {
+	        width: 0;
+	        height: 0;
+	      }
+
+	      .mholiday-chip {
+	        flex: 0 0 auto;
+	        scroll-snap-align: center;
+	        border-radius: 999px;
+	        border: 1px solid rgba(234, 240, 255, 0.14);
+	        background: rgba(7, 10, 18, 0.36);
+	        padding: 10px 12px;
+	        display: inline-flex;
+	        align-items: center;
+	        gap: 10px;
+	        color: rgba(234, 240, 255, 0.9);
+	        cursor: pointer;
+	        user-select: none;
+	        -webkit-tap-highlight-color: transparent;
+	        transition: transform 160ms var(--ease2), border-color 200ms var(--ease), background 200ms var(--ease);
+	      }
+
+	      .mholiday-chip:active {
+	        transform: translateY(1px);
+	      }
+
+	      .mholiday-chip .dot {
+	        width: 8px;
+	        height: 8px;
+	        border-radius: 999px;
+	        background: rgba(234, 240, 255, 0.22);
+	        box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.08);
+	      }
+
+	      .mholiday-chip .lbl {
+	        font-family: var(--headline);
+	        letter-spacing: 0.02em;
+	        font-size: 13px;
+	        max-width: 10ch;
+	        white-space: nowrap;
+	        overflow: hidden;
+	        text-overflow: ellipsis;
+	      }
+
+	      .mholiday-chip .cnt {
+	        font-family: var(--display);
+	        font-weight: 800;
+	        letter-spacing: 0.04em;
+	        font-size: 12px;
+	        color: rgba(210, 153, 34, 0.92);
+	      }
+
+	      .mholiday-chip.is-on {
+	        border-color: rgba(122, 167, 255, 0.55);
+	        background: linear-gradient(135deg, rgba(122, 167, 255, 0.16), rgba(255, 79, 216, 0.11));
+	        box-shadow: 0 18px 56px rgba(0, 0, 0, 0.36);
+	      }
+
+	      .mholiday-chip.is-on .dot {
+	        background: rgba(210, 153, 34, 0.92);
+	        box-shadow: 0 0 0 4px rgba(210, 153, 34, 0.14), 0 0 24px rgba(210, 153, 34, 0.18);
+	      }
+
+	      .mholiday-detail {
+	        position: relative;
+	        border-radius: 22px;
+	        border: 1px solid rgba(234, 240, 255, 0.12);
+	        background: linear-gradient(135deg, rgba(13, 17, 23, 0.42), rgba(13, 17, 23, 0.18));
+	        padding: 14px 14px;
+	        overflow: hidden;
+	      }
+
+	      .mholiday-detail::before {
+	        content: "";
+	        position: absolute;
+	        inset: -30%;
+	        background:
+	          radial-gradient(700px 420px at 20% 10%, rgba(88, 166, 255, 0.14), transparent 62%),
+	          radial-gradient(700px 420px at 86% 30%, rgba(188, 140, 255, 0.12), transparent 62%),
+	          radial-gradient(700px 520px at 50% 85%, rgba(210, 153, 34, 0.1), transparent 66%);
+	        opacity: 0.95;
+	        pointer-events: none;
+	      }
+
+	      .mholiday-detail > * {
+	        position: relative;
+	        z-index: 1;
+	      }
+
+	      .mh-head {
+	        display: flex;
+	        align-items: flex-start;
+	        justify-content: space-between;
+	        gap: 12px;
+	      }
+
+	      .mh-title {
+	        margin: 0;
+	        font-family: var(--headline);
+	        font-size: 18px;
+	        letter-spacing: 0.02em;
+	        line-height: 1.15;
+	      }
+
+	      .mh-meta {
+	        margin-top: 6px;
+	        color: rgba(234, 240, 255, 0.62);
+	        font-size: 12px;
+	        letter-spacing: 0.02em;
+	      }
+
+	      .mh-badge {
+	        border-radius: 999px;
+	        border: 1px solid rgba(48, 54, 61, 0.9);
+	        background: rgba(7, 10, 18, 0.38);
+	        padding: 8px 10px;
+	        display: inline-flex;
+	        align-items: baseline;
+	        gap: 8px;
+	        flex: 0 0 auto;
+	      }
+
+	      .mh-badge b {
+	        font-family: var(--display);
+	        font-weight: 900;
+	        letter-spacing: 0.04em;
+	        font-size: 16px;
+	      }
+
+	      .mh-badge span {
+	        color: rgba(139, 148, 158, 0.95);
+	        font-size: 11px;
+	        letter-spacing: 0.06em;
+	        text-transform: uppercase;
+	      }
+
+	      .mh-repos {
+	        margin-top: 12px;
+	        display: grid;
+	        gap: 8px;
+	      }
+
+	      .mh-repo {
+	        display: flex;
+	        align-items: center;
+	        justify-content: space-between;
+	        gap: 12px;
+	        border-radius: 16px;
+	        border: 1px solid rgba(234, 240, 255, 0.12);
+	        background: rgba(7, 10, 18, 0.32);
+	        padding: 10px 12px;
+	      }
+
+	      .mh-repo .name {
+	        min-width: 0;
+	        font-weight: 700;
+	        color: rgba(234, 240, 255, 0.92);
+	        white-space: nowrap;
+	        overflow: hidden;
+	        text-overflow: ellipsis;
+	      }
+
+	      .mh-repo .stars {
+	        flex: 0 0 auto;
+	        font-family: var(--display);
+	        font-size: 12px;
+	        letter-spacing: 0.04em;
+	        color: rgba(210, 153, 34, 0.92);
+	      }
+
+	      .mh-empty {
+	        color: rgba(234, 240, 255, 0.66);
+	        font-size: 12px;
+	        line-height: 1.55;
+	      }
 
       .memory {
         position: absolute;
@@ -1898,6 +3442,9 @@
         width: min(520px, calc(100% - 20px));
         transform-style: preserve-3d;
         translate: -50% -50%;
+        max-height: 240px;
+        display: flex;
+        flex-direction: column;
         border-radius: 22px;
         border: 1px solid rgba(234, 240, 255, 0.12);
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
@@ -1925,6 +3472,11 @@
         margin-top: 12px;
         display: grid;
         gap: 8px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-right: 4px;
       }
 
       .memory .repo {
@@ -2029,6 +3581,14 @@
         border: 1px solid rgba(48, 54, 61, 0.85);
         background: rgba(13, 17, 23, 0.36);
         padding: 12px 12px;
+      }
+
+      .stat-ico {
+        display: none;
+        width: 18px;
+        height: 18px;
+        color: rgba(234, 240, 255, 0.82);
+        opacity: 0.92;
       }
 
       .sharestat b {
@@ -2211,6 +3771,26 @@
 	        <div class="hud-mini" id="hudHint">滚轮 / ↑↓ 翻页</div>
 	      </div>
 	      <div class="hud-right">
+	        <button class="badge badge-icon" id="toggleFullscreen" type="button" aria-label="全屏预览" title="全屏预览" data-tip="全屏预览">
+	          <svg class="ico-enter" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+	            <path
+	              d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"
+	              stroke="currentColor"
+	              stroke-width="2"
+	              stroke-linecap="round"
+	              stroke-linejoin="round"
+	            />
+	          </svg>
+	          <svg class="ico-exit" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+	            <path
+	              d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5"
+	              stroke="currentColor"
+	              stroke-width="2"
+	              stroke-linecap="round"
+	              stroke-linejoin="round"
+	            />
+	          </svg>
+	        </button>
 	        <button class="badge" id="toggleMode" type="button" title="切换：逐页/自由滚动">
 	          <span style="opacity: 0.75">模式</span>
 	          <strong id="modeLabel">逐页</strong>
@@ -2297,11 +3877,11 @@
                   从 — 到 2025-12-31，你的 GitHub 旅程走过 — 天。
                 </p>
 
-                <div class="statgrid" data-reveal style="--d: 360ms">
-                  <div class="stat">
-                    <div class="n" id="followers">0</div>
-                    <div class="k">Followers</div>
-                  </div>
+	                <div class="statgrid" data-reveal style="--d: 360ms">
+	                  <div class="stat">
+	                    <div class="n" id="followers">0</div>
+	                    <div class="k">Followers</div>
+	                  </div>
                   <div class="stat">
                     <div class="n" id="following">0</div>
                     <div class="k">Following</div>
@@ -2310,19 +3890,27 @@
                     <div class="n" id="firstRepoYear">—</div>
                     <div class="k">第一座仓库</div>
                   </div>
-                  <div class="stat">
-                    <div class="n" id="firstStarYear">—</div>
-                    <div class="k">第一次 Star</div>
-                  </div>
-                </div>
-              </div>
+	                  <div class="stat">
+	                    <div class="n" id="firstStarYear">—</div>
+	                    <div class="k">第一次 Star</div>
+	                  </div>
+	                </div>
+	
+	                <div class="m-only-paged">
+	                  <div class="m-actions">
+	                    <button class="btn btn-mini btn-primary" type="button" data-sheet-target="s1ProfileCard" data-sheet-title="你的 2025 画像">
+	                      查看画像
+	                    </button>
+	                  </div>
+	                </div>
+	              </div>
 
-              <div>
-                <div class="card" data-reveal style="--d: 180ms">
-                  <div class="card-inner" style="display: grid; gap: 16px; justify-items: center; text-align: center">
-                    <div class="avatar-orb floaty">
-                      <img class="avatar" id="avatar" alt="avatar" />
-                    </div>
+		              <div>
+		                <div class="card" id="s1ProfileCard" data-mhide="paged" data-reveal style="--d: 180ms">
+		                  <div class="card-inner" style="display: grid; gap: 16px; justify-items: center; text-align: center">
+		                    <div class="avatar-orb floaty">
+		                      <img class="avatar" id="avatar" alt="avatar" />
+		                    </div>
                     <div>
                       <div class="pill" style="justify-content: center">
                         <span>你的 2025 画像</span>
@@ -2372,38 +3960,38 @@
 
             <div class="city" data-reveal style="--d: 360ms">
               <div class="city-bars">
-                <div class="bar" id="barCommits" style="--h: 40%">
-                  <div class="fill"></div>
-                  <div class="cap"><b id="nCommits">0</b><span>Commits</span></div>
-                  <div class="bar-meta" aria-hidden="true">
-                    <div class="bar-row"><span>占比</span><b id="pctCommits">—</b></div>
-                    <div class="bar-row"><span>每活跃日</span><b id="perDayCommits">—</b></div>
-                  </div>
-                </div>
-                <div class="bar" id="barPrs" style="--h: 20%">
-                  <div class="fill"></div>
-                  <div class="cap"><b id="nPrs">0</b><span>PRs</span></div>
-                  <div class="bar-meta" aria-hidden="true">
-                    <div class="bar-row"><span>占比</span><b id="pctPrs">—</b></div>
-                    <div class="bar-row"><span>平均每月</span><b id="perMonthPrs">—</b></div>
-                  </div>
-                </div>
-                <div class="bar" id="barIssues" style="--h: 16%">
-                  <div class="fill"></div>
-                  <div class="cap"><b id="nIssues">0</b><span>Issues</span></div>
-                  <div class="bar-meta" aria-hidden="true">
-                    <div class="bar-row"><span>占比</span><b id="pctIssues">—</b></div>
-                    <div class="bar-row"><span>平均每月</span><b id="perMonthIssues">—</b></div>
-                  </div>
-                </div>
-                <div class="bar" id="barRepos" style="--h: 28%">
-                  <div class="fill"></div>
-                  <div class="cap"><b id="nReposContrib">0</b><span>Repos</span></div>
-                  <div class="bar-meta" aria-hidden="true">
-                    <div class="bar-row"><span>平均贡献</span><b id="avgContribPerRepo">—</b></div>
-                    <div class="bar-row"><span>平均每月</span><b id="perMonthRepos">—</b></div>
-                  </div>
-                </div>
+	                <div class="bar" id="barCommits" style="--h: 40%">
+	                  <div class="fill"></div>
+	                  <div class="cap"><b id="nCommits">0</b><span>Commits</span></div>
+	                  <div class="bar-meta" data-mhide="paged" aria-hidden="true">
+	                    <div class="bar-row"><span>占比</span><b id="pctCommits">—</b></div>
+	                    <div class="bar-row"><span>每活跃日</span><b id="perDayCommits">—</b></div>
+	                  </div>
+	                </div>
+	                <div class="bar" id="barPrs" style="--h: 20%">
+	                  <div class="fill"></div>
+	                  <div class="cap"><b id="nPrs">0</b><span>PRs</span></div>
+	                  <div class="bar-meta" data-mhide="paged" aria-hidden="true">
+	                    <div class="bar-row"><span>占比</span><b id="pctPrs">—</b></div>
+	                    <div class="bar-row"><span>平均每月</span><b id="perMonthPrs">—</b></div>
+	                  </div>
+	                </div>
+	                <div class="bar" id="barIssues" style="--h: 16%">
+	                  <div class="fill"></div>
+	                  <div class="cap"><b id="nIssues">0</b><span>Issues</span></div>
+	                  <div class="bar-meta" data-mhide="paged" aria-hidden="true">
+	                    <div class="bar-row"><span>占比</span><b id="pctIssues">—</b></div>
+	                    <div class="bar-row"><span>平均每月</span><b id="perMonthIssues">—</b></div>
+	                  </div>
+	                </div>
+	                <div class="bar" id="barRepos" style="--h: 28%">
+	                  <div class="fill"></div>
+	                  <div class="cap"><b id="nReposContrib">0</b><span>Repos</span></div>
+	                  <div class="bar-meta" data-mhide="paged" aria-hidden="true">
+	                    <div class="bar-row"><span>平均贡献</span><b id="avgContribPerRepo">—</b></div>
+	                    <div class="bar-row"><span>平均每月</span><b id="perMonthRepos">—</b></div>
+	                  </div>
+	                </div>
               </div>
               <div class="city-floor"></div>
             </div>
@@ -2472,48 +4060,80 @@
                   <span class="kbd" id="monthLabel">01</span>
                 </div>
               </div>
-              <div class="tower-right">
-                <div class="tower-panel">
-                  <h3 id="monthTitle">—</h3>
-                  <p id="monthDesc">—</p>
-                  <div class="split">
-                    <div class="card-ghost">
-                      <div class="card-inner">
-                        <div class="chip"><span id="mContrib">0</span><small>贡献</small></div>
-                        <div class="note" style="margin-top: 10px">该月贡献次数</div>
-                      </div>
-                    </div>
-                    <div class="card-ghost">
-                      <div class="card-inner">
-                        <div class="chip"><span id="mStars">0</span><small>Star</small></div>
-                        <div class="note" style="margin-top: 10px">该月新增 Star</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="split" style="margin-top: 12px">
-                    <div class="card-ghost">
-                      <div class="card-inner">
-                        <div class="chip"><span id="mActive">0</span><small>天</small></div>
-                        <div class="note" style="margin-top: 10px">该月活跃天数</div>
-                      </div>
-                    </div>
-                    <div class="card-ghost">
-                      <div class="card-inner">
-                        <div class="chip"><span id="mTopRepoStars">—</span><small>★</small></div>
-                        <div class="note" style="margin-top: 10px" id="mTopRepoName">该月最热门发现</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="spark-stage" id="sparkStage" aria-label="当月 Star 时间线">
-                    <canvas class="sparkline" id="sparkStars" width="900" height="260" aria-label="当月 Star 时间线"></canvas>
-                    <div class="spark-tip" id="sparkTip" aria-hidden="true"></div>
-                  </div>
-                  <div class="note" style="margin-top: 10px">提示：点位 = 当月 Star 的时间落点（从月初到月末），点击点位可打开项目。</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	              <div class="tower-right">
+	                <div class="tower-panel">
+	                  <h3 id="monthTitle">—</h3>
+	                  <p id="monthDesc">—</p>
+	                  <div class="split">
+	                    <div class="card-ghost">
+	                      <div class="card-inner">
+		                        <div class="chip chip-ico">
+		                          <svg class="ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+		                            <path
+		                              d="M3 12h4l2-6 4 12 2-6h6"
+		                              stroke="currentColor"
+		                              stroke-width="2"
+		                              stroke-linecap="round"
+		                              stroke-linejoin="round"
+		                            />
+		                          </svg>
+		                          <span id="mContrib">0</span><small>贡献</small>
+		                        </div>
+	                        <div class="note" style="margin-top: 10px">该月贡献次数</div>
+	                      </div>
+	                    </div>
+	                    <div class="card-ghost">
+	                      <div class="card-inner">
+		                        <div class="chip chip-ico">
+		                          <svg class="ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+		                            <path
+		                              d="M12 2.8 14.9 8.7l6.5.6-4.9 4.2 1.6 6.4-6.1-3.5-6.1 3.5 1.6-6.4-4.9-4.2 6.5-.6L12 2.8Z"
+		                              stroke="currentColor"
+		                              stroke-width="2"
+		                              stroke-linejoin="round"
+		                            />
+		                          </svg>
+		                          <span id="mStars">0</span><small>Star</small>
+		                        </div>
+	                        <div class="note" style="margin-top: 10px">该月新增 Star</div>
+	                      </div>
+	                    </div>
+	                  </div>
+	
+	                  <div class="m-only-paged">
+	                    <div class="m-actions">
+	                      <button class="btn btn-mini" type="button" data-sheet-target="s4MonthMore" data-sheet-title="本月明细">
+	                        本月明细
+	                      </button>
+	                    </div>
+	                  </div>
+	
+			                  <div id="s4MonthMore" data-mhide="paged">
+			                    <div class="split" style="margin-top: 12px">
+			                      <div class="card-ghost">
+			                        <div class="card-inner">
+		                          <div class="chip"><span id="mActive">0</span><small>天</small></div>
+		                          <div class="note" style="margin-top: 10px">该月活跃天数</div>
+		                        </div>
+		                      </div>
+		                      <div class="card-ghost">
+		                        <div class="card-inner">
+		                          <div class="chip"><span id="mTopRepoStars">—</span><small>★</small></div>
+		                          <div class="note" style="margin-top: 10px" id="mTopRepoName">该月最热门发现</div>
+		                        </div>
+		                      </div>
+		                    </div>
+			                    <div class="spark-stage" id="sparkStage" aria-label="当月 Star 时间线" style="margin-top: 12px">
+			                      <canvas class="sparkline" id="sparkStars" width="900" height="260" aria-label="当月 Star 时间线"></canvas>
+			                      <div class="spark-tip" id="sparkTip" aria-hidden="true"></div>
+			                    </div>
+			                    <div class="note" style="margin-top: 10px">提示：点位 = 当月 Star 的时间落点（从月初到月末），点击点位可打开项目。</div>
+			                  </div>
+		                </div>
+		              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 5 -->
         <section class="scene" id="s5" data-scene-title="战场" data-accent="#d29922" data-accent2="#58a6ff">
@@ -2537,14 +4157,14 @@
                     <div class="note">次 commit 贡献</div>
                   </div>
                   <div class="note" style="margin-top: 12px" id="focusNote">—</div>
-                  <div class="list" id="topCommitList" style="margin-top: 16px"></div>
+                  <div class="list list-dense list-cols2" id="topCommitList"></div>
                 </div>
               </div>
 
-              <div class="card" data-reveal style="--d: 480ms">
-                <div class="card-inner">
-                  <div class="pill"><b>开源侧</b><span>合并 PR 与代码量</span></div>
-                  <div class="split" style="margin-top: 14px">
+		              <div class="card" id="s5OpenSourceCard" data-mhide="paged" data-reveal style="--d: 480ms">
+		                <div class="card-inner">
+		                  <div class="pill"><b>开源侧</b><span>合并 PR 与代码量</span></div>
+	                  <div class="split" style="margin-top: 14px">
                     <div class="card-ghost">
                       <div class="card-inner">
                         <div class="chip"><span id="mergedPrs">0</span><small>PR</small></div>
@@ -2559,12 +4179,20 @@
                     </div>
                   </div>
                   <div class="note" style="margin-top: 12px" id="prNote">—</div>
-                  <div class="list" id="prHighlights"></div>
+                  <div class="list list-dense list-cols2" id="prHighlights"></div>
                 </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	              </div>
+	            </div>
+
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini" type="button" data-sheet-target="s5OpenSourceCard" data-sheet-title="开源侧：合并 PR 与代码量">
+	                  开源侧明细
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 6 -->
         <section class="scene" id="s6" data-scene-title="宇宙" data-accent="#bc8cff" data-accent2="#3fb950">
@@ -2579,19 +4207,21 @@
               按仓库的 topics / primary language 自动归类（用于叙事，不代表唯一真相）。点击任意类别查看代表作。
             </p>
 
-            <div class="catgrid" id="catgrid" data-reveal style="--d: 360ms"></div>
-            <div class="catpanel" data-reveal style="--d: 460ms">
-              <div class="head">
-                <div>
-                  <h3 id="catTitle">—</h3>
-                  <p id="catSub">—</p>
-                </div>
-                <div class="pill"><b id="catCount">0</b><span>个 Star</span></div>
-              </div>
-              <div class="body">
-                <div class="list" id="catRepos"></div>
-              </div>
-            </div>
+	            <div class="s6-layout">
+	              <div class="catgrid" id="catgrid" data-reveal style="--d: 360ms"></div>
+		              <div class="catpanel" id="s6CatPanel" data-mhide="paged" data-reveal style="--d: 460ms">
+		                <div class="head">
+		                  <div>
+	                    <h3 id="catTitle">—</h3>
+	                    <p id="catSub">—</p>
+	                  </div>
+	                  <div class="pill"><b id="catCount">0</b><span>个 Star</span></div>
+	                </div>
+	                <div class="body">
+	                  <div class="list list-dense list-cols2" id="catRepos"></div>
+	                </div>
+	              </div>
+	            </div>
           </div>
         </section>
 
@@ -2608,22 +4238,22 @@
               评分依据：各类别在 2025 Star 数量（主权重）+ 对应开源 PR 的代码变更行（辅权重），归一化到 0-100。
             </p>
 
-            <div class="radar" data-reveal style="--d: 360ms">
-              <div class="card">
-                <div class="card-inner">
-                  <div class="radar-stage" id="radarStage">
-                    <canvas class="radar-canvas" id="radarCanvas" width="900" height="620"></canvas>
-                    <div class="radar-tip" id="radarTip" aria-hidden="true"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="card">
-                <div class="card-inner" style="display: grid; gap: 12px">
-                  <div class="pill"><b id="primaryTrack">—</b><span>主线类型</span></div>
-                  <p class="note" id="radarNote">
-                    —
+	            <div class="radar" data-reveal style="--d: 360ms">
+	              <div class="card">
+	                <div class="card-inner">
+	                  <div class="radar-stage" id="radarStage">
+	                    <canvas class="radar-canvas" id="radarCanvas" width="900" height="620"></canvas>
+	                    <div class="radar-tip" id="radarTip" aria-hidden="true"></div>
+	                  </div>
+	                </div>
+	              </div>
+		              <div class="card" id="s7BreakdownCard" data-mhide="paged">
+		                <div class="card-inner" style="display: grid; gap: 12px">
+		                  <div class="pill"><b id="primaryTrack">—</b><span>主线类型</span></div>
+	                  <p class="note" id="radarNote">
+	                    —
                   </p>
-                  <div style="display: grid; gap: 10px" id="radarBreakdown"></div>
+	                  <div class="list list-dense list-cols2" id="radarBreakdown"></div>
                   <div class="badge-unlock" style="margin-top: 8px">
                     <i></i>
                     <span>恭喜解锁：<b>六边形战士</b></span>
@@ -2631,11 +4261,19 @@
                   <p class="note">
                     <b>注意：</b>这是一种“年度叙事”的近似指标，并不代表真实时间投入；但很擅长捕捉你的关注方向。
                   </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	                </div>
+	              </div>
+	            </div>
+
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini" type="button" data-sheet-target="s7BreakdownCard" data-sheet-title="六边形解读">
+	                  六边形解读
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 8 -->
         <section class="scene" id="s8" data-scene-title="主线" data-accent="#d29922" data-accent2="#bc8cff">
@@ -2650,16 +4288,16 @@
               —
             </p>
 
-            <div class="grid2" style="margin-top: 18px">
-              <div class="card" data-reveal style="--d: 360ms">
-                <div class="card-inner">
-                  <div class="pill"><b>证据链</b><span>从数据里讲故事</span></div>
-                  <div class="list" id="evidenceList"></div>
-                </div>
-              </div>
-              <div class="card" data-reveal style="--d: 480ms">
-                <div class="card-inner">
-                  <div class="pill"><b>外部社区</b><span>年度开源奖候选</span></div>
+	            <div class="grid2" style="margin-top: 18px">
+	              <div class="card" data-reveal style="--d: 360ms">
+	                <div class="card-inner">
+	                  <div class="pill"><b>证据链</b><span>从数据里讲故事</span></div>
+	                  <div class="list" id="evidenceList"></div>
+	                </div>
+	              </div>
+	              <div class="card" id="s8CommunityCard" data-mhide="paged" data-reveal style="--d: 480ms">
+	                <div class="card-inner">
+	                  <div class="pill"><b>外部社区</b><span>年度开源奖候选</span></div>
                   <div class="supernova" style="margin-top: 14px">
                     <div class="card-inner">
                       <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
@@ -2682,10 +4320,18 @@
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	              </div>
+	            </div>
+
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini" type="button" data-sheet-target="s8CommunityCard" data-sheet-title="外部社区 · 年度开源奖候选">
+	                  开源奖候选
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 9 -->
         <section class="scene" id="s9" data-scene-title="解锁" data-accent="#3fb950" data-accent2="#58a6ff">
@@ -2700,25 +4346,40 @@
               对比你 2025 之前与 2025 当年的 Star topics：只要出现明显增量，就算“解锁”。
             </p>
 
-            <div class="grid2" style="margin-top: 18px">
-              <div class="card" data-reveal style="--d: 360ms">
-                <div class="card-inner">
-                  <div class="pill"><b>NEW</b><span>2025 新出现（或第一次形成规模）</span></div>
-                  <div class="list" id="newTopics"></div>
-                </div>
-              </div>
-              <div class="card" data-reveal style="--d: 480ms">
-                <div class="card-inner">
-                  <div class="pill"><b>UP</b><span>同比增幅显著</span></div>
-                  <div class="list" id="risingTopics"></div>
-                  <div style="height: 12px"></div>
-                  <div class="pill"><b>LANG</b><span>新增语言偏好（Star）</span></div>
-                  <div class="list" id="newLangs"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	            <div class="grid2" style="margin-top: 18px">
+	              <div class="card" data-reveal style="--d: 360ms">
+	                <div class="card-inner">
+	                  <div class="pill"><b>NEW</b><span>2025 新出现（或第一次形成规模）</span></div>
+		                  <div class="list list-dense list-cols2" id="newTopics"></div>
+	                </div>
+	              </div>
+	              <div class="card" id="s9MoreCard" data-mhide="paged" data-reveal style="--d: 480ms">
+	                <div class="card-inner">
+		                  <div class="s9-split">
+		                    <div class="interest-board up">
+		                      <div class="pill"><b>UP</b><span>同比增幅显著</span></div>
+			                      <div class="list list-dense" id="risingTopics"></div>
+                          <div class="note interest-note">提示：显示 2025 vs 往年同类 topic 的 Star 次数变化（仅用于叙事）。</div>
+		                    </div>
+		                    <div class="interest-board lang">
+		                      <div class="pill"><b>LANG</b><span>新增语言偏好（Star）</span></div>
+			                      <div class="list list-dense" id="newLangs"></div>
+                          <div class="note interest-note">提示：语言来源为仓库 <code>primaryLanguage</code>（可能为空或不准确）。</div>
+		                    </div>
+		                  </div>
+	                </div>
+	              </div>
+	            </div>
+
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini" type="button" data-sheet-target="s9MoreCard" data-sheet-title="新兴趣 · 详细变化">
+	                  更多变化
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 10 -->
         <section class="scene" id="s10" data-scene-title="超新星" data-accent="#d29922" data-accent2="#bc8cff">
@@ -2743,7 +4404,7 @@
                   </div>
                   <div class="pill"><b id="busiestDate">—</b></div>
                 </div>
-                <div class="list" id="topDaysList" style="margin-top: 16px"></div>
+                <div class="list list-dense list-cols2" id="topDaysList"></div>
                 <p class="note" style="margin-top: 14px">
                   <b>“具体干了什么？”</b>GitHub 公开贡献日历只提供日级总数，不提供按仓库/提交的公开明细；因此这里不编造“当天做了什么”，只展示可核验的事实与排名。
                 </p>
@@ -2765,8 +4426,8 @@
               这个章节只展示可从 API 直接验证的时间戳：2025 的 Star 时间（完整）以及 Events API 近 90 天的 push 事件（受 GitHub 限制）。
             </p>
 
-            <div class="grid2" style="margin-top: 18px">
-              <div class="terminal" data-reveal style="--d: 360ms">
+	            <div class="grid2" style="margin-top: 18px">
+	              <div class="terminal" data-reveal style="--d: 360ms">
                 <div class="terminal-head">
                   <span>terminal://night-ops</span>
                   <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -2775,18 +4436,26 @@
                   <div class="line"><span class="prompt">$</span><span class="dim">loading…</span></div>
                 </div>
               </div>
-              <div class="card" data-reveal style="--d: 480ms">
-                <div class="card-inner">
-                  <div class="pill"><b>分布</b><span>2025 Star 时段（北京时间）</span></div>
-                  <canvas id="hourChart" width="900" height="360" style="width: 100%; height: 180px; margin-top: 14px"></canvas>
+	              <div class="card" id="s11HourCard" data-mhide="paged" data-reveal style="--d: 480ms">
+	                <div class="card-inner">
+	                  <div class="pill"><b>分布</b><span>2025 Star 时段（北京时间）</span></div>
+	                  <canvas id="hourChart" width="900" height="360" style="width: 100%; height: 180px; margin-top: 14px"></canvas>
                   <div class="note" style="margin-top: 12px">
                     这张图不是“你写代码的时间”，而是“你发现项目的时间”。对很多开发者来说，它比工作日程更像兴趣的指纹。
                   </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	                </div>
+	              </div>
+	            </div>
+
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini" type="button" data-sheet-target="s11HourCard" data-sheet-title="分布 · 2025 Star 时段（北京时间）">
+	                  Star 分布
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 12 -->
         <section class="scene" id="s12" data-scene-title="节日" data-accent="#bc8cff" data-accent2="#d29922">
@@ -2801,23 +4470,42 @@
               这里检查了 2025 的中文节日（含春节/除夕/端午/七夕/中秋的公历日期）。只有当日确实有 Star 记录才展示。
             </p>
 
-            <div class="carousel" data-reveal style="--d: 360ms">
-              <div class="carousel-head">
-                <h3>节日记忆轮盘</h3>
+	            <div class="carousel" id="s12Carousel" data-mhide="paged" data-reveal style="--d: 360ms">
+	              <div class="carousel-head">
+	                <h3>节日记忆轮盘</h3>
                 <div class="ctrl">
                   <button class="iconbtn" id="carPrev" type="button" aria-label="上一个">←</button>
                   <button class="iconbtn" id="carNext" type="button" aria-label="下一个">→</button>
                 </div>
-              </div>
-              <div class="carousel-body">
-                <div class="wheel">
-                  <div class="wheel-inner" id="wheel"></div>
-                </div>
-                <div class="note" style="margin-top: 12px" id="holidayNote">—</div>
-              </div>
-            </div>
-          </div>
-        </section>
+		              </div>
+		              <div class="carousel-body">
+		                <div class="wheel">
+		                  <div class="wheel-inner" id="wheel"></div>
+		                </div>
+		                <div class="mholiday" id="mHoliday" aria-label="节日列表（移动端）">
+		                  <div class="mholiday-strip" id="mHolidayStrip" role="tablist" aria-label="节日"></div>
+		                  <div class="mholiday-detail" id="mHolidayDetail" role="region" aria-label="节日明细"></div>
+		                </div>
+		                <div class="note" style="margin-top: 12px" id="holidayNote">—</div>
+		              </div>
+		            </div>
+
+	            <div class="card-ghost m-only-paged" style="margin-top: 14px">
+	              <div class="card-inner">
+	                <div class="pill"><b id="holidayMiniCount">0</b><span>个节日有 Star</span></div>
+	                <div class="note" style="margin-top: 10px" id="holidayMiniTop">—</div>
+	                <div class="list" id="holidayMiniList" style="margin-top: 12px"></div>
+	              </div>
+	            </div>
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini btn-primary" type="button" data-sheet-target="s12Carousel" data-sheet-title="节日记忆轮盘">
+	                  打开轮盘
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 13 -->
         <section class="scene" id="s13" data-scene-title="领奖" data-accent="#d29922" data-accent2="#58a6ff">
@@ -2832,8 +4520,8 @@
               今年对外贡献最集中的项目：按合并 PR 数量评选；如果 PR 数相同，再看代码变更行。
             </p>
 
-            <div class="grid2" style="margin-top: 18px">
-              <div class="card award-hero" data-reveal style="--d: 360ms">
+	            <div class="grid2" style="margin-top: 18px">
+	              <div class="card award-hero" data-reveal style="--d: 360ms">
                 <div class="card-inner">
                   <div class="award-deco" aria-hidden="true">
                     <svg class="award-trophy" viewBox="0 0 64 64" fill="none">
@@ -2855,20 +4543,28 @@
                   <p class="note" style="margin-top: 12px" id="awardDesc">
                     —
                   </p>
-                </div>
-              </div>
-              <div class="card" data-reveal style="--d: 480ms">
-                <div class="card-inner">
-                  <div class="pill"><b>高光 PR</b><span>按代码变更量排序</span></div>
-                  <div class="list" id="awardHighlights"></div>
+	                </div>
+	              </div>
+	              <div class="card" id="s13HighlightsCard" data-mhide="paged" data-reveal style="--d: 480ms">
+	                <div class="card-inner">
+	                  <div class="pill"><b>高光 PR</b><span>按代码变更量排序</span></div>
+                  <div class="list list-dense list-cols2" id="awardHighlights"></div>
                   <p class="note" style="margin-top: 12px">
                     数值来自搜索 <code>author:&lt;you&gt; is:pr is:merged merged:2025-01-01..2025-12-31</code> 的 GraphQL 数据（已保存原始 JSON）。
                   </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+	                </div>
+	              </div>
+	            </div>
+
+	            <div class="m-only-paged">
+	              <div class="m-actions">
+	                <button class="btn btn-mini" type="button" data-sheet-target="s13HighlightsCard" data-sheet-title="年度开源奖 · 高光 PR">
+	                  高光 PR
+	                </button>
+	              </div>
+	            </div>
+	          </div>
+	        </section>
 
         <!-- Scene 14 -->
         <section class="scene" id="s14" data-scene-title="封面" data-accent="#58a6ff" data-accent2="#bc8cff">
@@ -2896,12 +4592,43 @@
                         <p id="shareSubtitle">—</p>
                       </div>
                     </div>
-                    <div class="sharestats">
-                      <div class="sharestat"><b id="shareContrib">0</b><span>贡献</span></div>
-                      <div class="sharestat"><b id="shareStars">0</b><span>今年 Star</span></div>
-                      <div class="sharestat"><b id="sharePrs">0</b><span>合并 PR</span></div>
-                      <div class="sharestat"><b id="shareActiveDays">0</b><span>活跃天数</span></div>
-                    </div>
+	                    <div class="sharestats">
+	                      <div class="sharestat">
+	                        <svg class="stat-ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+	                          <path d="M3 12h4l2-6 4 12 2-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+	                        </svg>
+	                        <b id="shareContrib">0</b><span>贡献</span>
+	                      </div>
+	                      <div class="sharestat">
+	                        <svg class="stat-ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+	                          <path
+	                            d="M12 2.8 14.9 8.7l6.5.6-4.9 4.2 1.6 6.4-6.1-3.5-6.1 3.5 1.6-6.4-4.9-4.2 6.5-.6L12 2.8Z"
+	                            stroke="currentColor"
+	                            stroke-width="2"
+	                            stroke-linejoin="round"
+	                          />
+	                        </svg>
+	                        <b id="shareStars">0</b><span>今年 Star</span>
+	                      </div>
+	                      <div class="sharestat">
+	                        <svg class="stat-ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+	                          <path d="M6 3v18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+	                          <circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="2" />
+	                          <circle cx="6" cy="19" r="2" stroke="currentColor" stroke-width="2" />
+	                          <path d="M6 7c0 4 3 7 7 7h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+	                          <circle cx="18" cy="14" r="2" stroke="currentColor" stroke-width="2" />
+	                        </svg>
+	                        <b id="sharePrs">0</b><span>合并 PR</span>
+	                      </div>
+	                      <div class="sharestat">
+	                        <svg class="stat-ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+	                          <rect x="3" y="5" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2" />
+	                          <path d="M8 3v4M16 3v4M3 9h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+	                          <path d="M8.2 13.3h.01M12 13.3h.01M15.8 13.3h.01" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" />
+	                        </svg>
+	                        <b id="shareActiveDays">0</b><span>活跃天数</span>
+	                      </div>
+	                    </div>
 
                     <div class="sharebest">
                       <div class="pill"><b>年度最佳贡献</b><span id="shareBestMeta">—</span></div>
@@ -2930,9 +4657,9 @@
                 <canvas id="cardCanvas" width="1200" height="630" style="display: none"></canvas>
               </div>
 
-              <div class="share-side">
-                <details class="drawer">
-                  <summary>
+	              <div class="share-side" id="s14ShareSide" data-mhide="paged">
+	                <details class="drawer">
+	                  <summary>
                     <b>数据完整性说明</b>
                     <span>点击展开</span>
                   </summary>
@@ -2959,10 +4686,27 @@
           </div>
         </section>
       </main>
-    </div>
+	    </div>
 
-    <!-- Embedded dataset (generated from saved gh JSON). -->
-    <script id="dataset" type="application/json">
+	    <!-- Mobile bottom-sheet modal (used for overflow details on small screens) -->
+	    <div class="msheet" id="msheet" aria-hidden="true">
+	      <div class="msheet-backdrop" data-close="1" aria-hidden="true"></div>
+	      <div class="msheet-panel" role="dialog" aria-modal="true" aria-label="详情">
+	        <div class="msheet-head">
+	          <div class="msheet-title" id="msheetTitle">详情</div>
+	          <button class="iconbtn msheet-close" type="button" data-close="1" aria-label="关闭">✕</button>
+	        </div>
+	        <div class="msheet-body" id="msheetBody">
+	          <div id="msheetSlot"></div>
+	        </div>
+	      </div>
+	    </div>
+
+	    <!-- Toast (tap feedback on touch devices) -->
+	    <div class="toast" id="toast" aria-hidden="true"></div>
+
+	    <!-- Embedded dataset (generated from saved gh JSON). -->
+	    <script id="dataset" type="application/json">
 {
   "meta": {
     "year": 2025,
@@ -9028,20 +10772,32 @@
         const monthRange = document.getElementById("monthRange");
         const monthLabel = document.getElementById("monthLabel");
 
-        const monthNames = (m) => {
-          const [, mm] = m.split("-");
-          return mm;
-        };
+	        const monthNames = (m) => {
+	          const [, mm] = m.split("-");
+	          return mm;
+	        };
 
-        const floorEls = [];
-	        months.forEach((m, idx) => {
-	          const div = document.createElement("div");
-	          div.className = "floor";
-	          div.innerHTML = `<b>${monthNames(m.month)} 月</b><span>${m.contributions} 贡献 · ${starsByMonth.get(m.month)?.count || 0} Star</span>`;
-	          div.addEventListener("click", () => setMonth(idx));
-	          floors.appendChild(div);
-	          floorEls.push(div);
-	        });
+	        const maxMonthContrib = Math.max(1, ...months.map((m) => Number(m?.contributions || 0)));
+	        const monthLv = (c) => {
+	          const n = Number(c || 0);
+	          if (!n || maxMonthContrib <= 0) return 0;
+	          const r = n / maxMonthContrib;
+	          if (r > 0.75) return 4;
+	          if (r > 0.5) return 3;
+	          if (r > 0.25) return 2;
+	          return 1;
+	        };
+
+	        const floorEls = [];
+			        months.forEach((m, idx) => {
+			          const div = document.createElement("div");
+			          div.className = "floor";
+			          div.dataset.lv = String(monthLv(m.contributions));
+			          div.innerHTML = `<b>${monthNames(m.month)}<small>月</small></b><span class="meta">${m.contributions} 贡献 · ${starsByMonth.get(m.month)?.count || 0} Star</span>`;
+			          div.addEventListener("click", () => setMonth(idx));
+			          floors.appendChild(div);
+			          floorEls.push(div);
+			        });
 
 		        const sparkStage = document.getElementById("sparkStage");
 		        const spark = document.getElementById("sparkStars");
@@ -9351,13 +11107,24 @@
 	          drawActiveSpark();
 	        };
 
-	        const setMonth = (idx) => {
-	          const safeIdx = Math.max(0, Math.min(months.length - 1, idx));
-	          monthRange.value = String(safeIdx);
-	          monthLabel.textContent = monthNames(months[safeIdx].month);
-	          floorEls.forEach((el, i) => el.classList.toggle("is-on", i === safeIdx));
-	          setActiveSparkMonth(safeIdx);
-	          hideSparkTip();
+		        const setMonth = (idx) => {
+		          const safeIdx = Math.max(0, Math.min(months.length - 1, idx));
+		          monthRange.value = String(safeIdx);
+		          monthLabel.textContent = monthNames(months[safeIdx].month);
+		          floorEls.forEach((el, i) => el.classList.toggle("is-on", i === safeIdx));
+		          try {
+		            const active = floorEls[safeIdx];
+		            if (floors && active && floors.scrollWidth > floors.clientWidth + 4) {
+		              const r = floors.getBoundingClientRect();
+		              const ar = active.getBoundingClientRect();
+		              const delta = ar.left + ar.width / 2 - (r.left + r.width / 2);
+		              floors.scrollBy({ left: delta, behavior: "smooth" });
+		            }
+		          } catch (e) {
+		            // ignore
+		          }
+		          setActiveSparkMonth(safeIdx);
+		          hideSparkTip();
 
 	          const info = months[safeIdx];
 	          const starInfo = starsByMonth.get(info.month);
@@ -9430,11 +11197,26 @@
           prHighlights.appendChild(div);
         });
 
-        // Categories
-        const catDefs = DATA.year.categories.definitions || [];
-        const catCounts = DATA.year.categories.starCounts2025 || {};
-        const catReposMap = DATA.year.categories.topRepos2025 || {};
-        const catgrid = document.getElementById("catgrid");
+	        // Categories
+	        const catDefs = DATA.year.categories.definitions || [];
+	        const catCounts = DATA.year.categories.starCounts2025 || {};
+	        const catReposMap = DATA.year.categories.topRepos2025 || {};
+	        const catgrid = document.getElementById("catgrid");
+	        const shortCatLabel = (label) => {
+	          const raw = String(label ?? "").trim();
+	          if (!raw) return "—";
+	          const parts = raw
+	            .split(/[\\/|｜·•]/g)
+	            .map((x) => x.trim())
+	            .filter(Boolean);
+	          let best = parts[0] || raw;
+	          if (parts.length > 1) {
+	            for (const p of parts) if (p.length < best.length) best = p;
+	          }
+	          best = best.replace(/\s+/g, "");
+	          if (best.length > 3) best = best.slice(0, 3);
+	          return best || raw.slice(0, 3) || "—";
+	        };
 
         let currentCat = DATA.year.categories.primaryTrack || catDefs[0]?.key;
         const catEls = new Map();
@@ -9448,7 +11230,7 @@
           setText("catCount", String(catCounts[key] || 0));
           const list = document.getElementById("catRepos");
           list.innerHTML = "";
-          (catReposMap[key] || []).forEach((r) => {
+          (catReposMap[key] || []).slice(0, 12).forEach((r) => {
             const div = document.createElement("div");
             div.className = "item";
             div.innerHTML = `
@@ -9464,21 +11246,33 @@
           });
         };
 
-        catDefs.forEach((def) => {
-          const el = document.createElement("div");
-          el.className = "cat";
-          el.style.setProperty("--catglow", def.color + "33");
-          el.innerHTML = `
-            <div class="top">
-              <div style="display:flex; gap:10px; align-items:center; min-width:0">
-                <div class="emoji">${def.emoji}</div>
-                <div class="label">${def.label}</div>
-              </div>
-              <div class="count">${catCounts[def.key] || 0}</div>
-            </div>
-            <div class="desc">${def.description}</div>
-          `;
-          el.addEventListener("click", () => renderCatPanel(def.key));
+	        const catPanelEl = document.getElementById("s6CatPanel");
+	        catDefs.forEach((def) => {
+	          const shortLabel = shortCatLabel(def.label);
+	          const el = document.createElement("div");
+	          el.className = "cat";
+	          el.style.setProperty("--catglow", def.color + "33");
+	          el.innerHTML = `
+	            <div class="top">
+	              <div style="display:flex; gap:10px; align-items:center; min-width:0">
+	                <div class="emoji">${def.emoji}</div>
+	                <div class="label"><span class="full">${def.label}</span><span class="short">${shortLabel}</span></div>
+	              </div>
+	              <div class="count">${catCounts[def.key] || 0}</div>
+	            </div>
+	            <div class="desc">${def.description}</div>
+	          `;
+          el.addEventListener("click", () => {
+            renderCatPanel(def.key);
+            try {
+              if (pageMode === "paged" && IS_MOBILE_LAYOUT()) {
+                const panel = catPanelEl || document.getElementById("s6CatPanel");
+                if (panel) msheet.open({ title: `${def.label} · 代表作`, element: panel });
+              }
+            } catch (e) {
+              // ignore
+            }
+          });
           catgrid.appendChild(el);
           catEls.set(def.key, el);
         });
@@ -9496,6 +11290,7 @@
         let radarHover = -1;
         let radarTipIdx = -1;
         let radarPts = [];
+        let radarDpr = 1;
         const radarLift = values.map(() => 0);
         let radarRaf = 0;
 
@@ -9515,8 +11310,8 @@
           const offX = rect.left - stageRect.left;
           const offY = rect.top - stageRect.top;
 
-          let xCss = offX + (p.hx / radarCanvas.width) * rect.width;
-          let yCss = offY + (p.hy / radarCanvas.height) * rect.height;
+          let xCss = offX + p.hx;
+          let yCss = offY + p.hy;
           xCss = clamp(xCss, 86, stageRect.width - 86);
           yCss = clamp(yCss, 76, stageRect.height - 22);
 
@@ -9560,8 +11355,8 @@
 
         const canvasXY = (clientX, clientY) => {
           const rect = radarCanvas.getBoundingClientRect();
-          const x = (clientX - rect.left) * (radarCanvas.width / Math.max(1, rect.width));
-          const y = (clientY - rect.top) * (radarCanvas.height / Math.max(1, rect.height));
+          const x = clientX - rect.left;
+          const y = clientY - rect.top;
           return { x, y };
         };
 
@@ -9618,8 +11413,21 @@
         }, { passive: true });
 
         const drawRadar = (now = performance.now()) => {
-          const w = radarCanvas.width;
-          const h = radarCanvas.height;
+          const rect = radarCanvas.getBoundingClientRect();
+          const cssW = Math.max(1, rect.width);
+          const cssH = Math.max(1, rect.height);
+          const dpr = Math.max(1, window.devicePixelRatio || 1);
+          const needW = Math.round(cssW * dpr);
+          const needH = Math.round(cssH * dpr);
+          if (radarCanvas.width !== needW || radarCanvas.height !== needH || radarDpr !== dpr) {
+            radarCanvas.width = needW;
+            radarCanvas.height = needH;
+            radarDpr = dpr;
+          }
+          rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+          const w = cssW;
+          const h = cssH;
           rctx.clearRect(0, 0, w, h);
           const cx = w / 2;
           const cy = h / 2;
@@ -9791,7 +11599,7 @@
           `;
           evidenceList.appendChild(div);
         };
-        addEvidence("主战场仓库（Commit 贡献最多）", focus?.nameWithOwner || "—", `${focus?.count || 0}<small>次</small>`, focus?.nameWithOwner ? repoUrl(focus.nameWithOwner) : "");
+	        addEvidence("主战场仓库", focus?.nameWithOwner || "—", `${focus?.count || 0}<small>次</small>`, focus?.nameWithOwner ? repoUrl(focus.nameWithOwner) : "");
 
         const busiest = DATA.year.activity.busiestDay;
         addEvidence("最疯狂的一天", fmtDate(busiest?.date), `${busiest?.count || 0}<small>次</small>`);
@@ -9942,42 +11750,165 @@
         };
         drawHour();
 
-        // Holiday carousel
-        const holidayStars = DATA.year.specialDates.holidayStars || [];
-        const wheel = document.getElementById("wheel");
-        const holidayNote = document.getElementById("holidayNote");
-        let wheelIndex = 0;
+	        // Holiday carousel
+	        const holidayStars = DATA.year.specialDates.holidayStars || [];
+	        const wheel = document.getElementById("wheel");
+	        const mHolidayStrip = document.getElementById("mHolidayStrip");
+	        const mHolidayDetail = document.getElementById("mHolidayDetail");
+	        const holidayNote = document.getElementById("holidayNote");
+	        let wheelIndex = 0;
 
-        const renderWheel = () => {
-          wheel.innerHTML = "";
-          if (!holidayStars.length) {
-            wheel.innerHTML = `<div class="note">2025 的节日当天没有检测到 Star 记录。</div>`;
-            holidayNote.textContent = "（提示：我们只展示“当天确实发生了 star”的节日，不凑数。）";
-            return;
+	        const IS_COARSE_HOLIDAY = (() => {
+	          try {
+	            if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) return true;
+	          } catch (e) {
+	            // ignore
+	          }
+	          return (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+	        })();
+
+	        const IS_HOLIDAY_MOBILE = () => {
+	          if (!IS_COARSE_HOLIDAY) return false;
+	          try {
+	            return window.matchMedia && window.matchMedia("(max-width: 620px)").matches;
+	          } catch (e) {
+	            return false;
+	          }
+	        };
+
+	        const renderWheel = () => {
+	          if (!wheel) return;
+
+	          // Mobile: selector strip + one detail card (avoid 3D + overflow).
+	          if (IS_HOLIDAY_MOBILE() && mHolidayStrip && mHolidayDetail) {
+	            mHolidayStrip.innerHTML = "";
+	            if (!holidayStars.length) {
+	              mHolidayDetail.innerHTML = `<div class="mh-empty">2025 的节日当天没有检测到 Star 记录。</div>`;
+	              if (holidayNote) holidayNote.textContent = "（提示：只展示“当天确实发生了 Star”的节日，不凑数。）";
+	              return;
+	            }
+	            const N = holidayStars.length;
+	            wheelIndex = ((wheelIndex % N) + N) % N;
+
+	            holidayStars.forEach((h, i) => {
+	              const btn = document.createElement("button");
+	              btn.type = "button";
+	              btn.className = "mholiday-chip" + (i === wheelIndex ? " is-on" : "");
+	              btn.setAttribute("role", "tab");
+	              btn.setAttribute("aria-selected", i === wheelIndex ? "true" : "false");
+	              btn.innerHTML = `<span class="dot" aria-hidden="true"></span><span class="lbl">${esc(h.label)}</span><span class="cnt">${Number(h.count || 0)}</span>`;
+	              btn.addEventListener("click", () => {
+	                wheelIndex = i;
+	                renderWheel();
+	              });
+	              mHolidayStrip.appendChild(btn);
+	            });
+
+	            const cur = holidayStars[wheelIndex] || holidayStars[0];
+	            const repoLines = (cur.repos || [])
+	              .slice(0, 5)
+	              .map(
+	                (r) =>
+	                  `<a class="mh-repo" href="${r.url}" target="_blank" rel="noreferrer"><span class="name">${esc(
+	                    r.nameWithOwner
+	                  )}</span><span class="stars">★ ${compact(r.stars)}</span></a>`
+	              )
+	              .join("");
+	            mHolidayDetail.innerHTML = `
+	              <div class="mh-head">
+	                <div style="min-width:0">
+	                  <h4 class="mh-title">${esc(cur.label)}</h4>
+	                  <div class="mh-meta">${esc(cur.date)}</div>
+	                </div>
+	                <div class="mh-badge"><b>${Number(cur.count || 0)}</b><span>STAR</span></div>
+	              </div>
+	              <div class="mh-repos">${repoLines || `<div class="mh-empty">当日没有记录到具体仓库。</div>`}</div>
+	            `;
+
+	            try {
+	              const active = mHolidayStrip.querySelector(".mholiday-chip.is-on");
+	              active?.scrollIntoView?.({ behavior: "smooth", block: "nearest", inline: "center" });
+	            } catch (e) {
+	              // ignore
+	            }
+
+	            if (holidayNote) holidayNote.textContent = `共检测到 ${holidayStars.length} 个节日有 Star 记录（2025）。`;
+	            return;
+	          }
+
+	          // Desktop / non-mobile: 3D wheel.
+	          wheel.innerHTML = "";
+	          if (!holidayStars.length) {
+	            wheel.innerHTML = `<div class="note">2025 的节日当天没有检测到 Star 记录。</div>`;
+	            if (holidayNote) holidayNote.textContent = "（提示：我们只展示“当天确实发生了 star”的节日，不凑数。）";
+	            return;
+	          }
+
+	          const N = holidayStars.length;
+	          const step = 360 / N;
+	          holidayStars.forEach((h, i) => {
+	            const angle = step * i;
+	            const card = document.createElement("div");
+	            card.className = "memory";
+	            card.style.transform = `rotateY(${angle}deg) translateZ(340px)`;
+	            const repoLines = (h.repos || [])
+	              .slice(0, 4)
+	              .map(
+	                (r) =>
+	                  `<div class="repo"><b><a href="${r.url}" target="_blank" rel="noreferrer">${esc(
+	                    r.nameWithOwner
+	                  )}</a></b><span>★ ${compact(r.stars)}</span></div>`
+	              )
+	              .join("");
+	            card.innerHTML = `
+	              <h4>${esc(h.label)} · ${esc(h.date)}</h4>
+	              <p>当日你 Star 了 ${Number(h.count || 0)} 个项目。</p>
+	              <div class="repos">${repoLines}</div>
+	            `;
+	            wheel.appendChild(card);
+	          });
+	          wheel.style.transform = `rotateY(${-wheelIndex * step}deg)`;
+	          if (holidayNote) holidayNote.textContent = `共检测到 ${holidayStars.length} 个节日有 Star 记录（2025）。`;
+	        };
+	        renderWheel();
+
+        // Mobile paged-mode mini summary (one-screen friendly)
+        const holidayMiniCount = document.getElementById("holidayMiniCount");
+        const holidayMiniTop = document.getElementById("holidayMiniTop");
+        const holidayMiniList = document.getElementById("holidayMiniList");
+        if (holidayMiniCount) holidayMiniCount.textContent = String(holidayStars.length || 0);
+        if (holidayMiniTop) {
+          if (!holidayStars.length) holidayMiniTop.textContent = "2025 的节日当天没有检测到 Star 记录。";
+          else {
+            const best = [...holidayStars].sort((a, b) => (b.count || 0) - (a.count || 0))[0];
+            holidayMiniTop.textContent = best ? `最热的一天：${best.label}（${best.date}）· Star ${best.count}` : "—";
           }
+        }
+        if (holidayMiniList) {
+          holidayMiniList.innerHTML = "";
+          [...holidayStars]
+            .sort((a, b) => (b.count || 0) - (a.count || 0))
+            .slice(0, 6)
+            .forEach((h, idx) => {
+              const div = document.createElement("div");
+              div.className = "item";
+              const topRepo = (h.repos || [])[0];
+              const topLine = topRepo?.url
+                ? `Top：<a href="${topRepo.url}" target="_blank" rel="noreferrer">${esc(topRepo.nameWithOwner)}</a>`
+                : "Top：—";
+              div.innerHTML = `
+                <div class="left">
+                  <div class="name">#${idx + 1} ${esc(h.label)} · ${esc(h.date)}</div>
+                  <div class="meta">${topLine}</div>
+                </div>
+                <div class="right">
+                  <div class="chip">${Number(h.count || 0)}<small>个</small></div>
+                </div>
+              `;
+              holidayMiniList.appendChild(div);
+            });
+        }
 
-          const N = holidayStars.length;
-          const step = 360 / N;
-          holidayStars.forEach((h, i) => {
-            const angle = step * i;
-            const card = document.createElement("div");
-            card.className = "memory";
-            card.style.transform = `rotateY(${angle}deg) translateZ(340px)`;
-            const repoLines = (h.repos || [])
-              .slice(0, 4)
-              .map((r) => `<div class="repo"><b><a href="${r.url}" target="_blank" rel="noreferrer">${r.nameWithOwner}</a></b><span>★ ${compact(r.stars)}</span></div>`)
-              .join("");
-            card.innerHTML = `
-              <h4>${h.label} · ${h.date}</h4>
-              <p>当日你 Star 了 ${h.count} 个项目。</p>
-              <div class="repos">${repoLines}</div>
-            `;
-            wheel.appendChild(card);
-          });
-          wheel.style.transform = `rotateY(${-wheelIndex * step}deg)`;
-          holidayNote.textContent = `共检测到 ${holidayStars.length} 个节日有 Star 记录（2025）。`;
-        };
-        renderWheel();
         document.getElementById("carPrev").addEventListener("click", () => {
           if (!holidayStars.length) return;
           wheelIndex = (wheelIndex - 1 + holidayStars.length) % holidayStars.length;
@@ -10108,13 +12039,155 @@
         const toggleMode = document.getElementById("toggleMode");
         const modeLabel = document.getElementById("modeLabel");
         const hudHint = document.getElementById("hudHint");
+        const toggleFullscreen = document.getElementById("toggleFullscreen");
 
-        let started = false;
-        let pageMode = "paged"; // 'paged' | 'free'
-        let current = 0;
-        let wheelLock = false;
-        let wheelAccum = 0;
-        let endFireworksPlayed = false;
+	        let started = false;
+	        let pageMode = "paged"; // 'paged' | 'free'
+	        let current = 0;
+	        let wheelLock = false;
+	        let wheelAccum = 0;
+	        let endFireworksPlayed = false;
+	        const IS_COARSE_POINTER = (() => {
+	          try {
+	            if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) return true;
+	          } catch (e) {
+	            // ignore
+	          }
+	          return (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+	        })();
+	        const pagedModeHint = () => (IS_COARSE_POINTER ? "上滑 / 下滑 翻页（逐页）" : "滚轮 / ↑↓ 翻页（幻灯片）");
+	        const IS_MOBILE_LAYOUT = () => {
+	          if (!IS_COARSE_POINTER) return false;
+	          try {
+	            return window.matchMedia && window.matchMedia("(max-width: 620px)").matches;
+	          } catch (e) {
+	            return false;
+	          }
+	        };
+
+	        const updateHudHint = () => {
+	          if (!hudHint) return;
+	          const title = scenes[current]?.dataset?.sceneTitle;
+	          const mode = pageMode === "paged" ? "逐页" : "自由";
+	          hudHint.textContent = title ? `${title} · ${mode}` : mode;
+	          hudHint.title = pageMode === "paged" ? pagedModeHint() : "自由滚动（无吸附）";
+	        };
+
+	        const toast = (() => {
+	          const el = document.getElementById("toast");
+	          let timer = 0;
+	          const hide = () => {
+	            if (!el) return;
+	            el.classList.remove("is-on");
+	            el.setAttribute("aria-hidden", "true");
+	          };
+	          const show = (msg, { duration = 1600 } = {}) => {
+	            if (!el) return;
+	            if (timer) clearTimeout(timer);
+	            el.textContent = String(msg || "");
+	            el.setAttribute("aria-hidden", "false");
+	            el.classList.add("is-on");
+	            timer = window.setTimeout(hide, duration);
+	          };
+	          return { show, hide };
+	        })();
+
+	        const msheet = (() => {
+	          const root = document.getElementById("msheet");
+	          const titleEl = document.getElementById("msheetTitle");
+	          const slot = document.getElementById("msheetSlot");
+	          const body = document.getElementById("msheetBody");
+
+	          let activeEl = null;
+	          let placeholder = null;
+	          let placeholderParent = null;
+	          let placeholderNext = null;
+	          let lastFocus = null;
+
+	          const isOpen = () => !!root?.classList.contains("is-on");
+
+	          const close = () => {
+	            if (!root || !slot) return;
+	            if (activeEl && placeholderParent) {
+	              const targetParent = placeholderParent;
+	              const next = placeholderNext;
+	              try {
+	                if (next && next.parentNode === targetParent) targetParent.insertBefore(activeEl, next);
+	                else targetParent.appendChild(activeEl);
+	              } catch (e) {
+	                // ignore
+	              }
+	            }
+	            if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+	            activeEl = null;
+	            placeholder = null;
+	            placeholderParent = null;
+	            placeholderNext = null;
+	            root.classList.remove("is-on");
+	            root.setAttribute("aria-hidden", "true");
+	            slot.innerHTML = "";
+	            if (body) body.scrollTop = 0;
+	            if (lastFocus && typeof lastFocus.focus === "function") {
+	              try {
+	                lastFocus.focus({ preventScroll: true });
+	              } catch (e) {
+	                // ignore
+	              }
+	            }
+	            lastFocus = null;
+	          };
+
+		          const open = ({ title = "详情", element } = {}) => {
+		            if (!root || !slot) return;
+		            if (!element) return;
+		            if (element === activeEl && isOpen()) {
+		              if (titleEl) titleEl.textContent = String(title || "详情");
+		              return;
+		            }
+
+	            close();
+	            lastFocus = document.activeElement;
+
+	            placeholder = document.createComment("msheet-placeholder");
+	            placeholderParent = element.parentNode;
+	            placeholderNext = element.nextSibling;
+	            if (placeholderParent) placeholderParent.insertBefore(placeholder, element);
+
+		            activeEl = element;
+		            slot.appendChild(element);
+		            if (titleEl) titleEl.textContent = String(title || "详情");
+		            root.classList.add("is-on");
+		            root.setAttribute("aria-hidden", "false");
+		            // Some content (e.g. canvases) is sized based on layout; reflow + redraw.
+		            try {
+		              requestAnimationFrame(() => {
+		                try {
+		                  window.dispatchEvent(new Event("resize"));
+		                } catch (e) {
+		                  // ignore
+		                }
+		              });
+		            } catch (e) {
+		              // ignore
+		            }
+		          };
+
+	          const onRootClick = (e) => {
+	            const closeBtn = e.target?.closest?.("[data-close]");
+	            if (closeBtn) return close();
+	            if (e.target === root || e.target?.classList?.contains?.("msheet-backdrop")) return close();
+	          };
+
+	          if (root) root.addEventListener("click", onRootClick);
+	          window.addEventListener("keydown", (e) => {
+	            if (e.key !== "Escape") return;
+	            if (!isOpen()) return;
+	            e.preventDefault();
+	            close();
+	          });
+
+	          return { open, close, isOpen };
+	        })();
 
         const applyTheme = (scene) => {
           const a = scene?.dataset?.accent;
@@ -10132,20 +12205,19 @@
           applyTheme(scenes[current]);
         };
 
-        const setActive = (idx) => {
-          current = Math.max(0, Math.min(scenes.length - 1, idx));
-          scenes.forEach((s, i) => {
-            s.classList.toggle("is-active", i === current);
-            s.classList.toggle("is-prev", pageMode === "paged" && i < current);
-          });
-          updateNav();
-          const title = scenes[current]?.dataset?.sceneTitle;
-          if (title) setText("hudHint", `${title} · ${pageMode === "paged" ? "逐页" : "自由"}`);
-          if (started && current === scenes.length - 1 && !endFireworksPlayed) {
-            endFireworksPlayed = true;
-            startFireworks(5200, { intensity: 0.85 });
-          }
-        };
+	        const setActive = (idx) => {
+	          current = Math.max(0, Math.min(scenes.length - 1, idx));
+	          scenes.forEach((s, i) => {
+	            s.classList.toggle("is-active", i === current);
+	            s.classList.toggle("is-prev", pageMode === "paged" && i < current);
+	          });
+	          updateNav();
+	          updateHudHint();
+	          if (started && current === scenes.length - 1 && !endFireworksPlayed) {
+	            endFireworksPlayed = true;
+	            startFireworks(5200, { intensity: 0.85 });
+	          }
+	        };
 
         const goToScene = (idx, { behavior = "smooth" } = {}) => {
           setActive(idx);
@@ -10315,13 +12387,270 @@
 	            play({ userGesture: false });
 	          });
 
-	          return { play, toggle, get playing() { return playing; } };
-	        })();
+		          return { play, toggle, get playing() { return playing; } };
+		        })();
 
-	        const start = () => {
-	          if (started) return;
-	          music.play({ userGesture: true });
-	          started = true;
+		        const installMobileOverflowUI = () => {
+		          if (!IS_MOBILE_LAYOUT()) return;
+
+		          const guessTitle = (el) => {
+		            const scene = el?.closest?.(".scene");
+		            const sceneTitle = scene?.dataset?.sceneTitle || "详情";
+		            const box = el?.closest?.(".card, .terminal, .carousel, .tower-panel, .catpanel, .supernova");
+		            const head =
+		              box?.querySelector?.(".pill b")?.textContent?.trim() ||
+		              box?.querySelector?.("h3")?.textContent?.trim() ||
+		              "";
+		            return head ? `${sceneTitle} · ${head}` : `${sceneTitle} · 详情`;
+		          };
+
+		          const addSheetBtnAfter = (targetEl, { title, label = "查看全部" } = {}) => {
+		            if (!targetEl?.parentElement) return;
+		            if (targetEl.dataset.mobileSheetBtn === "1") return;
+		            targetEl.dataset.mobileSheetBtn = "1";
+
+		            const wrap = document.createElement("div");
+		            wrap.className = "m-only-paged";
+		            wrap.innerHTML = `
+		              <div class="m-actions">
+		                <button class="btn btn-mini" type="button">${label}</button>
+		              </div>
+		            `;
+		            const btn = wrap.querySelector("button");
+		            btn.addEventListener("click", () => {
+		              msheet.open({ title: title || guessTitle(targetEl), element: targetEl });
+		            });
+		            targetEl.insertAdjacentElement("afterend", wrap);
+		          };
+
+				          // Auto: add “view all” buttons for long lists in paged scenes.
+				          document.querySelectorAll("#scroller .scene .list").forEach((list) => {
+				            if (list.id === "topDaysList") return;
+				            if (list.dataset.noAutoSheet === "1") return;
+				            const total = list.querySelectorAll(":scope > .item").length;
+				            if (total <= 2) return;
+				            addSheetBtnAfter(list, { label: `查看全部（${total}）` });
+				          });
+
+			          // Manual triggers (if any)
+			          document.querySelectorAll("[data-sheet-target]").forEach((btn) => {
+			            if (btn.dataset.sheetBound === "1") return;
+			            btn.dataset.sheetBound = "1";
+			            btn.addEventListener("click", () => {
+			              const id = btn.dataset.sheetTarget;
+			              const el = id ? document.getElementById(id) : null;
+			              if (!el) return toast.show("没有可展开的内容");
+			              msheet.open({ title: btn.dataset.sheetTitle || btn.getAttribute("aria-label") || "详情", element: el });
+			            });
+			          });
+
+			          // Heatmap: tap to show date + count (hover does not exist on phones).
+			          const heat = document.getElementById("heat");
+			          if (heat && heat.dataset.tapBound !== "1") {
+			            heat.dataset.tapBound = "1";
+			            heat.addEventListener("click", (e) => {
+			              const cell = e.target?.closest?.(".cell");
+			              if (!cell) return;
+			              toast.show(cell.title || "—");
+			            });
+			          }
+			        };
+			        installMobileOverflowUI();
+
+				        const installMobileTapSheets = () => {
+				          if (!IS_MOBILE_LAYOUT()) return;
+
+				          const terminalEl = document.querySelector("#s11 .terminal");
+				          if (terminalEl && terminalEl.dataset.sheetTapBound !== "1") {
+				            terminalEl.dataset.sheetTapBound = "1";
+				            terminalEl.addEventListener("click", () => {
+			              if (pageMode !== "paged") return;
+			              msheet.open({ title: "深夜 · terminal://night-ops", element: terminalEl });
+			            });
+			          }
+			        };
+			        installMobileTapSheets();
+
+			        const installMobileDraggables = () => {
+			          if (!IS_MOBILE_LAYOUT()) return;
+
+			          const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+			          const readPos = (key) => {
+			            try {
+			              const raw = localStorage.getItem(key);
+			              if (!raw) return null;
+			              const obj = JSON.parse(raw);
+			              if (!obj || typeof obj.x !== "number" || typeof obj.y !== "number") return null;
+			              if (!Number.isFinite(obj.x) || !Number.isFinite(obj.y)) return null;
+			              return { x: obj.x, y: obj.y };
+			            } catch (e) {
+			              return null;
+			            }
+			          };
+			          const writePos = (key, pos) => {
+			            try {
+			              localStorage.setItem(key, JSON.stringify({ x: pos.x, y: pos.y }));
+			            } catch (e) {
+			              // ignore
+			            }
+			          };
+			          const clampToViewport = (x, y, rect) => {
+			            const pad = 10;
+			            const vw = Math.max(1, window.innerWidth);
+			            const vh = Math.max(1, window.innerHeight);
+			            const maxX = Math.max(pad, vw - rect.width - pad);
+			            const maxY = Math.max(pad, vh - rect.height - pad);
+			            return { x: clamp(x, pad, maxX), y: clamp(y, pad, maxY) };
+			          };
+			          const applyPos = (el, pos) => {
+			            el.style.left = pos.x + "px";
+			            el.style.top = pos.y + "px";
+			            el.style.right = "auto";
+			            el.style.bottom = "auto";
+			          };
+
+			          const makeDraggable = (el, storageKey) => {
+			            if (!el) return;
+			            if (el.dataset.dragBound === "1") return;
+			            el.dataset.dragBound = "1";
+			            el.dataset.draggable = "1";
+			            el.style.touchAction = "none";
+			            el.style.willChange = "left, top";
+
+			            const saved = readPos(storageKey);
+			            if (saved) {
+			              const r = el.getBoundingClientRect();
+			              const p = clampToViewport(saved.x, saved.y, r);
+			              applyPos(el, p);
+			              writePos(storageKey, p);
+			            }
+
+			            let pid = null;
+			            let startX = 0;
+			            let startY = 0;
+			            let baseX = 0;
+			            let baseY = 0;
+			            let dragging = false;
+			            let raf = 0;
+			            let last = null;
+
+			            const moveTo = (x, y) => {
+			              const r = el.getBoundingClientRect();
+			              const p = clampToViewport(x, y, r);
+			              applyPos(el, p);
+			              last = p;
+			            };
+
+			            const onDown = (e) => {
+			              if (e.pointerType === "mouse" && e.button !== 0) return;
+			              pid = e.pointerId;
+			              const r = el.getBoundingClientRect();
+			              startX = e.clientX;
+			              startY = e.clientY;
+			              baseX = r.left;
+			              baseY = r.top;
+			              dragging = false;
+			              last = { x: baseX, y: baseY };
+			              try {
+			                el.setPointerCapture(pid);
+			              } catch (err) {
+			                // ignore
+			              }
+			            };
+
+			            const onMove = (e) => {
+			              if (pid === null || e.pointerId !== pid) return;
+			              const dx = e.clientX - startX;
+			              const dy = e.clientY - startY;
+			              if (!dragging) {
+			                if (Math.hypot(dx, dy) < 6) return;
+			                dragging = true;
+			                el.classList.add("is-dragging");
+			                el.dataset.skipClick = "1";
+			                // Convert to explicit left/top so future moves are stable.
+			                applyPos(el, { x: baseX, y: baseY });
+			              }
+			              e.preventDefault();
+			              const nx = baseX + dx;
+			              const ny = baseY + dy;
+			              if (raf) cancelAnimationFrame(raf);
+			              raf = requestAnimationFrame(() => {
+			                raf = 0;
+			                moveTo(nx, ny);
+			              });
+			            };
+
+			            const onUp = (e) => {
+			              if (pid === null || e.pointerId !== pid) return;
+			              try {
+			                el.releasePointerCapture(pid);
+			              } catch (err) {
+			                // ignore
+			              }
+			              pid = null;
+			              if (raf) {
+			                cancelAnimationFrame(raf);
+			                raf = 0;
+			              }
+				              if (dragging) {
+				                dragging = false;
+				                el.classList.remove("is-dragging");
+				                if (last) writePos(storageKey, last);
+				                setTimeout(() => {
+				                  el.dataset.skipClick = "0";
+				                }, 280);
+				              }
+				            };
+
+			            // Swallow click if it was a drag.
+			            el.addEventListener(
+			              "click",
+				              (ev) => {
+				                if (el.dataset.skipClick === "1") {
+				                  ev.preventDefault();
+				                  ev.stopPropagation();
+				                  el.dataset.skipClick = "0";
+				                }
+				              },
+				              true
+				            );
+
+			            el.addEventListener("pointerdown", onDown, { passive: true });
+			            el.addEventListener("pointermove", onMove, { passive: false });
+			            el.addEventListener("pointerup", onUp, { passive: true });
+			            el.addEventListener("pointercancel", onUp, { passive: true });
+
+			            window.addEventListener(
+			              "resize",
+			              () => {
+			                const r = el.getBoundingClientRect();
+			                const p = clampToViewport(r.left, r.top, r);
+			                applyPos(el, p);
+			                writePos(storageKey, p);
+			              },
+			              { passive: true }
+			            );
+			          };
+
+				          makeDraggable(document.getElementById("music-control"), "gw:drag:music");
+				          makeDraggable(toggleMode, "gw:drag:mode");
+
+				          try {
+				            const k = "gw:hint:drag";
+				            if (!localStorage.getItem(k)) {
+				              localStorage.setItem(k, "1");
+				              toast.show("提示：可拖拽移动左下角音乐/右下角模式按钮，避免遮挡内容", { duration: 2400 });
+				            }
+				          } catch (e) {
+				            // ignore
+				          }
+				        };
+			        installMobileDraggables();
+
+			        const start = () => {
+			          if (started) return;
+			          music.play({ userGesture: true });
+			          started = true;
 	          shell.setAttribute("aria-hidden", "false");
 	          boot.classList.add("is-hidden");
 	          setTimeout(() => {
@@ -10374,31 +12703,98 @@
           }
         });
 
-        const onWheel = (e) => {
-          if (!started) return;
-          if (pageMode !== "paged") return;
-          if (wheelLock) return;
-          wheelAccum += e.deltaY;
-          if (Math.abs(wheelAccum) < 40) return;
-          e.preventDefault();
-          wheelLock = true;
-          const dir = wheelAccum > 0 ? 1 : -1;
-          wheelAccum = 0;
-          goToScene(current + dir);
-          setTimeout(() => (wheelLock = false), 680);
-        };
-        scroller.addEventListener("wheel", onWheel, { passive: false });
+	        const onWheel = (e) => {
+	          if (!started) return;
+	          if (pageMode !== "paged") return;
+	          if (wheelLock) return;
+	          wheelAccum += e.deltaY;
+	          if (Math.abs(wheelAccum) < 40) return;
+	          e.preventDefault();
+	          wheelLock = true;
+	          const dir = wheelAccum > 0 ? 1 : -1;
+	          wheelAccum = 0;
+	          goToScene(current + dir);
+	          setTimeout(() => (wheelLock = false), 680);
+	        };
+	        scroller.addEventListener("wheel", onWheel, { passive: false });
+	
+	        // Touch swipe navigation (mobile page mode)
+	        let touchStartX = 0;
+	        let touchStartY = 0;
+	        let touchIntent = null; // 'vertical' | 'horizontal' | null
+	
+	        const onTouchStart = (e) => {
+	          if (!started) return;
+	          if (!IS_COARSE_POINTER) return;
+	          if (pageMode !== "paged") return;
+	          if (!e.touches || e.touches.length !== 1) return;
+	          const t = e.touches[0];
+	          touchStartX = t.clientX;
+	          touchStartY = t.clientY;
+	          touchIntent = null;
+	        };
+	
+	        const onTouchMove = (e) => {
+	          if (!started) return;
+	          if (!IS_COARSE_POINTER) return;
+	          if (pageMode !== "paged") return;
+	          if (!e.touches || e.touches.length !== 1) return;
+	          const t = e.touches[0];
+	          const dx = t.clientX - touchStartX;
+	          const dy = t.clientY - touchStartY;
+	          const ax = Math.abs(dx);
+	          const ay = Math.abs(dy);
+	          if (!touchIntent) {
+	            if (ax < 10 && ay < 10) return;
+	            touchIntent = ay > ax * 1.15 ? "vertical" : "horizontal";
+	          }
+	          if (touchIntent === "vertical") {
+	            // Prevent rubber-band / pull-to-refresh while in paged mode.
+	            e.preventDefault();
+	          }
+	        };
+	
+	        const onTouchEnd = (e) => {
+	          if (!started) return;
+	          if (!IS_COARSE_POINTER) return;
+	          if (pageMode !== "paged") return;
+	          if (touchIntent === "horizontal") return;
+	          const t = (e.changedTouches && e.changedTouches[0]) || null;
+	          if (!t) return;
+	          const dx = t.clientX - touchStartX;
+	          const dy = t.clientY - touchStartY;
+	          const ax = Math.abs(dx);
+	          const ay = Math.abs(dy);
+	          if (ay < 56) return;
+	          if (ay < ax * 1.1) return;
+	          if (wheelLock) return;
+	          wheelLock = true;
+	          const dir = dy < 0 ? 1 : -1; // swipe up -> next
+	          goToScene(current + dir);
+	          setTimeout(() => (wheelLock = false), 680);
+	          touchIntent = null;
+	        };
+	
+	        const onTouchCancel = () => {
+	          touchIntent = null;
+	        };
+	
+	        scroller.addEventListener("touchstart", onTouchStart, { passive: true });
+	        scroller.addEventListener("touchmove", onTouchMove, { passive: false });
+	        scroller.addEventListener("touchend", onTouchEnd, { passive: true });
+	        scroller.addEventListener("touchcancel", onTouchCancel, { passive: true });
 
-        const setMode = (mode) => {
-          pageMode = mode;
-          scroller.dataset.mode = mode;
-          modeLabel.textContent = mode === "paged" ? "逐页" : "自由";
-          hudHint.textContent = mode === "paged" ? "滚轮 / ↑↓ 翻页（幻灯片）" : "自由滚动（无吸附）";
-          setActive(current);
-          if (mode === "free") {
-            enableFreeObserver();
-            if (started) requestAnimationFrame(() => scenes[current].scrollIntoView({ behavior: "auto", block: "start" }));
-          } else {
+	        const setMode = (mode) => {
+	          pageMode = mode;
+	          scroller.dataset.mode = mode;
+	          toggleMode.dataset.mode = mode;
+	          modeLabel.textContent = mode === "paged" ? "逐页" : "自由";
+	          updateHudHint();
+	          setActive(current);
+	          if (mode === "free") {
+	            enableFreeObserver();
+	            if (started) requestAnimationFrame(() => scenes[current].scrollIntoView({ behavior: "auto", block: "start" }));
+	          } else {
             disableFreeObserver();
             scroller.scrollTop = 0;
           }
@@ -10408,6 +12804,68 @@
         toggleMode.addEventListener("click", () => {
           setMode(pageMode === "paged" ? "free" : "paged");
         });
+
+        // Fullscreen preview (desktop)
+        (() => {
+          if (!toggleFullscreen) return;
+
+          const getFsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+          const canFs = () =>
+            !!(
+              document.fullscreenEnabled ||
+              document.webkitFullscreenEnabled ||
+              document.documentElement.requestFullscreen ||
+              document.documentElement.webkitRequestFullscreen
+            );
+
+          const sync = () => {
+            const on = !!getFsEl();
+            toggleFullscreen.classList.toggle("is-fs", on);
+            toggleFullscreen.setAttribute("aria-pressed", on ? "true" : "false");
+            const tip = on ? "退出全屏" : "全屏预览";
+            toggleFullscreen.dataset.tip = tip;
+            toggleFullscreen.title = tip;
+            toggleFullscreen.setAttribute("aria-label", tip);
+          };
+
+          let tipTimer = 0;
+          toggleFullscreen.addEventListener("pointerdown", (e) => {
+            if (e && e.pointerType === "touch") {
+              toggleFullscreen.classList.add("tip-on");
+              if (tipTimer) clearTimeout(tipTimer);
+              tipTimer = window.setTimeout(() => toggleFullscreen.classList.remove("tip-on"), 1200);
+            }
+          });
+
+          toggleFullscreen.addEventListener("pointerleave", () => toggleFullscreen.classList.remove("tip-on"));
+          toggleFullscreen.addEventListener("blur", () => toggleFullscreen.classList.remove("tip-on"));
+
+          toggleFullscreen.addEventListener("click", async () => {
+            if (!canFs()) {
+              toast.show("当前浏览器不支持全屏预览");
+              return;
+            }
+            try {
+              if (getFsEl()) {
+                const exitStd = document.exitFullscreen;
+                const exitWebkit = document.webkitExitFullscreen;
+                if (exitStd) await exitStd.call(document);
+                else if (exitWebkit) await exitWebkit.call(document);
+              } else {
+                const reqStd = document.documentElement.requestFullscreen;
+                const reqWebkit = document.documentElement.webkitRequestFullscreen;
+                if (reqStd) await reqStd.call(document.documentElement, { navigationUI: "hide" });
+                else if (reqWebkit) await reqWebkit.call(document.documentElement);
+              }
+            } catch (err) {
+              toast.show("全屏切换失败");
+            }
+          });
+
+          document.addEventListener("fullscreenchange", sync);
+          document.addEventListener("webkitfullscreenchange", sync);
+          sync();
+        })();
 
         // Download share card as PNG (no external libs)
         const downloadCard = async () => {
@@ -10650,10 +13108,9 @@
           const bestBoxH = 170;
           const bestR = 20;
 
-          const bestBorder = ctx.createLinearGradient(bestBoxX, bestBoxY, bestBoxX + bestBoxW, bestBoxY + bestBoxH);
-          bestBorder.addColorStop(0, "rgba(88,166,255,0.85)");
-          bestBorder.addColorStop(0.55, "rgba(188,140,255,0.75)");
-          bestBorder.addColorStop(1, "rgba(63,185,80,0.75)");
+	          const bestBorder = ctx.createLinearGradient(bestBoxX, bestBoxY, bestBoxX + bestBoxW, bestBoxY + bestBoxH);
+	          bestBorder.addColorStop(0, "rgba(88,166,255,0.82)");
+	          bestBorder.addColorStop(1, "rgba(188,140,255,0.72)");
 
           ctx.save();
           roundRect(bestBoxX, bestBoxY, bestBoxW, bestBoxH, bestR);
