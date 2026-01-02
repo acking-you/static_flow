@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
 use lancedb::{connect, Connection, Table};
+use tokio::sync::RwLock;
+
+use crate::models::{CategoryInfo, TagInfo};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -9,6 +12,8 @@ pub struct AppState {
     db: Arc<Connection>,
     articles_table: String,
     images_table: String,
+    pub(crate) tags_cache: Arc<RwLock<Option<(Vec<TagInfo>, Instant)>>>,
+    pub(crate) categories_cache: Arc<RwLock<Option<(Vec<CategoryInfo>, Instant)>>>,
 }
 
 impl AppState {
@@ -18,6 +23,8 @@ impl AppState {
             db: Arc::new(db),
             articles_table: "articles".to_string(),
             images_table: "images".to_string(),
+            tags_cache: Arc::new(RwLock::new(None)),
+            categories_cache: Arc::new(RwLock::new(None)),
         })
     }
 

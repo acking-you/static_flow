@@ -249,4 +249,16 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn detect_language_defaults_to_english() {
+        let language = detect_language("Hello from StaticFlow");
+        assert_eq!(language, TextEmbeddingLanguage::English);
+    }
+
+    #[test]
+    fn detect_language_detects_chinese_characters() {
+        let language = detect_language("你好，StaticFlow");
+        assert_eq!(language, TextEmbeddingLanguage::Chinese);
+    }
 }

@@ -1,13 +1,14 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use image::{GenericImageView, ImageFormat};
-
-use crate::db::{connect_db, ensure_vector_index, upsert_images};
-use crate::schema::ImageRecord;
-use crate::utils::{collect_image_files, encode_thumbnail, hash_bytes, relative_filename};
 use static_flow_shared::embedding::embed_image_bytes;
+
+use crate::{
+    db::{connect_db, ensure_vector_index, upsert_images},
+    schema::ImageRecord,
+    utils::{collect_image_files, encode_thumbnail, hash_bytes, relative_filename},
+};
 
 pub async fn run(
     db_path: &Path,
@@ -31,8 +32,8 @@ pub async fn run(
 
     let mut records = Vec::new();
     for path in files {
-        let bytes = fs::read(&path)
-            .with_context(|| format!("failed to read image {}", path.display()))?;
+        let bytes =
+            fs::read(&path).with_context(|| format!("failed to read image {}", path.display()))?;
         let id = hash_bytes(&bytes);
         let filename = relative_filename(dir, &path);
 

@@ -25,15 +25,15 @@ pub enum Commands {
         /// Markdown file path.
         #[arg(long)]
         file: PathBuf,
-        /// Article summary (AI generated).
+        /// Article summary (optional if frontmatter provides it).
         #[arg(long)]
-        summary: String,
-        /// Comma-separated tags list.
+        summary: Option<String>,
+        /// Comma-separated tags list (optional if frontmatter provides it).
         #[arg(long)]
-        tags: String,
-        /// Article category.
+        tags: Option<String>,
+        /// Article category (optional if frontmatter provides it).
         #[arg(long)]
-        category: String,
+        category: Option<String>,
         /// Optional embedding vector as JSON array.
         #[arg(long)]
         vector: Option<String>,

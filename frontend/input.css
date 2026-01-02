@@ -708,6 +708,321 @@
     }
   }
 
+  /* GitHub Wrapped 2025 Button - Featured Entry */
+  .github-wrapped-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.875rem;
+    position: relative;
+    padding: 0.875rem 1.25rem;
+    background: linear-gradient(
+      135deg,
+      rgba(var(--surface-rgb), 0.95),
+      rgba(var(--surface-rgb), 0.85)
+    );
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    transition: all 0.2s ease-out;
+    transform: translateZ(0);
+    box-shadow: var(--shadow-2);
+  }
+
+  .github-wrapped-btn::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      #58a6ff,
+      #8b5cf6,
+      #f472b6,
+      #58a6ff
+    );
+    background-size: 300% 300%;
+    animation: gradient-border 4s ease infinite;
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .github-wrapped-btn::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      135deg,
+      rgba(88, 166, 255, 0.08),
+      rgba(139, 92, 246, 0.08),
+      rgba(244, 114, 182, 0.08)
+    );
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+  }
+
+  .github-wrapped-btn:hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: var(--shadow-4), 0 0 20px rgba(88, 166, 255, 0.15);
+  }
+
+  .github-wrapped-btn:hover::after {
+    opacity: 1;
+  }
+
+  .github-wrapped-btn:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .github-wrapped-badge {
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #fff;
+    background: linear-gradient(135deg, #f472b6, #8b5cf6);
+    border-radius: 0 var(--radius) 0 var(--radius);
+    animation: badge-pulse 2s ease-in-out infinite;
+  }
+
+  .github-wrapped-btn i {
+    font-size: 1.5rem;
+    color: var(--primary);
+    transition: transform 0.2s ease;
+  }
+
+  .github-wrapped-btn:hover i {
+    transform: rotate(-8deg) scale(1.1);
+  }
+
+  .github-wrapped-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .github-wrapped-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+
+  .github-wrapped-subtitle {
+    font-size: 0.75rem;
+    color: var(--muted);
+    transition: color 0.2s ease;
+  }
+
+  .github-wrapped-btn:hover .github-wrapped-subtitle {
+    color: var(--primary);
+  }
+
+  @keyframes gradient-border {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  @keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  /* Dark theme adjustments for GitHub Wrapped */
+  [data-theme="dark"] .github-wrapped-btn,
+  [theme="dark"] .github-wrapped-btn {
+    background: linear-gradient(
+      135deg,
+      rgba(var(--surface-rgb), 0.9),
+      rgba(var(--surface-rgb), 0.7)
+    );
+  }
+
+  [data-theme="dark"] .github-wrapped-btn:hover,
+  [theme="dark"] .github-wrapped-btn:hover {
+    box-shadow: var(--shadow-4), 0 0 30px rgba(88, 166, 255, 0.2);
+  }
+
+  /* GitHub Wrapped Container & Group */
+  .github-wrapped-container {
+    position: relative;
+  }
+
+  .github-wrapped-group {
+    display: inline-flex;
+    align-items: stretch;
+  }
+
+  .github-wrapped-group .github-wrapped-btn {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .github-wrapped-group .github-wrapped-btn::before {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* Expand button */
+  .github-wrapped-expand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    background: linear-gradient(
+      135deg,
+      rgba(var(--surface-rgb), 0.95),
+      rgba(var(--surface-rgb), 0.85)
+    );
+    border: 1px solid transparent;
+    border-left: none;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+  }
+
+  .github-wrapped-expand::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, #58a6ff, #8b5cf6, #f472b6, #58a6ff);
+    background-size: 300% 300%;
+    animation: gradient-border 4s ease infinite;
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    /* Hide left border to connect with main button */
+    clip-path: inset(0 0 0 1px);
+  }
+
+  .github-wrapped-expand:hover {
+    color: var(--primary);
+    background: var(--surface-alt);
+  }
+
+  .github-wrapped-expand i {
+    transition: transform 0.2s ease;
+  }
+
+  .github-wrapped-expand.expanded i {
+    transform: rotate(180deg);
+  }
+
+  /* Dropdown */
+  .github-wrapped-dropdown {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    left: 0;
+    min-width: 200px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-4);
+    overflow: hidden;
+    z-index: 50;
+    animation: dropdown-appear 0.15s ease-out;
+  }
+
+  @keyframes dropdown-appear {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .github-wrapped-dropdown-header {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-alt);
+  }
+
+  .github-wrapped-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    color: var(--text);
+    text-decoration: none;
+    transition: all 0.15s ease;
+  }
+
+  .github-wrapped-dropdown-item:hover {
+    background: var(--surface-alt);
+    color: var(--primary);
+  }
+
+  .github-wrapped-dropdown-item i {
+    font-size: 1rem;
+    color: var(--muted);
+    transition: color 0.15s ease;
+  }
+
+  .github-wrapped-dropdown-item:hover i {
+    color: var(--primary);
+  }
+
+  .github-wrapped-dropdown-item.latest {
+    background: linear-gradient(
+      90deg,
+      rgba(88, 166, 255, 0.08),
+      transparent
+    );
+  }
+
+  .github-wrapped-latest-tag {
+    margin-left: auto;
+    padding: 0.125rem 0.375rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(135deg, #58a6ff, #8b5cf6);
+    border-radius: 0.25rem;
+  }
+
+  /* Dark theme for dropdown */
+  [data-theme="dark"] .github-wrapped-expand,
+  [theme="dark"] .github-wrapped-expand {
+    background: linear-gradient(
+      135deg,
+      rgba(var(--surface-rgb), 0.9),
+      rgba(var(--surface-rgb), 0.7)
+    );
+  }
+
+  [data-theme="dark"] .github-wrapped-dropdown,
+  [theme="dark"] .github-wrapped-dropdown {
+    background: rgba(var(--surface-rgb), 0.95);
+    backdrop-filter: blur(12px);
+  }
+
   /* Liquid glass surfaces */
   .liquid-glass,
   .liquid-glass-strong,

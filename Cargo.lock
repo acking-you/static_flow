@@ -7355,6 +7355,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "static-flow-shared",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

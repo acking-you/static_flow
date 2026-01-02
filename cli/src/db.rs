@@ -1,11 +1,9 @@
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use arrow_array::{RecordBatch, RecordBatchIterator};
 use arrow_schema::Schema;
-use lancedb::index::Index;
-use lancedb::{connect, Connection, Table};
+use lancedb::{connect, index::Index, Connection, Table};
 
 use crate::schema::{build_article_batch, build_image_batch, ArticleRecord, ImageRecord};
 
@@ -22,9 +20,7 @@ pub async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> R
         Err(_) => {
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-            db.create_table(name, Box::new(batches))
-                .execute()
-                .await?;
+            db.create_table(name, Box::new(batches)).execute().await?;
             Ok(db.open_table(name).execute().await?)
         },
     }

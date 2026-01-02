@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, ListArray, RecordBatch,
@@ -11,16 +15,21 @@ use axum::{
     response::{Json, Response},
 };
 use futures::TryStreamExt;
-use lancedb::index::scalar::FullTextSearchQuery;
-use lancedb::query::{ExecutableQuery, QueryBase, Select};
-use lancedb::Table;
-use serde::{Deserialize, Serialize};
-use static_flow_shared::embedding::{
-    detect_language, embed_text_with_language, TextEmbeddingLanguage,
+use lancedb::{
+    index::scalar::FullTextSearchQuery,
+    query::{ExecutableQuery, QueryBase, Select},
+    Table,
 };
-use static_flow_shared::{Article, ArticleListItem};
+use serde::{Deserialize, Serialize};
+use static_flow_shared::{
+    embedding::{detect_language, embed_text_with_language, TextEmbeddingLanguage},
+    Article, ArticleListItem,
+};
 
-use crate::state::AppState;
+use crate::{
+    models::{CategoryInfo, TagInfo},
+    state::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
@@ -95,19 +104,6 @@ pub struct ErrorResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct TagInfo {
-    pub name: String,
-    pub count: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CategoryInfo {
-    pub name: String,
-    pub count: usize,
-    pub description: String,
-}
-
-#[derive(Debug, Serialize)]
 pub struct TagsResponse {
     pub tags: Vec<TagInfo>,
 }
@@ -125,6 +121,7 @@ const CATEGORY_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Productivity", "效率、写作与自我管理的小实验与道具。"),
     ("AI", "Prompt、LLM 与智能体的落地探索。"),
 ];
+const CACHE_TTL: Duration = Duration::from_secs(60);
 
 pub async fn list_articles(
     State(state): State<AppState>,
@@ -134,30 +131,9 @@ pub async fn list_articles(
         .articles_table()
         .await
         .map_err(|e| internal_error("Failed to open articles table", e))?;
-    let mut articles = fetch_article_list(&table)
+    let articles = fetch_article_list(&table, query.tag.as_deref(), query.category.as_deref())
         .await
         .map_err(|e| internal_error("Failed to fetch articles", e))?;
-
-    // Filter by tag and/or category
-    articles = articles
-        .into_iter()
-        .filter(|article| {
-            let mut matches = true;
-
-            // Filter by tag (case insensitive)
-            if let Some(ref tag) = query.tag {
-                let tag_lower = tag.to_lowercase();
-                matches = matches && article.tags.iter().any(|t| t.to_lowercase() == tag_lower);
-            }
-
-            // Filter by category (case insensitive)
-            if let Some(ref category) = query.category {
-                matches = matches && article.category.eq_ignore_ascii_case(category);
-            }
-
-            matches
-        })
-        .collect();
 
     let total = articles.len();
 
@@ -195,11 +171,15 @@ pub async fn get_article(
 pub async fn list_tags(
     State(state): State<AppState>,
 ) -> Result<Json<TagsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(tags) = read_cache(state.tags_cache.as_ref()).await {
+        return Ok(Json(TagsResponse { tags }));
+    }
+
     let table = state
         .articles_table()
         .await
         .map_err(|e| internal_error("Failed to open articles table", e))?;
-    let articles = fetch_article_list(&table)
+    let articles = fetch_article_list(&table, None, None)
         .await
         .map_err(|e| internal_error("Failed to fetch tags", e))?;
 
@@ -214,9 +194,14 @@ pub async fn list_tags(
     // Sort by name
     let mut tags: Vec<TagInfo> = tag_counts
         .into_iter()
-        .map(|(name, count)| TagInfo { name, count })
+        .map(|(name, count)| TagInfo {
+            name,
+            count,
+        })
         .collect();
     tags.sort_by(|a, b| a.name.cmp(&b.name));
+
+    write_cache(state.tags_cache.as_ref(), tags.clone()).await;
 
     Ok(Json(TagsResponse { tags }))
 }
@@ -224,11 +209,15 @@ pub async fn list_tags(
 pub async fn list_categories(
     State(state): State<AppState>,
 ) -> Result<Json<CategoriesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(categories) = read_cache(state.categories_cache.as_ref()).await {
+        return Ok(Json(CategoriesResponse { categories }));
+    }
+
     let table = state
         .articles_table()
         .await
         .map_err(|e| internal_error("Failed to open articles table", e))?;
-    let articles = fetch_article_list(&table)
+    let articles = fetch_article_list(&table, None, None)
         .await
         .map_err(|e| internal_error("Failed to fetch categories", e))?;
 
@@ -258,6 +247,8 @@ pub async fn list_categories(
 
     // Sort by name
     categories.sort_by(|a, b| a.name.cmp(&b.name));
+
+    write_cache(state.categories_cache.as_ref(), categories.clone()).await;
 
     Ok(Json(CategoriesResponse { categories }))
 }
@@ -397,10 +388,7 @@ pub async fn related_articles(
         },
     };
 
-    let filter = format!(
-        "{vector_column} IS NOT NULL AND id != '{}'",
-        escape_literal(&id)
-    );
+    let filter = format!("{vector_column} IS NOT NULL AND id != '{}'", escape_literal(&id));
     let vector_query = table
         .query()
         .nearest_to(vector.as_slice())
@@ -456,8 +444,8 @@ pub async fn list_images(
         .try_collect::<Vec<_>>()
         .await
         .map_err(|e| internal_error("Failed to read image batches", e))?;
-    let images = batches_to_images(&batch_list)
-        .map_err(|e| internal_error("Failed to parse images", e))?;
+    let images =
+        batches_to_images(&batch_list).map_err(|e| internal_error("Failed to parse images", e))?;
 
     Ok(Json(ImageListResponse {
         total: images.len(),
@@ -574,9 +562,60 @@ pub async fn serve_image(
         .unwrap())
 }
 
-async fn fetch_article_list(table: &Table) -> Result<Vec<ArticleListItem>> {
-    let batches = table
-        .query()
+async fn read_cache<T: Clone>(
+    cache: &tokio::sync::RwLock<Option<(Vec<T>, Instant)>>,
+) -> Option<Vec<T>> {
+    let cache = cache.read().await;
+    match cache.as_ref() {
+        Some((items, cached_at)) if cached_at.elapsed() < CACHE_TTL => Some(items.clone()),
+        _ => None,
+    }
+}
+
+async fn write_cache<T>(
+    cache: &tokio::sync::RwLock<Option<(Vec<T>, Instant)>>,
+    items: Vec<T>,
+) {
+    let mut cache = cache.write().await;
+    *cache = Some((items, Instant::now()));
+}
+
+async fn fetch_article_list(
+    table: &Table,
+    tag: Option<&str>,
+    category: Option<&str>,
+) -> Result<Vec<ArticleListItem>> {
+    let mut filters = Vec::new();
+
+    if let Some(tag) = tag {
+        let tag_lower = tag.to_lowercase();
+        let escaped_tag = escape_literal(tag);
+        let escaped_lower = escape_literal(&tag_lower);
+        let tag_filter = if escaped_tag == escaped_lower {
+            format!("list_contains(tags, '{}')", escaped_tag)
+        } else {
+            format!(
+                "(list_contains(tags, '{}') OR list_contains(tags, '{}'))",
+                escaped_tag, escaped_lower
+            )
+        };
+        filters.push(tag_filter);
+    }
+
+    if let Some(category) = category {
+        let category_lower = category.to_lowercase();
+        filters.push(format!(
+            "lower(category) = '{}'",
+            escape_literal(&category_lower)
+        ));
+    }
+
+    let mut query = table.query();
+    if !filters.is_empty() {
+        query = query.only_if(filters.join(" AND "));
+    }
+
+    let batches = query
         .select(Select::columns(&[
             "id",
             "title",
@@ -662,15 +701,7 @@ async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResul
         .query()
         .full_text_search(FullTextSearchQuery::new(keyword.to_string()))
         .limit(10)
-        .select(Select::columns(&[
-            "id",
-            "title",
-            "summary",
-            "content",
-            "tags",
-            "category",
-            "date",
-        ]))
+        .select(Select::columns(&["id", "title", "summary", "content", "tags", "category", "date"]))
         .execute()
         .await?;
 
@@ -694,15 +725,7 @@ async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResul
 async fn fallback_search(table: &Table, keyword: &str) -> Result<Vec<SearchResult>> {
     let batches = table
         .query()
-        .select(Select::columns(&[
-            "id",
-            "title",
-            "summary",
-            "content",
-            "tags",
-            "category",
-            "date",
-        ]))
+        .select(Select::columns(&["id", "title", "summary", "content", "tags", "category", "date"]))
         .execute()
         .await?;
 
@@ -836,11 +859,12 @@ fn extract_vector(batches: &[RecordBatch], column: &str) -> Option<Vec<f32>> {
         if batch.num_rows() == 0 {
             continue;
         }
-        let vector_array = batch
-            .schema()
-            .index_of(column)
-            .ok()
-            .and_then(|idx| batch.column(idx).as_any().downcast_ref::<FixedSizeListArray>())?;
+        let vector_array = batch.schema().index_of(column).ok().and_then(|idx| {
+            batch
+                .column(idx)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+        })?;
         if vector_array.is_null(0) {
             return None;
         }
@@ -871,15 +895,17 @@ fn extract_image_bytes(
 }
 
 fn string_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray> {
-    column(batch, name)?.as_any().downcast_ref::<StringArray>().with_context(|| {
-        format!("column {} is not StringArray", name)
-    })
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .with_context(|| format!("column {} is not StringArray", name))
 }
 
 fn list_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ListArray> {
-    column(batch, name)?.as_any().downcast_ref::<ListArray>().with_context(|| {
-        format!("column {} is not ListArray", name)
-    })
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .with_context(|| format!("column {} is not ListArray", name))
 }
 
 fn int32_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a arrow_array::Int32Array> {
@@ -890,9 +916,10 @@ fn int32_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a arrow_array
 }
 
 fn binary_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a BinaryArray> {
-    column(batch, name)?.as_any().downcast_ref::<BinaryArray>().with_context(|| {
-        format!("column {} is not BinaryArray", name)
-    })
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .with_context(|| format!("column {} is not BinaryArray", name))
 }
 
 fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {

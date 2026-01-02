@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
 
@@ -59,14 +58,16 @@ pub const IMAGE_VECTOR_DIM: usize = DEFAULT_IMAGE_MODEL.dim();
 static FASTEMBED_IMAGE_MODEL: OnceLock<Mutex<HashMap<ImageEmbeddingModelChoice, ImageEmbedding>>> =
     OnceLock::new();
 
-/// Generate a semantic embedding for an image (bytes should be an encoded image).
+/// Generate a semantic embedding for an image (bytes should be an encoded
+/// image).
 ///
 /// Use `embed_image_bytes_with_model` if you need a specific vision model.
 pub fn embed_image_bytes(bytes: &[u8]) -> Vec<f32> {
     embed_image_bytes_with_model(bytes, DEFAULT_IMAGE_MODEL)
 }
 
-/// Generate a semantic embedding for an image using a specific fastembed vision model.
+/// Generate a semantic embedding for an image using a specific fastembed vision
+/// model.
 pub fn embed_image_bytes_with_model(bytes: &[u8], model: ImageEmbeddingModelChoice) -> Vec<f32> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -79,10 +80,7 @@ pub fn embed_image_bytes_with_model(bytes: &[u8], model: ImageEmbeddingModelChoi
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fastembed_image_embedding(
-    bytes: &[u8],
-    model: ImageEmbeddingModelChoice,
-) -> Option<Vec<f32>> {
+fn fastembed_image_embedding(bytes: &[u8], model: ImageEmbeddingModelChoice) -> Option<Vec<f32>> {
     let lock = FASTEMBED_IMAGE_MODEL.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = lock.lock().ok()?;
 
@@ -94,9 +92,7 @@ fn fastembed_image_embedding(
                 guard.insert(model, instance);
             },
             Err(err) => {
-                tracing::warn!(
-                    "fastembed image init failed, using hash embedding fallback: {err}"
-                );
+                tracing::warn!("fastembed image init failed, using hash embedding fallback: {err}");
                 return None;
             },
         }
@@ -129,12 +125,11 @@ mod tests {
     use super::*;
 
     const TEST_PNG_BYTES: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49,
-        0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
-        0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44,
-        0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0x0F, 0x00, 0x01, 0x05, 0x01, 0x02, 0xA2,
-        0x7D, 0xA4, 0x31, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
-        0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0x0F, 0x00, 0x01, 0x05, 0x01, 0x02, 0xA2, 0x7D, 0xA4, 0x31, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
     #[test]

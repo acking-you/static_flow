@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use static_flow_shared::embedding::{
@@ -7,16 +6,18 @@ use static_flow_shared::embedding::{
     TEXT_VECTOR_DIM_ZH,
 };
 
-use crate::db::{connect_db, ensure_vector_index, upsert_articles};
-use crate::schema::ArticleRecord;
-use crate::utils::{estimate_read_time, parse_markdown, parse_tags, parse_vector};
+use crate::{
+    db::{connect_db, ensure_vector_index, upsert_articles},
+    schema::ArticleRecord,
+    utils::{estimate_read_time, parse_markdown, parse_tags, parse_vector, Frontmatter},
+};
 
 pub async fn run(
     db_path: &Path,
     file: &Path,
-    summary: String,
-    tags: String,
-    category: String,
+    summary: Option<String>,
+    tags: Option<String>,
+    category: Option<String>,
     vector: Option<String>,
     vector_en: Option<String>,
     vector_zh: Option<String>,
@@ -31,7 +32,18 @@ pub async fn run(
 
     let content = fs::read_to_string(file).context("failed to read markdown file")?;
     let (frontmatter, body) = parse_markdown(&content)?;
-    if frontmatter.title.trim().is_empty() {
+    let Frontmatter {
+        title,
+        summary: frontmatter_summary,
+        tags: frontmatter_tags,
+        category: frontmatter_category,
+        author,
+        date,
+        featured_image,
+        read_time,
+    } = frontmatter;
+
+    if title.trim().is_empty() {
         anyhow::bail!("frontmatter title is required");
     }
 
@@ -41,14 +53,26 @@ pub async fn run(
         .unwrap_or("unknown")
         .to_string();
 
-    let tags = parse_tags(&tags);
-    let read_time = frontmatter.read_time.unwrap_or_else(|| estimate_read_time(&body));
-    let date = frontmatter
-        .date
-        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
-    let author = frontmatter.author.unwrap_or_else(|| "Unknown".to_string());
+    let summary = summary
+        .or(frontmatter_summary)
+        .filter(|value| !value.trim().is_empty())
+        .context("summary is required (pass --summary or add summary to frontmatter)")?;
+    let tags = if let Some(tags) = tags {
+        parse_tags(&tags)
+    } else if let Some(tags) = frontmatter_tags {
+        tags
+    } else {
+        anyhow::bail!("tags are required (pass --tags or add tags to frontmatter)");
+    };
+    let category = category
+        .or(frontmatter_category)
+        .filter(|value| !value.trim().is_empty())
+        .context("category is required (pass --category or add category to frontmatter)")?;
+    let read_time = read_time.unwrap_or_else(|| estimate_read_time(&body));
+    let date = date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let author = author.unwrap_or_else(|| "Unknown".to_string());
 
-    let combined_text = format!("{} {} {}", frontmatter.title, summary, body);
+    let combined_text = format!("{} {} {}", title, summary, body);
     let language = match language.as_deref() {
         Some("en") => TextEmbeddingLanguage::English,
         Some("zh") => TextEmbeddingLanguage::Chinese,
@@ -94,14 +118,14 @@ pub async fn run(
     let now_ms = chrono::Utc::now().timestamp_millis();
     let record = ArticleRecord {
         id,
-        title: frontmatter.title,
+        title,
         content: body,
         summary,
         tags,
         category,
         author,
         date,
-        featured_image: frontmatter.featured_image,
+        featured_image,
         read_time,
         vector_en,
         vector_zh,

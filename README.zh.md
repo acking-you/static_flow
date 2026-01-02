@@ -108,21 +108,21 @@ cargo run -- query --table articles --limit 10
 ## 开发路线图
 
 ### Phase 1: CLI 工具开发
-- [ ] LanceDB schema 设计和初始化
-- [ ] write-article 命令实现
-- [ ] write-images 命令实现
-- [ ] query 命令实现
+- [x] LanceDB schema 设计和初始化
+- [x] write-article 命令实现
+- [x] write-images 命令实现
+- [x] query 命令实现
 
 ### Phase 2: Backend LanceDB 集成
-- [ ] 移除文件系统实现
-- [ ] 集成 LanceDB Rust SDK
-- [ ] 重构所有 API 端点
-- [ ] 实现向量搜索
+- [x] 移除文件系统实现
+- [x] 集成 LanceDB Rust SDK
+- [x] 重构所有 API 端点
+- [x] 实现向量搜索
 
 ### Phase 3: 功能完善
-- [ ] 语义搜索 UI
-- [ ] 以图搜图功能
-- [ ] 相关文章推荐
+- [x] 语义搜索 UI
+- [x] 以图搜图功能
+- [x] 相关文章推荐
 
 ## 开发命令
 

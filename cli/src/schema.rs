@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use arrow_array::builder::{
-    BinaryBuilder, FixedSizeListBuilder, Float32Builder, Int32Builder, ListBuilder,
-    StringBuilder, TimestampMillisecondBuilder,
+use arrow_array::{
+    builder::{
+        BinaryBuilder, FixedSizeListBuilder, Float32Builder, Int32Builder, ListBuilder,
+        StringBuilder, TimestampMillisecondBuilder,
+    },
+    ArrayRef, RecordBatch,
 };
-use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use static_flow_shared::embedding::{
-    IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH,
-};
+use static_flow_shared::embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
 
 pub struct ArticleRecord {
     pub id: String,
@@ -70,16 +70,8 @@ pub fn article_schema() -> Arc<Schema> {
             ),
             true,
         ),
-        Field::new(
-            "created_at",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        ),
-        Field::new(
-            "updated_at",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        ),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
 
@@ -98,11 +90,7 @@ pub fn image_schema() -> Arc<Schema> {
             false,
         ),
         Field::new("metadata", DataType::Utf8, false),
-        Field::new(
-            "created_at",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        ),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
 
@@ -118,9 +106,11 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
     let mut featured_builder = StringBuilder::new();
     let mut read_time_builder = Int32Builder::new();
     let mut vector_en_builder =
-        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32);
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32)
+            .with_field(Field::new_list_field(DataType::Float32, false));
     let mut vector_zh_builder =
-        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_ZH as i32);
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_ZH as i32)
+            .with_field(Field::new_list_field(DataType::Float32, false));
     let mut created_at_builder = TimestampMillisecondBuilder::new();
     let mut updated_at_builder = TimestampMillisecondBuilder::new();
 
@@ -163,7 +153,7 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
             },
             None => {
                 for _ in 0..TEXT_VECTOR_DIM_EN {
-                    vector_en_builder.values().append_null();
+                    vector_en_builder.values().append_value(0.0);
                 }
                 vector_en_builder.append(false);
             },
@@ -185,7 +175,7 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
             },
             None => {
                 for _ in 0..TEXT_VECTOR_DIM_ZH {
-                    vector_zh_builder.values().append_null();
+                    vector_zh_builder.values().append_value(0.0);
                 }
                 vector_zh_builder.append(false);
             },
@@ -222,7 +212,8 @@ pub fn build_image_batch(records: &[ImageRecord]) -> Result<RecordBatch> {
     let mut data_builder = BinaryBuilder::new();
     let mut thumb_builder = BinaryBuilder::new();
     let mut vector_builder =
-        FixedSizeListBuilder::new(Float32Builder::new(), IMAGE_VECTOR_DIM as i32);
+        FixedSizeListBuilder::new(Float32Builder::new(), IMAGE_VECTOR_DIM as i32)
+            .with_field(Field::new_list_field(DataType::Float32, false));
     let mut metadata_builder = StringBuilder::new();
     let mut created_at_builder = TimestampMillisecondBuilder::new();
 

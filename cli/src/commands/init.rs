@@ -1,11 +1,15 @@
 use std::path::Path;
 
 use anyhow::Result;
-use lancedb::index::scalar::FullTextSearchQuery;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::{
+    index::scalar::FullTextSearchQuery,
+    query::{ExecutableQuery, QueryBase},
+};
 
-use crate::db::{connect_db, ensure_fts_index, ensure_table, ensure_vector_index};
-use crate::schema::{article_schema, image_schema};
+use crate::{
+    db::{connect_db, ensure_fts_index, ensure_table, ensure_vector_index},
+    schema::{article_schema, image_schema},
+};
 
 pub async fn run(db_path: &Path) -> Result<()> {
     let db = connect_db(db_path).await?;

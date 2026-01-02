@@ -285,11 +285,7 @@ pub async fn semantic_search_articles(keyword: &str) -> Result<Vec<SearchResult>
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!(
-            "{}/semantic-search?q={}",
-            API_BASE,
-            urlencoding::encode(keyword)
-        );
+        let url = format!("{}/semantic-search?q={}", API_BASE, urlencoding::encode(keyword));
 
         let response = Request::get(&url)
             .send()
@@ -314,7 +310,11 @@ pub async fn fetch_related_articles(id: &str) -> Result<Vec<ArticleListItem>, St
     #[cfg(feature = "mock")]
     {
         let articles = models::get_mock_articles();
-        return Ok(articles.into_iter().filter(|a| a.id != id).take(3).collect());
+        return Ok(articles
+            .into_iter()
+            .filter(|a| a.id != id)
+            .take(3)
+            .collect());
     }
 
     #[cfg(not(feature = "mock"))]
@@ -381,11 +381,7 @@ pub async fn search_images_by_id(image_id: &str) -> Result<Vec<ImageInfo>, Strin
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!(
-            "{}/image-search?id={}",
-            API_BASE,
-            urlencoding::encode(image_id)
-        );
+        let url = format!("{}/image-search?id={}", API_BASE, urlencoding::encode(image_id));
 
         let response = Request::get(&url)
             .send()

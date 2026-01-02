@@ -9,7 +9,9 @@ use crate::cli::{Cli, Commands};
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Init { db_path } => init::run(&db_path).await,
+        Commands::Init {
+            db_path,
+        } => init::run(&db_path).await,
         Commands::WriteArticle {
             db_path,
             file,
@@ -22,15 +24,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             language,
         } => {
             write_article::run(
-                &db_path,
-                &file,
-                summary,
-                tags,
-                category,
-                vector,
-                vector_en,
-                vector_zh,
-                language,
+                &db_path, &file, summary, tags, category, vector, vector_en, vector_zh, language,
             )
             .await
         },

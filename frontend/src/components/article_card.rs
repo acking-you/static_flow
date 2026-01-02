@@ -2,9 +2,7 @@ use yew::prelude::*;
 use yew_router::prelude::{use_navigator, Link};
 
 use crate::{
-    components::image_with_loading::ImageWithLoading,
-    models::ArticleListItem,
-    router::Route,
+    components::image_with_loading::ImageWithLoading, models::ArticleListItem, router::Route,
     utils::image_url,
 };
 

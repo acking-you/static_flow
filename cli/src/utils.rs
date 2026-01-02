@@ -1,9 +1,10 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
-use gray_matter::engine::YAML;
-use gray_matter::Matter;
+use gray_matter::{engine::YAML, Matter};
 use image::{DynamicImage, ImageFormat};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -82,7 +83,10 @@ pub fn collect_image_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> 
     let exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 
     if recursive {
-        for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(Result::ok) {
+        for entry in walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             if entry.file_type().is_file() {
                 let path = entry.path();
                 if has_image_extension(path, &exts) {

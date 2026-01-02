@@ -1,3 +1,4 @@
+use wasm_bindgen::JsCast;
 use web_sys::console;
 use yew::prelude::*;
 use yew_router::prelude::Link;
@@ -338,6 +339,13 @@ pub fn home_page() -> Html {
                                     </a>
                                 </div>
 
+                                // GitHub Wrapped - Featured Entry with Year Selector
+                                <div class="terminal-line" style="margin-top: 1.5rem;">
+                                    <span class="terminal-prompt">{ "$ " }</span>
+                                    <span class="terminal-content">{ "./scripts/github-wrapped.sh --list-years" }</span>
+                                </div>
+                                <GithubWrappedSelector />
+
                                 // Blinking cursor at the end
                                 <div class="terminal-line" style="margin-top: 1.5rem;">
                                     <span class="terminal-prompt">{ "$ " }</span>
@@ -413,6 +421,150 @@ pub fn home_page() -> Html {
                         </div>
                     </section>
                 </div>
+        </div>
+    }
+}
+
+/// GitHub Wrapped year entry
+#[derive(Clone)]
+struct WrappedYear {
+    year: u16,
+    is_latest: bool,
+}
+
+impl WrappedYear {
+    fn url(&self) -> String {
+        format!("/standalone/github-wrapped-{}.html", self.year)
+    }
+}
+
+/// Available GitHub Wrapped years (newest first)
+fn get_wrapped_years() -> Vec<WrappedYear> {
+    vec![
+        WrappedYear { year: 2025, is_latest: true },
+        // Add more years here as they become available:
+        // WrappedYear { year: 2024, is_latest: false },
+    ]
+}
+
+#[function_component(GithubWrappedSelector)]
+fn github_wrapped_selector() -> Html {
+    let expanded = use_state(|| false);
+    let years = get_wrapped_years();
+    let latest = years.first().cloned();
+
+    let toggle_expand = {
+        let expanded = expanded.clone();
+        Callback::from(move |e: MouseEvent| {
+            e.prevent_default();
+            e.stop_propagation();
+            expanded.set(!*expanded);
+        })
+    };
+
+    let close_dropdown = {
+        let expanded = expanded.clone();
+        Callback::from(move |_| expanded.set(false))
+    };
+
+    // Close on outside click
+    {
+        let expanded = expanded.clone();
+        use_effect_with(*expanded, move |is_expanded| {
+            let cleanup: Box<dyn FnOnce()> = if *is_expanded {
+                let expanded = expanded.clone();
+                let closure = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
+                    expanded.set(false);
+                });
+
+                if let Some(window) = web_sys::window() {
+                    let _ = window.add_event_listener_with_callback(
+                        "click",
+                        closure.as_ref().unchecked_ref(),
+                    );
+                    let window_clone = window.clone();
+                    Box::new(move || {
+                        let _ = window_clone.remove_event_listener_with_callback(
+                            "click",
+                            closure.as_ref().unchecked_ref(),
+                        );
+                    })
+                } else {
+                    Box::new(|| {})
+                }
+            } else {
+                Box::new(|| {})
+            };
+            cleanup
+        });
+    }
+
+    let Some(latest) = latest else {
+        return html! {};
+    };
+
+    let has_multiple_years = years.len() > 1;
+
+    html! {
+        <div class={classes!("mt-3", "ml-8", "github-wrapped-container")}>
+            <div class="github-wrapped-group">
+                // Main button - always links to latest year
+                <a
+                    href={latest.url()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="github-wrapped-btn"
+                >
+                    <span class="github-wrapped-badge">{ "NEW" }</span>
+                    <i class={classes!("fa-brands", "fa-github", "text-xl")} aria-hidden="true"></i>
+                    <span class="github-wrapped-text">
+                        <span class="github-wrapped-title">{ format!("{} GitHub Wrapped", latest.year) }</span>
+                        <span class="github-wrapped-subtitle">{ "年度代码回顾 →" }</span>
+                    </span>
+                </a>
+
+                // Expand button (only show if multiple years)
+                if has_multiple_years {
+                    <button
+                        type="button"
+                        class={classes!(
+                            "github-wrapped-expand",
+                            if *expanded { "expanded" } else { "" }
+                        )}
+                        onclick={toggle_expand}
+                        aria-label="查看更多年份"
+                        aria-expanded={(*expanded).to_string()}
+                    >
+                        <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+
+            // Dropdown with all years
+            if has_multiple_years && *expanded {
+                <div class="github-wrapped-dropdown" onclick={close_dropdown.reform(|e: MouseEvent| e.stop_propagation())}>
+                    <div class="github-wrapped-dropdown-header">
+                        { "选择年份" }
+                    </div>
+                    { for years.iter().map(|y| html! {
+                        <a
+                            href={y.url()}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class={classes!(
+                                "github-wrapped-dropdown-item",
+                                if y.is_latest { "latest" } else { "" }
+                            )}
+                        >
+                            <i class="fa-brands fa-github" aria-hidden="true"></i>
+                            <span>{ format!("{} Wrapped", y.year) }</span>
+                            if y.is_latest {
+                                <span class="github-wrapped-latest-tag">{ "最新" }</span>
+                            }
+                        </a>
+                    }) }
+                </div>
+            }
         </div>
     }
 }

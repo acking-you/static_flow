@@ -4,8 +4,7 @@ use yew_router::prelude::*;
 use crate::{
     api::{fetch_images, search_images_by_id, semantic_search_articles, ImageInfo, SearchResult},
     components::{
-        image_with_loading::ImageWithLoading,
-        pagination::Pagination,
+        image_with_loading::ImageWithLoading, pagination::Pagination,
         scroll_to_top_button::ScrollToTopButton,
     },
     hooks::use_pagination,
@@ -28,11 +27,8 @@ pub fn search_page() -> Html {
         .and_then(|q| q.mode.clone())
         .unwrap_or_else(|| "keyword".to_string())
         .to_lowercase();
-    let mode = if matches!(mode.as_str(), "semantic" | "image") {
-        mode
-    } else {
-        "keyword".to_string()
-    };
+    let mode =
+        if matches!(mode.as_str(), "semantic" | "image") { mode } else { "keyword".to_string() };
     let results = use_state(|| Vec::<SearchResult>::new());
     let loading = use_state(|| false);
     let image_catalog = use_state(|| Vec::<ImageInfo>::new());
@@ -142,9 +138,7 @@ pub fn search_page() -> Html {
                         image_loading.set(false);
                     },
                     Err(e) => {
-                        web_sys::console::error_1(
-                            &format!("Image search failed: {}", e).into(),
-                        );
+                        web_sys::console::error_1(&format!("Image search failed: {}", e).into());
                         image_loading.set(false);
                     },
                 }

@@ -110,21 +110,21 @@ Read content/new-post.md, generate summary and tags, then call sf-cli write-arti
 ## Roadmap
 
 ### Phase 1: CLI Development
-- [ ] LanceDB schema design and initialization
-- [ ] write-article command
-- [ ] write-images command
-- [ ] query command
+- [x] LanceDB schema design and initialization
+- [x] write-article command
+- [x] write-images command
+- [x] query command
 
 ### Phase 2: Backend LanceDB Integration
-- [ ] Remove filesystem implementation
-- [ ] Integrate LanceDB Rust SDK
-- [ ] Refactor all API endpoints
-- [ ] Implement vector search
+- [x] Remove filesystem implementation
+- [x] Integrate LanceDB Rust SDK
+- [x] Refactor all API endpoints
+- [x] Implement vector search
 
 ### Phase 3: Feature Completion
-- [ ] Semantic search UI
-- [ ] Image-to-image search
-- [ ] Related articles recommendation
+- [x] Semantic search UI
+- [x] Image-to-image search
+- [x] Related articles recommendation
 
 ## Development Commands
 
