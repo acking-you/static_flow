@@ -2725,15 +2725,22 @@
         font-size: 13px;
       }
 
-      .catpanel .body {
-        padding: 14px 16px 18px;
-      }
+	      .catpanel .body {
+	        padding: 14px 16px 18px;
+	      }
 
-      .s9-split {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 14px;
-      }
+		      @media (min-width: 981px) {
+		        /* Scene 9: give the "more changes" panel more breathing room. */
+		        #s9 .grid2 {
+		          grid-template-columns: 0.95fr 1.05fr;
+		        }
+		      }
+
+	      .s9-split {
+	        display: grid;
+	        grid-template-columns: 1fr;
+	        gap: 14px;
+	      }
 
       .interest-board {
         position: relative;
@@ -2787,65 +2794,133 @@
         line-height: 1.55;
       }
 
-      @media (min-width: 981px) {
-        #s9 .list.list-dense .item .meta {
-          display: block;
-          -webkit-box-orient: initial;
-          -webkit-line-clamp: initial;
-          overflow: visible;
-        }
-      }
+	      @media (min-width: 981px) {
+	        #s9 .list.list-dense .item .meta {
+	          display: block;
+	          -webkit-box-orient: initial;
+	          -webkit-line-clamp: initial;
+	          overflow: visible;
+	        }
+	      }
 
-      @media (min-width: 981px) {
-        #s9 .interest-board .list.list-dense {
-          gap: 10px;
-        }
+	      @media (min-width: 981px) {
+	        #s9 .interest-board .list.list-dense {
+	          gap: 10px;
+	        }
 
-        #s9 .interest-board .item {
-          align-items: flex-start;
-        }
+		        #s9 .interest-board .item {
+		          position: relative;
+		          border-radius: 18px;
+		          padding: 14px 16px;
+		          align-items: flex-start;
+		          border-color: rgba(234, 240, 255, 0.16);
+		          background: linear-gradient(135deg, rgba(7, 10, 18, 0.5), rgba(7, 10, 18, 0.28));
+		          box-shadow: inset 0 1px 0 rgba(240, 246, 252, 0.06), 0 12px 32px rgba(0, 0, 0, 0.35);
+		        }
 
-        #s9 .interest-board .list.list-dense .item {
-          padding: 12px 14px;
-          background: rgba(7, 10, 18, 0.36);
-          border-color: rgba(234, 240, 255, 0.14);
-        }
+		        #s9 .interest-board .item::before {
+		          content: "";
+		          position: absolute;
+		          left: 12px;
+	          top: 12px;
+	          bottom: 12px;
+	          width: 3px;
+	          border-radius: 999px;
+	          opacity: 0.72;
+	          pointer-events: none;
+	        }
 
-        #s9 .interest-board .item:hover {
-          background: rgba(7, 10, 18, 0.42);
-          border-color: rgba(234, 240, 255, 0.22);
-        }
+	        #s9 .interest-board.up .item::before {
+	          background: linear-gradient(to bottom, rgba(63, 185, 80, 0.96), rgba(88, 166, 255, 0.72));
+	        }
 
-        #s9 .interest-board .item .name {
-          font-size: 15px;
-          letter-spacing: 0.01em;
-          white-space: normal;
-          overflow: visible;
-          text-overflow: clip;
-          display: block;
-          overflow-wrap: anywhere;
-          word-break: break-word;
-          line-height: 1.25;
-        }
+	        #s9 .interest-board.lang .item::before {
+	          background: linear-gradient(to bottom, rgba(210, 153, 34, 0.96), rgba(188, 140, 255, 0.72));
+	        }
 
-        #s9 .interest-board .item .meta {
-          font-size: 13px;
-          color: rgba(234, 240, 255, 0.72);
-          line-height: 1.45;
-          overflow-wrap: anywhere;
-          word-break: break-word;
-        }
+	        #s9 .interest-board .item .left {
+	          padding-left: 10px;
+	        }
 
-        #s9 .interest-board .item .right {
-          padding-top: 2px;
-        }
+	        #s9 .interest-board .item:hover {
+	          background: rgba(7, 10, 18, 0.42);
+	          border-color: rgba(234, 240, 255, 0.22);
+	        }
 
-        #s9 .interest-board .chip {
-          font-size: 12px;
-          padding: 8px 12px;
-          letter-spacing: 0.05em;
-        }
-      }
+	        #s9 .interest-board .item .name {
+	          font-size: 16px;
+	          letter-spacing: 0.01em;
+	          white-space: normal;
+	          overflow: visible;
+	          text-overflow: clip;
+	          display: block;
+	          overflow-wrap: break-word;
+	          word-break: normal;
+	          line-height: 1.25;
+	        }
+
+	        #s9 .interest-board .item .meta {
+	          font-size: 13px;
+	          color: rgba(234, 240, 255, 0.78);
+	          line-height: 1.45;
+	          overflow-wrap: break-word;
+	          word-break: normal;
+	        }
+
+	        #s9 .interest-board .item .right {
+	          padding-top: 2px;
+	        }
+
+	        #s9 .interest-board .chip {
+	          font-size: 13px;
+	          padding: 8px 12px;
+	          letter-spacing: 0;
+	          text-transform: none;
+	          font-variant-numeric: tabular-nums;
+	        }
+
+	        /* Scene 9: make "rising topics / new languages" stats scannable (no truncation). */
+	        #s9 .interest-board .meta.meta-tags {
+	          margin-top: 8px;
+	          display: flex;
+	          flex-wrap: wrap;
+	          gap: 8px;
+	          align-items: center;
+	          font-size: 12px;
+	          line-height: 1.2;
+	        }
+
+	        #s9 .interest-board .meta.meta-tags .tag {
+	          display: inline-flex;
+	          align-items: baseline;
+	          gap: 8px;
+	          padding: 7px 10px;
+	          border-radius: 999px;
+	          border: 1px solid rgba(234, 240, 255, 0.14);
+	          background: rgba(7, 10, 18, 0.36);
+	          color: rgba(234, 240, 255, 0.78);
+	          box-shadow: inset 0 1px 0 rgba(240, 246, 252, 0.05);
+	          white-space: nowrap;
+	        }
+
+	        #s9 .interest-board .meta.meta-tags .tag b {
+	          font-family: var(--display);
+	          font-weight: 800;
+	          letter-spacing: 0.02em;
+	          color: rgba(240, 246, 252, 0.96);
+	          font-variant-numeric: tabular-nums;
+	        }
+
+	        #s9 .interest-board .meta.meta-tags .tag.tag-diff {
+	          border-color: rgba(63, 185, 80, 0.24);
+	          background: rgba(63, 185, 80, 0.08);
+	        }
+
+	        #s9 .interest-board .meta.meta-tags .tag.tag-multi {
+	          border-color: rgba(88, 166, 255, 0.22);
+	          background: rgba(88, 166, 255, 0.08);
+	        }
+	      }
 
       /* Radar */
       .radar {
@@ -11618,37 +11693,57 @@
         setText("awardAdd", String(award?.add || 0));
         setText("awardDel", String(award?.del || 0));
 
-        // New interests
-        const renderTopicList = (id, items, kind) => {
-          const list = document.getElementById(id);
-          list.innerHTML = "";
-          if (!items || !items.length) {
-            const div = document.createElement("div");
-            div.className = "item";
-            div.innerHTML = `<div class="left"><div class="name">今年没有检测到明显新增项</div><div class="meta">（可能是你一直都很稳定）</div></div><div class="right"><div class="chip">0</div></div>`;
-            list.appendChild(div);
-            return;
-          }
-          items.slice(0, 10).forEach((t, idx) => {
-            const div = document.createElement("div");
-            div.className = "item";
-            const title = kind === "lang" ? t.language : t.topic;
-            const meta =
-              kind === "lang"
-                ? `2025：${t.count2025} · 往年：${t.countBefore}`
-                : `2025：${t.count2025} · 往年：${t.countBefore}` + (t.ratio ? ` · ×${t.ratio}` : "");
-            div.innerHTML = `
-              <div class="left">
-                <div class="name">${title}</div>
-                <div class="meta">${meta}</div>
-              </div>
-              <div class="right">
-                <div class="chip">${kind === "lang" ? t.count2025 : t.count2025}<small>次</small></div>
-              </div>
-            `;
-            list.appendChild(div);
-          });
-        };
+	        // New interests
+	        const fmtMul = (n) => {
+	          const v = Number(n);
+	          if (!Number.isFinite(v)) return String(n ?? "");
+	          const r = Math.round(v * 10) / 10;
+	          return Math.abs(r - Math.round(r)) < 1e-9 ? String(Math.round(r)) : String(r);
+	        };
+
+	        const renderTopicList = (id, items, kind) => {
+	          const list = document.getElementById(id);
+	          list.innerHTML = "";
+	          const useTags = id === "risingTopics" || id === "newLangs";
+	          if (!items || !items.length) {
+	            const div = document.createElement("div");
+	            div.className = "item";
+	            div.innerHTML = `<div class="left"><div class="name">今年没有检测到明显新增项</div><div class="meta">（可能是你一直都很稳定）</div></div><div class="right"><div class="chip">0</div></div>`;
+	            list.appendChild(div);
+	            return;
+	          }
+	          items.slice(0, 10).forEach((t, idx) => {
+	            const div = document.createElement("div");
+	            div.className = "item";
+	            const title = kind === "lang" ? t.language : t.topic;
+	            const count2025 = Number(t.count2025 || 0);
+	            const countBefore = Number(t.countBefore || 0);
+	            const diff = count2025 - countBefore;
+	            const diffText = diff > 0 ? `+${diff}` : String(diff);
+	            const metaText =
+	              kind === "lang"
+	                ? `2025：${count2025} 次 · 往年：${countBefore} 次`
+	                : `2025：${count2025} 次 · 往年：${countBefore} 次` + (t.ratio ? ` · 增长 ×${fmtMul(t.ratio)}` : "");
+	            const metaHtml = useTags
+	              ? `<div class="meta meta-tags">
+	                  <span class="tag"><span>2025</span><b>${count2025}</b><span>次</span></span>
+	                  <span class="tag"><span>往年</span><b>${countBefore}</b><span>次</span></span>
+	                  <span class="tag tag-diff"><span>净增</span><b>${diffText}</b></span>
+	                  ${t.ratio ? `<span class="tag tag-multi"><span>增长</span><b>×${fmtMul(t.ratio)}</b></span>` : ""}
+	                </div>`
+	              : `<div class="meta">${metaText}</div>`;
+	            div.innerHTML = `
+	              <div class="left">
+	                <div class="name">${title}</div>
+	                ${metaHtml}
+	              </div>
+	              <div class="right">
+	                <div class="chip">${count2025}<small>次</small></div>
+	              </div>
+	            `;
+	            list.appendChild(div);
+	          });
+	        };
         renderTopicList("newTopics", DATA.year.discoveries.newTopics, "topic");
         renderTopicList("risingTopics", DATA.year.discoveries.risingTopics, "topic");
         renderTopicList("newLangs", DATA.year.discoveries.newLanguages, "lang");
