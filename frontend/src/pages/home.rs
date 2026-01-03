@@ -442,8 +442,7 @@ impl WrappedYear {
 fn get_wrapped_years() -> Vec<WrappedYear> {
     vec![
         WrappedYear { year: 2025, is_latest: true },
-        // Add more years here as they become available:
-        // WrappedYear { year: 2024, is_latest: false },
+        WrappedYear { year: 2024, is_latest: false },
     ]
 }
 
