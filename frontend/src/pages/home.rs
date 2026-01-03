@@ -503,10 +503,29 @@ fn github_wrapped_selector() -> Html {
     };
 
     let has_multiple_years = years.len() > 1;
+    let group_ref = use_node_ref();
+    let dropdown_style = use_state(String::new);
+
+    // Calculate dropdown position when expanded
+    {
+        let group_ref = group_ref.clone();
+        let dropdown_style = dropdown_style.clone();
+        use_effect_with(*expanded, move |is_expanded| {
+            if *is_expanded {
+                if let Some(el) = group_ref.cast::<web_sys::HtmlElement>() {
+                    let rect = el.get_bounding_client_rect();
+                    let top = rect.bottom() + 8.0;
+                    let left = rect.left();
+                    dropdown_style.set(format!("top: {}px; left: {}px;", top, left));
+                }
+            }
+            || ()
+        });
+    }
 
     html! {
         <div class={classes!("mt-3", "ml-8", "github-wrapped-container")}>
-            <div class="github-wrapped-group">
+            <div class="github-wrapped-group" ref={group_ref}>
                 // Main button - always links to latest year
                 <a
                     href={latest.url()}
@@ -541,7 +560,11 @@ fn github_wrapped_selector() -> Html {
 
             // Dropdown with all years
             if has_multiple_years && *expanded {
-                <div class="github-wrapped-dropdown" onclick={close_dropdown.reform(|e: MouseEvent| e.stop_propagation())}>
+                <div
+                    class="github-wrapped-dropdown"
+                    style={(*dropdown_style).clone()}
+                    onclick={close_dropdown.reform(|e: MouseEvent| e.stop_propagation())}
+                >
                     <div class="github-wrapped-dropdown-header">
                         { "选择年份" }
                     </div>

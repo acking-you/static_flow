@@ -927,18 +927,16 @@
     transform: rotate(180deg);
   }
 
-  /* Dropdown */
+  /* Dropdown - use fixed positioning to escape overflow:hidden */
   .github-wrapped-dropdown {
-    position: absolute;
-    top: calc(100% + 0.5rem);
-    left: 0;
+    position: fixed;
     min-width: 200px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-4);
     overflow: hidden;
-    z-index: 50;
+    z-index: 9999;
     animation: dropdown-appear 0.15s ease-out;
   }
 
