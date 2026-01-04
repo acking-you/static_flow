@@ -1288,6 +1288,7 @@
 	        #scroller[data-mode="paged"] .heatmap,
 	        #scroller[data-mode="paged"] .tower,
 	        #scroller[data-mode="paged"] .catgrid,
+	        #scroller[data-mode="paged"] .atlas,
 	        #scroller[data-mode="paged"] .radar,
 	        #scroller[data-mode="paged"] .share {
 	          margin-top: 12px;
@@ -1677,6 +1678,11 @@
 		          align-items: flex-start;
 		        }
 
+		        .msheet #s6CatPanel .body {
+		          max-height: none;
+		          overflow: visible;
+		        }
+
 		        .msheet #s6CatPanel .head .pill {
 		          padding: 6px 10px;
 		          font-size: 12px;
@@ -1721,11 +1727,12 @@
 	          display: none;
 	        }
 
-        #scroller[data-mode="paged"] #s6 .catgrid .cat:nth-child(n + 5) {
+        #scroller[data-mode="paged"] #s6 .catgrid .cat:nth-child(n + 6) {
           display: none;
         }
 
-        /* Scene 7: keep radar undistorted on phones. */
+        /* Scene 7: keep atlas undistorted on phones. */
+        #scroller[data-mode="paged"] #s7 .atlas-canvas,
         #scroller[data-mode="paged"] #s7 .radar-canvas {
           height: auto;
           aspect-ratio: 900 / 620;
@@ -2727,6 +2734,204 @@
 
 	      .catpanel .body {
 	        padding: 14px 16px 18px;
+	        max-height: min(52vh, 520px);
+	        overflow: auto;
+	        overscroll-behavior: contain;
+	        scrollbar-gutter: stable;
+	      }
+
+	      .catpanel .body::-webkit-scrollbar {
+	        width: 10px;
+	      }
+
+	      .catpanel .body::-webkit-scrollbar-thumb {
+	        background: rgba(234, 240, 255, 0.12);
+	        border-radius: 999px;
+	        border: 2px solid rgba(7, 10, 18, 0.28);
+	      }
+
+	      .catpanel .body::-webkit-scrollbar-thumb:hover {
+	        background: rgba(234, 240, 255, 0.18);
+	      }
+
+	      .catpanel .item .meta {
+	        display: -webkit-box;
+	        -webkit-box-orient: vertical;
+	        -webkit-line-clamp: 2;
+	        overflow: hidden;
+	      }
+
+	      .cat.cat-more {
+	        border-style: dashed;
+	        border-color: rgba(234, 240, 255, 0.16);
+	        background: linear-gradient(135deg, rgba(13, 17, 23, 0.46), rgba(7, 10, 18, 0.22));
+	      }
+
+	      .cat.cat-more::before {
+	        opacity: 1;
+	        background:
+	          radial-gradient(700px 340px at 30% 10%, rgba(188, 140, 255, 0.16), transparent 60%),
+	          radial-gradient(740px 420px at 86% 28%, rgba(88, 166, 255, 0.12), transparent 66%);
+	      }
+
+	      .cat.cat-more .desc {
+	        opacity: 0.86;
+	      }
+
+	      /* Scene 6: category modal (all categories) */
+	      html.modal-lock,
+	      html.modal-lock body {
+	        overflow: hidden !important;
+	      }
+
+	      .cat-modal-overlay {
+	        position: fixed;
+	        inset: 0;
+	        z-index: 92;
+	        display: none;
+	        pointer-events: none;
+	      }
+
+	      .cat-modal-overlay.is-on {
+	        display: block;
+	        pointer-events: auto;
+	      }
+
+	      .cat-modal-backdrop {
+	        position: absolute;
+	        inset: 0;
+	        background: rgba(0, 0, 0, 0.62);
+	        backdrop-filter: blur(10px);
+	      }
+
+	      .cat-modal {
+	        position: absolute;
+	        left: 50%;
+	        top: 50%;
+	        transform: translate(-50%, -50%);
+	        width: min(980px, 92vw);
+	        max-height: min(78vh, 760px);
+	        border-radius: 24px;
+	        border: 1px solid rgba(234, 240, 255, 0.14);
+	        background: linear-gradient(180deg, rgba(13, 17, 23, 0.98), rgba(7, 10, 18, 0.94));
+	        box-shadow: 0 30px 120px rgba(0, 0, 0, 0.72);
+	        overflow: hidden;
+	      }
+
+	      .cat-modal-head {
+	        display: flex;
+	        align-items: center;
+	        justify-content: space-between;
+	        gap: 12px;
+	        padding: 12px 14px;
+	        border-bottom: 1px solid rgba(234, 240, 255, 0.1);
+	        background: rgba(7, 10, 18, 0.35);
+	      }
+
+	      .cat-modal-title {
+	        display: flex;
+	        align-items: baseline;
+	        gap: 10px;
+	        min-width: 0;
+	      }
+
+	      .cat-modal-title b {
+	        font-family: var(--headline);
+	        letter-spacing: 0.02em;
+	        font-size: 16px;
+	        color: rgba(240, 246, 252, 0.92);
+	        white-space: nowrap;
+	      }
+
+	      .cat-modal-title small {
+	        color: rgba(234, 240, 255, 0.62);
+	        font-size: 12px;
+	      }
+
+	      .cat-modal-search {
+	        padding: 12px 14px 0;
+	      }
+
+	      .cat-search {
+	        width: 100%;
+	        height: 44px;
+	        border-radius: 14px;
+	        border: 1px solid rgba(234, 240, 255, 0.14);
+	        background: rgba(7, 10, 18, 0.32);
+	        color: rgba(240, 246, 252, 0.92);
+	        padding: 0 12px;
+	        outline: none;
+	        font-family: var(--body);
+	        font-size: 13px;
+	        letter-spacing: 0.01em;
+	      }
+
+	      .cat-search::placeholder {
+	        color: rgba(234, 240, 255, 0.5);
+	      }
+
+	      .cat-search:focus {
+	        border-color: rgba(88, 166, 255, 0.34);
+	        box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.12);
+	      }
+
+	      .cat-modal-grid {
+	        padding: 14px;
+	        display: grid;
+	        grid-template-columns: repeat(3, 1fr);
+	        gap: 12px;
+	        max-height: calc(min(78vh, 760px) - 120px);
+	        overflow: auto;
+	        overscroll-behavior: contain;
+	      }
+
+	      .cat-modal-grid::-webkit-scrollbar {
+	        width: 10px;
+	      }
+
+	      .cat-modal-grid::-webkit-scrollbar-thumb {
+	        background: rgba(234, 240, 255, 0.12);
+	        border-radius: 999px;
+	        border: 2px solid rgba(13, 17, 23, 0.7);
+	      }
+
+	      .cat-modal-grid .cat {
+	        padding: 12px 12px;
+	        border-radius: 20px;
+	      }
+
+	      .cat-modal-grid .cat .desc {
+	        display: none;
+	      }
+
+	      .cat-modal-grid .cat .label {
+	        font-size: 18px;
+	      }
+
+	      @media (max-width: 980px) {
+	        .cat-modal-grid {
+	          grid-template-columns: repeat(2, 1fr);
+	        }
+	      }
+
+	      @media (max-width: 620px) {
+	        .cat-modal {
+	          left: 0;
+	          top: 0;
+	          transform: none;
+	          width: 100vw;
+	          height: 100vh;
+	          max-height: none;
+	          border-radius: 0;
+	          border-left: none;
+	          border-right: none;
+	          border-top: none;
+	        }
+
+	        .cat-modal-grid {
+	          max-height: calc(100vh - 120px);
+	          grid-template-columns: 1fr;
+	        }
 	      }
 
 		      @media (min-width: 981px) {
@@ -2777,6 +2982,13 @@
           radial-gradient(820px 620px at 60% 92%, rgba(88, 166, 255, 0.1), transparent 66%);
       }
 
+      .interest-board.new::before {
+        background:
+          radial-gradient(760px 520px at 18% 16%, rgba(88, 166, 255, 0.16), transparent 62%),
+          radial-gradient(760px 560px at 86% 26%, rgba(188, 140, 255, 0.14), transparent 64%),
+          radial-gradient(880px 680px at 54% 96%, rgba(63, 185, 80, 0.09), transparent 66%);
+      }
+
       .interest-board > * {
         position: relative;
         z-index: 1;
@@ -2787,11 +2999,56 @@
         border-color: rgba(234, 240, 255, 0.14);
       }
 
+      .interest-board.new .pill b {
+        background: linear-gradient(135deg, rgba(88, 166, 255, 0.96), rgba(188, 140, 255, 0.92));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+
       .interest-note {
         margin: 10px 0 0;
         color: rgba(234, 240, 255, 0.62);
         font-size: 12px;
         line-height: 1.55;
+      }
+
+      #s9 .interest-board .meta.meta-tags {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      #s9 .interest-board .meta.meta-tags .tag {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(234, 240, 255, 0.14);
+        background: rgba(7, 10, 18, 0.36);
+        color: rgba(234, 240, 255, 0.78);
+        box-shadow: inset 0 1px 0 rgba(240, 246, 252, 0.05);
+        white-space: nowrap;
+      }
+
+      #s9 .interest-board .meta.meta-tags .tag b {
+        font-family: var(--display);
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        color: rgba(240, 246, 252, 0.96);
+        font-variant-numeric: tabular-nums;
+      }
+
+      #s9 .interest-board .meta.meta-tags .tag.tag-diff {
+        border-color: rgba(63, 185, 80, 0.24);
+        background: rgba(63, 185, 80, 0.08);
+      }
+
+      #s9 .interest-board .meta.meta-tags .tag.tag-multi {
+        border-color: rgba(88, 166, 255, 0.22);
+        background: rgba(88, 166, 255, 0.08);
       }
 
 	      @media (min-width: 981px) {
@@ -2836,6 +3093,10 @@
 
 	        #s9 .interest-board.lang .item::before {
 	          background: linear-gradient(to bottom, rgba(210, 153, 34, 0.96), rgba(188, 140, 255, 0.72));
+	        }
+
+	        #s9 .interest-board.new .item::before {
+	          background: linear-gradient(to bottom, rgba(88, 166, 255, 0.96), rgba(188, 140, 255, 0.72));
 	        }
 
 	        #s9 .interest-board .item .left {
@@ -2922,7 +3183,7 @@
 	        }
 	      }
 
-      /* Radar */
+      /* Atlas (replaces radar) */
       .radar {
         margin-top: 18px;
         display: grid;
@@ -2937,17 +3198,75 @@
         }
       }
 
-      .radar-canvas {
+      .atlas {
+        margin-top: 18px;
+      }
+
+      .radar-canvas,
+      .atlas-canvas {
         width: 100%;
-        height: 360px;
+        height: clamp(380px, 56vh, 560px);
         display: block;
       }
 
-      .radar-stage {
+      .radar-stage,
+      .atlas-stage {
         position: relative;
       }
 
-      .radar-tip {
+      .atlas-stage {
+        border-radius: 18px;
+        overflow: hidden;
+        border: 1px solid rgba(234, 240, 255, 0.12);
+        background: linear-gradient(135deg, rgba(13, 17, 23, 0.56), rgba(7, 10, 18, 0.22));
+        box-shadow:
+          inset 0 1px 0 rgba(240, 246, 252, 0.06),
+          0 22px 64px rgba(0, 0, 0, 0.46);
+        isolation: isolate;
+      }
+
+      .atlas-hud {
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        z-index: 3;
+      }
+
+      .atlas-hud .pill {
+        border-color: rgba(234, 240, 255, 0.16);
+        background: rgba(7, 10, 18, 0.42);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+      }
+
+      .atlas-hud .btn {
+        border-radius: 999px;
+        border-color: rgba(88, 166, 255, 0.34);
+        background: linear-gradient(135deg, rgba(88, 166, 255, 0.16), rgba(188, 140, 255, 0.12));
+        box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+      }
+
+      .atlas-hud .btn:hover {
+        border-color: rgba(240, 246, 252, 0.26);
+      }
+
+      @media (max-width: 620px) {
+        .atlas-canvas {
+          height: min(46vh, 520px);
+        }
+
+        .atlas-hud {
+          left: 10px;
+          top: 10px;
+        }
+      }
+
+      .radar-tip,
+      .atlas-tip {
         position: absolute;
         left: 0;
         top: 0;
@@ -2965,12 +3284,14 @@
         max-width: min(260px, 56vw);
       }
 
-      .radar-tip.is-on {
+      .radar-tip.is-on,
+      .atlas-tip.is-on {
         opacity: 1;
         transform: translate(-50%, -120%) scale(1);
       }
 
-      .radar-tip::after {
+      .radar-tip::after,
+      .atlas-tip::after {
         content: "";
         position: absolute;
         left: 50%;
@@ -2983,27 +3304,31 @@
         border-bottom: 1px solid rgba(48, 54, 61, 0.9);
       }
 
-      .radar-tip .t {
+      .radar-tip .t,
+      .atlas-tip .t {
         font-weight: 800;
         color: rgba(240, 246, 252, 0.92);
         letter-spacing: 0.01em;
       }
 
-      .radar-tip .s {
+      .radar-tip .s,
+      .atlas-tip .s {
         margin-top: 6px;
         color: rgba(139, 148, 158, 0.95);
         font-size: 12px;
         line-height: 1.55;
       }
 
-      .radar-tip .chipline {
+      .radar-tip .chipline,
+      .atlas-tip .chipline {
         margin-top: 8px;
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
       }
 
-      .radar-tip .microchip {
+      .radar-tip .microchip,
+      .atlas-tip .microchip {
         display: inline-flex;
         align-items: baseline;
         gap: 6px;
@@ -3017,7 +3342,8 @@
         white-space: nowrap;
       }
 
-      .radar-tip .microchip b {
+      .radar-tip .microchip b,
+      .atlas-tip .microchip b {
         font-weight: 900;
       }
 
@@ -4301,50 +4627,36 @@
         </section>
 
         <!-- Scene 7 -->
-        <section class="scene" id="s7" data-scene-title="六边形" data-accent="#58a6ff" data-accent2="#3fb950">
+        <section class="scene" id="s7" data-scene-title="星图" data-accent="#58a6ff" data-accent2="#bc8cff">
           <div class="wrap">
             <div class="kicker" data-reveal style="--d: 0ms">
-              <strong>六边形</strong>
+              <strong>星图</strong>
               <span>·</span>
-              <span>年度状态图</span>
+              <span>兴趣分布</span>
             </div>
-            <h2 class="title" data-reveal style="--d: 120ms">你的 2025：六边形战士</h2>
+            <h2 class="title" data-reveal style="--d: 120ms">你的 2025：兴趣星图</h2>
             <p class="lead" data-reveal style="--d: 240ms">
-              评分依据：各类别在 2025 Star 数量（主权重）+ 对应开源 PR 的代码变更行（辅权重），归一化到 0-100。
+              每个“星座”来自你 2025 Star 仓库的 topics / description / language。面积≈该分类仓库数，亮度≈仓库总星量。点击任意星座打开完整项目清单。
             </p>
 
-	            <div class="radar" data-reveal style="--d: 360ms">
+	            <div class="atlas" data-reveal style="--d: 360ms">
 	              <div class="card">
 	                <div class="card-inner">
-	                  <div class="radar-stage" id="radarStage">
-	                    <canvas class="radar-canvas" id="radarCanvas" width="900" height="620"></canvas>
-	                    <div class="radar-tip" id="radarTip" aria-hidden="true"></div>
+	                  <div class="atlas-stage" id="atlasStage">
+	                    <canvas class="atlas-canvas" id="atlasCanvas" width="900" height="620"></canvas>
+	                    <div class="atlas-tip" id="atlasTip" aria-hidden="true"></div>
+	                    <div class="atlas-hud" aria-label="星图信息">
+	                      <div class="pill"><b id="primaryTrack">—</b><span>主星座</span></div>
+	                      <button class="btn btn-mini" id="atlasAllCats" type="button">全部分类</button>
+	                    </div>
+	                  </div>
+	                  <div class="atlas-foot" style="margin-top: 10px; display: grid; gap: 8px">
+	                    <p class="note" id="radarNote">—</p>
+	                    <p class="note">
+	                      提示：悬停查看“星座档案”；点击星座会跳转到「兴趣」页并展开该分类的完整项目清单（按 stars 从高到低）。
+	                    </p>
 	                  </div>
 	                </div>
-	              </div>
-		              <div class="card" id="s7BreakdownCard" data-mhide="paged">
-		                <div class="card-inner" style="display: grid; gap: 12px">
-		                  <div class="pill"><b id="primaryTrack">—</b><span>主线类型</span></div>
-	                  <p class="note" id="radarNote">
-	                    —
-                  </p>
-	                  <div class="list list-dense list-cols2" id="radarBreakdown"></div>
-                  <div class="badge-unlock" style="margin-top: 8px">
-                    <i></i>
-                    <span>恭喜解锁：<b>六边形战士</b></span>
-                  </div>
-                  <p class="note">
-                    <b>注意：</b>这是一种“年度叙事”的近似指标，并不代表真实时间投入；但很擅长捕捉你的关注方向。
-                  </p>
-	                </div>
-	              </div>
-	            </div>
-
-	            <div class="m-only-paged">
-	              <div class="m-actions">
-	                <button class="btn btn-mini" type="button" data-sheet-target="s7BreakdownCard" data-sheet-title="六边形解读">
-	                  六边形解读
-	                </button>
 	              </div>
 	            </div>
 	          </div>
@@ -4424,8 +4736,11 @@
 	            <div class="grid2" style="margin-top: 18px">
 	              <div class="card" data-reveal style="--d: 360ms">
 	                <div class="card-inner">
-	                  <div class="pill"><b>NEW</b><span>2025 新出现（或第一次形成规模）</span></div>
-		                  <div class="list list-dense list-cols2" id="newTopics"></div>
+	                  <div class="interest-board new">
+	                    <div class="pill"><b>NEW</b><span>2025 新出现（或第一次形成规模）</span></div>
+		                    <div class="list list-dense list-cols2" id="newTopics"></div>
+                      <div class="note interest-note">提示：仅基于 Star topics 的变化判断（用于叙事与探索）。</div>
+	                  </div>
 	                </div>
 	              </div>
 	              <div class="card" id="s9MoreCard" data-mhide="paged" data-reveal style="--d: 480ms">
@@ -4763,6 +5078,24 @@
       </main>
 	    </div>
 
+	    <!-- Category modal (Scene 6: all categories) -->
+	    <div class="cat-modal-overlay" id="catModalOverlay" aria-hidden="true">
+	      <div class="cat-modal-backdrop" data-close="1" aria-hidden="true"></div>
+	      <div class="cat-modal" role="dialog" aria-modal="true" aria-label="更多分类">
+	        <div class="cat-modal-head">
+	          <div class="cat-modal-title">
+	            <b>📂 更多分类</b>
+	            <small id="catModalCount">—</small>
+	          </div>
+	          <button class="iconbtn" id="catModalClose" type="button" data-close="1" aria-label="关闭">✕</button>
+	        </div>
+	        <div class="cat-modal-search">
+	          <input class="cat-search" id="catModalSearch" type="search" placeholder="搜索分类 / 关键词" autocomplete="off" />
+	        </div>
+	        <div class="cat-modal-grid" id="catModalGrid"></div>
+	      </div>
+	    </div>
+
 	    <!-- Mobile bottom-sheet modal (used for overflow details on small screens) -->
 	    <div class="msheet" id="msheet" aria-hidden="true">
 	      <div class="msheet-backdrop" data-close="1" aria-hidden="true"></div>
@@ -4786,7 +5119,7 @@
   "meta": {
     "year": 2025,
     "timezone": "Asia/Shanghai",
-    "generatedAt": "2025-12-31T21:38:59.074011+00:00",
+    "generatedAt": "2026-01-02T21:36:08.984897+00:00",
     "dataProvenance": {
       "rawDir": "data/github-wrapped-2025/raw",
       "notes": [
@@ -7230,6 +7563,3242 @@
     "stars": {
       "total2025": 190,
       "totalAllTime": 815,
+      "repos2025": [
+        {
+          "nameWithOwner": "massgravel/Microsoft-Activation-Scripts",
+          "stars": 160985,
+          "forks": 15498,
+          "language": "Batchfile",
+          "starredAt": "2025-11-22T15:59:00Z",
+          "url": "https://github.com/massgravel/Microsoft-Activation-Scripts",
+          "description": "Open-source Windows and Office activator featuring HWID, Ohook, TSforge, and Online KMS activation methods, along with advanced troubleshooting.",
+          "topics": [
+            "hwid",
+            "kms38",
+            "kms",
+            "activator",
+            "massgrave",
+            "massgravel",
+            "windows",
+            "windows-10",
+            "windows-11",
+            "office",
+            "ohook",
+            "microsoft",
+            "microsoft365",
+            "office365",
+            "powershell",
+            "tsforge"
+          ]
+        },
+        {
+          "nameWithOwner": "supabase/supabase",
+          "stars": 95462,
+          "forks": 11131,
+          "language": "TypeScript",
+          "starredAt": "2025-04-18T18:58:11Z",
+          "url": "https://github.com/supabase/supabase",
+          "description": "The Postgres development platform. Supabase gives you a dedicated Postgres database to build your web, mobile, and AI applications.",
+          "topics": [
+            "firebase",
+            "supabase",
+            "realtime",
+            "postgrest",
+            "postgres",
+            "postgresql",
+            "websockets",
+            "deno",
+            "embeddings",
+            "vectors",
+            "alternative",
+            "auth",
+            "database",
+            "example",
+            "nextjs",
+            "oauth2",
+            "pgvector",
+            "postgis",
+            "ai"
+          ]
+        },
+        {
+          "nameWithOwner": "openai/whisper",
+          "stars": 92577,
+          "forks": 11591,
+          "language": "Python",
+          "starredAt": "2025-01-22T17:45:03Z",
+          "url": "https://github.com/openai/whisper",
+          "description": "Robust Speech Recognition via Large-Scale Weak Supervision",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "immich-app/immich",
+          "stars": 87915,
+          "forks": 4648,
+          "language": "TypeScript",
+          "starredAt": "2025-01-20T05:13:33Z",
+          "url": "https://github.com/immich-app/immich",
+          "description": "High performance self-hosted photo and video management solution.",
+          "topics": [
+            "backup-tool",
+            "mobile-app",
+            "photo-gallery",
+            "photos",
+            "self-hosted",
+            "videos",
+            "flutter",
+            "nestjs",
+            "nodejs",
+            "google-photos-alternative",
+            "svelte",
+            "sveltekit",
+            "google-photos",
+            "photos-management",
+            "typescript",
+            "javascript"
+          ]
+        },
+        {
+          "nameWithOwner": "rasbt/LLMs-from-scratch",
+          "stars": 82083,
+          "forks": 12309,
+          "language": "Jupyter Notebook",
+          "starredAt": "2025-07-17T07:12:07Z",
+          "url": "https://github.com/rasbt/LLMs-from-scratch",
+          "description": "Implement a ChatGPT-like LLM in PyTorch from scratch, step by step",
+          "topics": [
+            "chatgpt",
+            "gpt",
+            "large-language-models",
+            "llm",
+            "python",
+            "pytorch",
+            "ai",
+            "artificial-intelligence",
+            "language-model",
+            "deep-learning",
+            "machine-learning",
+            "from-scratch",
+            "generative-ai",
+            "transformers",
+            "neural-networks",
+            "chatbot"
+          ]
+        },
+        {
+          "nameWithOwner": "punkpeye/awesome-mcp-servers",
+          "stars": 77917,
+          "forks": 6680,
+          "language": null,
+          "starredAt": "2025-03-31T02:36:37Z",
+          "url": "https://github.com/punkpeye/awesome-mcp-servers",
+          "description": "A collection of MCP servers.",
+          "topics": [
+            "ai",
+            "mcp"
+          ]
+        },
+        {
+          "nameWithOwner": "astral-sh/uv",
+          "stars": 76036,
+          "forks": 2397,
+          "language": "Rust",
+          "starredAt": "2025-02-15T17:24:25Z",
+          "url": "https://github.com/astral-sh/uv",
+          "description": "An extremely fast Python package and project manager, written in Rust.",
+          "topics": [
+            "packaging",
+            "python",
+            "resolver",
+            "uv"
+          ]
+        },
+        {
+          "nameWithOwner": "BurntSushi/ripgrep",
+          "stars": 58497,
+          "forks": 2352,
+          "language": "Rust",
+          "starredAt": "2025-02-14T06:24:47Z",
+          "url": "https://github.com/BurntSushi/ripgrep",
+          "description": "ripgrep recursively searches directories for a regex pattern while respecting your gitignore",
+          "topics": [
+            "ripgrep",
+            "recursively-search",
+            "search",
+            "regex",
+            "gitignore",
+            "grep",
+            "command-line-tool",
+            "command-line",
+            "cli",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "cline/cline",
+          "stars": 56560,
+          "forks": 5522,
+          "language": "TypeScript",
+          "starredAt": "2025-02-20T02:56:19Z",
+          "url": "https://github.com/cline/cline",
+          "description": "Autonomous coding agent right in your IDE, capable of creating/editing files, executing commands, using the browser, and more with your permission every step of the way.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "withastro/astro",
+          "stars": 55208,
+          "forks": 3042,
+          "language": "TypeScript",
+          "starredAt": "2025-11-12T08:23:36Z",
+          "url": "https://github.com/withastro/astro",
+          "description": "The web framework for content-driven websites. ⭐️ Star to support our work!",
+          "topics": [
+            "static-site-generator",
+            "blog",
+            "islands",
+            "components",
+            "node",
+            "browser",
+            "server",
+            "hybrid",
+            "universal",
+            "astro",
+            "static"
+          ]
+        },
+        {
+          "nameWithOwner": "meilisearch/meilisearch",
+          "stars": 55178,
+          "forks": 2316,
+          "language": "Rust",
+          "starredAt": "2025-05-09T07:23:35Z",
+          "url": "https://github.com/meilisearch/meilisearch",
+          "description": "A lightning-fast search engine API bringing AI-powered hybrid search to your sites and applications.",
+          "topics": [
+            "search-engine",
+            "typo-tolerance",
+            "site-search",
+            "database",
+            "enterprise-search",
+            "search",
+            "app-search",
+            "full-text-search",
+            "geosearch",
+            "instantsearch",
+            "search-as-you-type",
+            "faceting",
+            "fuzzy-search",
+            "vector-database",
+            "vectors",
+            "hybrid-search",
+            "semantic-search",
+            "ai",
+            "api",
+            "vector-search"
+          ]
+        },
+        {
+          "nameWithOwner": "openai/codex",
+          "stars": 54998,
+          "forks": 7014,
+          "language": "Rust",
+          "starredAt": "2025-08-20T14:39:56Z",
+          "url": "https://github.com/openai/codex",
+          "description": "Lightweight coding agent that runs in your terminal",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "unslothai/unsloth",
+          "stars": 50164,
+          "forks": 4142,
+          "language": "Python",
+          "starredAt": "2025-02-08T09:02:46Z",
+          "url": "https://github.com/unslothai/unsloth",
+          "description": "Fine-tuning & Reinforcement Learning for LLMs. 🦥 Train OpenAI gpt-oss, DeepSeek, Qwen, Llama, Gemma, TTS 2x faster with 70% less VRAM.",
+          "topics": [
+            "fine-tuning",
+            "llama",
+            "llms",
+            "mistral",
+            "gemma",
+            "llama3",
+            "unsloth",
+            "llm",
+            "deepseek",
+            "deepseek-r1",
+            "gemma3",
+            "text-to-speech",
+            "tts",
+            "qwen",
+            "qwen3",
+            "agent",
+            "openai",
+            "gpt-oss",
+            "voice-cloning",
+            "reinforcement-learning"
+          ]
+        },
+        {
+          "nameWithOwner": "anthropics/claude-code",
+          "stars": 50080,
+          "forks": 3549,
+          "language": "Shell",
+          "starredAt": "2025-08-14T11:51:15Z",
+          "url": "https://github.com/anthropics/claude-code",
+          "description": "Claude Code is an agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks, explaining complex code, and handling git workflows - all through natural language commands.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "microsoft/ai-agents-for-beginners",
+          "stars": 47816,
+          "forks": 16492,
+          "language": "Jupyter Notebook",
+          "starredAt": "2025-02-16T13:33:33Z",
+          "url": "https://github.com/microsoft/ai-agents-for-beginners",
+          "description": "12 Lessons to Get Started Building AI Agents",
+          "topics": [
+            "agentic-ai",
+            "agentic-framework",
+            "agentic-rag",
+            "ai-agents",
+            "ai-agents-framework",
+            "autogen",
+            "generative-ai",
+            "semantic-kernel"
+          ]
+        },
+        {
+          "nameWithOwner": "sst/opencode",
+          "stars": 44840,
+          "forks": 3863,
+          "language": "TypeScript",
+          "starredAt": "2025-12-10T07:42:23Z",
+          "url": "https://github.com/sst/opencode",
+          "description": "The open source coding agent.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "cli/cli",
+          "stars": 41841,
+          "forks": 7689,
+          "language": "Go",
+          "starredAt": "2025-11-18T12:19:16Z",
+          "url": "https://github.com/cli/cli",
+          "description": "GitHub’s official command line tool",
+          "topics": [
+            "github-api-v4",
+            "cli",
+            "git",
+            "golang"
+          ]
+        },
+        {
+          "nameWithOwner": "upstash/context7",
+          "stars": 40568,
+          "forks": 2005,
+          "language": "TypeScript",
+          "starredAt": "2025-09-17T06:24:41Z",
+          "url": "https://github.com/upstash/context7",
+          "description": "Context7 MCP Server -- Up-to-date code documentation for LLMs and AI code editors",
+          "topics": [
+            "llm",
+            "mcp",
+            "mcp-server",
+            "vibe-coding"
+          ]
+        },
+        {
+          "nameWithOwner": "ghostty-org/ghostty",
+          "stars": 40403,
+          "forks": 1358,
+          "language": "Zig",
+          "starredAt": "2025-10-01T03:20:00Z",
+          "url": "https://github.com/ghostty-org/ghostty",
+          "description": "👻 Ghostty is a fast, feature-rich, and cross-platform terminal emulator that uses platform-native UI and GPU acceleration.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "servo/servo",
+          "stars": 34842,
+          "forks": 3423,
+          "language": "Rust",
+          "starredAt": "2025-10-22T16:26:54Z",
+          "url": "https://github.com/servo/servo",
+          "description": "Servo aims to empower developers with a lightweight, high-performance alternative for embedding web technologies in applications.",
+          "topics": [
+            "servo",
+            "rust",
+            "browser",
+            "webengine",
+            "web",
+            "webbrowser",
+            "webplatform"
+          ]
+        },
+        {
+          "nameWithOwner": "pbatard/rufus",
+          "stars": 34153,
+          "forks": 2921,
+          "language": "C",
+          "starredAt": "2025-10-05T05:25:27Z",
+          "url": "https://github.com/pbatard/rufus",
+          "description": "The Reliable USB Formatting Utility",
+          "topics": [
+            "usb",
+            "iso",
+            "bootable-drives",
+            "mbr",
+            "uefi",
+            "bios",
+            "boot",
+            "windows",
+            "syslinux",
+            "freedos",
+            "grub",
+            "grub4dos",
+            "sha1",
+            "sha256",
+            "md5",
+            "gpt",
+            "windows-to-go",
+            "persistence",
+            "secure-boot",
+            "rufus"
+          ]
+        },
+        {
+          "nameWithOwner": "PDFMathTranslate/PDFMathTranslate",
+          "stars": 30962,
+          "forks": 2777,
+          "language": "Python",
+          "starredAt": "2025-07-29T17:18:00Z",
+          "url": "https://github.com/PDFMathTranslate/PDFMathTranslate",
+          "description": "[EMNLP 2025 Demo] PDF scientific paper translation with preserved formats - 基于 AI 完整保留排版的 PDF 文档全文双语翻译，支持 Google/DeepL/Ollama/OpenAI 等服务，提供 CLI/GUI/MCP/Docker/Zotero",
+          "topics": [
+            "chinese",
+            "latex",
+            "pdf",
+            "translation",
+            "korean",
+            "english",
+            "japanese",
+            "openai",
+            "pdf2zh",
+            "russian",
+            "python",
+            "translate",
+            "math",
+            "zotero",
+            "obsidian",
+            "document",
+            "edit",
+            "modify",
+            "mcp"
+          ]
+        },
+        {
+          "nameWithOwner": "Wox-launcher/Wox",
+          "stars": 26445,
+          "forks": 2417,
+          "language": "Go",
+          "starredAt": "2025-10-05T09:33:57Z",
+          "url": "https://github.com/Wox-launcher/Wox",
+          "description": "A cross-platform launcher that simply works",
+          "topics": [
+            "launchy",
+            "alfred",
+            "launcher",
+            "wox",
+            "spotlight",
+            "windows",
+            "linux",
+            "macos",
+            "raycast"
+          ]
+        },
+        {
+          "nameWithOwner": "block/goose",
+          "stars": 25265,
+          "forks": 2271,
+          "language": "Rust",
+          "starredAt": "2025-06-06T17:11:41Z",
+          "url": "https://github.com/block/goose",
+          "description": "an open source, extensible AI agent that goes beyond code suggestions - install, execute, edit, and test with any LLM",
+          "topics": [
+            "mcp"
+          ]
+        },
+        {
+          "nameWithOwner": "fishaudio/fish-speech",
+          "stars": 24455,
+          "forks": 2015,
+          "language": "Python",
+          "starredAt": "2025-02-12T19:39:33Z",
+          "url": "https://github.com/fishaudio/fish-speech",
+          "description": "SOTA Open Source TTS",
+          "topics": [
+            "llama",
+            "transformer",
+            "tts",
+            "valle",
+            "vits",
+            "vqgan",
+            "vqvae"
+          ]
+        },
+        {
+          "nameWithOwner": "musistudio/claude-code-router",
+          "stars": 24351,
+          "forks": 1917,
+          "language": "TypeScript",
+          "starredAt": "2025-08-17T07:11:00Z",
+          "url": "https://github.com/musistudio/claude-code-router",
+          "description": "Use Claude Code as the foundation for coding infrastructure, allowing you to decide how to interact with the model while enjoying updates from Anthropic.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "wezterm/wezterm",
+          "stars": 23108,
+          "forks": 1095,
+          "language": "Rust",
+          "starredAt": "2025-11-23T08:33:08Z",
+          "url": "https://github.com/wezterm/wezterm",
+          "description": "A GPU-accelerated cross-platform terminal emulator and multiplexer written by @wez and implemented in Rust",
+          "topics": [
+            "terminal-emulators",
+            "rust",
+            "terminal",
+            "terminal-emulator",
+            "serial-port",
+            "serial"
+          ]
+        },
+        {
+          "nameWithOwner": "uutils/coreutils",
+          "stars": 22456,
+          "forks": 1696,
+          "language": "Rust",
+          "starredAt": "2025-05-26T15:20:10Z",
+          "url": "https://github.com/uutils/coreutils",
+          "description": "Cross-platform Rust rewrite of the GNU coreutils",
+          "topics": [
+            "rust",
+            "coreutils",
+            "gnu-coreutils",
+            "busybox",
+            "cross-platform",
+            "command-line-tool"
+          ]
+        },
+        {
+          "nameWithOwner": "sgl-project/sglang",
+          "stars": 22091,
+          "forks": 3914,
+          "language": "Python",
+          "starredAt": "2025-09-29T08:32:18Z",
+          "url": "https://github.com/sgl-project/sglang",
+          "description": "SGLang is a high-performance serving framework for large language models and multimodal models.",
+          "topics": [
+            "cuda",
+            "inference",
+            "llama",
+            "llm",
+            "moe",
+            "transformer",
+            "vlm",
+            "deepseek",
+            "blackwell",
+            "gpt-oss",
+            "diffusion",
+            "attention",
+            "glm",
+            "minimax",
+            "qwen",
+            "qwen-image",
+            "reinforcement-learning",
+            "wan"
+          ]
+        },
+        {
+          "nameWithOwner": "RooCodeInc/Roo-Code",
+          "stars": 21521,
+          "forks": 2726,
+          "language": "TypeScript",
+          "starredAt": "2025-02-20T02:56:40Z",
+          "url": "https://github.com/RooCodeInc/Roo-Code",
+          "description": "Roo Code gives you a whole dev team of AI agents in your code editor.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "yamadashy/repomix",
+          "stars": 20902,
+          "forks": 961,
+          "language": "TypeScript",
+          "starredAt": "2025-09-03T09:46:39Z",
+          "url": "https://github.com/yamadashy/repomix",
+          "description": "📦 Repomix is a powerful tool that packs your entire repository into a single, AI-friendly file. Perfect for when you need to feed your codebase to Large Language Models (LLMs) or other AI tools like Claude, ChatGPT, DeepSeek, Perplexity, Gemini, Gemma, Llama, Grok, and more.",
+          "topics": [
+            "ai",
+            "llm",
+            "generative-ai",
+            "chatgpt",
+            "claude",
+            "developer-tools",
+            "chatbot",
+            "gpt",
+            "openai",
+            "javascript",
+            "nodejs",
+            "typescript",
+            "anthropic",
+            "gemini",
+            "language-model",
+            "artificial-intelligence",
+            "genai",
+            "deepseek",
+            "llama",
+            "mcp"
+          ]
+        },
+        {
+          "nameWithOwner": "winfunc/opcode",
+          "stars": 19597,
+          "forks": 1510,
+          "language": "TypeScript",
+          "starredAt": "2025-12-17T05:54:57Z",
+          "url": "https://github.com/winfunc/opcode",
+          "description": "A powerful GUI app and Toolkit for Claude Code - Create custom agents, manage interactive Claude Code sessions, run secure background agents, and more.",
+          "topics": [
+            "anthropic",
+            "anthropic-claude",
+            "claude",
+            "claude-4",
+            "claude-4-sonnet",
+            "claude-ai",
+            "claude-code",
+            "claude-code-sdk",
+            "cursor",
+            "ide",
+            "llm",
+            "llm-code",
+            "claude-4-opus",
+            "rust",
+            "tauri"
+          ]
+        },
+        {
+          "nameWithOwner": "microsoft/VibeVoice",
+          "stars": 19272,
+          "forks": 2137,
+          "language": "Python",
+          "starredAt": "2025-09-06T06:25:00Z",
+          "url": "https://github.com/microsoft/VibeVoice",
+          "description": "Open-Source Frontier Voice AI",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "rustfs/rustfs",
+          "stars": 18767,
+          "forks": 806,
+          "language": "Rust",
+          "starredAt": "2025-07-02T06:34:31Z",
+          "url": "https://github.com/rustfs/rustfs",
+          "description": "🚀2.3x faster than MinIO for 4KB object payloads. RustFS is an open-source, S3-compatible high-performance object storage system supporting migration and coexistence with other S3-compatible platforms such as MinIO and Ceph.",
+          "topics": [
+            "bigdata",
+            "cloud-native",
+            "filesystem",
+            "object-storage",
+            "rust",
+            "s3",
+            "minio",
+            "amazon-s3",
+            "objectstorage"
+          ]
+        },
+        {
+          "nameWithOwner": "clockworklabs/SpacetimeDB",
+          "stars": 18762,
+          "forks": 663,
+          "language": "Rust",
+          "starredAt": "2025-10-22T07:58:48Z",
+          "url": "https://github.com/clockworklabs/SpacetimeDB",
+          "description": "Multiplayer at the speed of light",
+          "topics": [
+            "database",
+            "dataoriented",
+            "game-development",
+            "relational",
+            "relational-database",
+            "smart-contracts"
+          ]
+        },
+        {
+          "nameWithOwner": "oraios/serena",
+          "stars": 17936,
+          "forks": 1233,
+          "language": "Python",
+          "starredAt": "2025-09-19T06:54:31Z",
+          "url": "https://github.com/oraios/serena",
+          "description": "A powerful coding agent toolkit providing semantic retrieval and editing capabilities (MCP server & other integrations)",
+          "topics": [
+            "agent",
+            "ai",
+            "llms",
+            "vibe-coding",
+            "mcp-server",
+            "ai-coding",
+            "language-server",
+            "programming",
+            "claude",
+            "claude-code"
+          ]
+        },
+        {
+          "nameWithOwner": "k4yt3x/video2x",
+          "stars": 16561,
+          "forks": 1460,
+          "language": "C++",
+          "starredAt": "2025-10-29T16:16:24Z",
+          "url": "https://github.com/k4yt3x/video2x",
+          "description": "A machine learning-based video super resolution and frame interpolation framework. Est. Hack the Valley II, 2018.",
+          "topics": [
+            "machine-learning",
+            "anime4k",
+            "vulkan",
+            "realesrgan",
+            "neural-networks",
+            "super-resoluion",
+            "upscale-video",
+            "rife",
+            "frame-interpolation",
+            "realcugan"
+          ]
+        },
+        {
+          "nameWithOwner": "charmbracelet/crush",
+          "stars": 16558,
+          "forks": 979,
+          "language": "Go",
+          "starredAt": "2025-11-27T18:14:38Z",
+          "url": "https://github.com/charmbracelet/crush",
+          "description": "The glamourous AI coding agent for your favourite terminal 💘",
+          "topics": [
+            "agentic-ai",
+            "ai",
+            "llms",
+            "ravishing"
+          ]
+        },
+        {
+          "nameWithOwner": "mediar-ai/screenpipe",
+          "stars": 16315,
+          "forks": 1305,
+          "language": "TypeScript",
+          "starredAt": "2025-06-06T17:15:27Z",
+          "url": "https://github.com/mediar-ai/screenpipe",
+          "description": "AI app store powered by 24/7 desktop history.  open source | 100% local | dev friendly | 24/7 screen, mic recording",
+          "topics": [
+            "ai",
+            "computer-vision",
+            "llm",
+            "machine-learning",
+            "ml",
+            "multimodal",
+            "vision",
+            "agents",
+            "agi"
+          ]
+        },
+        {
+          "nameWithOwner": "CapSoftware/Cap",
+          "stars": 16123,
+          "forks": 1118,
+          "language": "TypeScript",
+          "starredAt": "2025-10-09T02:15:58Z",
+          "url": "https://github.com/CapSoftware/Cap",
+          "description": "Open source Loom alternative. Beautiful, shareable screen recordings.",
+          "topics": [
+            "app",
+            "cap",
+            "coss",
+            "mac",
+            "open-source",
+            "oss",
+            "react",
+            "record",
+            "screen-capture",
+            "screen-recorder",
+            "screenshot",
+            "tauri",
+            "tauri-app",
+            "typescript",
+            "vite",
+            "solidjs",
+            "loom",
+            "nextjs",
+            "rust",
+            "nextjs15"
+          ]
+        },
+        {
+          "nameWithOwner": "tursodatabase/turso",
+          "stars": 16107,
+          "forks": 666,
+          "language": "Rust",
+          "starredAt": "2025-01-03T14:14:53Z",
+          "url": "https://github.com/tursodatabase/turso",
+          "description": "Turso is an in-process SQL database, compatible with SQLite.",
+          "topics": [
+            "database",
+            "embedded-database",
+            "sql",
+            "sqlite3",
+            "webassembly"
+          ]
+        },
+        {
+          "nameWithOwner": "tursodatabase/libsql",
+          "stars": 16012,
+          "forks": 453,
+          "language": "C",
+          "starredAt": "2025-10-10T12:18:52Z",
+          "url": "https://github.com/tursodatabase/libsql",
+          "description": "libSQL is a fork of SQLite that is both Open Source, and Open Contributions.",
+          "topics": [
+            "sqlite",
+            "database",
+            "embedded-database",
+            "rust",
+            "webassembly"
+          ]
+        },
+        {
+          "nameWithOwner": "Infrasys-AI/AISystem",
+          "stars": 15980,
+          "forks": 2285,
+          "language": "Jupyter Notebook",
+          "starredAt": "2025-07-19T18:48:01Z",
+          "url": "https://github.com/Infrasys-AI/AISystem",
+          "description": "AISystem 主要是指AI系统，包括AI芯片、AI编译器、AI推理和训练框架等AI全栈底层技术",
+          "topics": [
+            "ai",
+            "mlsys",
+            "aiinfra",
+            "aisys",
+            "dlsys"
+          ]
+        },
+        {
+          "nameWithOwner": "tigerbeetle/tigerbeetle",
+          "stars": 14808,
+          "forks": 744,
+          "language": "Zig",
+          "starredAt": "2025-05-22T19:23:33Z",
+          "url": "https://github.com/tigerbeetle/tigerbeetle",
+          "description": "The financial transactions database designed for mission critical safety and performance.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "QuantumNous/new-api",
+          "stars": 14382,
+          "forks": 2823,
+          "language": "JavaScript",
+          "starredAt": "2025-08-17T10:54:00Z",
+          "url": "https://github.com/QuantumNous/new-api",
+          "description": "AI模型聚合管理中转分发系统，一个应用管理您的所有AI模型，支持将多种大模型转为统一格式调用，支持OpenAI、Claude、Gemini等格式，可供个人或者企业内部管理与分发渠道使用。🍥 The next-generation LLM gateway and AI asset management system supports multiple languages.",
+          "topics": [
+            "claude",
+            "gemini",
+            "openai",
+            "rerank",
+            "ai-gateway",
+            "deepseek"
+          ]
+        },
+        {
+          "nameWithOwner": "rathole-org/rathole",
+          "stars": 12548,
+          "forks": 670,
+          "language": "Rust",
+          "starredAt": "2025-11-10T10:45:18Z",
+          "url": "https://github.com/rathole-org/rathole",
+          "description": "A lightweight and high-performance reverse proxy for NAT traversal, written in Rust. An alternative to frp and ngrok.",
+          "topics": [
+            "nat",
+            "tunnel",
+            "rust",
+            "network",
+            "firewall",
+            "frp",
+            "http",
+            "proxy",
+            "noise",
+            "noise-protocol",
+            "ngrok"
+          ]
+        },
+        {
+          "nameWithOwner": "ultrafunkamsterdam/undetected-chromedriver",
+          "stars": 12158,
+          "forks": 1312,
+          "language": "Python",
+          "starredAt": "2025-10-22T16:20:45Z",
+          "url": "https://github.com/ultrafunkamsterdam/undetected-chromedriver",
+          "description": "Custom Selenium Chromedriver | Zero-Config | Passes ALL bot mitigation systems (like Distil / Imperva/ Datadadome / CloudFlare IUAM)",
+          "topics": [
+            "chromedriver",
+            "selenium",
+            "webdriver",
+            "chrome",
+            "anti-detection",
+            "anti-bot",
+            "distil",
+            "browser",
+            "automation",
+            "scraping",
+            "python3",
+            "captcha",
+            "navigator",
+            "testing",
+            "cloudflare",
+            "cloudflare-bypass",
+            "bot-detection"
+          ]
+        },
+        {
+          "nameWithOwner": "RUCAIBox/LLMSurvey",
+          "stars": 12043,
+          "forks": 937,
+          "language": "Python",
+          "starredAt": "2025-06-28T15:41:02Z",
+          "url": "https://github.com/RUCAIBox/LLMSurvey",
+          "description": "The official GitHub page for the survey paper \"A Survey of Large Language Models\".",
+          "topics": [
+            "chain-of-thought",
+            "chatgpt",
+            "in-context-learning",
+            "instruction-tuning",
+            "large-language-models",
+            "llm",
+            "llms",
+            "natural-language-processing",
+            "pre-trained-language-models",
+            "pre-training",
+            "rlhf"
+          ]
+        },
+        {
+          "nameWithOwner": "owncast/owncast",
+          "stars": 10775,
+          "forks": 1161,
+          "language": "TypeScript",
+          "starredAt": "2025-06-04T15:04:35Z",
+          "url": "https://github.com/owncast/owncast",
+          "description": "Take control over your live stream video by running it yourself.  Streaming + chat out of the box.",
+          "topics": [
+            "video",
+            "streaming-video",
+            "livestream",
+            "hls",
+            "chat",
+            "rtmp",
+            "broadcasting",
+            "self-hosted",
+            "golang",
+            "live",
+            "owncast",
+            "activitypub",
+            "decentralized",
+            "federation",
+            "fediverse",
+            "hacktoberfest"
+          ]
+        },
+        {
+          "nameWithOwner": "codexu/note-gen",
+          "stars": 10347,
+          "forks": 742,
+          "language": "TypeScript",
+          "starredAt": "2025-06-06T17:14:04Z",
+          "url": "https://github.com/codexu/note-gen",
+          "description": "A cross-platform Markdown AI note-taking software.",
+          "topics": [
+            "markdown",
+            "tauri",
+            "nextjs",
+            "chatbot",
+            "llm",
+            "note-taking",
+            "webdav",
+            "knowledge-base",
+            "rag",
+            "mcp",
+            "agent"
+          ]
+        },
+        {
+          "nameWithOwner": "BloopAI/vibe-kanban",
+          "stars": 10001,
+          "forks": 912,
+          "language": "Rust",
+          "starredAt": "2025-10-10T16:45:37Z",
+          "url": "https://github.com/BloopAI/vibe-kanban",
+          "description": "Get 10X more out of Claude Code, Codex or any coding agent",
+          "topics": [
+            "agent",
+            "ai-agents",
+            "kanban",
+            "management",
+            "task-manager"
+          ]
+        },
+        {
+          "nameWithOwner": "google/magika",
+          "stars": 9996,
+          "forks": 478,
+          "language": "Python",
+          "starredAt": "2025-11-10T10:43:27Z",
+          "url": "https://github.com/google/magika",
+          "description": "Fast and accurate AI powered file content types detection ",
+          "topics": [
+            "deep-learning",
+            "filetype",
+            "keras-classification-models",
+            "keras-models",
+            "mime-types",
+            "ai",
+            "onnx"
+          ]
+        },
+        {
+          "nameWithOwner": "longbridge/gpui-component",
+          "stars": 9504,
+          "forks": 386,
+          "language": "Rust",
+          "starredAt": "2025-10-10T03:01:05Z",
+          "url": "https://github.com/longbridge/gpui-component",
+          "description": "Rust GUI components for building fantastic cross-platform desktop application by using GPUI.",
+          "topics": [
+            "gpui",
+            "desktop-application",
+            "uikit",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "rapidsai/cudf",
+          "stars": 9398,
+          "forks": 996,
+          "language": "C++",
+          "starredAt": "2025-12-02T08:35:45Z",
+          "url": "https://github.com/rapidsai/cudf",
+          "description": "cuDF - GPU DataFrame Library ",
+          "topics": [
+            "gpu",
+            "rapids",
+            "cudf",
+            "arrow",
+            "cuda",
+            "pandas",
+            "dataframe",
+            "dask",
+            "data-analysis",
+            "data-science",
+            "pydata",
+            "cpp",
+            "python"
+          ]
+        },
+        {
+          "nameWithOwner": "cloudwego/eino",
+          "stars": 8892,
+          "forks": 693,
+          "language": "Go",
+          "starredAt": "2025-04-05T18:52:35Z",
+          "url": "https://github.com/cloudwego/eino",
+          "description": "The ultimate LLM/AI application development framework in Golang.",
+          "topics": [
+            "ai",
+            "langchaingo",
+            "ai-application",
+            "llm-application",
+            "langchain-for-go",
+            "ai-framework",
+            "langchain"
+          ]
+        },
+        {
+          "nameWithOwner": "awslabs/llrt",
+          "stars": 8675,
+          "forks": 385,
+          "language": "Rust",
+          "starredAt": "2025-08-27T16:02:42Z",
+          "url": "https://github.com/awslabs/llrt",
+          "description": "LLRT (Low Latency Runtime) is an experimental, lightweight JavaScript runtime designed to address the growing demand for fast and efficient Serverless applications.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "hunshcn/gh-proxy",
+          "stars": 8529,
+          "forks": 2336,
+          "language": "Python",
+          "starredAt": "2025-06-06T17:45:59Z",
+          "url": "https://github.com/hunshcn/gh-proxy",
+          "description": "github release、archive以及项目文件的加速项目",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "neon-bindings/neon",
+          "stars": 8378,
+          "forks": 287,
+          "language": "Rust",
+          "starredAt": "2025-06-09T06:26:30Z",
+          "url": "https://github.com/neon-bindings/neon",
+          "description": "Rust bindings for writing safe and fast native Node.js modules.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "lancedb/lancedb",
+          "stars": 8361,
+          "forks": 683,
+          "language": "Rust",
+          "starredAt": "2025-01-23T07:44:58Z",
+          "url": "https://github.com/lancedb/lancedb",
+          "description": "Developer-friendly OSS embedded retrieval library for multimodal AI. Search More; Manage Less.",
+          "topics": [
+            "approximate-nearest-neighbor-search",
+            "image-search",
+            "nearest-neighbor-search",
+            "recommender-system",
+            "search-engine",
+            "semantic-search",
+            "similarity-search",
+            "vector-database"
+          ]
+        },
+        {
+          "nameWithOwner": "farion1231/cc-switch",
+          "stars": 8326,
+          "forks": 559,
+          "language": "Rust",
+          "starredAt": "2025-09-12T09:16:06Z",
+          "url": "https://github.com/farion1231/cc-switch",
+          "description": "A cross-platform desktop All-in-One assistant tool for Claude Code, Codex & Gemini CLI.",
+          "topics": [
+            "ai-tools",
+            "claude-code",
+            "deepseek-v3",
+            "desktop-app",
+            "open-source",
+            "qwen-coder",
+            "rust",
+            "tauri",
+            "typescript",
+            "codex",
+            "mcp",
+            "provider-management",
+            "wsl-support",
+            "minimax",
+            "kimi-k2-thiking"
+          ]
+        },
+        {
+          "nameWithOwner": "haad/proxychains",
+          "stars": 7614,
+          "forks": 673,
+          "language": "C",
+          "starredAt": "2025-02-06T03:13:55Z",
+          "url": "https://github.com/haad/proxychains",
+          "description": "proxychains - a tool that forces any TCP connection made by any given application to follow through proxy like TOR or any other SOCKS4, SOCKS5 or HTTP(S) proxy.  Supported auth-types: \"user/pass\" for SOCKS4/5, \"basic\" for HTTP.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "shuttle-hq/shuttle",
+          "stars": 6804,
+          "forks": 295,
+          "language": "Rust",
+          "starredAt": "2025-05-23T16:14:33Z",
+          "url": "https://github.com/shuttle-hq/shuttle",
+          "description": "Build & ship backends without writing any infrastructure files.",
+          "topics": [
+            "rust",
+            "framework",
+            "web",
+            "web-framework",
+            "deployment",
+            "paas",
+            "devops",
+            "baas",
+            "rust-lang"
+          ]
+        },
+        {
+          "nameWithOwner": "Ji4n1ng/OpenInTerminal",
+          "stars": 6575,
+          "forks": 264,
+          "language": "Swift",
+          "starredAt": "2025-05-22T18:15:08Z",
+          "url": "https://github.com/Ji4n1ng/OpenInTerminal",
+          "description": "✨ Finder Toolbar app for macOS to open the current directory in Terminal, iTerm, Hyper or Alacritty.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "lyogavin/airllm",
+          "stars": 6563,
+          "forks": 537,
+          "language": "Jupyter Notebook",
+          "starredAt": "2025-01-30T08:26:57Z",
+          "url": "https://github.com/lyogavin/airllm",
+          "description": "AirLLM 70B inference with single 4GB GPU",
+          "topics": [
+            "chinese-nlp",
+            "finetune",
+            "generative-ai",
+            "instruct-gpt",
+            "instruction-set",
+            "llama",
+            "llm",
+            "lora",
+            "open-models",
+            "open-source",
+            "open-source-models",
+            "qlora",
+            "chinese-llm"
+          ]
+        },
+        {
+          "nameWithOwner": "slopus/happy",
+          "stars": 5923,
+          "forks": 453,
+          "language": "TypeScript",
+          "starredAt": "2025-12-25T18:52:35Z",
+          "url": "https://github.com/slopus/happy",
+          "description": "Mobile and Web client for Codex and Claude Code, with realtime voice, encryption and fully featured",
+          "topics": [
+            "claude-code",
+            "claude-desktop",
+            "codex",
+            "codex-cli",
+            "hacktoberfest",
+            "claude-mobile"
+          ]
+        },
+        {
+          "nameWithOwner": "ai-dynamo/dynamo",
+          "stars": 5703,
+          "forks": 759,
+          "language": "Rust",
+          "starredAt": "2025-12-24T18:54:55Z",
+          "url": "https://github.com/ai-dynamo/dynamo",
+          "description": "A Datacenter Scale Distributed Inference Serving Framework",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "cocoindex-io/cocoindex",
+          "stars": 5534,
+          "forks": 413,
+          "language": "Rust",
+          "starredAt": "2025-11-11T10:14:53Z",
+          "url": "https://github.com/cocoindex-io/cocoindex",
+          "description": "Data transformation framework for AI. Ultra performant, with incremental processing.  🌟 Star if you like it!",
+          "topics": [
+            "ai",
+            "change-data-capture",
+            "data",
+            "data-indexing",
+            "etl",
+            "indexing",
+            "pipeline",
+            "python",
+            "rag",
+            "real-time",
+            "rust",
+            "semantic-search",
+            "data-engineering",
+            "data-infrastructure",
+            "data-processing",
+            "help-wanted",
+            "knowledge-graph",
+            "llm",
+            "context-engineering",
+            "hacktoberfest"
+          ]
+        },
+        {
+          "nameWithOwner": "Byron/dua-cli",
+          "stars": 5415,
+          "forks": 136,
+          "language": "Rust",
+          "starredAt": "2025-05-09T17:12:39Z",
+          "url": "https://github.com/Byron/dua-cli",
+          "description": "View disk space usage and delete unwanted data, fast.",
+          "topics": [
+            "disk",
+            "space-use",
+            "cleaner",
+            "terminal-based",
+            "fast",
+            "efficient"
+          ]
+        },
+        {
+          "nameWithOwner": "0xPlaygrounds/rig",
+          "stars": 5289,
+          "forks": 601,
+          "language": "Rust",
+          "starredAt": "2025-08-12T17:53:36Z",
+          "url": "https://github.com/0xPlaygrounds/rig",
+          "description": "⚙️🦀 Build modular and scalable LLM Applications in Rust",
+          "topics": [
+            "ai",
+            "llm",
+            "agent",
+            "artificial-intelligence",
+            "automation",
+            "large-language-model",
+            "rust",
+            "scalable-ai",
+            "generative-ai",
+            "llmops"
+          ]
+        },
+        {
+          "nameWithOwner": "supabase-community/postgres-language-server",
+          "stars": 5133,
+          "forks": 111,
+          "language": "Rust",
+          "starredAt": "2025-04-18T18:53:15Z",
+          "url": "https://github.com/supabase-community/postgres-language-server",
+          "description": "A Language Server for Postgres",
+          "topics": [
+            "language-server-protocol",
+            "postgres"
+          ]
+        },
+        {
+          "nameWithOwner": "Eventual-Inc/Daft",
+          "stars": 5085,
+          "forks": 376,
+          "language": "Rust",
+          "starredAt": "2025-01-08T09:16:11Z",
+          "url": "https://github.com/Eventual-Inc/Daft",
+          "description": "High-performance data engine for AI and multimodal workloads. Process images, audio, video, and structured data at any scale",
+          "topics": [
+            "machine-learning",
+            "python",
+            "data-engineering",
+            "distributed-computing",
+            "rust",
+            "big-data",
+            "artificial-intelligence",
+            "multimodal",
+            "arrow",
+            "distributed",
+            "distributed-systems",
+            "embeddings",
+            "etl",
+            "huggingface",
+            "iceberg",
+            "parquet",
+            "ray",
+            "ai-engineering",
+            "ai-pipeline"
+          ]
+        },
+        {
+          "nameWithOwner": "zilliztech/claude-context",
+          "stars": 4894,
+          "forks": 446,
+          "language": "TypeScript",
+          "starredAt": "2025-10-15T01:55:51Z",
+          "url": "https://github.com/zilliztech/claude-context",
+          "description": "Code search MCP for Claude Code. Make entire codebase the context for any coding agent.",
+          "topics": [
+            "agent",
+            "agentic-rag",
+            "ai-coding",
+            "code-search",
+            "cursor",
+            "embedding",
+            "mcp",
+            "nodejs",
+            "openai",
+            "rag",
+            "semantic-search",
+            "typescript",
+            "vector-database",
+            "vibe-coding",
+            "voyage-ai",
+            "vscode-extension",
+            "merkle-tree",
+            "code-generation",
+            "claude-code",
+            "gemini-cli"
+          ]
+        },
+        {
+          "nameWithOwner": "zhaochenyang20/Awesome-ML-SYS-Tutorial",
+          "stars": 4850,
+          "forks": 313,
+          "language": "Python",
+          "starredAt": "2025-12-25T06:47:27Z",
+          "url": "https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial",
+          "description": "My learning notes for ML SYS.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "katanemo/plano",
+          "stars": 4719,
+          "forks": 263,
+          "language": "Rust",
+          "starredAt": "2025-12-12T04:58:42Z",
+          "url": "https://github.com/katanemo/plano",
+          "description": "Ship agents faster. Plano is delivery infrastructure for agentic applications - a smart proxy & dataplane that offloads plumbing work, so you stay focused on product logic.",
+          "topics": [
+            "gateway",
+            "generative-ai",
+            "llm-inference",
+            "llms",
+            "prompt",
+            "proxy",
+            "proxy-server",
+            "llmops",
+            "openai",
+            "routing",
+            "ai-gateway",
+            "llm-gateway",
+            "llm-routing",
+            "envoy",
+            "envoyproxy",
+            "ai-gateway-support",
+            "llm-proxy"
+          ]
+        },
+        {
+          "nameWithOwner": "DearVa/Everywhere",
+          "stars": 4712,
+          "forks": 268,
+          "language": "C#",
+          "starredAt": "2025-05-28T18:50:46Z",
+          "url": "https://github.com/DearVa/Everywhere",
+          "description": "A context-aware AI assistant for your desktop. Ready to respond intelligently, seamlessly integrating multiple LLMs and MCP tools.",
+          "topics": [
+            "agent",
+            "ai",
+            "avalonia",
+            "chat",
+            "deepseek",
+            "llm",
+            "mcp",
+            "ollama",
+            "openai",
+            "rag",
+            "ui-automation",
+            "claude",
+            "gpt-oss",
+            "grok"
+          ]
+        },
+        {
+          "nameWithOwner": "antinomyhq/forge",
+          "stars": 4579,
+          "forks": 1178,
+          "language": "Rust",
+          "starredAt": "2025-08-20T14:44:50Z",
+          "url": "https://github.com/antinomyhq/forge",
+          "description": "AI enabled pair programmer for Claude, GPT, O Series, Grok, Deepseek, Gemini and 300+ models",
+          "topics": [
+            "ai-workflows",
+            "artifical-intelligense",
+            "claude-3-7-sonnet",
+            "command-line",
+            "multi-agent-reinforcement-learning",
+            "shell",
+            "grok",
+            "open-router",
+            "openai",
+            "qwen",
+            "claude-4",
+            "claude-4-sonnet",
+            "ai-pair-programming",
+            "llm",
+            "cli-assistant",
+            "open-source-claude-code"
+          ]
+        },
+        {
+          "nameWithOwner": "antonputra/tutorials",
+          "stars": 4358,
+          "forks": 2992,
+          "language": "HCL",
+          "starredAt": "2025-07-12T17:05:52Z",
+          "url": "https://github.com/antonputra/tutorials",
+          "description": "DevOps Tutorials",
+          "topics": [
+            "kubernetes",
+            "terraform",
+            "ansible",
+            "devops",
+            "sre",
+            "packer",
+            "aws",
+            "gcp",
+            "serverless"
+          ]
+        },
+        {
+          "nameWithOwner": "deckerst/aves",
+          "stars": 4254,
+          "forks": 155,
+          "language": "Dart",
+          "starredAt": "2025-01-20T03:07:41Z",
+          "url": "https://github.com/deckerst/aves",
+          "description": "Aves is a gallery and metadata explorer app, built for Android with Flutter.",
+          "topics": [
+            "gallery",
+            "flutter",
+            "android",
+            "xmp",
+            "svg",
+            "tiff",
+            "exif",
+            "metadata",
+            "geotiff",
+            "gdepth",
+            "metadata-explorer",
+            "heif",
+            "heic",
+            "multipage",
+            "topojson",
+            "motion-photos",
+            "mpf",
+            "gpx"
+          ]
+        },
+        {
+          "nameWithOwner": "facebook/buck2",
+          "stars": 4202,
+          "forks": 315,
+          "language": "Rust",
+          "starredAt": "2025-05-17T08:11:56Z",
+          "url": "https://github.com/facebook/buck2",
+          "description": "Build system, successor to Buck",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "KDE/heaptrack",
+          "stars": 3916,
+          "forks": 236,
+          "language": "C++",
+          "starredAt": "2025-10-22T07:34:44Z",
+          "url": "https://github.com/KDE/heaptrack",
+          "description": "A heap memory profiler for Linux",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "pulsejet/memories",
+          "stars": 3666,
+          "forks": 130,
+          "language": "Vue",
+          "starredAt": "2025-01-20T03:28:37Z",
+          "url": "https://github.com/pulsejet/memories",
+          "description": "Fast, modern and advanced photo management suite. Runs as a Nextcloud app.",
+          "topics": [
+            "nextcloud",
+            "photos",
+            "gallery",
+            "backup-tool",
+            "photo-gallery",
+            "self-hosted",
+            "videos"
+          ]
+        },
+        {
+          "nameWithOwner": "skyzh/tiny-llm",
+          "stars": 3596,
+          "forks": 248,
+          "language": "Python",
+          "starredAt": "2025-05-01T21:35:58Z",
+          "url": "https://github.com/skyzh/tiny-llm",
+          "description": "A course of learning LLM inference serving on Apple Silicon for systems engineers: build a tiny vLLM + Qwen.",
+          "topics": [
+            "course",
+            "large-language-model",
+            "llm",
+            "python",
+            "qwen",
+            "qwen2",
+            "serving",
+            "vllm"
+          ]
+        },
+        {
+          "nameWithOwner": "HelixDB/helix-db",
+          "stars": 3531,
+          "forks": 181,
+          "language": "Rust",
+          "starredAt": "2025-05-23T02:16:07Z",
+          "url": "https://github.com/HelixDB/helix-db",
+          "description": "HelixDB is an open-source graph-vector database built from scratch in Rust.",
+          "topics": [
+            "ai",
+            "cli",
+            "database",
+            "databases",
+            "graph-database",
+            "helix",
+            "rag",
+            "rust",
+            "rust-crate",
+            "rust-lang",
+            "vector",
+            "vector-database",
+            "vector-db",
+            "vectorsearch",
+            "helixdb"
+          ]
+        },
+        {
+          "nameWithOwner": "unum-cloud/USearch",
+          "stars": 3506,
+          "forks": 249,
+          "language": "C++",
+          "starredAt": "2025-06-23T07:10:26Z",
+          "url": "https://github.com/unum-cloud/USearch",
+          "description": "Fast Open-Source Search & Clustering engine × for Vectors & Arbitrary Objects × in C++, C, Python, JavaScript, Rust, Java, Objective-C, Swift, C#, GoLang, and Wolfram 🔍",
+          "topics": [
+            "kann",
+            "vector-search",
+            "approximate-nearest-neighbor-search",
+            "simd",
+            "search",
+            "similarity-search",
+            "database",
+            "faiss",
+            "search-engine",
+            "webassembly",
+            "clustering",
+            "nearest-neighbor-search",
+            "recommender-system",
+            "semantic-search",
+            "full-text-search",
+            "fuzzy-search",
+            "text-search",
+            "image-search"
+          ]
+        },
+        {
+          "nameWithOwner": "SeaDve/Kooha",
+          "stars": 3167,
+          "forks": 87,
+          "language": "Rust",
+          "starredAt": "2025-07-26T16:38:39Z",
+          "url": "https://github.com/SeaDve/Kooha",
+          "description": "Elegantly record your screen",
+          "topics": [
+            "video-recording",
+            "screen-recorder",
+            "gnome",
+            "linux",
+            "gtk4",
+            "gstreamer",
+            "rust",
+            "gtk4-rs",
+            "wayland",
+            "gtk-rs"
+          ]
+        },
+        {
+          "nameWithOwner": "davidlattimore/wild",
+          "stars": 3104,
+          "forks": 90,
+          "language": "Rust",
+          "starredAt": "2025-09-26T01:53:54Z",
+          "url": "https://github.com/davidlattimore/wild",
+          "description": "A very fast linker for Linux",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "mg-chao/snow-shot",
+          "stars": 3063,
+          "forks": 173,
+          "language": "TypeScript",
+          "starredAt": "2025-06-07T06:06:56Z",
+          "url": "https://github.com/mg-chao/snow-shot",
+          "description": "超好用的截图工具",
+          "topics": [
+            "chatbot",
+            "ocr",
+            "screen-capture",
+            "screenshot",
+            "translate",
+            "snowshot"
+          ]
+        },
+        {
+          "nameWithOwner": "microsoft/proxy",
+          "stars": 3046,
+          "forks": 214,
+          "language": "C++",
+          "starredAt": "2025-11-18T18:16:34Z",
+          "url": "https://github.com/microsoft/proxy",
+          "description": "Proxy: Next Generation Polymorphism in C++",
+          "topics": [
+            "cpp",
+            "cpp20",
+            "header-only",
+            "library",
+            "cross-platform",
+            "polymorphism",
+            "duck-typing",
+            "single-header"
+          ]
+        },
+        {
+          "nameWithOwner": "j178/prek",
+          "stars": 3025,
+          "forks": 92,
+          "language": "Rust",
+          "starredAt": "2025-11-11T06:40:59Z",
+          "url": "https://github.com/j178/prek",
+          "description": "⚡ Better `pre-commit`, re-engineered in Rust",
+          "topics": [
+            "git",
+            "pre-commit",
+            "git-hooks"
+          ]
+        },
+        {
+          "nameWithOwner": "tekaratzas/RustGPT",
+          "stars": 3020,
+          "forks": 254,
+          "language": "Rust",
+          "starredAt": "2025-09-20T18:35:07Z",
+          "url": "https://github.com/tekaratzas/RustGPT",
+          "description": "An transformer based LLM. Written completely in Rust",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "just-every/code",
+          "stars": 3005,
+          "forks": 185,
+          "language": "Rust",
+          "starredAt": "2025-09-15T02:29:37Z",
+          "url": "https://github.com/just-every/code",
+          "description": "Every Code - push frontier AI to it limits. A fork of the Codex CLI with validation, automation, browser integration, multi-agents, theming, and much more. Orchestrate agents from OpenAI, Claude, Gemini or any provider.",
+          "topics": [
+            "ai",
+            "claude",
+            "cli",
+            "code",
+            "codex",
+            "every",
+            "gemini",
+            "anthropic",
+            "deepseek",
+            "google",
+            "grok",
+            "opanai",
+            "qwen"
+          ]
+        },
+        {
+          "nameWithOwner": "LagrangeDev/Lagrange.Core",
+          "stars": 2887,
+          "forks": 355,
+          "language": "C#",
+          "starredAt": "2025-02-12T19:14:16Z",
+          "url": "https://github.com/LagrangeDev/Lagrange.Core",
+          "description": "An Implementation of NTQQ Protocol, with Pure C#, Derived from Konata.Core",
+          "topics": [
+            "csharp",
+            "ntqq",
+            "qq-protocol",
+            "qqbot",
+            "onebot11"
+          ]
+        },
+        {
+          "nameWithOwner": "netnr/kms",
+          "stars": 2781,
+          "forks": 445,
+          "language": "HTML",
+          "starredAt": "2025-09-27T10:58:55Z",
+          "url": "https://github.com/netnr/kms",
+          "description": "KMS 激活服务，slmgr 命令激活 Windows 系统、Office",
+          "topics": [
+            "kms",
+            "slmgr",
+            "vlmcsd",
+            "office",
+            "windows"
+          ]
+        },
+        {
+          "nameWithOwner": "modelcontextprotocol/rust-sdk",
+          "stars": 2770,
+          "forks": 432,
+          "language": "Rust",
+          "starredAt": "2025-09-29T08:37:02Z",
+          "url": "https://github.com/modelcontextprotocol/rust-sdk",
+          "description": "The official Rust SDK for the Model Context Protocol",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "Rust-GPU/rust-gpu",
+          "stars": 2703,
+          "forks": 86,
+          "language": "Rust",
+          "starredAt": "2025-07-28T13:56:26Z",
+          "url": "https://github.com/Rust-GPU/rust-gpu",
+          "description": "🐉 Making Rust a first-class language and ecosystem for GPU shaders 🚧",
+          "topics": [
+            "compiler",
+            "rust",
+            "shaders",
+            "spirv",
+            "vulkan",
+            "gpu-programming",
+            "graphics-programing"
+          ]
+        },
+        {
+          "nameWithOwner": "xtensor-stack/xsimd",
+          "stars": 2576,
+          "forks": 291,
+          "language": "C++",
+          "starredAt": "2025-11-10T10:49:01Z",
+          "url": "https://github.com/xtensor-stack/xsimd",
+          "description": "C++ wrappers for SIMD intrinsics and parallelized, optimized mathematical functions (SSE, AVX, AVX512, NEON, SVE, WebAssembly, VSX, RISC-V))",
+          "topics": [
+            "simd-intrinsics",
+            "vectorization",
+            "simd",
+            "cpp",
+            "avx",
+            "neon",
+            "sse",
+            "avx512",
+            "simd-instructions",
+            "mathematical-functions",
+            "c-plus-plus-11",
+            "sve",
+            "vsx",
+            "wasm"
+          ]
+        },
+        {
+          "nameWithOwner": "Pintree-io/pintree",
+          "stars": 2555,
+          "forks": 1796,
+          "language": "TypeScript",
+          "starredAt": "2025-06-28T16:46:10Z",
+          "url": "https://github.com/Pintree-io/pintree",
+          "description": "Pintree: Easily turn your browser bookmarks into a directory website and start monetizing in minutes.",
+          "topics": [
+            "bookmark",
+            "directory",
+            "directory-website"
+          ]
+        },
+        {
+          "nameWithOwner": "mixedbread-ai/mgrep",
+          "stars": 2454,
+          "forks": 108,
+          "language": "TypeScript",
+          "starredAt": "2025-12-05T17:52:50Z",
+          "url": "https://github.com/mixedbread-ai/mgrep",
+          "description": "A calm, CLI-native way to semantically grep everything, like code, images, pdfs and more.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "pulldown-cmark/pulldown-cmark",
+          "stars": 2426,
+          "forks": 267,
+          "language": "Rust",
+          "starredAt": "2025-11-14T19:19:29Z",
+          "url": "https://github.com/pulldown-cmark/pulldown-cmark",
+          "description": "An efficient, reliable parser for CommonMark, a standard dialect of Markdown",
+          "topics": [
+            "commonmark",
+            "markdown",
+            "parser",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "stephenberry/glaze",
+          "stars": 2299,
+          "forks": 205,
+          "language": "C++",
+          "starredAt": "2025-02-13T03:26:50Z",
+          "url": "https://github.com/stephenberry/glaze",
+          "description": "Extremely fast, in memory, JSON and reflection library for modern C++. BEVE, CBOR, CSV, MessagePack, TOML, EETF",
+          "topics": [
+            "api",
+            "binary",
+            "cplusplus",
+            "cpp",
+            "interface",
+            "json",
+            "serialization",
+            "reflection",
+            "header-only",
+            "json-rpc2",
+            "fast",
+            "csv",
+            "json-schema",
+            "beve",
+            "cbor",
+            "toml",
+            "messagepack"
+          ]
+        },
+        {
+          "nameWithOwner": "pythops/oryx",
+          "stars": 2297,
+          "forks": 65,
+          "language": "Rust",
+          "starredAt": "2025-08-11T01:53:21Z",
+          "url": "https://github.com/pythops/oryx",
+          "description": "🕵️‍♂️ TUI for sniffing network traffic using eBPF on Linux",
+          "topics": [
+            "ebpf",
+            "linux",
+            "ratatui",
+            "rust",
+            "tui",
+            "network",
+            "sniffing",
+            "kernel",
+            "sysadmin",
+            "bpf",
+            "observability",
+            "security",
+            "firewall"
+          ]
+        },
+        {
+          "nameWithOwner": "felixguendling/cista",
+          "stars": 2157,
+          "forks": 150,
+          "language": "C++",
+          "starredAt": "2025-05-19T16:33:25Z",
+          "url": "https://github.com/felixguendling/cista",
+          "description": "Cista is a simple, high-performance, zero-copy C++ serialization & reflection library.",
+          "topics": [
+            "serialization",
+            "cpp",
+            "cpp17",
+            "reflection",
+            "deserialization",
+            "efficient",
+            "zero-copy",
+            "benchmark",
+            "high-performance"
+          ]
+        },
+        {
+          "nameWithOwner": "rcore-os/rCore-Tutorial-v3",
+          "stars": 1939,
+          "forks": 540,
+          "language": "Rust",
+          "starredAt": "2025-02-22T11:22:52Z",
+          "url": "https://github.com/rcore-os/rCore-Tutorial-v3",
+          "description": "Let's write an OS which can run on RISC-V in Rust from scratch!",
+          "topics": [
+            "rust",
+            "risc-v",
+            "rcore",
+            "operating-system",
+            "k210"
+          ]
+        },
+        {
+          "nameWithOwner": "ashvardanian/less_slow.cpp",
+          "stars": 1888,
+          "forks": 82,
+          "language": "C++",
+          "starredAt": "2025-01-09T10:31:10Z",
+          "url": "https://github.com/ashvardanian/less_slow.cpp",
+          "description": "Playing around \"Less Slow\" coding practices in C++ 20, C, CUDA, PTX, & Assembly, from numerics & SIMD to coroutines, ranges, exception handling, networking and user-space IO",
+          "topics": [
+            "google-benchmark",
+            "cpp",
+            "cpp17",
+            "gcc",
+            "llvm",
+            "benchmark",
+            "cpp-programming",
+            "tutorial",
+            "tutorials",
+            "assembly",
+            "hpc",
+            "avx512",
+            "coroutines",
+            "ranges",
+            "cpp20",
+            "assembly-language",
+            "linux-kernel",
+            "cuda",
+            "io-uring",
+            "ptx"
+          ]
+        },
+        {
+          "nameWithOwner": "rust-embedded/heapless",
+          "stars": 1880,
+          "forks": 235,
+          "language": "Rust",
+          "starredAt": "2025-10-27T13:24:43Z",
+          "url": "https://github.com/rust-embedded/heapless",
+          "description": "Heapless, `static` friendly data structures",
+          "topics": [
+            "rust",
+            "no-std",
+            "data-structures"
+          ]
+        },
+        {
+          "nameWithOwner": "athasdev/athas",
+          "stars": 1848,
+          "forks": 182,
+          "language": "TypeScript",
+          "starredAt": "2025-12-09T14:36:46Z",
+          "url": "https://github.com/athasdev/athas",
+          "description": "A lightweight, cross-platform code editor, built with Tauri (Rust and React) with Git support, AI agents, vim keybindings.",
+          "topics": [
+            "editor",
+            "ide",
+            "athas",
+            "code-editor",
+            "cross-platform",
+            "lightweight",
+            "react",
+            "rust",
+            "tauri",
+            "text-editor",
+            "wasm",
+            "vim"
+          ]
+        },
+        {
+          "nameWithOwner": "stateright/stateright",
+          "stars": 1752,
+          "forks": 61,
+          "language": "Rust",
+          "starredAt": "2025-11-13T14:27:10Z",
+          "url": "https://github.com/stateright/stateright",
+          "description": "A model checker for implementing distributed systems.",
+          "topics": [
+            "model-checker",
+            "distributed-systems",
+            "actor-model",
+            "paxos"
+          ]
+        },
+        {
+          "nameWithOwner": "hexagonal-sun/moss-kernel",
+          "stars": 1646,
+          "forks": 69,
+          "language": "Rust",
+          "starredAt": "2025-11-21T08:46:24Z",
+          "url": "https://github.com/hexagonal-sun/moss-kernel",
+          "description": "Rust Linux-compatible kernel",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "ashvardanian/SimSIMD",
+          "stars": 1617,
+          "forks": 99,
+          "language": "C",
+          "starredAt": "2025-06-20T06:06:39Z",
+          "url": "https://github.com/ashvardanian/SimSIMD",
+          "description": "Up to 200x Faster Dot Products & Similarity Metrics — for Python, Rust, C, JS, and Swift, supporting f64, f32, f16 real & complex, i8, and bit vectors using SIMD for both AVX2, AVX-512, NEON, SVE, & SVE2 📐",
+          "topics": [
+            "arm-neon",
+            "arm-sve",
+            "assembly",
+            "avx2",
+            "distance-calculation",
+            "metrics",
+            "neon",
+            "simd",
+            "simd-instructions",
+            "information-retrieval",
+            "numpy",
+            "scipy",
+            "similarity-measures",
+            "similarity-search",
+            "vector-search",
+            "avx512",
+            "blas",
+            "blas-libraries",
+            "float16",
+            "bfloat16"
+          ]
+        },
+        {
+          "nameWithOwner": "metrico/gigapipe",
+          "stars": 1616,
+          "forks": 83,
+          "language": "Go",
+          "starredAt": "2025-07-14T02:55:01Z",
+          "url": "https://github.com/metrico/gigapipe",
+          "description": "⭐️ The Open-Source Polyglot Observability Warehouse: Light, Fast, Cloud Native, Drop-in Grafana LGTMP alternative :rocket: Indie All-in-One Opentelemetry, Loki, Prometheus, Tempo, Pyroscope On-Prem Alternative :star: ",
+          "topics": [
+            "loki",
+            "grafana",
+            "prometheus",
+            "clickhouse",
+            "logql",
+            "timeseries",
+            "metrics",
+            "logs",
+            "promql",
+            "tempo",
+            "observability",
+            "monitoring",
+            "opentelemetry",
+            "lgtm",
+            "wasm",
+            "pyroscope",
+            "tracing",
+            "signoz",
+            "gigapipe",
+            "sql"
+          ]
+        },
+        {
+          "nameWithOwner": "cexll/myclaude",
+          "stars": 1534,
+          "forks": 200,
+          "language": "Go",
+          "starredAt": "2025-11-14T07:21:37Z",
+          "url": "https://github.com/cexll/myclaude",
+          "description": "Claude Code and Codex orchestration workflow",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "substrait-io/substrait",
+          "stars": 1442,
+          "forks": 189,
+          "language": "Python",
+          "starredAt": "2025-10-05T16:45:34Z",
+          "url": "https://github.com/substrait-io/substrait",
+          "description": "A cross platform way to express data transformation, relational algebra, standardized record expression and plans.",
+          "topics": [
+            "execution-plan",
+            "query-plan",
+            "relational-algebra",
+            "specification"
+          ]
+        },
+        {
+          "nameWithOwner": "boost-ext/ut",
+          "stars": 1398,
+          "forks": 133,
+          "language": "C++",
+          "starredAt": "2025-07-14T16:25:20Z",
+          "url": "https://github.com/boost-ext/ut",
+          "description": "C++20 μ(micro)/Unit Testing framework",
+          "topics": [
+            "testing",
+            "tdd",
+            "bdd",
+            "cpp20"
+          ]
+        },
+        {
+          "nameWithOwner": "metrics-rs/metrics",
+          "stars": 1396,
+          "forks": 205,
+          "language": "Rust",
+          "starredAt": "2025-11-12T06:40:06Z",
+          "url": "https://github.com/metrics-rs/metrics",
+          "description": "A metrics ecosystem for Rust.",
+          "topics": [
+            "rust-lang",
+            "metrics",
+            "telemetry"
+          ]
+        },
+        {
+          "nameWithOwner": "jeremy-rifkin/cpptrace",
+          "stars": 1300,
+          "forks": 140,
+          "language": "C++",
+          "starredAt": "2025-03-31T02:35:43Z",
+          "url": "https://github.com/jeremy-rifkin/cpptrace",
+          "description": "Simple, portable, and self-contained stacktrace library for C++11 and newer",
+          "topics": [
+            "backtrace",
+            "debugging",
+            "diagnostics",
+            "stacktrace"
+          ]
+        },
+        {
+          "nameWithOwner": "eliaskosunen/scnlib",
+          "stars": 1293,
+          "forks": 57,
+          "language": "C++",
+          "starredAt": "2025-08-11T16:09:14Z",
+          "url": "https://github.com/eliaskosunen/scnlib",
+          "description": "scanf for modern C++",
+          "topics": [
+            "c-plus-plus",
+            "cpp",
+            "scanf",
+            "input",
+            "io",
+            "parsing",
+            "ranges"
+          ]
+        },
+        {
+          "nameWithOwner": "vivoblueos/kernel",
+          "stars": 1267,
+          "forks": 79,
+          "language": "Rust",
+          "starredAt": "2025-07-25T02:46:32Z",
+          "url": "https://github.com/vivoblueos/kernel",
+          "description": null,
+          "topics": []
+        },
+        {
+          "nameWithOwner": "martinus/unordered_dense",
+          "stars": 1265,
+          "forks": 94,
+          "language": "C++",
+          "starredAt": "2025-07-10T07:52:51Z",
+          "url": "https://github.com/martinus/unordered_dense",
+          "description": "A fast & densely stored hashmap and hashset based on robin-hood backward shift deletion",
+          "topics": [
+            "c-plus-plus",
+            "cpp17",
+            "cpp",
+            "hash",
+            "hash-tables",
+            "header-only-library",
+            "no-dependencies",
+            "stl-containers",
+            "unordered-map",
+            "unordered-set"
+          ]
+        },
+        {
+          "nameWithOwner": "pawurb/hotpath-rs",
+          "stars": 1261,
+          "forks": 24,
+          "language": "Rust",
+          "starredAt": "2025-10-11T06:11:13Z",
+          "url": "https://github.com/pawurb/hotpath-rs",
+          "description": "Simple async Rust profiler with memory and data-flow insights - quickly find and debug performance bottlenecks.",
+          "topics": [
+            "allocations",
+            "benchmark",
+            "performance",
+            "rust",
+            "debugging",
+            "mpsc",
+            "profiler"
+          ]
+        },
+        {
+          "nameWithOwner": "Haleclipse/CCometixLine",
+          "stars": 1220,
+          "forks": 71,
+          "language": "Rust",
+          "starredAt": "2025-09-01T02:58:07Z",
+          "url": "https://github.com/Haleclipse/CCometixLine",
+          "description": "Claude Code statusline tool written in Rust",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "vorner/arc-swap",
+          "stars": 1213,
+          "forks": 45,
+          "language": "Rust",
+          "starredAt": "2025-09-26T06:17:58Z",
+          "url": "https://github.com/vorner/arc-swap",
+          "description": "Support atomic operations on Arc itself",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "OpenImagingLab/FlashVSR",
+          "stars": 1173,
+          "forks": 96,
+          "language": "Python",
+          "starredAt": "2025-10-30T18:29:46Z",
+          "url": "https://github.com/OpenImagingLab/FlashVSR",
+          "description": "Towards Real-Time Diffusion-Based Streaming Video Super-Resolution — An efficient one-step diffusion framework for streaming VSR with locality-constrained sparse attention and a tiny conditional decoder.",
+          "topics": [
+            "diffusion-models",
+            "video-super-resolution"
+          ]
+        },
+        {
+          "nameWithOwner": "yanyiwu/simhash",
+          "stars": 1164,
+          "forks": 262,
+          "language": "C++",
+          "starredAt": "2025-06-17T08:21:06Z",
+          "url": "https://github.com/yanyiwu/simhash",
+          "description": "中文文档simhash值计算",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "jellydn/zed-101-setup",
+          "stars": 1115,
+          "forks": 26,
+          "language": "TypeScript",
+          "starredAt": "2025-11-11T06:24:42Z",
+          "url": "https://github.com/jellydn/zed-101-setup",
+          "description": "Your ultimate guide to setting up Zed with Vim mode, tailored settings, and key bindings for a seamless coding experience",
+          "topics": [
+            "guide",
+            "zed",
+            "hacktoberfest"
+          ]
+        },
+        {
+          "nameWithOwner": "lakehq/sail",
+          "stars": 1105,
+          "forks": 71,
+          "language": "Rust",
+          "starredAt": "2025-07-24T06:29:04Z",
+          "url": "https://github.com/lakehq/sail",
+          "description": "LakeSail's computation framework with a mission to unify batch processing, stream processing, and compute-intensive AI workloads.",
+          "topics": [
+            "arrow",
+            "big-data",
+            "data",
+            "pyspark",
+            "rust",
+            "spark",
+            "sql",
+            "datafusion",
+            "python",
+            "artificial-intelligence",
+            "data-engineering",
+            "distributed-computing",
+            "machine-learning"
+          ]
+        },
+        {
+          "nameWithOwner": "BrisklyDev/brisk",
+          "stars": 1040,
+          "forks": 42,
+          "language": "Dart",
+          "starredAt": "2025-04-19T09:15:27Z",
+          "url": "https://github.com/BrisklyDev/brisk",
+          "description": "Ultra-fast, modern download manager for desktop ",
+          "topics": [
+            "download-manager",
+            "downloader",
+            "downloadmanager",
+            "linux",
+            "windows",
+            "macos"
+          ]
+        },
+        {
+          "nameWithOwner": "tantaraio/voy",
+          "stars": 1035,
+          "forks": 36,
+          "language": "Rust",
+          "starredAt": "2025-12-02T06:25:52Z",
+          "url": "https://github.com/tantaraio/voy",
+          "description": "🕸️🦀 A WASM vector similarity search written in Rust",
+          "topics": [
+            "k-d-tree",
+            "nearest-neighbor-search",
+            "similarity-search",
+            "vector-search",
+            "wasm",
+            "webassembly",
+            "rust",
+            "wasm-pack"
+          ]
+        },
+        {
+          "nameWithOwner": "Xuanwo/backon",
+          "stars": 978,
+          "forks": 52,
+          "language": "Rust",
+          "starredAt": "2025-07-14T12:45:55Z",
+          "url": "https://github.com/Xuanwo/backon",
+          "description": "Make retry like a built-in feature provided by Rust.",
+          "topics": [
+            "async",
+            "backoff",
+            "rust",
+            "retry"
+          ]
+        },
+        {
+          "nameWithOwner": "MengRao/fmtlog",
+          "stars": 970,
+          "forks": 148,
+          "language": "C++",
+          "starredAt": "2025-08-02T16:07:52Z",
+          "url": "https://github.com/MengRao/fmtlog",
+          "description": "fmtlog is a performant fmtlib-style logging library with latency in nanoseconds.",
+          "topics": [
+            "high-performance",
+            "logging-library",
+            "logging",
+            "fmtlib",
+            "low-latency"
+          ]
+        },
+        {
+          "nameWithOwner": "mmastrac/rust-ctor",
+          "stars": 942,
+          "forks": 63,
+          "language": "Rust",
+          "starredAt": "2025-10-13T06:24:13Z",
+          "url": "https://github.com/mmastrac/rust-ctor",
+          "description": "Module initialization/global constructor functions for Rust",
+          "topics": [
+            "rust",
+            "macros",
+            "constructor",
+            "dylib"
+          ]
+        },
+        {
+          "nameWithOwner": "jm33-m0/kms-activate",
+          "stars": 921,
+          "forks": 166,
+          "language": "C#",
+          "starredAt": "2025-09-27T11:01:53Z",
+          "url": "https://github.com/jm33-m0/kms-activate",
+          "description": "Microsoft Windows/Office 一键激活工具",
+          "topics": [
+            "kms",
+            "activator",
+            "windows-10",
+            "office"
+          ]
+        },
+        {
+          "nameWithOwner": "nnethercote/dhat-rs",
+          "stars": 914,
+          "forks": 42,
+          "language": "Rust",
+          "starredAt": "2025-09-26T02:03:32Z",
+          "url": "https://github.com/nnethercote/dhat-rs",
+          "description": "Heap profiling and ad hoc profiling for Rust programs.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "vibevoice-community/VibeVoice",
+          "stars": 890,
+          "forks": 339,
+          "language": "Python",
+          "starredAt": "2025-09-06T21:16:52Z",
+          "url": "https://github.com/vibevoice-community/VibeVoice",
+          "description": "VibeVoice: Expressive, longform conversational speech synthesis. (Community fork)",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "messense/jieba-rs",
+          "stars": 888,
+          "forks": 57,
+          "language": "Rust",
+          "starredAt": "2025-06-17T08:23:26Z",
+          "url": "https://github.com/messense/jieba-rs",
+          "description": "The Jieba Chinese Word Segmentation Implemented in Rust",
+          "topics": [
+            "chinese-word-segmentation",
+            "jieba-chinese",
+            "jieba",
+            "nlp",
+            "wasm"
+          ]
+        },
+        {
+          "nameWithOwner": "holmgr/cargo-sweep",
+          "stars": 888,
+          "forks": 37,
+          "language": "Rust",
+          "starredAt": "2025-05-09T17:41:42Z",
+          "url": "https://github.com/holmgr/cargo-sweep",
+          "description": "A cargo subcommand for cleaning up unused build files generated by Cargo",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "nashaofu/xcap",
+          "stars": 876,
+          "forks": 116,
+          "language": "Rust",
+          "starredAt": "2025-06-06T17:03:36Z",
+          "url": "https://github.com/nashaofu/xcap",
+          "description": "XCap is a cross-platform screen capture library written in Rust. It supports Linux (X11, Wayland), MacOS, and Windows. XCap supports screenshot and video recording (WIP).",
+          "topics": [
+            "monitor",
+            "screen-capture",
+            "screencapture",
+            "windows",
+            "screen-record"
+          ]
+        },
+        {
+          "nameWithOwner": "boinkor-net/governor",
+          "stars": 845,
+          "forks": 62,
+          "language": "Rust",
+          "starredAt": "2025-07-28T13:49:58Z",
+          "url": "https://github.com/boinkor-net/governor",
+          "description": "A rate-limiting library for Rust (f.k.a. ratelimit_meter)",
+          "topics": [
+            "rate-limiting",
+            "in-memory",
+            "gcra",
+            "async",
+            "no-std",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "gcui-art/album-ai",
+          "stars": 791,
+          "forks": 70,
+          "language": "TypeScript",
+          "starredAt": "2025-01-20T02:40:30Z",
+          "url": "https://github.com/gcui-art/album-ai",
+          "description": "AI-First Album: Chat with your gallery using plain language! LLM Vision + RAG + Album/Gallery.",
+          "topics": [
+            "ai",
+            "album",
+            "gpt-4o-mini",
+            "image",
+            "llm",
+            "rag",
+            "haiku",
+            "gallery"
+          ]
+        },
+        {
+          "nameWithOwner": "letta-ai/letta-code",
+          "stars": 772,
+          "forks": 87,
+          "language": "TypeScript",
+          "starredAt": "2025-12-17T17:34:20Z",
+          "url": "https://github.com/letta-ai/letta-code",
+          "description": "The memory-first coding agent",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "ned14/outcome",
+          "stars": 765,
+          "forks": 66,
+          "language": "C++",
+          "starredAt": "2025-01-08T09:23:20Z",
+          "url": "https://github.com/ned14/outcome",
+          "description": "Provides very lightweight outcome\u003cT> and result\u003cT> (non-Boost edition)",
+          "topics": [
+            "boost",
+            "c-plus-plus"
+          ]
+        },
+        {
+          "nameWithOwner": "Anush008/fastembed-rs",
+          "stars": 709,
+          "forks": 97,
+          "language": "Rust",
+          "starredAt": "2025-12-26T03:31:34Z",
+          "url": "https://github.com/Anush008/fastembed-rs",
+          "description": "Rust library for generating vector embeddings, reranking. Re-write of qdrant/fastembed.",
+          "topics": [
+            "embeddings",
+            "rag",
+            "retrieval",
+            "retrieval-augmented-generation",
+            "vector-search",
+            "fastembed",
+            "reranker",
+            "reranking"
+          ]
+        },
+        {
+          "nameWithOwner": "ktprime/emhash",
+          "stars": 666,
+          "forks": 68,
+          "language": "C++",
+          "starredAt": "2025-01-08T07:49:08Z",
+          "url": "https://github.com/ktprime/emhash",
+          "description": "Fast and memory efficient c++ flat hash table/map/set",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "retrage/gpt-macro",
+          "stars": 663,
+          "forks": 9,
+          "language": "Rust",
+          "starredAt": "2025-02-07T09:18:48Z",
+          "url": "https://github.com/retrage/gpt-macro",
+          "description": "ChatGPT powered Rust proc macro that generates code at compile-time.",
+          "topics": [
+            "rust",
+            "chatgpt",
+            "test"
+          ]
+        },
+        {
+          "nameWithOwner": "bosun-ai/swiftide",
+          "stars": 630,
+          "forks": 52,
+          "language": "Rust",
+          "starredAt": "2025-01-14T11:02:27Z",
+          "url": "https://github.com/bosun-ai/swiftide",
+          "description": "Fast, streaming indexing, query, and agentic LLM applications in Rust",
+          "topics": [
+            "indexing",
+            "llm",
+            "rag",
+            "ai",
+            "data",
+            "ml",
+            "llmops",
+            "genai",
+            "retrieval-augmented-generation",
+            "rust",
+            "agents"
+          ]
+        },
+        {
+          "nameWithOwner": "alceal/plotlars",
+          "stars": 621,
+          "forks": 22,
+          "language": "Rust",
+          "starredAt": "2025-05-07T02:31:45Z",
+          "url": "https://github.com/alceal/plotlars",
+          "description": "Plotlars is a Rust library designed to facilitate the integration between the Polars data analysis library and Plotly library.",
+          "topics": [
+            "chart",
+            "charts",
+            "data-science",
+            "plot",
+            "plotly",
+            "plots",
+            "polars",
+            "visualisation",
+            "visualization"
+          ]
+        },
+        {
+          "nameWithOwner": "sopaco/deepwiki-rs",
+          "stars": 600,
+          "forks": 73,
+          "language": "Rust",
+          "starredAt": "2025-11-10T02:43:31Z",
+          "url": "https://github.com/sopaco/deepwiki-rs",
+          "description": "Turn code into clarity. Generate accurate technical docs and AI-ready context in minutes—perfectly structured for human teams and intelligent agents.",
+          "topics": [
+            "deepwiki",
+            "llm",
+            "rust",
+            "claude",
+            "deepseek",
+            "mistral",
+            "openai",
+            "openrouter",
+            "wiki"
+          ]
+        },
+        {
+          "nameWithOwner": "s2-streamstore/cachey",
+          "stars": 552,
+          "forks": 13,
+          "language": "Rust",
+          "starredAt": "2025-09-15T02:48:35Z",
+          "url": "https://github.com/s2-streamstore/cachey",
+          "description": "Read-through cache for object storage",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "nanchen2251/ScreenRecordHelper",
+          "stars": 533,
+          "forks": 89,
+          "language": "Kotlin",
+          "starredAt": "2025-07-26T16:39:46Z",
+          "url": "https://github.com/nanchen2251/ScreenRecordHelper",
+          "description": "🔥Android screen record helper, Android 屏幕录制  https://github.com/nanchen2251/ScreenRecordHelper",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "chromium/crashpad",
+          "stars": 531,
+          "forks": 181,
+          "language": "C++",
+          "starredAt": "2025-06-25T03:32:47Z",
+          "url": "https://github.com/chromium/crashpad",
+          "description": "A crash-reporting system",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "second-state/echokit_server",
+          "stars": 504,
+          "forks": 69,
+          "language": "Rust",
+          "starredAt": "2025-11-24T17:23:47Z",
+          "url": "https://github.com/second-state/echokit_server",
+          "description": "Open Source Voice Agent Platform",
+          "topics": [
+            "agentic-ai",
+            "ai",
+            "asr",
+            "esp32",
+            "llm",
+            "mcp",
+            "mcp-client",
+            "tts",
+            "voice",
+            "voice-assistant"
+          ]
+        },
+        {
+          "nameWithOwner": "agerasev/ringbuf",
+          "stars": 503,
+          "forks": 46,
+          "language": "Rust",
+          "starredAt": "2025-04-09T03:33:16Z",
+          "url": "https://github.com/agerasev/ringbuf",
+          "description": "Lock-free SPSC FIFO ring buffer with direct access to inner data",
+          "topics": [
+            "concurrent-data-structure",
+            "ring-buffer",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "michaellatman/mcp-get",
+          "stars": 497,
+          "forks": 103,
+          "language": "TypeScript",
+          "starredAt": "2025-03-03T18:25:06Z",
+          "url": "https://github.com/michaellatman/mcp-get",
+          "description": null,
+          "topics": []
+        },
+        {
+          "nameWithOwner": "rust-minidump/rust-minidump",
+          "stars": 482,
+          "forks": 72,
+          "language": "Rust",
+          "starredAt": "2025-12-01T02:10:05Z",
+          "url": "https://github.com/rust-minidump/rust-minidump",
+          "description": "Type definitions, parsing, and analysis for the minidump file format.",
+          "topics": [
+            "rust",
+            "minidump",
+            "crash-reporting",
+            "crash-reports"
+          ]
+        },
+        {
+          "nameWithOwner": "straussmaximilian/ocrmac",
+          "stars": 465,
+          "forks": 36,
+          "language": "Jupyter Notebook",
+          "starredAt": "2025-08-11T15:52:27Z",
+          "url": "https://github.com/straussmaximilian/ocrmac",
+          "description": "A python wrapper to extract text from images on a mac system. Uses the vision framework from Apple.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "smol-rs/async-executor",
+          "stars": 422,
+          "forks": 53,
+          "language": "Rust",
+          "starredAt": "2025-10-23T03:40:14Z",
+          "url": "https://github.com/smol-rs/async-executor",
+          "description": "Async executor",
+          "topics": [
+            "async",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "gimli-rs/addr2line",
+          "stars": 396,
+          "forks": 75,
+          "language": "Rust",
+          "starredAt": "2025-10-20T13:41:49Z",
+          "url": "https://github.com/gimli-rs/addr2line",
+          "description": "A cross-platform `addr2line` clone written in Rust, using `gimli`",
+          "topics": [
+            "addr2line",
+            "debug-symbols",
+            "rust",
+            "symbolicate",
+            "symbolication",
+            "cross-platform"
+          ]
+        },
+        {
+          "nameWithOwner": "frostyplanet/crossfire-rs",
+          "stars": 387,
+          "forks": 12,
+          "language": "Rust",
+          "starredAt": "2025-09-30T08:08:31Z",
+          "url": "https://github.com/frostyplanet/crossfire-rs",
+          "description": "A lockless mpmc/mpsc to support async base on crossbeam ",
+          "topics": [
+            "rust",
+            "channel",
+            "async",
+            "mpmc"
+          ]
+        },
+        {
+          "nameWithOwner": "apache/sedona-db",
+          "stars": 371,
+          "forks": 40,
+          "language": "Rust",
+          "starredAt": "2025-11-23T13:11:49Z",
+          "url": "https://github.com/apache/sedona-db",
+          "description": "A single-node analytical database engine with geospatial as a first-class citizen",
+          "topics": [
+            "c",
+            "database",
+            "geospatial",
+            "hacktoberfest",
+            "python",
+            "r",
+            "rust",
+            "spatial-analysis",
+            "spatial-query",
+            "spatial-sql"
+          ]
+        },
+        {
+          "nameWithOwner": "luohy15/y-router",
+          "stars": 369,
+          "forks": 60,
+          "language": "TypeScript",
+          "starredAt": "2025-08-28T19:04:02Z",
+          "url": "https://github.com/luohy15/y-router",
+          "description": "A Simple Proxy enabling Claude Code to work with OpenRouter",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "XiangpengHao/liquid-cache",
+          "stars": 356,
+          "forks": 37,
+          "language": "Rust",
+          "starredAt": "2025-05-01T21:20:40Z",
+          "url": "https://github.com/XiangpengHao/liquid-cache",
+          "description": "Distributed pushdown cache for DataFusion",
+          "topics": [
+            "arrow",
+            "cache",
+            "data-analytics",
+            "datafusion",
+            "object-store",
+            "parquet",
+            "query-engine"
+          ]
+        },
+        {
+          "nameWithOwner": "timvw/qv",
+          "stars": 341,
+          "forks": 18,
+          "language": "Rust",
+          "starredAt": "2025-12-25T04:36:02Z",
+          "url": "https://github.com/timvw/qv",
+          "description": "Quickly view your data",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "alfg/mp4-rust",
+          "stars": 341,
+          "forks": 96,
+          "language": "Rust",
+          "starredAt": "2025-11-12T06:31:41Z",
+          "url": "https://github.com/alfg/mp4-rust",
+          "description": "MP4 reader + writer library in Rust! 🎥🦀",
+          "topics": [
+            "rust",
+            "mp4",
+            "isobmff",
+            "reader",
+            "qt",
+            "writer",
+            "video"
+          ]
+        },
+        {
+          "nameWithOwner": "quickwit-oss/bitpacking",
+          "stars": 321,
+          "forks": 35,
+          "language": "Rust",
+          "starredAt": "2025-04-10T06:38:55Z",
+          "url": "https://github.com/quickwit-oss/bitpacking",
+          "description": "SIMD algorithms for integer compression via bitpacking. This crate is a port of a C library called simdcomp.",
+          "topics": [
+            "rust",
+            "compression",
+            "simd"
+          ]
+        },
+        {
+          "nameWithOwner": "boostorg/mp11",
+          "stars": 279,
+          "forks": 94,
+          "language": "C++",
+          "starredAt": "2025-01-23T09:22:46Z",
+          "url": "https://github.com/boostorg/mp11",
+          "description": "C++11 metaprogramming library",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "SaladDay/cc-switch-cli",
+          "stars": 272,
+          "forks": 12,
+          "language": "Rust",
+          "starredAt": "2025-12-12T03:36:14Z",
+          "url": "https://github.com/SaladDay/cc-switch-cli",
+          "description": "⭐️ A cross-platform CLI All-in-One assistant tool for Claude Code, Codex & Gemini CLI.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "azat/chdig",
+          "stars": 259,
+          "forks": 22,
+          "language": "Rust",
+          "starredAt": "2025-01-21T07:28:34Z",
+          "url": "https://github.com/azat/chdig",
+          "description": "Dig into ClickHouse with TUI interface.",
+          "topics": [
+            "clickhouse"
+          ]
+        },
+        {
+          "nameWithOwner": "apache/datafusion-ray",
+          "stars": 228,
+          "forks": 26,
+          "language": "Python",
+          "starredAt": "2025-01-06T02:37:42Z",
+          "url": "https://github.com/apache/datafusion-ray",
+          "description": "Apache DataFusion Ray",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "LagrangeDev/LagrangeGo",
+          "stars": 221,
+          "forks": 46,
+          "language": "Go",
+          "starredAt": "2025-06-07T10:08:56Z",
+          "url": "https://github.com/LagrangeDev/LagrangeGo",
+          "description": "A Go Implementation of NTQQ PC Protocol",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "bdbai/nyquest",
+          "stars": 210,
+          "forks": 8,
+          "language": "Rust",
+          "starredAt": "2025-05-08T17:19:13Z",
+          "url": "https://github.com/bdbai/nyquest",
+          "description": "truly platform-native Rust HTTP client library",
+          "topics": [
+            "curl",
+            "http",
+            "http-client",
+            "nsurlsession",
+            "rust",
+            "winhttp",
+            "winrt"
+          ]
+        },
+        {
+          "nameWithOwner": "jazzyalex/agent-sessions",
+          "stars": 158,
+          "forks": 8,
+          "language": "Swift",
+          "starredAt": "2025-11-11T06:25:43Z",
+          "url": "https://github.com/jazzyalex/agent-sessions",
+          "description": "Session browser + Agents Analytics + Limits tracker for Codex CLI,  Claude Code, OpenCode, Gemini CLI, Factory Droid  & GitHub Copilot CLI. Search ALL past sessions, filter by folder·repo, resume instantly, see rate limits in real-time. Native macOS app.",
+          "topics": [
+            "agentic-workflow",
+            "agents",
+            "ai",
+            "antrophic",
+            "claude-code",
+            "codex",
+            "codex-cli",
+            "developer-tools",
+            "gpt-5",
+            "indie-hacker",
+            "macos",
+            "openai",
+            "productivity-tools",
+            "session-management",
+            "usage-tracking",
+            "vibe-coding"
+          ]
+        },
+        {
+          "nameWithOwner": "Azure/kimojio-rs",
+          "stars": 157,
+          "forks": 7,
+          "language": "Rust",
+          "starredAt": "2025-11-20T07:04:14Z",
+          "url": "https://github.com/Azure/kimojio-rs",
+          "description": "A thread-per-core Linux io_uring async runtime for Rust optimized for latency.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "parallel101/simdtutor",
+          "stars": 146,
+          "forks": 13,
+          "language": "C++",
+          "starredAt": "2025-07-07T04:58:13Z",
+          "url": "https://github.com/parallel101/simdtutor",
+          "description": "x86-64 SIMD矢量优化系列教程",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "graniet/rllm",
+          "stars": 138,
+          "forks": 3,
+          "language": "Rust",
+          "starredAt": "2025-01-13T11:00:35Z",
+          "url": "https://github.com/graniet/rllm",
+          "description": "Use multiple LLM backends in a single crate, simple builder-based configuration, and built-in prompt chaining & templating.",
+          "topics": [
+            "ai",
+            "anthropic",
+            "builder-pattern",
+            "chatbot",
+            "llm",
+            "nlp",
+            "ollama",
+            "openai",
+            "prompt-engineering",
+            "rust",
+            "rust-crate",
+            "rust-library"
+          ]
+        },
+        {
+          "nameWithOwner": "backtrace-labs/crashpad",
+          "stars": 127,
+          "forks": 52,
+          "language": "C++",
+          "starredAt": "2025-07-11T16:17:04Z",
+          "url": "https://github.com/backtrace-labs/crashpad",
+          "description": "A fork of Crashpad with file attachment support and other improvements.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "samscott89/rudy",
+          "stars": 115,
+          "forks": 3,
+          "language": "Rust",
+          "starredAt": "2025-07-11T16:18:30Z",
+          "url": "https://github.com/samscott89/rudy",
+          "description": "A Toolchain for Rust Debuginfo",
+          "topics": [
+            "debugging",
+            "rust"
+          ]
+        },
+        {
+          "nameWithOwner": "xuhuafeifei/leetcode-runner",
+          "stars": 114,
+          "forks": 5,
+          "language": "Java",
+          "starredAt": "2025-04-03T05:13:58Z",
+          "url": "https://github.com/xuhuafeifei/leetcode-runner",
+          "description": "leetcode插件",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "hexagonal-sun/trale",
+          "stars": 112,
+          "forks": 7,
+          "language": "Rust",
+          "starredAt": "2025-12-11T07:38:29Z",
+          "url": "https://github.com/hexagonal-sun/trale",
+          "description": "Tiny Rust Async Linux Executor",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "beve-org/beve",
+          "stars": 107,
+          "forks": 4,
+          "language": "JavaScript",
+          "starredAt": "2025-05-20T07:28:47Z",
+          "url": "https://github.com/beve-org/beve",
+          "description": "High performance, tagged binary data specification",
+          "topics": [
+            "binary-data",
+            "high-performance",
+            "messaging",
+            "data-interchange",
+            "fast",
+            "lightweight",
+            "matrix",
+            "beve"
+          ]
+        },
+        {
+          "nameWithOwner": "nc-photos/nc-photos",
+          "stars": 99,
+          "forks": 4,
+          "language": "Dart",
+          "starredAt": "2025-01-20T06:18:22Z",
+          "url": "https://github.com/nc-photos/nc-photos",
+          "description": "Browse your photos on Nextcloud servers.",
+          "topics": [
+            "nextcloud",
+            "gallery"
+          ]
+        },
+        {
+          "nameWithOwner": "RustyStarX/RustyStar",
+          "stars": 52,
+          "forks": 1,
+          "language": "Rust",
+          "starredAt": "2025-05-28T07:28:12Z",
+          "url": "https://github.com/RustyStarX/RustyStar",
+          "description": "EnergyStar alernative in Rust",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "LagrangeDev/mania",
+          "stars": 52,
+          "forks": 10,
+          "language": "Rust",
+          "starredAt": "2025-02-12T19:22:41Z",
+          "url": "https://github.com/LagrangeDev/mania",
+          "description": "An Experimental Implementation of NTQQ Protocol, with Pure Rust🦀, Derived from Lagrange.Core",
+          "topics": [
+            "ntqq",
+            "qq-protocol",
+            "qqbot",
+            "rust",
+            "rs-qq",
+            "protocol"
+          ]
+        },
+        {
+          "nameWithOwner": "google/serde_json5",
+          "stars": 44,
+          "forks": 15,
+          "language": "Rust",
+          "starredAt": "2025-06-20T14:58:37Z",
+          "url": "https://github.com/google/serde_json5",
+          "description": null,
+          "topics": []
+        },
+        {
+          "nameWithOwner": "xiaoniaoyouhuajiang/sidebundle",
+          "stars": 36,
+          "forks": 1,
+          "language": "Rust",
+          "starredAt": "2025-12-03T06:23:45Z",
+          "url": "https://github.com/xiaoniaoyouhuajiang/sidebundle",
+          "description": "Painless relocation of Linux executable file and all of their dependencies–without containers.",
+          "topics": [
+            "linux",
+            "portable",
+            "relocation"
+          ]
+        },
+        {
+          "nameWithOwner": "conanhujinming/flash_hash_join",
+          "stars": 30,
+          "forks": 4,
+          "language": "C++",
+          "starredAt": "2025-09-14T14:23:10Z",
+          "url": "https://github.com/conanhujinming/flash_hash_join",
+          "description": "A flash implementation of hash join in C++",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "bluecatengineering/fast_radix_trie",
+          "stars": 22,
+          "forks": 2,
+          "language": "Rust",
+          "starredAt": "2025-11-30T16:43:44Z",
+          "url": "https://github.com/bluecatengineering/fast_radix_trie",
+          "description": "A fast, memory-efficient radix tree implementation written in Rust",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "discreaminant2809/better_collect",
+          "stars": 21,
+          "forks": 2,
+          "language": "Rust",
+          "starredAt": "2025-12-09T03:32:06Z",
+          "url": "https://github.com/discreaminant2809/better_collect",
+          "description": "Provides a composable, declarative way to consume an iterator.",
+          "topics": []
+        },
+        {
+          "nameWithOwner": "hs-CN/msedge-tts",
+          "stars": 17,
+          "forks": 2,
+          "language": "Rust",
+          "starredAt": "2025-03-28T14:34:58Z",
+          "url": "https://github.com/hs-CN/msedge-tts",
+          "description": "This library is a wrapper of MSEdge Read aloud function API. You can use it to synthesize text to speech with many voices MS provided.",
+          "topics": [
+            "edge-tts",
+            "text-to-speech",
+            "tts",
+            "msedge-tts"
+          ]
+        },
+        {
+          "nameWithOwner": "apache/opendal-oli",
+          "stars": 16,
+          "forks": 2,
+          "language": "Rust",
+          "starredAt": "2025-11-10T11:19:19Z",
+          "url": "https://github.com/apache/opendal-oli",
+          "description": "`oli` stands for OpenDAL Command Line Interface. It aims to provide a unified and user-friendly way to manipulate data stored in various storage service.",
+          "topics": [
+            "cli",
+            "fs",
+            "rust",
+            "s3",
+            "storage"
+          ]
+        },
+        {
+          "nameWithOwner": "spyoungtech/json-five-rs",
+          "stars": 15,
+          "forks": 0,
+          "language": "Rust",
+          "starredAt": "2025-06-20T16:30:41Z",
+          "url": "https://github.com/spyoungtech/json-five-rs",
+          "description": "JSON5 in Rust",
+          "topics": [
+            "json",
+            "json5",
+            "json5-parser",
+            "rust-crate"
+          ]
+        },
+        {
+          "nameWithOwner": "SF-Zhou/ruapc",
+          "stars": 4,
+          "forks": 0,
+          "language": "Rust",
+          "starredAt": "2025-08-02T15:13:33Z",
+          "url": "https://github.com/SF-Zhou/ruapc",
+          "description": "A Rust RPC library.",
+          "topics": []
+        }
+      ],
       "byYear": {
         "2021": 7,
         "2022": 89,
@@ -11272,11 +14841,17 @@
           prHighlights.appendChild(div);
         });
 
-	        // Categories
-	        const catDefs = DATA.year.categories.definitions || [];
-	        const catCounts = DATA.year.categories.starCounts2025 || {};
-	        const catReposMap = DATA.year.categories.topRepos2025 || {};
+	        // Categories (2025: rebuilt from full Star repo metadata)
 	        const catgrid = document.getElementById("catgrid");
+	        const catPanelEl = document.getElementById("s6CatPanel");
+	        const catBodyEl = catPanelEl?.querySelector?.(".body");
+
+	        const catModalOverlay = document.getElementById("catModalOverlay");
+	        const catModalClose = document.getElementById("catModalClose");
+	        const catModalGrid = document.getElementById("catModalGrid");
+	        const catModalSearch = document.getElementById("catModalSearch");
+	        const catModalCountEl = document.getElementById("catModalCount");
+
 	        const shortCatLabel = (label) => {
 	          const raw = String(label ?? "").trim();
 	          if (!raw) return "—";
@@ -11285,75 +14860,1169 @@
 	            .map((x) => x.trim())
 	            .filter(Boolean);
 	          let best = parts[0] || raw;
-	          if (parts.length > 1) {
-	            for (const p of parts) if (p.length < best.length) best = p;
-	          }
+	          if (parts.length > 1) for (const p of parts) if (p.length < best.length) best = p;
 	          best = best.replace(/\s+/g, "");
 	          if (best.length > 3) best = best.slice(0, 3);
 	          return best || raw.slice(0, 3) || "—";
 	        };
 
-        let currentCat = DATA.year.categories.primaryTrack || catDefs[0]?.key;
-        const catEls = new Map();
+	        const norm = (s) => String(s ?? "").toLowerCase();
+	        const toTopics = (topics) =>
+	          new Set(
+	            (Array.isArray(topics) ? topics : [])
+	              .map((t) => norm(t).trim())
+	              .filter(Boolean),
+	          );
 
-        const renderCatPanel = (key) => {
-          currentCat = key;
-          for (const [k, el] of catEls) el.classList.toggle("is-on", k === key);
-          const def = catDefs.find((c) => c.key === key);
-          setText("catTitle", `${def?.emoji || ""} ${def?.label || key}`);
-          setText("catSub", def?.description || "");
-          setText("catCount", String(catCounts[key] || 0));
-          const list = document.getElementById("catRepos");
-          list.innerHTML = "";
-          (catReposMap[key] || []).slice(0, 12).forEach((r) => {
-            const div = document.createElement("div");
-            div.className = "item";
-            div.innerHTML = `
-              <div class="left">
-                <div class="name"><a href="${r.url}" target="_blank" rel="noreferrer">${r.nameWithOwner}</a></div>
-                <div class="meta">${r.language || "—"}</div>
-              </div>
-              <div class="right">
-                <div class="chip">★ ${compact(r.stars)}<small>stars</small></div>
-              </div>
-            `;
-            list.appendChild(div);
+	        const STAR_REPOS_2025 = (Array.isArray(DATA?.year?.stars?.repos2025) ? DATA.year.stars.repos2025 : [])
+	          .map((r) => ({
+	            nameWithOwner: String(r?.nameWithOwner || "").trim(),
+	            description: String(r?.description || "").trim(),
+	            topics: Array.isArray(r?.topics) ? r.topics.map((t) => String(t || "").trim()).filter(Boolean) : [],
+	            language: String(r?.language || "").trim(),
+	            stars: Number(r?.stars || 0) || 0,
+	            forks: Number(r?.forks || 0) || 0,
+	            starredAt: String(r?.starredAt || ""),
+	            url: String(r?.url || ""),
+	          }))
+	          .filter((r) => r.nameWithOwner && r.url);
+
+	        const CAT_RULES = [
+	          {
+	            key: "mcp",
+	            label: "MCP / 协议栈",
+	            emoji: "🧩",
+	            color: "#7aa7ff",
+	            description: "工具调用协议、clients/servers、上下文连接器",
+	            topics: ["mcp", "claude-code", "codex", "model-context-protocol"],
+	            words: ["model context protocol", "mcp"],
+	            tw: 9,
+	            ww: 4,
+	          },
+	          {
+	            key: "rag",
+	            label: "RAG / 向量检索",
+	            emoji: "🧲",
+	            color: "#45f7c7",
+	            description: "embeddings、semantic search、vector DB",
+	            topics: ["rag", "embeddings", "vector-search", "semantic-search", "vector-database", "similarity-search", "nearest-neighbor-search", "pgvector"],
+	            words: ["retrieval", "embedding", "vector search", "semantic search", "similarity search", "pgvector"],
+	            tw: 7,
+	            ww: 3,
+	          },
+	          {
+	            key: "agents",
+	            label: "Agent / 工具调用",
+	            emoji: "🦾",
+	            color: "#bc8cff",
+	            description: "agent frameworks、tool calling、workflow",
+	            topics: ["agent", "agents", "agentic-ai", "tool-calling", "function-calling", "vibe-coding", "workflow"],
+	            words: ["agent", "tool calling", "function calling", "assistant", "autonomous"],
+	            tw: 6,
+	            ww: 2,
+	          },
+	          {
+	            key: "llm",
+	            label: "LLM / 模型与推理",
+	            emoji: "🧬",
+	            color: "#ff4fd8",
+	            description: "LLM、transformers、推理与应用",
+	            topics: ["llm", "llms", "chatgpt", "gpt", "llama", "qwen", "deepseek", "generative-ai", "artificial-intelligence", "machine-learning", "transformers", "pytorch", "openai", "claude", "anthropic", "gemini", "grok"],
+	            words: ["llm", "large language model", "transformer", "openai", "anthropic", "claude", "deepseek", "qwen", "llama", "chatgpt"],
+	            tw: 5,
+	            ww: 2,
+	          },
+	          {
+	            key: "speech",
+	            label: "语音 / 多媒体",
+	            emoji: "🎙️",
+	            color: "#58a6ff",
+	            description: "ASR/TTS、screen capture、媒体处理",
+	            topics: ["tts", "asr", "whisper", "screen-capture", "audio", "video"],
+	            words: ["speech", "audio", "tts", "asr", "whisper", "screen capture", "video"],
+	            tw: 7,
+	            ww: 3,
+	          },
+	          {
+	            key: "db",
+	            label: "数据库 / 查询引擎",
+	            emoji: "🗄️",
+	            color: "#ffcc66",
+	            description: "SQL/OLAP/存储/索引/查询优化",
+	            topics: ["database", "sql", "olap", "analytics", "storage", "index", "indexing", "postgres", "postgresql", "mysql", "sqlite", "clickhouse", "duckdb", "datafusion", "arrow", "parquet"],
+	            words: ["database", "sql", "olap", "query", "postgres", "mysql", "sqlite", "clickhouse", "duckdb", "datafusion", "arrow", "parquet"],
+	            tw: 6,
+	            ww: 2,
+	          },
+	          {
+	            key: "selfhosted",
+	            label: "Self-hosted / 个人云",
+	            emoji: "🏠",
+	            color: "#3fb950",
+	            description: "自托管应用、NAS、个人服务",
+	            topics: ["self-hosted", "homelab", "gallery", "backup-tool"],
+	            words: ["self-hosted", "self hosted", "homelab", "photo", "photos", "gallery", "backup", "server"],
+	            tw: 6,
+	            ww: 2,
+	          },
+	          {
+	            key: "windows",
+	            label: "Windows / 系统工具",
+	            emoji: "🪟",
+	            color: "#7aa7ff",
+	            description: "Windows/Office、PowerShell、系统小工具",
+	            topics: ["windows", "office", "kms", "hwid", "powershell"],
+	            words: ["windows", "office", "activation", "kms", "hwid", "powershell"],
+	            tw: 7,
+	            ww: 2,
+	          },
+	          {
+	            key: "terminal",
+	            label: "终端 / 编辑器",
+	            emoji: "⌨️",
+	            color: "#c48bff",
+	            description: "CLI、terminal、neovim、效率工具",
+	            topics: ["cli", "terminal", "tmux", "neovim", "vim", "vscode", "zed", "git", "productivity", "automation", "devtools", "workflow", "shell"],
+	            words: ["cli", "terminal", "tmux", "neovim", "vim", "shell", "command line"],
+	            tw: 5,
+	            ww: 2,
+	          },
+	          {
+	            key: "desktop",
+	            label: "桌面 / 跨端客户端",
+	            emoji: "🖥️",
+	            color: "#7cf7ff",
+	            description: "Tauri、跨平台、应用层体验",
+	            topics: ["tauri", "cross-platform", "desktop", "mobile-app", "macos", "browser"],
+	            words: ["tauri", "desktop", "cross-platform", "app"],
+	            tw: 5,
+	            ww: 2,
+	          },
+	          {
+	            key: "web",
+	            label: "Web / 前端",
+	            emoji: "🕸️",
+	            color: "#d29922",
+	            description: "TypeScript、UI、Web frameworks",
+	            topics: ["frontend", "web", "browser", "nextjs", "react", "vue", "svelte", "sveltekit", "ui", "ux", "typescript", "nodejs"],
+	            words: ["frontend", "browser", "next.js", "svelte", "react", "vue", "ui", "ux"],
+	            tw: 4,
+	            ww: 2,
+	          },
+	          {
+	            key: "devops",
+	            label: "DevOps / 可观测性",
+	            emoji: "🛰️",
+	            color: "#22c55e",
+	            description: "CI/CD、容器、监控、基础设施",
+	            topics: ["kubernetes", "docker", "devops", "ci", "cd", "github-actions", "observability", "monitoring", "metrics"],
+	            words: ["kubernetes", "docker", "devops", "github actions", "observability", "monitoring", "metrics"],
+	            tw: 6,
+	            ww: 2,
+	          },
+	          {
+	            key: "security",
+	            label: "安全 / 逆向",
+	            emoji: "🛡️",
+	            color: "#ff5b5b",
+	            description: "security、CTF、reverse engineering",
+	            topics: ["security", "ctf", "reverse-engineering", "malware", "cryptography", "vulnerability"],
+	            words: ["security", "ctf", "exploit", "reverse", "malware", "vulnerability", "cryptography"],
+	            tw: 7,
+	            ww: 2,
+	          },
+	          {
+	            key: "systems",
+	            label: "系统 / Runtime / 性能",
+	            emoji: "🧠",
+	            color: "#45f7c7",
+	            description: "Rust/C/C++/Zig、异步、WASM、编译与性能",
+	            topics: ["async", "wasm", "webassembly", "linux", "runtime", "compiler", "networking", "benchmark", "simd", "avx512", "high-performance", "cuda"],
+	            words: ["runtime", "compiler", "kernel", "async", "wasm", "webassembly", "benchmark", "simd", "avx", "cuda", "proxy"],
+	            langs: { Rust: 3, "C++": 2, C: 2, Zig: 2, Go: 1 },
+	            tw: 3,
+	            ww: 1,
+	          },
+	          {
+	            key: "learning",
+	            label: "学习资料 / Awesome",
+	            emoji: "📚",
+	            color: "#58a6ff",
+	            description: "教程、手册、awesome lists、from-scratch",
+	            topics: ["tutorial", "from-scratch", "awesome", "book", "roadmap", "open-source"],
+	            words: ["from scratch", "tutorial", "awesome", "handbook", "cookbook", "guide", "paper"],
+	            tw: 4,
+	            ww: 2,
+	          },
+	          {
+	            key: "misc",
+	            label: "长尾收藏",
+	            emoji: "🧷",
+	            color: "#8b949e",
+	            description: "难以归类，但值得收藏的项目",
+	            topics: [],
+	            words: [],
+	            tw: 0,
+	            ww: 0,
+	          },
+	        ].map((c) => ({
+	          ...c,
+	          topics: (c.topics || []).map((t) => norm(t)),
+	          words: (c.words || []).map((w) => norm(w)),
+	        }));
+
+	        const scoreRule = (rule, repo, text, topics) => {
+	          let score = 0;
+	          for (const t of rule.topics || []) if (topics.has(t)) score += rule.tw || 0;
+	          for (const w of rule.words || []) if (w && text.includes(w)) score += rule.ww || 0;
+	          if (rule.langs && repo.language && rule.langs[repo.language]) score += Number(rule.langs[repo.language] || 0);
+	          return score;
+	        };
+
+	        const buildStarCategories = (repos) => {
+	          const byKey = new Map();
+	          const defByKey = new Map(CAT_RULES.map((d) => [d.key, d]));
+
+	          const ensure = (key) => {
+	            if (byKey.has(key)) return byKey.get(key);
+	            const def = defByKey.get(key) || defByKey.get("misc");
+	            const cat = {
+	              key: def.key,
+	              label: def.label,
+	              emoji: def.emoji,
+	              color: def.color,
+	              description: def.description,
+	              repos: [],
+	              count: 0,
+	              totalStars: 0,
+	            };
+	            byKey.set(key, cat);
+	            return cat;
+	          };
+
+	          repos.forEach((repo) => {
+	            const text = norm([repo.nameWithOwner, repo.description, repo.language, (repo.topics || []).join(" ")].join(" "));
+	            const topics = toTopics(repo.topics);
+	            let bestKey = "misc";
+	            let bestScore = 0;
+	            for (const rule of CAT_RULES) {
+	              if (rule.key === "misc") continue;
+	              const s = scoreRule(rule, repo, text, topics);
+	              if (s > bestScore) {
+	                bestScore = s;
+	                bestKey = rule.key;
+	              }
+	            }
+	            const cat = ensure(bestKey);
+	            cat.repos.push(repo);
+	            cat.count += 1;
+	            cat.totalStars += repo.stars || 0;
+	          });
+
+	          const cats = Array.from(byKey.values()).filter((c) => c.count > 0);
+	          cats.forEach((c) => {
+	            c.repos.sort((a, b) => (b.stars || 0) - (a.stars || 0) || String(a.nameWithOwner).localeCompare(String(b.nameWithOwner)));
+	          });
+	          cats.sort((a, b) => b.count - a.count || b.totalStars - a.totalStars);
+	          const primaryKey = (cats.find((c) => c.key !== "misc") || cats[0] || { key: "misc" }).key;
+	          return { cats, byKey, primaryKey };
+	        };
+
+	        const starCats = buildStarCategories(STAR_REPOS_2025);
+
+	        let currentCat = starCats.primaryKey;
+	        const catEls = new Map();
+	        const IS_COARSE_POINTER_LOCAL = (() => {
+	          try {
+	            if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) return true;
+	          } catch (e) {
+	            // ignore
+	          }
+	          return (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+	        })();
+	        const IS_MOBILE_LAYOUT_LOCAL = () => {
+	          if (!IS_COARSE_POINTER_LOCAL) return false;
+	          try {
+	            return window.matchMedia && window.matchMedia("(max-width: 620px)").matches;
+	          } catch (e) {
+	            return false;
+	          }
+	        };
+	        const getModeLocal = () => {
+	          const m = document.getElementById("scroller")?.dataset?.mode;
+	          return m === "free" ? "free" : "paged";
+	        };
+
+	        const renderCatPanel = (key) => {
+	          currentCat = key;
+	          for (const [k, el] of catEls) el.classList.toggle("is-on", k === key);
+	          const cat = starCats.byKey.get(key) || starCats.byKey.get("misc");
+	          const subtitle = cat?.totalStars
+	            ? `${cat.description} · Σ ${compact(cat.totalStars)} stars`
+	            : String(cat?.description || "");
+	          setText("catTitle", `${cat?.emoji || ""} ${cat?.label || key}`);
+	          setText("catSub", subtitle || "—");
+	          setText("catCount", String(cat?.count || 0));
+
+	          if (catBodyEl) catBodyEl.scrollTop = 0;
+	          const list = document.getElementById("catRepos");
+	          list.innerHTML = "";
+	          (cat?.repos || []).forEach((r) => {
+	            const div = document.createElement("div");
+	            div.className = "item";
+	            const metaBits = [];
+	            if (r.language) metaBits.push(esc(r.language));
+	            if (r.description) metaBits.push(esc(r.description));
+	            const meta = metaBits.join(" · ") || "—";
+	            div.innerHTML = `
+	              <div class="left">
+	                <div class="name"><a href="${r.url}" target="_blank" rel="noreferrer">${esc(r.nameWithOwner)}</a></div>
+	                <div class="meta">${meta}</div>
+	              </div>
+	              <div class="right">
+	                <div class="chip">★ ${compact(r.stars)}<small>stars</small></div>
+	              </div>
+	            `;
+	            list.appendChild(div);
+	          });
+
+	          try {
+	            window.dispatchEvent(new CustomEvent("gw25:cat", { detail: { key } }));
+	          } catch (e) {
+	            // ignore
+	          }
+	        };
+
+	        const catMaxVisible = () => {
+	          const mobilePaged = getModeLocal() === "paged" && IS_MOBILE_LAYOUT_LOCAL();
+	          if (mobilePaged) return 4;
+	          return window.matchMedia("(min-width: 981px)").matches ? 9 : 8;
+	        };
+
+	        const renderCatGrid = () => {
+	          if (!catgrid) return;
+	          catgrid.innerHTML = "";
+	          catEls.clear();
+
+	          const max = catMaxVisible();
+	          const sorted = starCats.cats.slice();
+	          const visible = sorted.slice(0, max);
+	          const moreCount = Math.max(0, sorted.length - visible.length);
+	          const hasMore = moreCount > 0;
+
+	          const mkCat = (cat, { isMore = false } = {}) => {
+	            const shortLabel = shortCatLabel(cat.label);
+	            const el = document.createElement("div");
+	            el.className = "cat" + (isMore ? " cat-more" : "");
+	            el.style.setProperty("--catglow", (cat.color || "#7aa7ff") + "33");
+	            el.innerHTML = `
+	              <div class="top">
+	                <div style="display:flex; gap:10px; align-items:center; min-width:0">
+	                  <div class="emoji">${cat.emoji}</div>
+	                  <div class="label"><span class="full">${cat.label}</span><span class="short">${shortLabel}</span></div>
+	                </div>
+	                <div class="count">${isMore ? `+${moreCount}` : cat.count}</div>
+	              </div>
+	              <div class="desc">${isMore ? "展开全部分类（支持搜索）" : cat.description}</div>
+	            `;
+	            return el;
+	          };
+
+	          visible.forEach((cat) => {
+	            const el = mkCat(cat);
+	            el.classList.toggle("is-on", cat.key === currentCat);
+	            el.addEventListener("click", () => {
+	              renderCatPanel(cat.key);
+	              try {
+	                if (getModeLocal() === "paged" && IS_MOBILE_LAYOUT_LOCAL()) {
+	                  const panel = catPanelEl || document.getElementById("s6CatPanel");
+	                  if (panel) msheet.open({ title: `${cat.label} · 全部项目`, element: panel });
+	                }
+	              } catch (e) {
+	                // ignore
+	              }
+	            });
+	            catgrid.appendChild(el);
+	            catEls.set(cat.key, el);
+	          });
+
+	          if (hasMore) {
+	            const moreEl = mkCat({ label: "更多分类", emoji: "📂", color: "#8b949e", description: "" }, { isMore: true });
+	            moreEl.addEventListener("click", () => openCatModal());
+	            catgrid.appendChild(moreEl);
+	          }
+	        };
+
+	        const openCatModal = () => {
+	          if (!catModalOverlay) return;
+	          catModalOverlay.classList.add("is-on");
+	          catModalOverlay.setAttribute("aria-hidden", "false");
+	          document.documentElement.classList.add("modal-lock");
+	          try {
+	            catModalSearch?.focus?.({ preventScroll: true });
+	          } catch (e) {
+	            // ignore
+	          }
+	          renderCatModal();
+	        };
+
+	        const closeCatModal = () => {
+	          if (!catModalOverlay) return;
+	          catModalOverlay.classList.remove("is-on");
+	          catModalOverlay.setAttribute("aria-hidden", "true");
+	          document.documentElement.classList.remove("modal-lock");
+	          if (catModalSearch) catModalSearch.value = "";
+	        };
+
+	        const renderCatModal = () => {
+	          if (!catModalGrid) return;
+	          const q = norm(catModalSearch?.value || "").trim();
+	          const all = starCats.cats.slice();
+	          const filtered = q
+	            ? all.filter((c) => {
+	                const hay = norm([c.label, c.description, c.key].join(" "));
+	                return hay.includes(q);
+	              })
+	            : all;
+
+	          if (catModalCountEl) catModalCountEl.textContent = `${filtered.length} / ${all.length}`;
+
+	          catModalGrid.innerHTML = filtered
+	            .map((cat) => {
+	              const shortLabel = shortCatLabel(cat.label);
+	              const on = cat.key === currentCat ? " is-on" : "";
+	              const glow = (cat.color || "#7aa7ff") + "33";
+	              return `
+	                <div class="cat${on}" data-cat="${esc(cat.key)}" style="--catglow:${glow}">
+	                  <div class="top">
+	                    <div style="display:flex; gap:10px; align-items:center; min-width:0">
+	                      <div class="emoji">${cat.emoji}</div>
+	                      <div class="label"><span class="full">${esc(cat.label)}</span><span class="short">${esc(shortLabel)}</span></div>
+	                    </div>
+	                    <div class="count">${cat.count}</div>
+	                  </div>
+	                  <div class="desc">${esc(cat.description)}</div>
+	                </div>
+	              `;
+	            })
+	            .join("");
+
+	          catModalGrid.querySelectorAll(".cat[data-cat]").forEach((el) => {
+	            el.addEventListener("click", () => {
+	              const key = el.getAttribute("data-cat") || "";
+	              if (key) {
+	                try {
+	                  if (document.getElementById("s7")?.classList?.contains?.("is-active")) openCatList(key);
+	                  else renderCatPanel(key);
+	                } catch (e) {
+	                  renderCatPanel(key);
+	                }
+	              }
+	              closeCatModal();
+	            });
+	          });
+	        };
+
+	        if (catModalOverlay) {
+	          catModalOverlay.addEventListener("click", (e) => {
+	            const closeBtn = e.target?.closest?.("[data-close]");
+	            if (closeBtn) return closeCatModal();
+	            if (e.target === catModalOverlay || e.target?.classList?.contains?.("cat-modal-backdrop")) return closeCatModal();
+	          });
+	        }
+	        if (catModalClose) catModalClose.addEventListener("click", closeCatModal);
+	        if (catModalSearch) catModalSearch.addEventListener("input", renderCatModal);
+	        window.addEventListener("keydown", (e) => {
+	          if (e.key !== "Escape") return;
+	          if (!catModalOverlay?.classList?.contains?.("is-on")) return;
+	          e.preventDefault();
+	          closeCatModal();
+	        });
+
+	        const atlasAllCatsBtn = document.getElementById("atlasAllCats");
+	        if (atlasAllCatsBtn) atlasAllCatsBtn.addEventListener("click", openCatModal);
+
+	        // Paged mode: allow scrolling inside the repo list without triggering page flip.
+	        if (catBodyEl) {
+	          catBodyEl.addEventListener(
+	            "wheel",
+	            (e) => {
+	              if (getModeLocal() !== "paged") return;
+	              const el = catBodyEl;
+	              if (el.scrollHeight <= el.clientHeight + 1) return;
+	              const dy = e.deltaY || 0;
+	              const atTop = el.scrollTop <= 0;
+	              const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+	              if ((dy < 0 && !atTop) || (dy > 0 && !atBottom)) e.stopPropagation();
+	            },
+	            { passive: true },
+	          );
+	        }
+
+	        renderCatGrid();
+	        renderCatPanel(currentCat);
+	        window.addEventListener(
+	          "resize",
+	          () => {
+	            try {
+	              renderCatGrid();
+	            } catch (e) {
+	              // ignore
+	            }
+	          },
+	          { passive: true },
+	        );
+
+        // Atlas (category constellation)
+        const activeCats = starCats.cats.filter((c) => c.key !== "misc");
+        const primaryCat = starCats.byKey.get(starCats.primaryKey) || activeCats[0] || starCats.cats[0];
+
+        const openCatList = (key) => {
+          const cat = starCats.byKey.get(key) || starCats.byKey.get("misc");
+          if (!cat) return;
+          renderCatPanel(cat.key);
+          // Jump to Scene 6 (details) and open the full list.
+          try {
+            const sceneEls = Array.from(document.querySelectorAll("#scroller .scene"));
+            const idx = sceneEls.findIndex((s) => s.id === "s6");
+            if (idx >= 0 && typeof goToScene === "function") goToScene(idx);
+            else document.getElementById("s6")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+          } catch (e) {
+            // ignore
+          }
+
+          try {
+            if (getModeLocal() === "paged" && IS_MOBILE_LAYOUT_LOCAL() && catPanelEl) {
+              setTimeout(() => msheet.open({ title: `${cat.label} · 全部项目`, element: catPanelEl }), 260);
+            }
+          } catch (e) {
+            // ignore
+          }
+        };
+
+        if (primaryCat) {
+          setText("primaryTrack", primaryCat.label || primaryCat.key);
+          setText(
+            "radarNote",
+            `主星座为「${primaryCat.label || primaryCat.key}」。这不是“时间统计”，而是你 2025 Star 兴趣的高密度切片。`
+          );
+        }
+
+        const breakdown = document.getElementById("radarBreakdown");
+        if (breakdown) {
+          breakdown.innerHTML = "";
+          activeCats
+            .slice()
+            .sort((a, b) => b.count - a.count || b.totalStars - a.totalStars)
+            .forEach((c, idx) => {
+              const div = document.createElement("div");
+              div.className = "item";
+              div.innerHTML = `
+                <div class="left">
+                  <div class="name">${c.emoji} ${esc(c.label)}</div>
+                  <div class="meta">#${idx + 1} · Σ ${compact(c.totalStars)} stars</div>
+                </div>
+                <div class="right">
+                  <div class="chip">${c.count}<small>repos</small></div>
+                </div>
+              `;
+              div.addEventListener("click", () => openCatList(c.key));
+              breakdown.appendChild(div);
+            });
+        }
+
+        const atlasCanvas = document.getElementById("atlasCanvas");
+        const atlasStage = document.getElementById("atlasStage");
+        const atlasTip = document.getElementById("atlasTip");
+        const actx = atlasCanvas ? atlasCanvas.getContext("2d") : null;
+
+        const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+        const hexToRgba = (hex, a) => {
+          const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+          if (!m) return `rgba(88,166,255,${a})`;
+          const n = parseInt(m[1], 16);
+          const r = (n >> 16) & 255;
+          const g = (n >> 8) & 255;
+          const b = n & 255;
+          return `rgba(${r},${g},${b},${a})`;
+        };
+
+        const hashSeed = (s) => {
+          let h = 2166136261;
+          const str = String(s || "");
+          for (let i = 0; i < str.length; i++) {
+            h ^= str.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+          }
+          return h >>> 0;
+        };
+        const mulberry32 = (a) => () => {
+          let t = (a += 0x6d2b79f5);
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+
+        const atlasNodes = activeCats
+          .slice()
+          .sort((a, b) => b.count - a.count || b.totalStars - a.totalStars)
+          .map((c, i) => {
+            const rand = mulberry32(hashSeed((DATA?.user?.login || "user") + ":atlas:node:" + c.key));
+            const dir = rand() < 0.5 ? -1 : 1;
+            return {
+              key: c.key,
+              label: c.label,
+              emoji: c.emoji,
+              color: c.color || "#58a6ff",
+              description: c.description,
+              count: c.count || 0,
+              totalStars: c.totalStars || 0,
+              top: (c.repos || []).slice(0, 3),
+              r0: 22 + Math.sqrt(c.count || 0) * 8 + Math.log10((c.totalStars || 0) + 10) * 2.2,
+              baseR: 0,
+              r: 0,
+              bx: 0,
+              by: 0,
+              x: 0,
+              y: 0,
+              phase: rand() * Math.PI * 2,
+              phase2: rand() * Math.PI * 2,
+              driftA: 5 + rand() * 11,
+              driftB: 5 + rand() * 13,
+              speedA: 0.00055 + rand() * 0.00095,
+              speedB: 0.00055 + rand() * 0.00105,
+              spin: dir * (0.000055 + rand() * 0.00018),
+              orbit: 2 + rand() * 9,
+              pulse: 0.04 + rand() * 0.07,
+              depth: 0.25 + rand() * 0.75,
+              glow: 0.9 + rand() * 0.8,
+            };
+          });
+
+        const atlasRand = mulberry32(hashSeed((DATA?.user?.login || "user") + ":atlas:comet"));
+        let atlasPrevNow = performance.now();
+        let atlasComets = [];
+        let atlasNextCometAt = performance.now() + 860;
+        let atlasLoopRaf = 0;
+
+        let atlasHover = -1;
+        let atlasMouse = { x: 0, y: 0 };
+        let atlasDpr = 1;
+        let atlasStars = [];
+        let atlasPaintQueued = false;
+
+        const ensureAtlasStars = (w, h) => {
+          if (atlasStars.length) return;
+          const rand = mulberry32(hashSeed((DATA?.user?.login || "user") + ":atlas"));
+          const count = Math.round(140 + Math.min(120, (w * h) / 8000));
+          atlasStars = Array.from({ length: count }).map(() => ({
+            x: rand(),
+            y: rand(),
+            r: 0.5 + rand() * 1.6,
+            a: 0.18 + rand() * 0.42,
+            p: rand() * Math.PI * 2,
+          }));
+        };
+
+        const layoutAtlas = () => {
+          if (!atlasCanvas || !actx) return;
+          const rect = atlasCanvas.getBoundingClientRect();
+          const w = Math.max(1, rect.width);
+          const h = Math.max(1, rect.height);
+          const cx = w / 2;
+          const cy = h / 2;
+          ensureAtlasStars(w, h);
+
+          const maxR = Math.min(w, h) * 0.22;
+          atlasNodes.forEach((n) => {
+            const rr = clamp(n.r0 || 0, 24, maxR);
+            n.baseR = rr;
+            n.r = rr;
+          });
+
+          const golden = Math.PI * (3 - Math.sqrt(5));
+          const base = Math.min(w, h) * 0.11;
+          atlasNodes.forEach((n, i) => {
+            const radius = base + Math.sqrt(i + 0.8) * 44;
+            const angle = i * golden;
+            n.x = cx + Math.cos(angle) * radius;
+            n.y = cy + Math.sin(angle) * radius;
+          });
+
+          const pad = 14;
+          for (let iter = 0; iter < 190; iter++) {
+            for (let i = 0; i < atlasNodes.length; i++) {
+              const a = atlasNodes[i];
+              a.x += (cx - a.x) * 0.0022;
+              a.y += (cy - a.y) * 0.0022;
+              for (let j = i + 1; j < atlasNodes.length; j++) {
+                const b = atlasNodes[j];
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const d = Math.hypot(dx, dy) || 1;
+                const minD = a.r + b.r + pad;
+                if (d < minD) {
+                  const push = ((minD - d) / d) * 0.5;
+                  const px = dx * push;
+                  const py = dy * push;
+                  b.x += px;
+                  b.y += py;
+                  a.x -= px;
+                  a.y -= py;
+                }
+              }
+            }
+            for (const n of atlasNodes) {
+              n.x = clamp(n.x, n.r + 18, w - n.r - 18);
+              n.y = clamp(n.y, n.r + 18, h - n.r - 18);
+            }
+          }
+
+          atlasNodes.forEach((n) => {
+            n.bx = n.x;
+            n.by = n.y;
           });
         };
 
-	        const catPanelEl = document.getElementById("s6CatPanel");
-	        catDefs.forEach((def) => {
-	          const shortLabel = shortCatLabel(def.label);
-	          const el = document.createElement("div");
-	          el.className = "cat";
-	          el.style.setProperty("--catglow", def.color + "33");
-	          el.innerHTML = `
-	            <div class="top">
-	              <div style="display:flex; gap:10px; align-items:center; min-width:0">
-	                <div class="emoji">${def.emoji}</div>
-	                <div class="label"><span class="full">${def.label}</span><span class="short">${shortLabel}</span></div>
-	              </div>
-	              <div class="count">${catCounts[def.key] || 0}</div>
-	            </div>
-	            <div class="desc">${def.description}</div>
-	          `;
-          el.addEventListener("click", () => {
-            renderCatPanel(def.key);
-            try {
-              if (pageMode === "paged" && IS_MOBILE_LAYOUT()) {
-                const panel = catPanelEl || document.getElementById("s6CatPanel");
-                if (panel) msheet.open({ title: `${def.label} · 代表作`, element: panel });
+        const scheduleAtlasPaint = () => {
+          if (atlasPaintQueued) return;
+          atlasPaintQueued = true;
+          requestAnimationFrame((now) => {
+            atlasPaintQueued = false;
+            drawAtlas(now);
+            updateAtlasTip();
+          });
+        };
+
+        const drawAtlas = (now = performance.now()) => {
+          if (!atlasCanvas || !actx) return;
+          const rect = atlasCanvas.getBoundingClientRect();
+          const w = Math.max(1, rect.width);
+          const h = Math.max(1, rect.height);
+          const dpr = Math.max(1, Math.min(2.4, window.devicePixelRatio || 1));
+          const needW = Math.round(w * dpr);
+          const needH = Math.round(h * dpr);
+          if (atlasCanvas.width !== needW || atlasCanvas.height !== needH || atlasDpr !== dpr) {
+            atlasCanvas.width = needW;
+            atlasCanvas.height = needH;
+            atlasDpr = dpr;
+          }
+          actx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          actx.clearRect(0, 0, w, h);
+
+          const dt = Math.min(40, Math.max(0, now - (atlasPrevNow || now)));
+          atlasPrevNow = now;
+
+          const cx = w / 2;
+          const cy = h / 2;
+          ensureAtlasStars(w, h);
+
+          // Nebula (slow drifting gradient mesh)
+          const t = now * 0.00014;
+          actx.save();
+          actx.fillStyle = "rgba(7,10,18,0.08)";
+          actx.fillRect(0, 0, w, h);
+          actx.globalCompositeOperation = "screen";
+          const neb1 = actx.createRadialGradient(w * (0.18 + 0.08 * Math.sin(t * 1.1)), h * (0.14 + 0.06 * Math.cos(t * 0.9)), 0, w * 0.2, h * 0.2, Math.max(w, h) * 0.9);
+          neb1.addColorStop(0, "rgba(88,166,255,0.13)");
+          neb1.addColorStop(1, "rgba(0,0,0,0)");
+          actx.fillStyle = neb1;
+          actx.fillRect(0, 0, w, h);
+
+          const neb2 = actx.createRadialGradient(w * (0.86 + 0.06 * Math.cos(t * 1.3)), h * (0.26 + 0.07 * Math.sin(t * 1.05)), 0, w * 0.86, h * 0.28, Math.max(w, h) * 0.95);
+          neb2.addColorStop(0, "rgba(188,140,255,0.11)");
+          neb2.addColorStop(1, "rgba(0,0,0,0)");
+          actx.fillStyle = neb2;
+          actx.fillRect(0, 0, w, h);
+
+          const neb3 = actx.createRadialGradient(w * (0.44 + 0.08 * Math.sin(t * 0.8)), h * (0.88 + 0.06 * Math.cos(t * 1.2)), 0, w * 0.46, h * 0.86, Math.max(w, h) * 0.92);
+          neb3.addColorStop(0, "rgba(63,185,80,0.08)");
+          neb3.addColorStop(1, "rgba(0,0,0,0)");
+          actx.fillStyle = neb3;
+          actx.fillRect(0, 0, w, h);
+          actx.restore();
+
+          const px = (atlasMouse.x - w / 2) / Math.max(1, w);
+          const py = (atlasMouse.y - h / 2) / Math.max(1, h);
+
+          // Stars (parallax + twinkle)
+          actx.save();
+          actx.globalCompositeOperation = "screen";
+          for (const s of atlasStars) {
+            const tw = 0.56 + 0.44 * Math.sin(now * 0.0017 + s.p);
+            const x = s.x * w + px * 28;
+            const y = s.y * h + py * 24;
+            actx.fillStyle = `rgba(240,246,252,${s.a * tw})`;
+            actx.beginPath();
+            actx.arc(x, y, s.r, 0, Math.PI * 2);
+            actx.fill();
+          }
+          actx.restore();
+
+          // Node drift + orbital wobble (keeps layout, adds life)
+          const maxR = Math.min(w, h) * 0.22;
+          for (const n of atlasNodes) {
+            const pulse = 1 + (n.pulse || 0.05) * Math.sin(now * 0.0016 + (n.phase || 0));
+            n.r = clamp((n.baseR || 0) * pulse, 20, maxR * 1.05);
+            const dx0 = (n.bx || n.x) - cx;
+            const dy0 = (n.by || n.y) - cy;
+            const dist = Math.hypot(dx0, dy0) || 1;
+            const tx = -dy0 / dist;
+            const ty = dx0 / dist;
+            const orbit = Math.sin(now * (n.spin || 0.0001) + (n.phase2 || 0)) * (n.orbit || 6);
+            const dx = Math.sin(now * (n.speedA || 0.0009) + (n.phase || 0)) * (n.driftA || 8);
+            const dy = Math.cos(now * (n.speedB || 0.001) + (n.phase2 || 0)) * (n.driftB || 9);
+            n.x = (n.bx || n.x) + dx + tx * orbit + px * 18 * (n.depth || 0.6);
+            n.y = (n.by || n.y) + dy + ty * orbit + py * 16 * (n.depth || 0.6);
+            n.x = clamp(n.x, n.r + 18, w - n.r - 18);
+            n.y = clamp(n.y, n.r + 18, h - n.r - 18);
+          }
+
+          // Comets
+          const spawnComet = () => {
+            const side = Math.floor(atlasRand() * 4);
+            const pad = 80;
+            let x = 0;
+            let y = 0;
+            if (side === 0) {
+              x = -pad;
+              y = atlasRand() * h;
+            } else if (side === 1) {
+              x = w + pad;
+              y = atlasRand() * h;
+            } else if (side === 2) {
+              x = atlasRand() * w;
+              y = -pad;
+            } else {
+              x = atlasRand() * w;
+              y = h + pad;
+            }
+            const tx = w * (0.3 + 0.4 * atlasRand());
+            const ty = h * (0.25 + 0.5 * atlasRand());
+            const dx = tx - x;
+            const dy = ty - y;
+            const d = Math.hypot(dx, dy) || 1;
+            const speed = 0.55 + atlasRand() * 0.75; // px/ms
+            const vx = (dx / d) * speed;
+            const vy = (dy / d) * speed;
+            const ttl = 1200 + atlasRand() * 1100;
+            const palette = ["#58a6ff", "#bc8cff", "#3fb950"];
+            const color = palette[Math.floor(atlasRand() * palette.length)] || "#58a6ff";
+            atlasComets.push({ x, y, vx, vy, ttl, t: 0, color, w: 2.0 + atlasRand() * 1.6 });
+          };
+
+          if (now >= atlasNextCometAt && atlasComets.length < 4) {
+            spawnComet();
+            atlasNextCometAt = now + 2200 + atlasRand() * 3200;
+          }
+          if (dt > 0 && atlasComets.length) {
+            atlasComets.forEach((c) => {
+              c.t += dt;
+              c.x += c.vx * dt;
+              c.y += c.vy * dt;
+            });
+            atlasComets = atlasComets.filter((c) => c.t < c.ttl);
+          }
+
+          if (atlasComets.length) {
+            actx.save();
+            actx.globalCompositeOperation = "screen";
+            for (const c of atlasComets) {
+              const k = clamp(c.t / c.ttl, 0, 1);
+              const fade = (1 - k) * (1 - k);
+              const sp = Math.hypot(c.vx, c.vy) || 1;
+              const ux = c.vx / sp;
+              const uy = c.vy / sp;
+              const tail = 220 + 260 * (1 - k);
+              const x2 = c.x - ux * tail;
+              const y2 = c.y - uy * tail;
+              const grad = actx.createLinearGradient(x2, y2, c.x, c.y);
+              grad.addColorStop(0, hexToRgba(c.color, 0));
+              grad.addColorStop(1, hexToRgba(c.color, 0.22 * fade));
+              actx.strokeStyle = grad;
+              actx.lineWidth = (c.w || 2.6) * (0.9 + 0.5 * (1 - k));
+              actx.lineCap = "round";
+              actx.beginPath();
+              actx.moveTo(x2, y2);
+              actx.lineTo(c.x, c.y);
+              actx.stroke();
+
+              actx.fillStyle = hexToRgba(c.color, 0.18 * fade);
+              actx.beginPath();
+              actx.arc(c.x, c.y, 7.5 * (0.55 + 0.65 * fade), 0, Math.PI * 2);
+              actx.fill();
+            }
+            actx.restore();
+          }
+
+          // Constellation links (distance-based)
+          const linkMax = Math.max(220, Math.min(w, h) * 0.5);
+          const links = [];
+          for (let i = 0; i < atlasNodes.length; i++) {
+            for (let j = i + 1; j < atlasNodes.length; j++) {
+              const a = atlasNodes[i];
+              const b = atlasNodes[j];
+              const d = Math.hypot(a.x - b.x, a.y - b.y);
+              if (d < linkMax) links.push({ i, j, d, s: hashSeed(a.key + ":" + b.key) });
+            }
+          }
+          links.sort((a, b) => a.d - b.d);
+          const linkDraw = links.slice(0, Math.min(26, links.length));
+
+          if (linkDraw.length) {
+            actx.save();
+            actx.globalCompositeOperation = "screen";
+            for (const l of linkDraw) {
+              const a = atlasNodes[l.i];
+              const b = atlasNodes[l.j];
+              const t = clamp(1 - l.d / linkMax, 0, 1);
+              const shimmer = 0.72 + 0.28 * Math.sin(now * 0.0019 + (l.s % 1024));
+              const hot =
+                (atlasHover >= 0 && (atlasNodes[atlasHover]?.key === a.key || atlasNodes[atlasHover]?.key === b.key)) ||
+                (a.key === currentCat || b.key === currentCat);
+              const alpha = (0.08 + 0.18 * t * t) * shimmer * (hot ? 1.65 : 1);
+              if (alpha <= 0.01) continue;
+
+              const grad = actx.createLinearGradient(a.x, a.y, b.x, b.y);
+              grad.addColorStop(0, hexToRgba(a.color, alpha));
+              grad.addColorStop(1, hexToRgba(b.color, alpha));
+              actx.strokeStyle = grad;
+              actx.lineWidth = hot ? 1.9 : 1.1;
+              actx.beginPath();
+              actx.moveTo(a.x, a.y);
+              actx.lineTo(b.x, b.y);
+              actx.stroke();
+            }
+            actx.restore();
+          }
+
+          const fontHeadline = getComputedStyle(document.documentElement).getPropertyValue("--headline") || "system-ui";
+          const fontDisplay = getComputedStyle(document.documentElement).getPropertyValue("--display") || "system-ui";
+
+          const drawOrder = atlasNodes.slice().sort((a, b) => b.r - a.r);
+          drawOrder.forEach((n) => {
+            const isHover = atlasHover >= 0 && atlasNodes[atlasHover]?.key === n.key;
+            const isOn = n.key === currentCat;
+
+            const halo = actx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r * 1.8);
+            halo.addColorStop(0, hexToRgba(n.color, isHover || isOn ? 0.24 : 0.16));
+            halo.addColorStop(1, "rgba(0,0,0,0)");
+            actx.fillStyle = halo;
+            actx.beginPath();
+            actx.arc(n.x, n.y, n.r * 1.8, 0, Math.PI * 2);
+            actx.fill();
+
+            const body = actx.createRadialGradient(n.x - n.r * 0.35, n.y - n.r * 0.35, n.r * 0.2, n.x, n.y, n.r);
+            body.addColorStop(0, "rgba(240,246,252,0.10)");
+            body.addColorStop(1, "rgba(7,10,18,0.52)");
+            actx.fillStyle = body;
+            actx.beginPath();
+            actx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+            actx.fill();
+
+            actx.strokeStyle = isHover
+              ? "rgba(240,246,252,0.78)"
+              : isOn
+                ? "rgba(240,246,252,0.56)"
+                : "rgba(240,246,252,0.22)";
+            actx.lineWidth = isHover ? 2.4 : isOn ? 1.9 : 1.4;
+            actx.beginPath();
+            actx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+            actx.stroke();
+
+            // Satellites (tiny orbiting markers) — adds motion cues without clutter
+            const satR = n.r + 10 + (n.r < 44 ? 6 : 10);
+            const satA = now * (n.spin || 0.0001) * 2.2 + (n.phase || 0);
+            const sx = n.x + Math.cos(satA) * satR;
+            const sy = n.y + Math.sin(satA) * satR;
+            actx.save();
+            actx.globalCompositeOperation = "screen";
+            actx.fillStyle = hexToRgba(n.color, (isHover || isOn ? 0.28 : 0.16) * (n.depth || 0.6));
+            actx.beginPath();
+            actx.arc(sx, sy, isHover ? 2.2 : 1.7, 0, Math.PI * 2);
+            actx.fill();
+            actx.restore();
+
+            const showLabel = n.r >= 34;
+            if (showLabel) {
+              const lbl = n.r < 56 ? shortCatLabel(n.label) : n.label;
+              actx.textAlign = "center";
+              actx.textBaseline = "middle";
+              actx.fillStyle = "rgba(240,246,252,0.92)";
+              actx.font = `800 ${Math.max(14, Math.min(20, n.r * 0.26))}px ${fontHeadline}`;
+              actx.fillText(`${n.emoji} ${lbl}`, n.x, n.y - (n.r < 48 ? 0 : 8));
+
+              actx.fillStyle = "rgba(234,240,255,0.68)";
+              actx.font = `800 ${Math.max(12, Math.min(16, n.r * 0.22))}px ${fontDisplay}`;
+              actx.fillText(String(n.count), n.x, n.y + (n.r < 48 ? 18 : 14));
+            }
+          });
+        };
+
+        const updateAtlasTip = () => {
+          if (!atlasTip || !atlasStage || !atlasCanvas) return;
+          if (atlasHover < 0 || !atlasNodes[atlasHover]) {
+            atlasTip.classList.remove("is-on");
+            return;
+          }
+
+          const n = atlasNodes[atlasHover];
+          const rect = atlasCanvas.getBoundingClientRect();
+          const stageRect = atlasStage.getBoundingClientRect();
+          const offX = rect.left - stageRect.left;
+          const offY = rect.top - stageRect.top;
+
+          let xCss = offX + n.x;
+          let yCss = offY + n.y - n.r;
+          xCss = clamp(xCss, 86, stageRect.width - 86);
+          yCss = clamp(yCss, 76, stageRect.height - 22);
+
+          atlasTip.style.left = xCss + "px";
+          atlasTip.style.top = yCss + "px";
+
+          const top = (n.top || [])
+            .slice(0, 3)
+            .map((r) => esc(r.nameWithOwner || "—"))
+            .join(" · ");
+          atlasTip.innerHTML = `
+            <div class="t">${n.emoji} ${esc(n.label)}</div>
+            <div class="s">${esc(n.description || "")}</div>
+            <div class="chipline">
+              <div class="microchip"><span>Repos</span><b>${n.count}</b></div>
+              <div class="microchip"><span>Σ stars</span><b>${compact(n.totalStars)}</b></div>
+            </div>
+            ${top ? `<div class="s" style="margin-top:8px">Top：${top}</div>` : ""}
+          `;
+          atlasTip.classList.add("is-on");
+        };
+
+        const atlasXY = (clientX, clientY) => {
+          const rect = atlasCanvas.getBoundingClientRect();
+          return { x: clientX - rect.left, y: clientY - rect.top };
+        };
+
+        if (atlasCanvas && actx) {
+          const pick = (x, y) => {
+            let best = -1;
+            let bestD = 1e9;
+            for (let i = 0; i < atlasNodes.length; i++) {
+              const n = atlasNodes[i];
+              const d = Math.hypot(x - n.x, y - n.y);
+              if (d < bestD) {
+                bestD = d;
+                best = i;
               }
+            }
+            if (best < 0) return -1;
+            return bestD <= atlasNodes[best].r + 10 ? best : -1;
+          };
+
+          atlasCanvas.addEventListener("mousemove", (e) => {
+            const { x, y } = atlasXY(e.clientX, e.clientY);
+            atlasMouse = { x, y };
+            const next = pick(x, y);
+            if (next !== atlasHover) {
+              atlasHover = next;
+              atlasCanvas.style.cursor = atlasHover >= 0 ? "pointer" : "default";
+            }
+            scheduleAtlasPaint();
+          });
+          atlasCanvas.addEventListener("mouseleave", () => {
+            atlasHover = -1;
+            atlasCanvas.style.cursor = "default";
+            scheduleAtlasPaint();
+          });
+          atlasCanvas.addEventListener("click", () => {
+            const idx = atlasHover;
+            if (idx < 0 || !atlasNodes[idx]) return;
+            openCatList(atlasNodes[idx].key);
+          });
+          atlasCanvas.addEventListener(
+            "touchstart",
+            (e) => {
+              const t = e.touches?.[0];
+              if (!t) return;
+              const { x, y } = atlasXY(t.clientX, t.clientY);
+              atlasHover = pick(x, y);
+              scheduleAtlasPaint();
+            },
+            { passive: true }
+          );
+        }
+
+        window.addEventListener(
+          "gw25:cat",
+          () => {
+            scheduleAtlasPaint();
+          },
+          { passive: true }
+        );
+
+        window.addEventListener(
+          "resize",
+          () => {
+            try {
+              layoutAtlas();
+              scheduleAtlasPaint();
             } catch (e) {
               // ignore
             }
-          });
-          catgrid.appendChild(el);
-          catEls.set(def.key, el);
-        });
-        renderCatPanel(currentCat);
+          },
+          { passive: true }
+        );
 
-        // Radar
+        layoutAtlas();
+        scheduleAtlasPaint();
+
+        // Animate only when Scene 7 is active (avoid burning CPU across the whole story).
+        const isAtlasActive = () => !!document.getElementById("s7")?.classList?.contains?.("is-active");
+        const stopAtlasLoop = () => {
+          if (!atlasLoopRaf) return;
+          try {
+            cancelAnimationFrame(atlasLoopRaf);
+          } catch (e) {
+            // ignore
+          }
+          atlasLoopRaf = 0;
+        };
+        const startAtlasLoop = () => {
+          if (atlasLoopRaf) return;
+          atlasPrevNow = performance.now();
+          const tick = (now) => {
+            if (!atlasLoopRaf) return;
+            if (document.hidden) return stopAtlasLoop();
+            if (!isAtlasActive()) return stopAtlasLoop();
+            drawAtlas(now);
+            updateAtlasTip();
+            atlasLoopRaf = requestAnimationFrame(tick);
+          };
+          atlasLoopRaf = requestAnimationFrame(tick);
+        };
+
+        window.addEventListener(
+          "gw25:scene",
+          (e) => {
+            const id = e?.detail?.id || "";
+            if (id === "s7") startAtlasLoop();
+            else stopAtlasLoop();
+          },
+          { passive: true }
+        );
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden) stopAtlasLoop();
+          else if (isAtlasActive()) startAtlasLoop();
+        });
+        if (isAtlasActive()) startAtlasLoop();
+
+        // Main track (powered by rebuilt categories)
+        setText("mainTrackLabel", primaryCat?.label || primaryCat?.key || "—");
+        setText(
+          "mainTrackLead",
+          `你今年的关注主轴落在「${primaryCat?.label || primaryCat?.key || "—"}」。下面这份“证据链”全部来自可核验的数据：贡献 Top 仓库、合并 PR、以及 Star 的兴趣分布。`
+        );
+
+        // Radar (deprecated; kept for reference)
+        if (false) {
         const radar = DATA.year.categories.radar || {};
         const radarCanvas = document.getElementById("radarCanvas");
         const rctx = radarCanvas.getContext("2d");
@@ -11658,6 +16327,8 @@
           `你今年的关注主轴落在「${primaryDef?.label || primaryKey}」。下面这份“证据链”全部来自可核验的数据：贡献 Top 仓库、合并 PR、以及 Star 的类别分布。`
         );
 
+        } // end deprecated radar
+
         const evidenceList = document.getElementById("evidenceList");
         const addEvidence = (title, meta, chip, url = "") => {
           const div = document.createElement("div");
@@ -11704,7 +16375,7 @@
 	        const renderTopicList = (id, items, kind) => {
 	          const list = document.getElementById(id);
 	          list.innerHTML = "";
-	          const useTags = id === "risingTopics" || id === "newLangs";
+	          const useTags = id === "newTopics" || id === "risingTopics" || id === "newLangs";
 	          if (!items || !items.length) {
 	            const div = document.createElement("div");
 	            div.className = "item";
@@ -12308,6 +16979,11 @@
 	          });
 	          updateNav();
 	          updateHudHint();
+	          try {
+	            window.dispatchEvent(new CustomEvent("gw25:scene", { detail: { index: current, id: scenes[current]?.id || "" } }));
+	          } catch (e) {
+	            // ignore
+	          }
 	          if (started && current === scenes.length - 1 && !endFireworksPlayed) {
 	            endFireworksPlayed = true;
 	            startFireworks(5200, { intensity: 0.85 });
