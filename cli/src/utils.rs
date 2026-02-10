@@ -15,6 +15,7 @@ pub struct Frontmatter {
     pub summary: Option<String>,
     pub tags: Option<Vec<String>>,
     pub category: Option<String>,
+    pub category_description: Option<String>,
     pub author: Option<String>,
     pub date: Option<String>,
     pub featured_image: Option<String>,
@@ -105,6 +106,59 @@ pub fn collect_image_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> 
     }
 
     Ok(files)
+}
+
+pub fn collect_markdown_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+
+    if recursive {
+        for entry in walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if entry.file_type().is_file() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("md"))
+                    .unwrap_or(false)
+                {
+                    files.push(path.to_path_buf());
+                }
+            }
+        }
+    } else {
+        for entry in fs::read_dir(dir).context("failed to read notes directory")? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("md"))
+                    .unwrap_or(false)
+            {
+                files.push(path);
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+pub fn normalize_markdown_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string()
+}
+
+pub fn markdown_filename(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn has_image_extension(path: &Path, exts: &[&str]) -> bool {

@@ -1,17 +1,21 @@
 mod handlers;
-mod models;
 mod routes;
 mod state;
 
 use std::env;
 
 use anyhow::Result;
-use tracing_subscriber;
+use tracing_subscriber::EnvFilter;
+
+const DEFAULT_LOG_FILTER: &str = "warn,static_flow_backend=info";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Default: suppress verbose dependency info logs.
+    // Override with RUST_LOG for troubleshooting.
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     // Load environment variables
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
@@ -28,7 +32,7 @@ async fn main() -> Result<()> {
 
     // Start server
     // Development: 0.0.0.0 for direct access
-    // Production with rathole: can use either 0.0.0.0 or 127.0.0.1
+    // Production: usually 127.0.0.1 behind local Nginx/pb-mapper
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0".to_string());
     let addr = format!("{}:{}", bind_addr, port);
     tracing::info!("Listening on {}", addr);

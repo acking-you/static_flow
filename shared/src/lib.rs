@@ -2,22 +2,23 @@ use serde::{Deserialize, Serialize};
 
 pub mod embedding;
 
-// 完整文章数据模型
+#[cfg(not(target_arch = "wasm32"))]
+pub mod lancedb_api;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Article {
     pub id: String,
     pub title: String,
     pub summary: String,
-    pub content: String, // Markdown 文本
+    pub content: String,
     pub tags: Vec<String>,
     pub category: String,
     pub author: String,
-    pub date: String, // 简化为 YYYY-MM-DD 字符串
+    pub date: String,
     pub featured_image: Option<String>,
-    pub read_time: u32, // 单位：分钟
+    pub read_time: u32,
 }
 
-// 列表项（精简版）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArticleListItem {
     pub id: String,
@@ -47,7 +48,6 @@ impl From<Article> for ArticleListItem {
     }
 }
 
-// Tag & Category 结构体（方便未来扩展，如计数/描述）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tag {
     pub name: String,
@@ -58,4 +58,37 @@ pub struct Tag {
 pub struct Category {
     pub name: String,
     pub slug: String,
+}
+
+pub fn normalize_taxonomy_key(name: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_dash = false;
+
+    for ch in name.trim().chars() {
+        if ch.is_alphanumeric() {
+            for lower in ch.to_lowercase() {
+                normalized.push(lower);
+            }
+            last_dash = false;
+            continue;
+        }
+
+        if !normalized.is_empty() && !last_dash {
+            normalized.push('-');
+            last_dash = true;
+        }
+    }
+
+    normalized.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_taxonomy_key;
+
+    #[test]
+    fn normalize_taxonomy_key_compacts_symbols() {
+        assert_eq!(normalize_taxonomy_key(" Rust / Web "), "rust-web");
+        assert_eq!(normalize_taxonomy_key("AI---Ops"), "ai-ops");
+    }
 }

@@ -1,22 +1,22 @@
 use std::path::Path;
 
-use anyhow::Result;
-use lancedb::{
-    index::scalar::FullTextSearchQuery,
-    query::{ExecutableQuery, QueryBase},
-};
+use anyhow::{Context, Result};
 
-use crate::{
-    db::{connect_db, ensure_fts_index, ensure_table, ensure_vector_index},
-    schema::{article_schema, image_schema, taxonomy_schema},
-};
+use crate::db::{connect_db, ensure_fts_index, ensure_vector_index};
 
 pub async fn run(db_path: &Path) -> Result<()> {
     let db = connect_db(db_path).await?;
 
-    let articles_table = ensure_table(&db, "articles", article_schema()).await?;
-    let images_table = ensure_table(&db, "images", image_schema()).await?;
-    ensure_table(&db, "taxonomies", taxonomy_schema()).await?;
+    let articles_table = db
+        .open_table("articles")
+        .execute()
+        .await
+        .context("articles table not found; run `sf-cli init` first")?;
+    let images_table = db
+        .open_table("images")
+        .execute()
+        .await
+        .context("images table not found; run `sf-cli init` first")?;
 
     if let Err(err) = ensure_fts_index(&articles_table, "content").await {
         tracing::warn!("Failed to create FTS index on articles: {err}");
@@ -32,13 +32,6 @@ pub async fn run(db_path: &Path) -> Result<()> {
         tracing::warn!("Failed to create vector index on images: {err}");
     }
 
-    let _ = articles_table
-        .query()
-        .full_text_search(FullTextSearchQuery::new("init".to_string()))
-        .limit(1)
-        .execute()
-        .await;
-
-    tracing::info!("LanceDB initialized at {}", db_path.display());
+    tracing::info!("Index ensure run finished for {}", db_path.display());
     Ok(())
 }

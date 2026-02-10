@@ -49,10 +49,7 @@ mod tests {
         let created_at = schema
             .field_with_name("created_at")
             .expect("created_at field");
-        assert_eq!(
-            created_at.data_type(),
-            &DataType::Timestamp(TimeUnit::Millisecond, None)
-        );
+        assert_eq!(created_at.data_type(), &DataType::Timestamp(TimeUnit::Millisecond, None));
     }
 
     #[test]
@@ -64,7 +61,9 @@ mod tests {
         assert_eq!(data.data_type(), &DataType::Binary);
         assert!(!data.is_nullable());
 
-        let thumbnail = schema.field_with_name("thumbnail").expect("thumbnail field");
+        let thumbnail = schema
+            .field_with_name("thumbnail")
+            .expect("thumbnail field");
         assert_eq!(thumbnail.data_type(), &DataType::Binary);
         assert!(thumbnail.is_nullable());
 
@@ -193,5 +192,26 @@ mod tests {
             .map(|idx| tags_values.value(idx).to_string())
             .collect::<Vec<_>>();
         assert_eq!(tags, vec!["rust".to_string(), "cli".to_string()]);
+    }
+
+    #[test]
+    fn taxonomy_schema_has_expected_fields() {
+        let schema = schema::taxonomy_schema();
+        assert_eq!(schema.fields().len(), 7);
+
+        let id = schema.field_with_name("id").expect("id field");
+        assert_eq!(id.data_type(), &DataType::Utf8);
+
+        let kind = schema.field_with_name("kind").expect("kind field");
+        assert_eq!(kind.data_type(), &DataType::Utf8);
+
+        let key = schema.field_with_name("key").expect("key field");
+        assert_eq!(key.data_type(), &DataType::Utf8);
+
+        let description = schema
+            .field_with_name("description")
+            .expect("description field");
+        assert_eq!(description.data_type(), &DataType::Utf8);
+        assert!(description.is_nullable());
     }
 }

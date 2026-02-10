@@ -24,7 +24,7 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
         .clone()
         .unwrap_or_else(|| "未命名分类".to_string());
 
-    let articles = use_state(|| Vec::<ArticleListItem>::new());
+    let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
 
     {

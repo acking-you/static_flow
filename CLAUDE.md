@@ -41,7 +41,8 @@ static-flow/
 
 ```bash
 # 启动开发环境
-cd backend && cargo run                    # 后端 :3000
+make bin-backend
+cd backend && ../target/release/static-flow-backend  # 后端 :3000
 cd frontend && trunk serve --open          # 前端 :8080
 
 # 构建
@@ -117,6 +118,7 @@ sf-cli write-article \
   --summary <text>        # 摘要（AI 生成）
   --tags <tag1,tag2>      # 标签列表（AI 生成）
   --category <name>       # 分类（AI 生成）
+  --category-description <text>  # 可选，分类描述（写入 taxonomies 表）
   --vector <json>         # 可选，文本 embedding（自动判断维度）
   --vector-en <json>      # 可选，英文 embedding
   --vector-zh <json>      # 可选，中文 embedding

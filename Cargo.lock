@@ -7351,6 +7351,7 @@ dependencies = [
  "gray_matter",
  "image",
  "lancedb",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -7637,17 +7638,9 @@ name = "static-flow-backend"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arrow",
- "arrow-array",
- "arrow-schema",
  "axum",
- "chrono",
- "futures",
- "lancedb",
  "serde",
- "serde_json",
  "static-flow-shared",
- "thiserror 2.0.17",
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
@@ -7678,7 +7671,11 @@ dependencies = [
 name = "static-flow-shared"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "arrow-array",
  "fastembed",
+ "futures",
+ "lancedb",
  "serde",
  "tracing",
 ]

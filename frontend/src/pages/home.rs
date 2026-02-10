@@ -4,7 +4,7 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{icons::IconName, image_with_loading::ImageWithLoading, stats_card::StatsCard},
+    components::{icons::IconName, image_with_loading::ImageWithLoading},
     router::Route,
 };
 
@@ -44,7 +44,7 @@ pub fn home_page() -> Html {
         "ease-[var(--ease-snap)]"
     );
 
-    let tech_chip_class = classes!(
+    let _tech_chip_class = classes!(
         "group",
         "inline-flex",
         "items-center",
@@ -71,7 +71,7 @@ pub fn home_page() -> Html {
         "hover:scale-105"
     );
 
-    let tech_icon_wrapper_class = classes!(
+    let _tech_icon_wrapper_class = classes!(
         "flex",
         "items-center",
         "justify-center",
@@ -85,7 +85,7 @@ pub fn home_page() -> Html {
         "ease-[var(--ease-snap)]"
     );
 
-    let tech_label_class = classes!(
+    let _tech_label_class = classes!(
         "text-sm",
         "font-semibold",
         "whitespace-nowrap",
@@ -97,7 +97,7 @@ pub fn home_page() -> Html {
         "group-hover:text-[var(--primary)]"
     );
 
-    let tech_stack = vec![
+    let tech_stack = [
         (
             crate::config::asset_path("static/logos/rust.svg"),
             "Rust",
@@ -367,7 +367,7 @@ pub fn home_page() -> Html {
                                     "md:grid-cols-3",
                                     "w-full"
                                 )}>
-                                    { for stats.into_iter().map(|(icon, value, label, route)| {
+                                    { for stats.into_iter().map(|(_icon, value, label, route)| {
                                         let panel_content = html! {
                                             <div class="system-panel">
                                                 <div class="system-panel-label">{ label.clone() }</div>
@@ -441,8 +441,14 @@ impl WrappedYear {
 /// Available GitHub Wrapped years (newest first)
 fn get_wrapped_years() -> Vec<WrappedYear> {
     vec![
-        WrappedYear { year: 2025, is_latest: true },
-        WrappedYear { year: 2024, is_latest: false },
+        WrappedYear {
+            year: 2025,
+            is_latest: true,
+        },
+        WrappedYear {
+            year: 2024,
+            is_latest: false,
+        },
     ]
 }
 
@@ -472,9 +478,11 @@ fn github_wrapped_selector() -> Html {
         use_effect_with(*expanded, move |is_expanded| {
             let cleanup: Box<dyn FnOnce()> = if *is_expanded {
                 let expanded = expanded.clone();
-                let closure = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
-                    expanded.set(false);
-                });
+                let closure = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(
+                    move |_: web_sys::Event| {
+                        expanded.set(false);
+                    },
+                );
 
                 if let Some(window) = web_sys::window() {
                     let _ = window.add_event_listener_with_callback(

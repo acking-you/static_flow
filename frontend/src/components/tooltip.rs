@@ -2,6 +2,7 @@ use gloo_timers::callback::Timeout;
 use web_sys::TouchEvent;
 use yew::prelude::*;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TooltipPosition {
     Top,

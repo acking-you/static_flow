@@ -86,7 +86,7 @@ pub async fn fetch_articles(
         }
 
         if !params.is_empty() {
-            url.push_str("?");
+            url.push('?');
             url.push_str(&params.join("&"));
         }
 
@@ -211,6 +211,7 @@ pub struct SearchResult {
 }
 
 #[cfg(not(feature = "mock"))]
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     results: Vec<SearchResult>,
@@ -225,6 +226,7 @@ pub struct ImageInfo {
 }
 
 #[cfg(not(feature = "mock"))]
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ImageListResponse {
     images: Vec<ImageInfo>,
@@ -232,6 +234,7 @@ struct ImageListResponse {
 }
 
 #[cfg(not(feature = "mock"))]
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ImageSearchResponse {
     images: Vec<ImageInfo>,

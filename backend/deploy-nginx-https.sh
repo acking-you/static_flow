@@ -1,125 +1,112 @@
 #!/bin/bash
 
-# Nginx + HTTPS 一键部署脚本
-# 使用方法: sudo bash deploy-nginx-https.sh
+# Optional cloud Nginx + HTTPS deployment script (for pb-mapper exposure)
+# Usage: sudo DOMAIN=api.yourdomain.com PBMAPPER_PORT=8888 EMAIL=admin@yourdomain.com bash deploy-nginx-https.sh
 
 set -e
 
-# ========== 配置区域（修改这里）==========
-DOMAIN="${DOMAIN:-api.example.com}"      # 你的域名
-BACKEND_PORT="${BACKEND_PORT:-9999}"     # 后端端口
-EMAIL="${EMAIL:-admin@example.com}"      # 证书邮箱
-SITE_NAME="${SITE_NAME:-your-site}"      # 站点配置文件名
-# ======================================
+DOMAIN="${DOMAIN:-api.example.com}"
+PBMAPPER_PORT="${PBMAPPER_PORT:-8888}"
+EMAIL="${EMAIL:-admin@example.com}"
+SITE_NAME="${SITE_NAME:-staticflow-api}"
 
-echo "🚀 开始部署 Nginx + HTTPS for ${DOMAIN}"
+echo "🚀 Deploying Nginx + HTTPS for ${DOMAIN} (pb-mapper:${PBMAPPER_PORT})"
 echo ""
 
-# 1. 检查权限
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ 请使用 sudo 运行此脚本"
+  echo "❌ Please run with sudo"
   exit 1
 fi
 
-# 2. 安装依赖
-echo "📦 安装 Nginx 和 Certbot..."
+echo "📦 Installing Nginx and Certbot..."
 apt update
 apt install -y nginx certbot python3-certbot-nginx
 
-# 3. 配置防火墙
-echo "🔥 配置防火墙..."
+echo "🔥 Configuring firewall..."
 ufw allow 80/tcp
 ufw allow 443/tcp
-echo "✅ 防火墙已开放 80/443 端口"
 
-# 4. 删除默认配置
-echo "🗑️  删除默认配置..."
-rm -f /etc/nginx/sites-enabled/default
-
-# 5. 创建 Nginx 配置
-echo "📝 创建 Nginx 配置..."
+echo "📝 Writing Nginx config..."
 cat > /etc/nginx/sites-available/${SITE_NAME} << EOF
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen 80;
+    listen [::]:80;
     server_name ${DOMAIN};
 
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
     location / {
-        proxy_pass http://127.0.0.1:${BACKEND_PORT};
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options DENY;
+
+    location /api/ {
+        proxy_pass https://127.0.0.1:${PBMAPPER_PORT}/api/;
+
+        # common when upstream is local self-signed TLS
+        proxy_ssl_verify off;
+        proxy_ssl_server_name on;
+
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_connect_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location /health {
+        access_log off;
+        return 200 "OK\\n";
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        return 404 '{"error":"Not Found"}';
+        add_header Content-Type application/json;
     }
 }
 EOF
 
-# 6. 启用配置
-echo "🔗 启用站点配置..."
-ln -sf /etc/nginx/sites-available/${SITE_NAME} /etc/nginx/sites-enabled/
-
-# 7. 测试配置
-echo "🧪 测试 Nginx 配置..."
-if nginx -t; then
-    echo "✅ Nginx 配置语法正确"
-else
-    echo "❌ Nginx 配置语法错误"
-    exit 1
-fi
-
-# 8. 重载 Nginx
-echo "🔄 重载 Nginx..."
+ln -sf /etc/nginx/sites-available/${SITE_NAME} /etc/nginx/sites-enabled/${SITE_NAME}
+nginx -t
 systemctl reload nginx
 
-# 9. 测试 HTTP
-echo "🧪 测试 HTTP 访问..."
-sleep 2
-if curl -sf http://127.0.0.1 > /dev/null; then
-    echo "✅ HTTP 访问正常"
+echo "🧪 Checking pb-mapper local port..."
+if curl -skf "https://127.0.0.1:${PBMAPPER_PORT}/api/articles" > /dev/null; then
+    echo "✅ pb-mapper local port is reachable"
 else
-    echo "⚠️  HTTP 访问失败，请检查后端服务"
+    echo "⚠️ pb-mapper local port is not reachable: 127.0.0.1:${PBMAPPER_PORT}"
+    echo "   Continue anyway; HTTPS setup may still complete."
 fi
 
-# 10. 验证 DNS
-echo "🌐 验证 DNS 解析..."
-if dig ${DOMAIN} +short | grep -q .; then
-    echo "✅ DNS 解析成功"
-else
-    echo "⚠️  DNS 未生效，跳过证书申请"
-    echo "请等待 DNS 生效后手动运行："
-    echo "sudo certbot --nginx -d ${DOMAIN} --email ${EMAIL} --agree-tos --redirect --non-interactive"
-    exit 0
-fi
+echo "🔐 Requesting certificate..."
+certbot --nginx -d ${DOMAIN} --email ${EMAIL} --agree-tos --redirect --non-interactive
 
-# 11. 申请 SSL 证书
-echo "🔐 申请 SSL 证书..."
-if certbot --nginx -d ${DOMAIN} --email ${EMAIL} --agree-tos --redirect --non-interactive; then
-    echo "✅ SSL 证书申请成功"
-else
-    echo "❌ SSL 证书申请失败，请检查 DNS 配置和防火墙"
-    exit 1
-fi
+echo "🧪 Verifying HTTPS..."
+curl -sf "https://${DOMAIN}/api/articles" > /dev/null && echo "✅ HTTPS API OK"
 
-# 12. 验证 HTTPS
-echo "🧪 验证 HTTPS..."
-sleep 3
-if curl -sf https://${DOMAIN} > /dev/null; then
-    echo "✅ HTTPS 访问正常"
-else
-    echo "⚠️  HTTPS 访问失败"
-fi
-
-# 13. 显示结果
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ 部署完成！"
+echo "✅ Done"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "🌐 域名: https://${DOMAIN}"
-echo "📡 测试: curl https://${DOMAIN}"
-echo ""
-echo "🛠️  常用命令:"
-echo "  查看日志: sudo tail -f /var/log/nginx/access.log"
-echo "  重载配置: sudo systemctl reload nginx"
-echo "  查看证书: sudo certbot certificates"
+echo "API: https://${DOMAIN}/api"
 echo ""

@@ -148,12 +148,12 @@ fn fastembed_embedding(text: &str, model: TextEmbeddingModel) -> Option<Vec<f32>
     let lock = FASTEMBED_TEXT_MODEL.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = lock.lock().ok()?;
 
-    if !guard.contains_key(&model) {
+    if let std::collections::hash_map::Entry::Vacant(entry) = guard.entry(model) {
         // Model initialization is expensive; cache the instance for reuse.
         let options = TextInitOptions::new(model.to_fastembed());
         match TextEmbedding::try_new(options) {
             Ok(instance) => {
-                guard.insert(model, instance);
+                entry.insert(instance);
             },
             Err(err) => {
                 tracing::warn!(

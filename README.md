@@ -2,7 +2,9 @@
 
 [中文文档](./README.zh.md)
 
-A local-first dynamic blog system. Write Markdown locally, auto-generate summaries and tags via Claude Code/Codex skills, store in LanceDB via CLI tools, full-stack Rust.
+[CLI Guide (ZH)](./docs/cli-user-guide.zh.md)
+
+A local-first dynamic blog system. Run backend locally, expose secure API via local Nginx + pb-mapper, and write Markdown notes plus images into LanceDB through CLI.
 
 ## Philosophy
 
@@ -11,38 +13,42 @@ A local-first dynamic blog system. Write Markdown locally, auto-generate summari
 
 This project does not build a standalone AI Agent.
 
-The reality: the capability gap between mainstream agent tools (Claude Code, Codex, Cursor) and other solutions is enormous. Even now, when agent technology is rapidly evolving, the performance differences between products are staggering. Building a proprietary agent with Rig/LangChain—no matter how much effort you invest—will never catch up with the iteration speed of mainstream tools.
-
-The right approach: **Build Skills, Not Agents**.
-
 AI automation strategy:
-- **Intelligence**: Delegate to Claude Code/Codex, describe workflows via skills
-- **Tooling**: Build simple CLI tools for LanceDB read/write operations
-
-Benefits:
-1. Zero agent development/maintenance cost
-2. Automatically benefit from mainstream agent upgrades
-3. CLI stays simple, focused on data operations
+- **Intelligence**: Delegate to Claude Code/Codex and describe workflows via skills
+- **Tooling**: Keep CLI simple, only for LanceDB read/write
 
 ## Architecture
 
-```
+```text
 static-flow/
 ├── frontend/     # Yew WASM frontend
 ├── backend/      # Axum backend (LanceDB query layer)
 ├── shared/       # Shared types
-├── cli/          # LanceDB CLI tools (simple read/write)
-└── content/      # Local Markdown and images
+├── cli/          # LanceDB CLI tools
+└── content/      # Sample local markdown + images
 ```
 
-## Tech Stack
+## Deployment Topology (Recommended)
 
-| Module | Technology |
-|--------|------------|
-| Frontend | Yew 0.21 + WASM + TailwindCSS v4 |
-| Backend | Axum 0.7 + LanceDB |
-| CLI | clap + LanceDB Rust SDK |
-| Shared | serde + shared data models |
+1. Run `backend` on local machine (`127.0.0.1:3000`).
+2. Put local Nginx in front of backend for local HTTPS (`127.0.0.1:3443`).
+3. Use `pb-mapper` to map local `127.0.0.1:3443` to a cloud endpoint (for example `https://<cloud-host>:8888`).
+4. Frontend (already loaded in browser) directly calls that cloud HTTPS endpoint as API.
+5. Optional: add cloud Nginx on `443` for domain/cert management and reverse-proxy to pb-mapper local port.
+
+Main request chain (frontend fetch perspective):
+
+```text
+Frontend(fetch/XHR)
+  -> https://<cloud-host>:8888/api
+  -> pb-mapper tunnel
+  -> Local Nginx https://127.0.0.1:3443
+  -> Local backend http://127.0.0.1:3000
+```
+
+Reference configs:
+- Local Nginx HTTPS: `deployment-examples/nginx-staticflow-api.conf`
+- Optional cloud Nginx HTTPS proxy: `deployment-examples/nginx-staticflow-cloud-proxy.conf`
 
 ## Quick Start
 
@@ -51,11 +57,20 @@ static-flow/
 rustup target add wasm32-unknown-unknown
 cargo install trunk
 
+# Build binaries
+make bin-all
+
+# Initialize LanceDB tables
+cd cli
+../target/release/sf-cli init --db-path ../data/lancedb
+
 # Start backend
-cd backend && cargo run
+cd ../backend
+LANCEDB_URI=../data/lancedb ../target/release/static-flow-backend
 
 # Start frontend (another terminal)
-cd frontend && trunk serve --open
+cd ../frontend
+trunk serve --open
 ```
 
 Backend: `http://localhost:3000` | Frontend: `http://localhost:8080`
@@ -65,34 +80,81 @@ Backend: `http://localhost:3000` | Frontend: `http://localhost:8080`
 ```bash
 cd cli
 
-# Initialize LanceDB
-cargo run -- init --db-path ./data/lancedb
+# Build CLI binary
+make bin-cli
 
-# Write article (with Claude Code generated metadata)
-cargo run -- write-article \
-  --file ../content/post.md \
+# Initialize LanceDB
+../target/release/sf-cli init --db-path ../data/lancedb
+
+# Manually ensure all expected indexes (useful after bulk imports)
+# - articles.content (FTS)
+# - articles.vector_en / articles.vector_zh (vector)
+# - images.vector (vector)
+# - taxonomies table stores category/tag metadata (no vector index)
+../target/release/sf-cli ensure-indexes --db-path ../data/lancedb
+
+# Write single article
+../target/release/sf-cli write-article \
+  --db-path ../data/lancedb \
+  --file ../content/post-001.md \
   --summary "Article summary" \
   --tags "rust,wasm" \
-  --category "Tech"
+  --category "Tech" \
+  --category-description "Engineering notes about Rust + WASM"
+
+# Optional in markdown frontmatter for sync/write
+# category_description: "Engineering notes about Rust + WASM"
 
 # Batch write images
-cargo run -- write-images --dir ../content/images
+../target/release/sf-cli write-images \
+  --db-path ../data/lancedb \
+  --dir ../content/images \
+  --recursive \
+  --generate-thumbnail
+
+# Sync a local notes folder (markdown + image files)
+# - Auto imports referenced local images into `images` table
+# - Rewrites markdown image links to `images/<sha256_id>`
+# - Upserts article records into `articles` table
+# - Upserts category/tag metadata into `taxonomies` table
+../target/release/sf-cli sync-notes \
+  --db-path ../data/lancedb \
+  --dir ../content \
+  --recursive \
+  --generate-thumbnail
 
 # Query verification
-cargo run -- query --table articles --limit 10
-```
+../target/release/sf-cli query --db-path ../data/lancedb --table articles --limit 10
+../target/release/sf-cli query --db-path ../data/lancedb --table articles --limit 1 --format vertical
 
-## Claude Code Workflow
+# Database-style management (CRUD + index)
+../target/release/sf-cli db --db-path ../data/lancedb list-tables
+../target/release/sf-cli db --db-path ../data/lancedb describe-table articles
+../target/release/sf-cli db --db-path ../data/lancedb query-rows articles --where "category='Tech'" --columns id,title,date --limit 5
+../target/release/sf-cli db --db-path ../data/lancedb query-rows articles --limit 1 --format vertical
+../target/release/sf-cli db --db-path ../data/lancedb count-rows articles --where "vector_en IS NOT NULL"
+../target/release/sf-cli db --db-path ../data/lancedb update-rows articles --set "category='Notes'" --where "id='post-001'"
+../target/release/sf-cli db --db-path ../data/lancedb delete-rows articles --where "id='draft-001'"
+../target/release/sf-cli db --db-path ../data/lancedb list-indexes articles --with-stats
+../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
+../target/release/sf-cli db --db-path ../data/lancedb optimize articles
 
-Process new articles with Claude Code/Codex:
+# Managed tables
+# - articles: article body/metadata + vectors
+# - images: binary image data + vectors
+# - taxonomies: category/tag metadata (`kind`, `key`, `name`, `description`)
 
-1. Read Markdown file content
-2. AI generates summary (100-200 words), tags (3-5), category
-3. Call CLI tool to write to LanceDB
-
-Example prompt:
-```
-Read content/new-post.md, generate summary and tags, then call sf-cli write-article to write to database
+# Backend-like API debug commands
+../target/release/sf-cli api --db-path ../data/lancedb list-articles --category "Tech"
+../target/release/sf-cli api --db-path ../data/lancedb get-article frontend-architecture
+../target/release/sf-cli api --db-path ../data/lancedb search --q "staticflow"
+../target/release/sf-cli api --db-path ../data/lancedb semantic-search --q "前端 架构"
+../target/release/sf-cli api --db-path ../data/lancedb related-articles frontend-architecture
+../target/release/sf-cli api --db-path ../data/lancedb list-tags
+../target/release/sf-cli api --db-path ../data/lancedb list-categories
+../target/release/sf-cli api --db-path ../data/lancedb list-images
+../target/release/sf-cli api --db-path ../data/lancedb search-images --id <image_id>
+../target/release/sf-cli api --db-path ../data/lancedb get-image <image_id_or_filename> --thumb --out ./tmp-thumb.bin
 ```
 
 ## API
@@ -101,47 +163,45 @@ Read content/new-post.md, generate summary and tags, then call sf-cli write-arti
 |----------|-------------|
 | `GET /api/articles` | Article list (supports tag/category filter) |
 | `GET /api/articles/:id` | Article detail |
+| `GET /api/articles/:id/related` | Related articles (vector similarity) |
 | `GET /api/search?q=` | Full-text search |
 | `GET /api/semantic-search?q=` | Semantic search (vector) |
-| `GET /api/image/:id` | Image service |
+| `GET /api/images` | Image catalog |
+| `GET /api/images/:id-or-filename` | Read image binary from LanceDB |
+| `GET /api/image-search?id=` | Similar images |
 | `GET /api/tags` | Tag list |
 | `GET /api/categories` | Category list |
 
-## Roadmap
+## Key Env Vars
 
-### Phase 1: CLI Development
-- [x] LanceDB schema design and initialization
-- [x] write-article command
-- [x] write-images command
-- [x] query command
+Backend (`backend/.env`):
+- `LANCEDB_URI` (default `../data/lancedb`)
+- `PORT` (default `3000`)
+- `BIND_ADDR` (dev: `0.0.0.0`, production: `127.0.0.1`)
+- `RUST_ENV` (`development` or `production`)
+- `ALLOWED_ORIGINS` (optional comma-separated CORS list in production)
 
-### Phase 2: Backend LanceDB Integration
-- [x] Remove filesystem implementation
-- [x] Integrate LanceDB Rust SDK
-- [x] Refactor all API endpoints
-- [x] Implement vector search
-
-### Phase 3: Feature Completion
-- [x] Semantic search UI
-- [x] Image-to-image search
-- [x] Related articles recommendation
+Frontend build-time:
+- `STATICFLOW_API_BASE` (direct pb-mapper endpoint, e.g. `https://<cloud-host>:8888/api`)
+- If using cloud Nginx proxy, set it to your domain (e.g. `https://api.yourdomain.com/api`)
 
 ## Development Commands
 
 ```bash
 # Workspace commands
-cargo build --workspace      # Build all crates
-cargo test --workspace       # Run tests
-cargo fmt --all              # Format code
-cargo clippy --workspace     # Lint check
+cargo build --workspace
+cargo test --workspace
+cargo fmt --all
+cargo clippy --workspace -- -D warnings
 
 # Frontend
-cd frontend && trunk serve   # Dev mode
-cd frontend && trunk build --release  # Production build
+cd frontend && trunk serve
+cd frontend && trunk build --release
 
 # Backend
-cd backend && cargo run      # Dev mode
-cd backend && cargo run --release     # Production mode
+make bin-backend
+cd backend && ../target/release/static-flow-backend
+cd backend && RUST_ENV=production BIND_ADDR=127.0.0.1 ../target/release/static-flow-backend
 ```
 
 ## License

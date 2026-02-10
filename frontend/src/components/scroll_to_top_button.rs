@@ -50,7 +50,7 @@ pub fn scroll_to_top_button() -> Html {
             options.set_top(0.0);
             options.set_left(0.0);
 
-            let _ = window.scroll_with_scroll_to_options(&options);
+            window.scroll_with_scroll_to_options(&options);
         }
     });
 

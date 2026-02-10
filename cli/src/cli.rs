@@ -1,6 +1,12 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum QueryOutputFormat {
+    Table,
+    Vertical,
+}
 
 #[derive(Parser)]
 #[command(name = "sf-cli", version, about = "StaticFlow LanceDB CLI")]
@@ -17,6 +23,12 @@ pub enum Commands {
         #[arg(long, default_value = "./data/lancedb")]
         db_path: PathBuf,
     },
+    /// Ensure all expected indexes for articles/images tables.
+    EnsureIndexes {
+        /// LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb")]
+        db_path: PathBuf,
+    },
     /// Write a Markdown article into LanceDB.
     WriteArticle {
         /// LanceDB directory path.
@@ -25,6 +37,9 @@ pub enum Commands {
         /// Markdown file path.
         #[arg(long)]
         file: PathBuf,
+        /// Custom article id (defaults to markdown file stem).
+        #[arg(long)]
+        id: Option<String>,
         /// Article summary (optional if frontmatter provides it).
         #[arg(long)]
         summary: Option<String>,
@@ -34,6 +49,9 @@ pub enum Commands {
         /// Article category (optional if frontmatter provides it).
         #[arg(long)]
         category: Option<String>,
+        /// Category description metadata (stored in taxonomies table).
+        #[arg(long)]
+        category_description: Option<String>,
         /// Optional embedding vector as JSON array.
         #[arg(long)]
         vector: Option<String>,
@@ -46,6 +64,33 @@ pub enum Commands {
         /// Optional language hint for auto-embedding (en/zh).
         #[arg(long, value_parser = ["en", "zh"])]
         language: Option<String>,
+    },
+    /// Sync a local notes directory (markdown + images) into LanceDB.
+    SyncNotes {
+        /// LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb")]
+        db_path: PathBuf,
+        /// Notes directory path.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Recursively scan notes directory.
+        #[arg(long)]
+        recursive: bool,
+        /// Generate thumbnails for imported images.
+        #[arg(long)]
+        generate_thumbnail: bool,
+        /// Thumbnail size (pixels).
+        #[arg(long, default_value_t = 256)]
+        thumbnail_size: u32,
+        /// Optional language hint for auto-embedding (en/zh).
+        #[arg(long, value_parser = ["en", "zh"])]
+        language: Option<String>,
+        /// Default category used when frontmatter category is missing.
+        #[arg(long, default_value = "Notes")]
+        default_category: String,
+        /// Default author used when frontmatter author is missing.
+        #[arg(long, default_value = "Unknown")]
+        default_author: String,
     },
     /// Batch write images into LanceDB.
     WriteImages {
@@ -73,8 +118,220 @@ pub enum Commands {
         /// Table name (articles/images).
         #[arg(long)]
         table: String,
+        /// SQL filter expression.
+        #[arg(long = "where")]
+        where_clause: Option<String>,
+        /// Comma-separated columns to project.
+        #[arg(long, value_delimiter = ',')]
+        columns: Vec<String>,
         /// Number of rows to fetch.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Number of rows to skip.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Output format (`table` or `vertical`).
+        #[arg(long, value_enum, default_value_t = QueryOutputFormat::Table, ignore_case = true)]
+        format: QueryOutputFormat,
+    },
+    /// Backend-like API commands for local debugging.
+    Api {
+        /// LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb")]
+        db_path: PathBuf,
+        #[command(subcommand)]
+        command: ApiCommands,
+    },
+    /// Database-style management commands for LanceDB tables.
+    Db {
+        /// LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb")]
+        db_path: PathBuf,
+        #[command(subcommand)]
+        command: DbCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ApiCommands {
+    /// GET /api/articles
+    ListArticles {
+        /// Optional tag filter.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Optional category filter.
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// GET /api/articles/:id
+    GetArticle {
+        /// Article id.
+        id: String,
+    },
+    /// GET /api/articles/:id/related
+    RelatedArticles {
+        /// Article id.
+        id: String,
+    },
+    /// GET /api/search?q=
+    Search {
+        /// Search keyword.
+        #[arg(long)]
+        q: String,
+    },
+    /// GET /api/semantic-search?q=
+    SemanticSearch {
+        /// Search keyword.
+        #[arg(long)]
+        q: String,
+    },
+    /// GET /api/tags
+    ListTags,
+    /// GET /api/categories
+    ListCategories,
+    /// GET /api/images
+    ListImages,
+    /// GET /api/image-search?id=
+    SearchImages {
+        /// Image id.
+        #[arg(long)]
+        id: String,
+    },
+    /// GET /api/images/:id-or-filename
+    GetImage {
+        /// Image id or filename.
+        id_or_filename: String,
+        /// Return thumbnail when available.
+        #[arg(long)]
+        thumb: bool,
+        /// Output file path (defaults to current dir + image filename).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DbCommands {
+    /// List all tables.
+    ListTables {
+        /// Maximum table names to return.
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    /// Create a managed table (`articles`, `images`, or `taxonomies`).
+    CreateTable {
+        /// Table name.
+        table: String,
+        /// Drop existing table first.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Drop a table (requires --yes).
+    DropTable {
+        /// Table name.
+        table: String,
+        /// Confirm destructive operation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Show table schema and row count.
+    DescribeTable {
+        /// Table name.
+        table: String,
+    },
+    /// Count rows with optional SQL filter.
+    CountRows {
+        /// Table name.
+        table: String,
+        /// SQL filter expression.
+        #[arg(long = "where")]
+        where_clause: Option<String>,
+    },
+    /// Query rows with projection/filter/pagination.
+    QueryRows {
+        /// Table name.
+        table: String,
+        /// SQL filter expression.
+        #[arg(long = "where")]
+        where_clause: Option<String>,
+        /// Comma-separated columns to project.
+        #[arg(long, value_delimiter = ',')]
+        columns: Vec<String>,
+        /// Number of rows to fetch.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Number of rows to skip.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Output format (`table` or `vertical`).
+        #[arg(long, value_enum, default_value_t = QueryOutputFormat::Table, ignore_case = true)]
+        format: QueryOutputFormat,
+    },
+    /// Update rows with SQL expressions, e.g. --set "title='new'".
+    UpdateRows {
+        /// Table name.
+        table: String,
+        /// Column assignment expression (column=sql_expr). Repeat for multiple
+        /// columns.
+        #[arg(long = "set", required = true)]
+        assignments: Vec<String>,
+        /// SQL filter expression.
+        #[arg(long = "where")]
+        where_clause: Option<String>,
+        /// Allow updating all rows when no --where is provided.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Delete rows by SQL filter.
+    DeleteRows {
+        /// Table name.
+        table: String,
+        /// SQL filter expression.
+        #[arg(long = "where")]
+        where_clause: Option<String>,
+        /// Allow deleting all rows when no --where is provided.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Ensure indexes for managed tables.
+    EnsureIndexes {
+        /// Optional table filter (`articles`, `images`, or `taxonomies`).
+        #[arg(long)]
+        table: Option<String>,
+    },
+    /// List indexes and optional coverage stats.
+    ListIndexes {
+        /// Table name.
+        table: String,
+        /// Show index coverage statistics.
+        #[arg(long)]
+        with_stats: bool,
+    },
+    /// Drop an index by name.
+    DropIndex {
+        /// Table name.
+        table: String,
+        /// Index name.
+        name: String,
+    },
+    /// Optimize index coverage (default) or whole table.
+    Optimize {
+        /// Table name.
+        table: String,
+        /// Run full optimization instead of index-only optimization.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Upsert one article row from JSON payload.
+    UpsertArticle {
+        /// Full JSON object matching `ArticleRecord` fields.
+        #[arg(long)]
+        json: String,
+    },
+    /// Upsert one image row from JSON payload.
+    UpsertImage {
+        /// Full JSON object matching `ImageRecord` fields.
+        #[arg(long)]
+        json: String,
     },
 }

@@ -2,6 +2,7 @@ use yew::prelude::*;
 
 /// Lucide Icons - 清晰的线性 icon 系统
 /// SVG 路径来自 https://lucide.dev
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IconName {
     // Navigation
@@ -89,7 +90,7 @@ pub fn icon(props: &IconProps) -> Html {
     } = props;
 
     let stroke_width = if *size <= 16 { 2.5 } else { 2.0 };
-    let fill = if name.needs_fill() { "none" } else { "none" };
+    let fill = if name.needs_fill() { "currentColor" } else { "none" };
 
     html! {
         <svg

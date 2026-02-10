@@ -17,7 +17,7 @@ use crate::{
 #[function_component(LatestArticlesPage)]
 pub fn latest_articles_page() -> Html {
     let route_location = use_location();
-    let articles = use_state(|| Vec::<ArticleListItem>::new());
+    let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
 
     let (visible_articles, current_page_num, total_pages, go_to_page) =
@@ -46,7 +46,6 @@ pub fn latest_articles_page() -> Html {
     }
 
     let save_scroll_position = {
-        let current_page_num = current_page_num;
         Callback::from(move |_| {
             if let Some(win) = window() {
                 if let Some(storage) = win.session_storage().ok().flatten() {
@@ -94,7 +93,7 @@ pub fn latest_articles_page() -> Html {
                         let callback = wasm_bindgen::closure::Closure::once(move || {
                             if scroll_pos > 0 {
                                 if let Some(win) = window() {
-                                    let _ = win.scroll_to_with_x_and_y(0.0, scroll_pos as f64);
+                                    win.scroll_to_with_x_and_y(0.0, scroll_pos as f64);
                                 }
                             }
                             if let Some(storage) =

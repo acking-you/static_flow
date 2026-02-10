@@ -8,6 +8,7 @@ use crate::{
     router::Route,
 };
 
+#[allow(dead_code)]
 #[derive(Properties, PartialEq, Clone)]
 pub struct StatsCardProps {
     pub icon: IconName,
@@ -85,7 +86,7 @@ pub fn stats_card(props: &StatsCardProps) -> Html {
                         if let Some(win) = web_sys::window() {
                             let span_clone = span.clone();
                             let timeout_closure = Closure::once(move || {
-                                let _ = span_clone.remove();
+                                span_clone.remove();
                             });
                             let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
                                 timeout_closure.as_ref().unchecked_ref(),

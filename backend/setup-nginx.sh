@@ -1,14 +1,15 @@
 #!/bin/bash
 
 # StaticFlow Nginx + HTTPS 一键配置脚本
-# Domain: api.acking-you.top
+# 场景（可选层）：云端 Nginx -> pb-mapper server local -> 本地 Nginx(HTTPS) -> 本地 backend
 
 set -e
 
-DOMAIN="api.acking-you.top"
-EMAIL="${EMAIL:-admin@acking-you.top}"  # 可通过环境变量覆盖
+DOMAIN="${DOMAIN:-api.acking-you.top}"
+EMAIL="${EMAIL:-admin@acking-you.top}"          # 可通过环境变量覆盖
+PBMAPPER_PORT="${PBMAPPER_PORT:-8888}"          # 云端 pb-mapper server local 端口
 
-echo "🚀 开始配置 Nginx + HTTPS for ${DOMAIN}"
+echo "🚀 开始配置 Nginx + HTTPS for ${DOMAIN} (pb-mapper:${PBMAPPER_PORT})"
 echo ""
 
 # 1. 安装依赖
@@ -29,7 +30,7 @@ sudo tee /etc/nginx/sites-available/staticflow-api > /dev/null << 'EOF'
 server {
     listen 80;
     listen [::]:80;
-    server_name api.acking-you.top;
+    server_name __DOMAIN__;
 
     # Let's Encrypt ACME 验证
     location /.well-known/acme-challenge/ {
@@ -46,11 +47,11 @@ server {
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name api.acking-you.top;
+    server_name __DOMAIN__;
 
     # SSL 证书路径（certbot 会自动配置）
-    ssl_certificate /etc/letsencrypt/live/api.acking-you.top/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.acking-you.top/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
@@ -60,16 +61,14 @@ server {
     add_header X-XSS-Protection "1; mode=block";
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
-    # 限流配置
-    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
-
     # API 反向代理
     location /api/ {
-        # 限流
-        limit_req zone=api_limit burst=20 nodelay;
+        # 代理到 pb-mapper server local 端口
+        proxy_pass https://127.0.0.1:__PBMAPPER_PORT__/api/;
 
-        # 代理到后端
-        proxy_pass http://127.0.0.1:9999/api/;
+        # 当上游是本地自签证书时
+        proxy_ssl_verify off;
+        proxy_ssl_server_name on;
 
         # 请求头
         proxy_set_header Host $host;
@@ -106,6 +105,9 @@ server {
     error_log /var/log/nginx/staticflow-error.log;
 }
 EOF
+
+sudo sed -i "s/__DOMAIN__/${DOMAIN}/g" /etc/nginx/sites-available/staticflow-api
+sudo sed -i "s/__PBMAPPER_PORT__/${PBMAPPER_PORT}/g" /etc/nginx/sites-available/staticflow-api
 
 echo "✅ Nginx 配置已创建"
 
@@ -150,11 +152,11 @@ fi
 echo ""
 echo "🧪 验证部署..."
 
-echo "1. 测试本地后端..."
-if curl -sf http://127.0.0.1:9999/api/articles > /dev/null; then
-    echo "   ✅ 本地后端正常"
+echo "1. 测试 pb-mapper 映射端口..."
+if curl -skf https://127.0.0.1:${PBMAPPER_PORT}/api/articles > /dev/null; then
+    echo "   ✅ pb-mapper 映射端口正常"
 else
-    echo "   ❌ 本地后端无响应"
+    echo "   ❌ pb-mapper 映射端口无响应"
 fi
 
 echo "2. 测试 HTTPS API..."

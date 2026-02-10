@@ -8,7 +8,8 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/opt/staticflow
-ExecStart=/bin/sh -c "CONTENT_DIR=/opt/staticflow/content/ IMAGES_DIR=/opt/staticflow/content/images/ PORT=9999 /opt/staticflow/static-flow-backend"
+EnvironmentFile=-/opt/staticflow/.env
+ExecStart=/opt/staticflow/static-flow-backend
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -22,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/staticflow/content /opt/staticflow/logs
+ReadWritePaths=/opt/staticflow/data /opt/staticflow/logs
 
 # 资源限制
 LimitNOFILE=65535

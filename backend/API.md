@@ -1,421 +1,205 @@
-# StaticFlow 后端 API 文档
+# StaticFlow Backend API 文档
 
 ## 基础信息
 
-- **Base URL**: `http://localhost:3000/api`
-- **协议**: HTTP/1.1
-- **数据格式**: JSON
-- **字符编码**: UTF-8
-- **CORS**: 已启用，允许所有来源
+- Base URL（本地开发）: `http://localhost:3000/api`
+- Base URL（生产示例，直连 pb-mapper）: `https://<cloud-host>:8888/api`
+- Base URL（生产示例，可选云端 Nginx）: `https://api.yourdomain.com/api`
+- 协议: HTTP/1.1
+- 数据格式: JSON（图片接口返回二进制）
+
+## CORS 说明
+
+- `RUST_ENV=development`：允许所有来源（便于本地开发）
+- `RUST_ENV=production`：默认仅允许 `https://acking-you.github.io`
+- `ALLOWED_ORIGINS`：可选，逗号分隔来源白名单，覆盖默认生产来源
+
+示例：
+
+```env
+RUST_ENV=production
+ALLOWED_ORIGINS=https://acking-you.github.io,https://your-frontend-domain.com
+```
 
 ---
 
-## 接口列表
+## API 列表
 
-### 1. 获取文章列表
+### 1) 获取文章列表
 
-获取所有文章的列表信息（不含正文内容）。
+`GET /api/articles`
 
-**请求**
+查询参数：
+- `tag`（可选）按标签过滤（大小写不敏感）
+- `category`（可选）按分类过滤（大小写不敏感）
 
-```http
-GET /api/articles
-```
-
-**查询参数**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| tag | string | 否 | 按标签过滤（大小写不敏感） |
-| category | string | 否 | 按分类过滤（大小写不敏感） |
-
-**请求示例**
+示例：
 
 ```bash
-# 获取所有文章
-curl http://localhost:3000/api/articles
-
-# 按标签过滤
-curl "http://localhost:3000/api/articles?tag=rust"
-
-# 按分类过滤
-curl "http://localhost:3000/api/articles?category=Web"
-
-# 组合过滤
-curl "http://localhost:3000/api/articles?tag=wasm&category=Rust"
+curl "http://localhost:3000/api/articles?tag=rust&category=Web"
 ```
 
-**响应示例**
+### 2) 获取文章详情
 
-```json
-{
-  "articles": [
-    {
-      "id": "post-012",
-      "title": "示例文章 12 - Web 技术与思考",
-      "summary": "这是一篇关于 Web 的示例文章，涵盖实践要点与思考。",
-      "tags": ["frontend", "html", "css"],
-      "category": "Web",
-      "author": "Alice",
-      "date": "2024-12-22",
-      "featured_image": "/static/hero-3.jpg",
-      "read_time": 7
-    }
-  ],
-  "total": 15
-}
-```
+`GET /api/articles/:id`
 
-**字段说明**
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| articles | array | 文章列表 |
-| articles[].id | string | 文章唯一标识符 |
-| articles[].title | string | 文章标题 |
-| articles[].summary | string | 文章摘要 |
-| articles[].tags | array<string> | 标签列表 |
-| articles[].category | string | 分类名称 |
-| articles[].author | string | 作者名称 |
-| articles[].date | string | 发布日期（YYYY-MM-DD） |
-| articles[].featured_image | string\|null | 特色图片URL |
-| articles[].read_time | integer | 预计阅读时长（分钟） |
-| total | integer | 文章总数 |
-
----
-
-### 2. 获取文章详情
-
-获取指定文章的完整内容（包含Markdown正文）。
-
-**请求**
-
-```http
-GET /api/articles/:id
-```
-
-**路径参数**
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| id | string | 文章ID（如：post-001） |
-
-**请求示例**
+示例：
 
 ```bash
 curl http://localhost:3000/api/articles/post-001
 ```
 
-**响应示例（成功）**
+### 3) 获取相关文章（向量）
 
-```json
-{
-  "id": "post-001",
-  "title": "示例文章 1 - Rust 技术与思考",
-  "summary": "这是一篇关于 Rust 的示例文章，涵盖实践要点与思考。",
-  "content": "# 用 Rust + Yew 构建本地优先博客\n\nStaticFlow 是...",
-  "tags": ["rust", "wasm", "yew"],
-  "category": "Rust",
-  "author": "Bob",
-  "date": "2024-01-11",
-  "featured_image": "/static/hero-1.jpg",
-  "read_time": 4
-}
-```
+`GET /api/articles/:id/related`
 
-**响应示例（文章不存在）**
-
-```json
-{
-  "error": "Article not found",
-  "code": 404
-}
-```
-
-**HTTP状态码**
-
-- `200 OK` - 成功获取文章
-- `404 Not Found` - 文章不存在
-- `500 Internal Server Error` - 服务器内部错误
-
-**字段说明**
-
-在文章列表的基础上，增加：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| content | string | 文章完整Markdown内容 |
-
----
-
-### 3. 获取标签列表
-
-获取所有标签及其文章数量统计。
-
-**请求**
-
-```http
-GET /api/tags
-```
-
-**请求示例**
+示例：
 
 ```bash
-curl http://localhost:3000/api/tags
+curl http://localhost:3000/api/articles/post-001/related
 ```
 
-**响应示例**
+### 4) 标签与分类
 
-```json
-{
-  "tags": [
-    {
-      "name": "rust",
-      "count": 3
-    },
-    {
-      "name": "wasm",
-      "count": 3
-    },
-    {
-      "name": "frontend",
-      "count": 3
-    }
-  ]
-}
-```
+- `GET /api/tags`
+- `GET /api/categories`
 
-**字段说明**
+### 5) 关键词搜索
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| tags | array | 标签列表（按名称字母排序） |
-| tags[].name | string | 标签名称 |
-| tags[].count | integer | 使用该标签的文章数量 |
+`GET /api/search?q=关键词`
 
----
-
-### 4. 获取分类列表
-
-获取所有分类及其文章数量、描述信息。
-
-**请求**
-
-```http
-GET /api/categories
-```
-
-**请求示例**
+示例：
 
 ```bash
-curl http://localhost:3000/api/categories
+curl "http://localhost:3000/api/search?q=rust"
 ```
 
-**响应示例**
+### 6) 语义搜索
 
-```json
-{
-  "categories": [
-    {
-      "name": "Rust",
-      "count": 3,
-      "description": "静态类型、零成本抽象与 Wasm 生态的实战笔记。"
-    },
-    {
-      "name": "Web",
-      "count": 3,
-      "description": "现代前端工程化与体验设计相关内容。"
-    },
-    {
-      "name": "DevOps",
-      "count": 3,
-      "description": "自动化、流水线与交付体验的工程思考。"
-    },
-    {
-      "name": "Productivity",
-      "count": 3,
-      "description": "效率、写作与自我管理的小实验与道具。"
-    },
-    {
-      "name": "AI",
-      "count": 3,
-      "description": "Prompt、LLM 与智能体的落地探索。"
-    }
-  ]
-}
+`GET /api/semantic-search?q=关键词`
+
+示例：
+
+```bash
+curl "http://localhost:3000/api/semantic-search?q=异步编程"
 ```
 
-**字段说明**
+### 7) 图片列表
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| categories | array | 分类列表（按名称字母排序） |
-| categories[].name | string | 分类名称 |
-| categories[].count | integer | 该分类下的文章数量 |
-| categories[].description | string | 分类描述文字 |
+`GET /api/images`
+
+示例：
+
+```bash
+curl http://localhost:3000/api/images
+```
+
+### 8) 图片读取（从 LanceDB）
+
+`GET /api/images/:id-or-filename`
+
+- 支持通过 `id`（sha256）或 `filename` 查询
+- 可选参数 `thumb=true` 读取缩略图
+
+示例：
+
+```bash
+curl "http://localhost:3000/api/images/1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65fcd4f95f5f6c68ca68cfb7b" --output image.bin
+curl "http://localhost:3000/api/images/wallhaven-5yyyw9.png?thumb=true" --output thumb.png
+```
+
+### 9) 以图搜图
+
+`GET /api/image-search?id=<image_id>`
+
+示例：
+
+```bash
+curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65fcd4f95f5f6c68ca68cfb7b"
+```
 
 ---
 
 ## 错误响应格式
 
-所有错误响应遵循统一格式：
-
 ```json
 {
-  "error": "错误描述信息",
-  "code": 404
+  "error": "Error message",
+  "code": 500
 }
 ```
 
-**字段说明**
+---
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| error | string | 人类可读的错误描述 |
-| code | integer | HTTP状态码 |
+## 存储模型
 
-**常见错误码**
+后端已基于 LanceDB 运行，不再读取 `content/images` 静态目录。
 
-| 状态码 | 说明 |
-|--------|------|
-| 400 Bad Request | 请求参数错误 |
-| 404 Not Found | 资源不存在 |
-| 500 Internal Server Error | 服务器内部错误 |
+- `articles` 表：文章元数据、正文、文本向量
+- `images` 表：图片二进制、缩略图、视觉向量
+
+图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。
 
 ---
 
-## 数据存储
-
-**当前阶段（MVP）**：
-- 存储方式：文件系统（Markdown文件）
-- 数据目录：`../content/`（相对于backend目录）
-- 文件格式：`.md`文件，包含YAML frontmatter
-
-**示例文件结构**：
-
-```markdown
----
-title: "文章标题"
-summary: "文章摘要"
-tags: ["tag1", "tag2"]
-category: "分类名"
-author: "作者名"
-date: "2024-01-01"
-featured_image: "/static/image.jpg"
-read_time: 5
----
-
-# 文章正文
-
-Markdown内容...
-```
-
----
-
-## 技术栈
-
-- **Web框架**: Axum 0.7
-- **异步运行时**: Tokio 1.48
-- **序列化**: serde + serde_json
-- **Markdown解析**: gray_matter 0.2（YAML frontmatter）
-- **CORS**: tower-http 0.5
-
----
-
-## 开发环境
-
-### 启动后端服务器
+## 后端运行
 
 ```bash
-# 使用Makefile（推荐）
-make dev-backend
+make bin-all
 
-# 或直接使用cargo
-cd backend
-cargo run
+# 开发环境
+LANCEDB_URI=../data/lancedb PORT=3000 ./target/release/static-flow-backend
+
+# 生产环境示例
+RUST_ENV=production \
+BIND_ADDR=127.0.0.1 \
+PORT=9999 \
+LANCEDB_URI=/opt/staticflow/data/lancedb \
+ALLOWED_ORIGINS=https://acking-you.github.io \
+./target/release/static-flow-backend
 ```
-
-### 配置文件
-
-后端配置文件：`backend/.env`
-
-```env
-# Content directory (relative to backend/ or absolute path)
-CONTENT_DIR=../content
-
-# Server port
-PORT=3000
-
-# Log level (trace, debug, info, warn, error)
-RUST_LOG=info
-```
-
-### 健康检查
-
-```bash
-# 检查服务器是否启动
-curl http://localhost:3000/api/articles | jq '.total'
-```
-
----
-
-## 未来扩展（Week 2+）
-
-以下功能计划在后续版本实现：
-
-### 1. 全文搜索
-
-```http
-GET /api/search?q=关键词
-```
-
-**计划使用**: Meilisearch 1.5+
-
-### 2. 图片服务
-
-```http
-GET /api/image/:base64_filename
-```
-
-**说明**: 根据base64编码的文件名返回图片二进制数据
-
-### 3. 数据库持久化
-
-- SQLite：存储文章元数据
-- Meilisearch：全文搜索索引
-
-### 4. 文章管理
-
-```http
-POST /api/articles        # 创建文章
-PUT /api/articles/:id     # 更新文章
-DELETE /api/articles/:id  # 删除文章
-```
-
-**认证**: 签名认证（计划实现）
 
 ---
 
 ## 常见问题
 
-### Q: 如何添加新文章？
+### Q1: 为什么前端图片显示不了？
 
-A: 在`content/`目录下创建新的`.md`文件，包含YAML frontmatter，重启后端即可。
+检查：
+1. 文章内图片链接是否是 `images/<image_id>`
+2. `images` 表是否有对应记录
+3. 前端 `STATICFLOW_API_BASE` 是否指向正确 endpoint（直连 pb-mapper 或云端 Nginx）
 
-### Q: 如何修改分类描述？
+### Q2: 如何把本地笔记目录导入？
 
-A: 编辑`backend/src/handlers.rs`中的`CATEGORY_DESCRIPTIONS`常量。
+使用 CLI：
 
-### Q: 支持分页吗？
+```bash
+./target/release/sf-cli sync-notes --db-path ./data/lancedb --dir ./content --recursive --generate-thumbnail
+```
 
-A: 当前版本不支持，所有文章一次性返回。计划在Week 2实现。
+### Q3: 是否仍需把图片放到后端静态目录？
 
-### Q: 日期格式必须是YYYY-MM-DD吗？
+不需要。当前实现支持图片二进制直接写入 LanceDB，再通过 `/api/images/:id-or-filename` 读取。
 
-A: 是的，前端严格依赖该格式进行解析和分组显示。
+### Q3.1: 分类描述来自哪里？
 
----
+`/api/categories` 的 `description` 来自 `taxonomies` 表（`kind=category`）。
+可通过 `sf-cli write-article --category-description ...` 或 `sync-notes`（frontmatter）写入。
 
-**文档版本**: v1.0
-**最后更新**: 2025-11-15
-**维护者**: StaticFlow Team
+### Q4: 如何不用启动 backend，直接调试同款 API 逻辑？
+
+可以使用 `sf-cli api` 子命令（和 backend API 共用同一套 LanceDB 访问代码）：
+
+```bash
+./target/release/sf-cli api --db-path ./data/lancedb list-articles --category Tech
+./target/release/sf-cli api --db-path ./data/lancedb get-article frontend-architecture
+./target/release/sf-cli api --db-path ./data/lancedb search --q "staticflow"
+./target/release/sf-cli api --db-path ./data/lancedb semantic-search --q "前端 架构"
+./target/release/sf-cli api --db-path ./data/lancedb related-articles frontend-architecture
+./target/release/sf-cli api --db-path ./data/lancedb list-tags
+./target/release/sf-cli api --db-path ./data/lancedb list-categories
+./target/release/sf-cli api --db-path ./data/lancedb list-images
+./target/release/sf-cli api --db-path ./data/lancedb search-images --id <image_id>
+./target/release/sf-cli api --db-path ./data/lancedb get-image <image_id_or_filename> --thumb --out ./tmp-thumb.bin
+```

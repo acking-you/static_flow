@@ -25,6 +25,9 @@ pub struct ArticleDetailProps {
     pub id: String,
 }
 
+type ImageClickListener =
+    (web_sys::Element, wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>);
+
 #[function_component(ArticleDetailPage)]
 pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let route = use_route::<Route>();
@@ -42,7 +45,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     let article = use_state(|| None::<Article>);
     let loading = use_state(|| true);
-    let related_articles = use_state(|| Vec::<ArticleListItem>::new());
+    let related_articles = use_state(Vec::<ArticleListItem>::new);
     let related_loading = use_state(|| false);
 
     // Handle back navigation - use browser history
@@ -230,10 +233,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     {
         let open_image_preview = open_image_preview.clone();
         use_effect_with(article_data.clone(), move |article_opt| {
-            let mut listeners: Vec<(
-                web_sys::Element,
-                wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>,
-            )> = Vec::new();
+            let mut listeners: Vec<ImageClickListener> = Vec::new();
 
             if article_opt.is_some() {
                 if let Some(document) = window().and_then(|win| win.document()) {
@@ -495,11 +495,11 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         "m-0",
                         "p-0"
                     )}>
-                        { for article.tags.iter().cloned().map(|tag| {
+                        { for article.tags.iter().map(|tag| {
                             html! {
                                 <li>
                                     <Link<Route>
-                                        to={Route::TagDetail { tag: tag.clone() }}
+                                        to={Route::TagDetail { tag: tag.to_string() }}
                                         classes={classes!(
                                             "py-[0.4rem]",
                                             "px-[1.1rem]",

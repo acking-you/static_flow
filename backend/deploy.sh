@@ -50,11 +50,6 @@ check_prerequisites() {
         exit 1
     fi
 
-    if [ ! -d "content" ]; then
-        log_error "content directory not found"
-        exit 1
-    fi
-
     log_info "Prerequisites check passed"
 }
 
@@ -77,14 +72,14 @@ prepare_deployment_package() {
     cp "backend/.env.production" "$TEMP_DIR/staticflow/.env"
     cp "backend/staticflow-backend.service" "$TEMP_DIR/staticflow/"
 
-    # Copy content directory (for testing)
-    log_info "Copying content directory..."
-    cp -r "content" "$TEMP_DIR/staticflow/"
-
-    # Count files
-    local ARTICLE_COUNT=$(find "$TEMP_DIR/staticflow/content" -name "*.md" | wc -l)
-    local IMAGE_COUNT=$(find "$TEMP_DIR/staticflow/content/images" -type f 2>/dev/null | wc -l || echo 0)
-    log_info "Packaged ${ARTICLE_COUNT} articles and ${IMAGE_COUNT} images"
+    # Prepare LanceDB data directory
+    mkdir -p "$TEMP_DIR/staticflow/data"
+    if [ -d "data/lancedb" ]; then
+        log_info "Copying LanceDB data directory..."
+        cp -r "data/lancedb" "$TEMP_DIR/staticflow/data/"
+    else
+        log_warn "data/lancedb not found, deploying without local database snapshot"
+    fi
 
     # Create archive
     tar -czf "staticflow-deploy.tar.gz" -C "$TEMP_DIR" staticflow
@@ -113,22 +108,22 @@ set -e
 cd /tmp
 tar -xzf staticflow-deploy.tar.gz
 
-# Backup existing content if it exists
-if [ -d "/opt/staticflow/content" ]; then
-    echo "Backing up existing content..."
-    sudo mv /opt/staticflow/content "/opt/staticflow/content.backup.$(date +%Y%m%d_%H%M%S)"
-fi
-
 # Create deployment directory structure
-sudo mkdir -p /opt/staticflow/logs
+sudo mkdir -p /opt/staticflow/logs /opt/staticflow/data
 
 # Copy files
 sudo cp /tmp/staticflow/static-flow-backend /opt/staticflow/
 sudo cp /tmp/staticflow/.env /opt/staticflow/
 sudo chmod +x /opt/staticflow/static-flow-backend
 
-# Copy content directory
-sudo cp -r /tmp/staticflow/content /opt/staticflow/
+# Copy LanceDB data snapshot if present
+if [ -d "/tmp/staticflow/data/lancedb" ]; then
+    if [ -d "/opt/staticflow/data/lancedb" ]; then
+        echo "Backing up existing LanceDB data..."
+        sudo mv /opt/staticflow/data/lancedb "/opt/staticflow/data/lancedb.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    sudo cp -r /tmp/staticflow/data/lancedb /opt/staticflow/data/
+fi
 
 # Install systemd service
 sudo cp /tmp/staticflow/staticflow-backend.service /etc/systemd/system/
@@ -193,10 +188,10 @@ EOF
 show_next_steps() {
     log_info "Deployment completed successfully!"
     echo ""
-    echo "✅ Backend deployed with test content"
+    echo "✅ Backend deployed with LanceDB data"
     echo ""
     echo "Next steps:"
-    echo "1. Configure Nginx (see backend/nginx.conf.example)"
+    echo "1. Configure Nginx (see deployment-examples/nginx-staticflow-api.conf)"
     echo "   sudo nano /etc/nginx/sites-available/staticflow-api"
     echo ""
     echo "2. Enable Nginx site"
@@ -204,14 +199,16 @@ show_next_steps() {
     echo "   sudo nginx -t"
     echo "   sudo systemctl reload nginx"
     echo ""
-    echo "3. Setup SSL with Let's Encrypt"
+    echo "3. (Optional) Setup cloud Nginx SSL with Let's Encrypt"
     echo "   sudo certbot --nginx -d api.yourdomain.com"
     echo ""
-    echo "4. Update GitHub Actions variable"
-    echo "   STATICFLOW_API_BASE=https://api.yourdomain.com/api"
+    echo "4. Update frontend API base"
+    echo "   Direct pb-mapper mode: STATICFLOW_API_BASE=https://<cloud-host>:8888/api"
+    echo "   Optional cloud Nginx mode: STATICFLOW_API_BASE=https://api.yourdomain.com/api"
     echo ""
-    echo "5. Test HTTPS endpoint"
-    echo "   curl https://api.yourdomain.com/api/articles"
+    echo "5. Test API endpoint"
+    echo "   Direct: curl -k https://<cloud-host>:8888/api/articles"
+    echo "   Optional cloud Nginx: curl https://api.yourdomain.com/api/articles"
     echo ""
     echo "Useful commands:"
     echo "  Check logs:   ssh ${REMOTE_USER}@${REMOTE_HOST} 'sudo journalctl -u staticflow-backend -f'"

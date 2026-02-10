@@ -9,8 +9,10 @@ use arrow_array::{
     ArrayRef, RecordBatch,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use serde::{Deserialize, Serialize};
 use static_flow_shared::embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleRecord {
     pub id: String,
     pub title: String,
@@ -28,6 +30,7 @@ pub struct ArticleRecord {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageRecord {
     pub id: String,
     pub filename: String,
@@ -36,6 +39,17 @@ pub struct ImageRecord {
     pub vector: Vec<f32>,
     pub metadata: String,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaxonomyRecord {
+    pub id: String,
+    pub kind: String,
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 pub fn article_schema() -> Arc<Schema> {
@@ -91,6 +105,18 @@ pub fn image_schema() -> Arc<Schema> {
         ),
         Field::new("metadata", DataType::Utf8, false),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+    ]))
+}
+
+pub fn taxonomy_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("key", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("description", DataType::Utf8, true),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
 
@@ -253,6 +279,42 @@ pub fn build_image_batch(records: &[ImageRecord]) -> Result<RecordBatch> {
         Arc::new(vector_builder.finish()),
         Arc::new(metadata_builder.finish()),
         Arc::new(created_at_builder.finish()),
+    ];
+
+    Ok(RecordBatch::try_new(schema, arrays)?)
+}
+
+pub fn build_taxonomy_batch(records: &[TaxonomyRecord]) -> Result<RecordBatch> {
+    let mut id_builder = StringBuilder::new();
+    let mut kind_builder = StringBuilder::new();
+    let mut key_builder = StringBuilder::new();
+    let mut name_builder = StringBuilder::new();
+    let mut description_builder = StringBuilder::new();
+    let mut created_at_builder = TimestampMillisecondBuilder::new();
+    let mut updated_at_builder = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        id_builder.append_value(&record.id);
+        kind_builder.append_value(&record.kind);
+        key_builder.append_value(&record.key);
+        name_builder.append_value(&record.name);
+        match &record.description {
+            Some(description) => description_builder.append_value(description),
+            None => description_builder.append_null(),
+        }
+        created_at_builder.append_value(record.created_at);
+        updated_at_builder.append_value(record.updated_at);
+    }
+
+    let schema = taxonomy_schema();
+    let arrays: Vec<ArrayRef> = vec![
+        Arc::new(id_builder.finish()),
+        Arc::new(kind_builder.finish()),
+        Arc::new(key_builder.finish()),
+        Arc::new(name_builder.finish()),
+        Arc::new(description_builder.finish()),
+        Arc::new(created_at_builder.finish()),
+        Arc::new(updated_at_builder.finish()),
     ];
 
     Ok(RecordBatch::try_new(schema, arrays)?)

@@ -5,12 +5,20 @@ use crate::api::API_BASE;
 
 /// Convert image path to API endpoint if it's a relative path
 pub fn image_url(path: &str) -> String {
-    if path.starts_with("images/") {
-        // Extract filename after "images/"
-        let filename = path.strip_prefix("images/").unwrap_or(path);
+    let normalized = path.trim();
+
+    if normalized.starts_with("http://")
+        || normalized.starts_with("https://")
+        || normalized.starts_with("data:")
+    {
+        normalized.to_string()
+    } else if normalized.starts_with("images/") {
+        let filename = normalized.strip_prefix("images/").unwrap_or(normalized);
         format!("{}/images/{}", API_BASE, filename)
+    } else if normalized.starts_with("/api/images/") {
+        format!("{}{}", API_BASE.trim_end_matches("/api"), normalized)
     } else {
-        path.to_string()
+        normalized.to_string()
     }
 }
 

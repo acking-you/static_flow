@@ -11,7 +11,7 @@ use crate::{
 
 #[function_component(TagsPage)]
 pub fn tags_page() -> Html {
-    let tag_stats = use_state(|| Vec::<crate::api::TagInfo>::new());
+    let tag_stats = use_state(Vec::<crate::api::TagInfo>::new);
     let loading = use_state(|| true);
 
     {

@@ -1,5 +1,4 @@
-/// Configuration for the frontend application
-
+//! Configuration for the frontend application
 /// Base path for routes - depends on mock feature
 #[cfg(not(feature = "mock"))]
 pub const ROUTE_BASE: &str = "";

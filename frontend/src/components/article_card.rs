@@ -71,7 +71,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
         )}>
             {
                 if let Some(image) = article.featured_image.as_ref() {
-                    let image_url_val = image_url(&image);
+                    let image_url_val = image_url(image);
                     let title = article.title.clone();
                     html! {
                         <a

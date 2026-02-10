@@ -12,6 +12,7 @@ use crate::{
     utils::image_url,
 };
 
+#[allow(dead_code)]
 #[derive(Properties, Clone, PartialEq)]
 pub struct SearchPageProps {
     pub query: Option<String>,
@@ -29,10 +30,10 @@ pub fn search_page() -> Html {
         .to_lowercase();
     let mode =
         if matches!(mode.as_str(), "semantic" | "image") { mode } else { "keyword".to_string() };
-    let results = use_state(|| Vec::<SearchResult>::new());
+    let results = use_state(Vec::<SearchResult>::new);
     let loading = use_state(|| false);
-    let image_catalog = use_state(|| Vec::<ImageInfo>::new());
-    let image_results = use_state(|| Vec::<ImageInfo>::new());
+    let image_catalog = use_state(Vec::<ImageInfo>::new);
+    let image_results = use_state(Vec::<ImageInfo>::new);
     let image_loading = use_state(|| false);
     let selected_image_id = use_state(|| None::<String>);
     let (visible_results, current_page, total_pages, go_to_page) =
@@ -45,10 +46,7 @@ pub fn search_page() -> Html {
         let mode = mode.clone();
 
         use_effect_with((keyword.clone(), mode.clone()), move |(kw, mode)| {
-            if mode == "image" {
-                loading.set(false);
-                results.set(vec![]);
-            } else if kw.trim().is_empty() {
+            if mode == "image" || kw.trim().is_empty() {
                 loading.set(false);
                 results.set(vec![]);
             } else {
@@ -453,7 +451,7 @@ pub fn search_page() -> Html {
                                 </div>
                             }
 
-                            if let Some(_) = &*selected_image_id {
+                            if (*selected_image_id).is_some() {
                                 <div class={classes!(
                                     "mt-8",
                                     "text-sm",

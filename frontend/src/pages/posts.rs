@@ -46,8 +46,8 @@ pub fn posts_page() -> Html {
         .unwrap_or_default()
         .normalized();
 
-    let articles = use_state(|| Vec::<ArticleListItem>::new());
-    let expanded_years = use_state(|| HashMap::<i32, bool>::new());
+    let articles = use_state(Vec::<ArticleListItem>::new);
+    let expanded_years = use_state(HashMap::<i32, bool>::new);
 
     {
         let articles = articles.clone();
@@ -288,7 +288,7 @@ pub fn posts_page() -> Html {
                                                 "lg:grid-cols-3",
                                                 "gap-6"
                                             )}>
-                                                { for posts.iter().take(visible_count).cloned().map(|article| {
+                                                { for posts.iter().take(visible_count).map(|article| {
                                                     let detail_route = Route::ArticleDetail { id: article.id.clone() };
                                                     html! {
                                                         <Link<Route>
@@ -440,10 +440,12 @@ pub fn posts_page() -> Html {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -> Html {
     render_timeline_with_state(grouped_by_year, None, None)
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_expandable_timeline(
     grouped_by_year: &[(i32, Vec<ArticleListItem>)],
     expanded_years: &HashMap<i32, bool>,
@@ -452,6 +454,7 @@ pub(crate) fn render_expandable_timeline(
     render_timeline_with_state(grouped_by_year, Some(expanded_years), Some(toggle_year))
 }
 
+#[allow(dead_code)]
 fn render_timeline_with_state(
     grouped_by_year: &[(i32, Vec<ArticleListItem>)],
     expanded_years: Option<&HashMap<i32, bool>>,
@@ -487,7 +490,7 @@ fn render_timeline_with_state(
                                     "text-[var(--text)]"
                                 )}>{ year_value }</h3>
                         <div class={classes!("timeline")}>
-                            { for posts.iter().take(visible_count).cloned().map(|article| {
+                            { for posts.iter().take(visible_count).map(|article| {
                                 let detail_route = Route::ArticleDetail { id: article.id.clone() };
                                 html! {
                                     <div class={classes!("circle")}>

@@ -4,6 +4,9 @@ use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::{HtmlElement, MouseEvent};
 use yew::{prelude::*, use_effect_with, use_mut_ref};
 
+type AnimationClosure = Closure<dyn FnMut()>;
+type SharedAnimationClosure = Rc<RefCell<Option<AnimationClosure>>>;
+
 #[function_component(Spotlight)]
 pub fn spotlight() -> Html {
     let spotlight_ref = use_node_ref();
@@ -63,8 +66,7 @@ pub fn spotlight() -> Html {
                         mouse_move_closure.as_ref().unchecked_ref(),
                     );
 
-                    let animation_cb: Rc<RefCell<Option<Closure<dyn FnMut()>>>> =
-                        Rc::new(RefCell::new(None));
+                    let animation_cb: SharedAnimationClosure = Rc::new(RefCell::new(None));
                     let animation_cb_clone = animation_cb.clone();
                     let spotlight_for_animation = spotlight_ref.clone();
                     let target_for_animation = target_position.clone();

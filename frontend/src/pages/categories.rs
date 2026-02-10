@@ -11,7 +11,7 @@ use crate::{
 
 #[function_component(CategoriesPage)]
 pub fn categories_page() -> Html {
-    let categories = use_state(|| Vec::<crate::api::CategoryInfo>::new());
+    let categories = use_state(Vec::<crate::api::CategoryInfo>::new);
     let loading = use_state(|| true);
 
     {

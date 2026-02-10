@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use sf_cli::utils;
     use std::io::Write;
+
+    use sf_cli::utils;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -24,8 +25,7 @@ read_time: 3
 
 Body content.
 "#;
-        file.write_all(markdown.as_bytes())
-            .expect("write markdown");
+        file.write_all(markdown.as_bytes()).expect("write markdown");
         file.flush().expect("flush markdown");
 
         let content = std::fs::read_to_string(file.path()).expect("read markdown");
@@ -33,10 +33,7 @@ Body content.
 
         assert_eq!(frontmatter.title, "Hello");
         assert_eq!(frontmatter.summary.as_deref(), Some("Short summary"));
-        assert_eq!(
-            frontmatter.tags,
-            Some(vec!["rust".to_string(), "wasm".to_string()])
-        );
+        assert_eq!(frontmatter.tags, Some(vec!["rust".to_string(), "wasm".to_string()]));
         assert_eq!(frontmatter.category.as_deref(), Some("Tech"));
         assert_eq!(frontmatter.author.as_deref(), Some("Ada"));
         assert_eq!(frontmatter.date.as_deref(), Some("2024-01-01"));
@@ -49,10 +46,7 @@ Body content.
     #[test]
     fn parse_tags_trims_and_filters_empty() {
         let tags = utils::parse_tags(" rust, wasm, ,backend ,,");
-        assert_eq!(
-            tags,
-            vec!["rust".to_string(), "wasm".to_string(), "backend".to_string()]
-        );
+        assert_eq!(tags, vec!["rust".to_string(), "wasm".to_string(), "backend".to_string()]);
     }
 
     #[test]
@@ -71,9 +65,6 @@ Body content.
     #[test]
     fn hash_bytes_matches_sha256() {
         let hash = utils::hash_bytes(b"hello");
-        assert_eq!(
-            hash,
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-        );
+        assert_eq!(hash, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
     }
 }

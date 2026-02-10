@@ -255,20 +255,9 @@ pub fn mock_tags() -> Vec<TagInfo> {
     tags
 }
 
-/// 模拟分类统计，包含描述
+/// 模拟分类统计（无硬编码分类词典）
 #[cfg(feature = "mock")]
 pub fn mock_categories() -> Vec<CategoryInfo> {
-    // 与后端保持一致的描述
-    let descriptions: HashMap<&str, &str> = [
-        ("Rust", "静态类型、零成本抽象与 Wasm 生态的实战笔记。"),
-        ("Web", "现代前端工程化与体验设计相关内容。"),
-        ("DevOps", "自动化、流水线与交付体验的工程思考。"),
-        ("Productivity", "效率、写作与自我管理的小实验与道具。"),
-        ("AI", "Prompt、LLM 与智能体的落地探索。"),
-    ]
-    .into_iter()
-    .collect();
-
     let mut counts: HashMap<String, usize> = HashMap::new();
     for article in mock_articles_full() {
         *counts.entry(article.category).or_insert(0) += 1;
@@ -276,17 +265,10 @@ pub fn mock_categories() -> Vec<CategoryInfo> {
 
     let mut categories: Vec<CategoryInfo> = counts
         .into_iter()
-        .map(|(name, count)| {
-            let description = descriptions
-                .get(name.as_str())
-                .copied()
-                .unwrap_or("")
-                .to_string();
-            CategoryInfo {
-                name,
-                count,
-                description,
-            }
+        .map(|(name, count)| CategoryInfo {
+            description: name.clone(),
+            name,
+            count,
         })
         .collect();
 

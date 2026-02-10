@@ -28,10 +28,13 @@ use yew_router::prelude::use_location;
 /// }
 /// ```
 #[hook]
-pub fn use_pagination<T: Clone + PartialEq + 'static>(
+pub fn use_pagination<T>(
     items: Vec<T>,
     items_per_page: usize,
-) -> (Vec<T>, usize, usize, Callback<usize>) {
+) -> (Vec<T>, usize, usize, Callback<usize>)
+where
+    T: Clone + PartialEq + 'static,
+{
     let per_page = items_per_page.max(1);
     let total_pages = calculate_total_pages(items.len(), per_page);
     let current_page = use_state(|| 1usize);
@@ -109,7 +112,7 @@ fn scroll_window_to_top() {
         options.set_left(0.0);
         options.set_top(0.0);
         options.set_behavior(ScrollBehavior::Smooth);
-        let _ = window.scroll_to_with_scroll_to_options(&options);
+        window.scroll_to_with_scroll_to_options(&options);
     }
 }
 

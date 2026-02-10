@@ -24,7 +24,7 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
         .clone()
         .unwrap_or_else(|| "未命名标签".to_string());
 
-    let articles = use_state(|| Vec::<ArticleListItem>::new());
+    let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
 
     {

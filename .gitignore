@@ -70,5 +70,7 @@ target-doc/
 
 # Fastembed 缓存
 shared/.fastembed_cache/
+.fastembed_cache
 
 data/
+bin/

@@ -1,6 +1,7 @@
 use yew::{prelude::*, use_effect_with};
 use yew_hooks::prelude::use_timeout;
 
+#[allow(dead_code)]
 #[derive(Properties, PartialEq)]
 pub struct ErrorBannerProps {
     pub message: String,
