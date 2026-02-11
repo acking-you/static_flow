@@ -144,6 +144,16 @@ async fn sync_notes(
     let mut article_store: Vec<ArticleRecord> = Vec::new();
     let mut taxonomy_store: HashMap<String, TaxonomyRecord> = HashMap::new();
 
+    // Pre-query fallback cover once for the entire batch.
+    let fallback_cover =
+        match crate::db::query_fallback_cover(images_table, articles_table).await {
+            Ok(cover) => cover,
+            Err(err) => {
+                tracing::warn!("Failed to query fallback cover: {err}");
+                None
+            },
+        };
+
     for markdown_path in markdown_files {
         let markdown_text = fs::read_to_string(&markdown_path)
             .with_context(|| format!("failed to read markdown {}", markdown_path.display()))?;
@@ -151,7 +161,12 @@ async fn sync_notes(
 
         let featured_image_source = frontmatter.featured_image.clone();
 
-        let title = frontmatter.title.trim().to_string();
+        let title = frontmatter
+            .title
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if title.is_empty() {
             anyhow::bail!("frontmatter title is required: {}", markdown_path.display());
         }
@@ -214,6 +229,7 @@ async fn sync_notes(
             &mut image_index_by_source,
             &mut image_id_seen,
         );
+        let featured_image = featured_image.or_else(|| fallback_cover.clone());
 
         let combined_text = format!("{} {} {}", title, summary, rewritten_body);
         let embedding_language = config

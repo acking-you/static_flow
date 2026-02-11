@@ -49,9 +49,25 @@ pub enum Commands {
         /// Article category (optional if frontmatter provides it).
         #[arg(long)]
         category: Option<String>,
-        /// Category description metadata (stored in taxonomies table).
+        /// Category description metadata (required if frontmatter does not
+        /// provide `category_description`; stored in taxonomies table).
         #[arg(long)]
         category_description: Option<String>,
+        /// Import local image links from markdown into `images` and rewrite
+        /// links.
+        #[arg(long)]
+        import_local_images: bool,
+        /// Additional Obsidian/global media root directories used when an
+        /// image cannot be resolved relative to the markdown file.
+        #[arg(long = "media-root")]
+        media_roots: Vec<PathBuf>,
+        /// Generate thumbnails when importing local images.
+        #[arg(long)]
+        generate_thumbnail: bool,
+        /// Thumbnail size (pixels) used with --import-local-images
+        /// --generate-thumbnail.
+        #[arg(long, default_value_t = 256)]
+        thumbnail_size: u32,
         /// Optional embedding vector as JSON array.
         #[arg(long)]
         vector: Option<String>,

@@ -119,6 +119,103 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
 
     <script>
+      function slugifyHeadingText(text) {
+        return (text || '')
+          .trim()
+          .toLowerCase()
+          .replace(/[`~!@#$%^&*()+=[\]{}|\\:;"'<>,.?/！？。；：、“”‘’【】（）《》]/g, '')
+          .replace(/_/g, '-')
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '');
+      }
+
+      function assignHeadingIds(articleContent) {
+        const headings = articleContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        const seen = new Map();
+
+        headings.forEach((heading, index) => {
+          const existingId = (heading.getAttribute('id') || '').trim();
+          const baseId = existingId || slugifyHeadingText(heading.textContent || '') || `heading-${index + 1}`;
+          const count = (seen.get(baseId) || 0) + 1;
+          seen.set(baseId, count);
+          heading.id = count === 1 ? baseId : `${baseId}-${count}`;
+        });
+
+        return headings;
+      }
+
+      function findHashTarget(rawHash) {
+        const hash = (rawHash || '').replace(/^#/, '');
+        if (!hash) return null;
+
+        let decodedHash = hash;
+        try {
+          decodedHash = decodeURIComponent(hash);
+        } catch (_) {
+          // keep original hash if decode fails
+        }
+
+        return document.getElementById(decodedHash) || document.getElementById(hash);
+      }
+
+      function getHeadingScrollOffset() {
+        const header = document.querySelector('header');
+        if (header) {
+          const rect = header.getBoundingClientRect();
+          if (rect.height > 0) {
+            return rect.height + 12;
+          }
+        }
+
+        const rootStyle = window.getComputedStyle(document.documentElement);
+        const isDesktop = window.matchMedia('(min-width: 48rem)').matches;
+        const cssValue = rootStyle
+          .getPropertyValue(isDesktop ? '--header-height-desktop' : '--header-height-mobile')
+          .trim();
+
+        const parsed = Number.parseFloat(cssValue);
+        if (!Number.isFinite(parsed)) {
+          return 80;
+        }
+
+        if (cssValue.endsWith('rem')) {
+          const fontSize = Number.parseFloat(rootStyle.fontSize || '16') || 16;
+          return parsed * fontSize + 12;
+        }
+
+        return parsed + 12;
+      }
+
+      function scrollToHeading(target, behavior) {
+        if (!target) return;
+        const offset = getHeadingScrollOffset();
+        const targetTop = window.scrollY + target.getBoundingClientRect().top - offset;
+        window.scrollTo({
+          top: Math.max(0, targetTop),
+          behavior: behavior || 'smooth'
+        });
+      }
+
+      function bindArticleAnchorLinks(articleContent) {
+        articleContent.querySelectorAll('a[href^="#"]').forEach((link) => {
+          if (link.dataset.sfAnchorBound === 'true') {
+            return;
+          }
+
+          link.dataset.sfAnchorBound = 'true';
+          link.addEventListener('click', (event) => {
+            const href = link.getAttribute('href') || '';
+            const target = findHashTarget(href);
+            if (!target) return;
+
+            event.preventDefault();
+            scrollToHeading(target, 'smooth');
+            history.replaceState(null, '', `#${encodeURIComponent(target.id)}`);
+          });
+        });
+      }
+
       // Initialize markdown rendering features
       window.initMarkdownRendering = function() {
         // Convert mermaid code blocks to mermaid divs
@@ -183,8 +280,21 @@
           }
         });
 
+        const articleContent = document.querySelector('.article-content');
+        if (articleContent) {
+          assignHeadingIds(articleContent);
+          bindArticleAnchorLinks(articleContent);
+        }
+
         // Generate table of contents
         generateTOC();
+
+        if (window.location.hash) {
+          const target = findHashTarget(window.location.hash);
+          if (target) {
+            scrollToHeading(target, 'auto');
+          }
+        }
 
         // Back to top button is now managed by Yew ScrollToTopButton component
       };
@@ -543,16 +653,9 @@
         const articleContent = document.querySelector('.article-content');
         if (!articleContent) return;
 
-        // Find all headings (h1-h6)
-        const headings = articleContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        // Find all headings (h1-h6) and ensure stable, link-friendly IDs.
+        const headings = assignHeadingIds(articleContent);
         if (headings.length === 0) return;
-
-        // Add IDs to headings if they don't have one
-        headings.forEach((heading, index) => {
-          if (!heading.id) {
-            heading.id = `heading-${index}`;
-          }
-        });
 
         // Create TOC container
         const tocContainer = document.createElement('aside');
@@ -568,9 +671,14 @@
           <div class="article-toc-heading">
             <h3 class="article-toc-title">目录</h3>
           </div>
-          <button class="toc-close-btn" type="button" aria-label="关闭目录">
-            <i class="fas fa-times"></i>
-          </button>
+          <div class="toc-header-actions">
+            <button class="toc-collapse-btn" type="button" aria-label="收起目录" aria-expanded="true" title="收起目录">
+              <i class="fas fa-chevron-up"></i>
+            </button>
+            <button class="toc-close-btn" type="button" aria-label="关闭目录">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
         `;
 
         // Create TOC list
@@ -595,7 +703,8 @@
             e.preventDefault();
             const target = document.getElementById(id);
             if (target) {
-              target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              scrollToHeading(target, 'smooth');
+              history.replaceState(null, '', `#${encodeURIComponent(id)}`);
               // Update active state
               document.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
               a.classList.add('active');
@@ -621,11 +730,34 @@
         // Enable floating drag & snap (desktop only)
         setupFloatingTOC(tocContainer);
 
+        const collapseBtn = tocContainer.querySelector('.toc-collapse-btn');
+        const syncCollapseState = (collapsed) => {
+          if (!collapseBtn) return;
+          collapseBtn.setAttribute('aria-expanded', String(!collapsed));
+          collapseBtn.setAttribute('aria-label', collapsed ? '展开目录' : '收起目录');
+          collapseBtn.setAttribute('title', collapsed ? '展开目录' : '收起目录');
+          collapseBtn.innerHTML = collapsed
+            ? '<i class="fas fa-chevron-down"></i>'
+            : '<i class="fas fa-chevron-up"></i>';
+        };
+
+        if (collapseBtn) {
+          collapseBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const collapsed = tocContainer.classList.toggle('collapsed');
+            syncCollapseState(collapsed);
+          });
+          syncCollapseState(false);
+        }
+
         // Close button handler
         const closeBtn = tocContainer.querySelector('.toc-close-btn');
-        closeBtn.addEventListener('click', () => {
-          tocContainer.classList.remove('mobile-open');
-        });
+        if (closeBtn) {
+          closeBtn.addEventListener('click', () => {
+            tocContainer.classList.remove('mobile-open');
+          });
+        }
 
         // Mobile TOC toggle button is now managed by Yew TocButton component
         // This prevents the bug where the button persisted after leaving article pages
@@ -743,7 +875,7 @@
         const attachPointerHandlers = (getPointFromEvent, events) => {
           const onStart = (event) => {
             if (isMobileView()) return;
-            if (event.target.closest('.toc-close-btn')) return;
+            if (event.target.closest('.toc-close-btn, .toc-collapse-btn')) return;
             const point = getPointFromEvent(event);
             if (!point) return;
 

@@ -219,6 +219,7 @@ pub mod article_detail_page {
     pub const BACK_TOOLTIP: &str = "返回";
     pub const CLOSE_IMAGE_ARIA: &str = "关闭图片";
     pub const DEFAULT_IMAGE_ALT: &str = "文章图片";
+    pub const IMAGE_PREVIEW_FAILED: &str = "图片加载失败，可尝试在新标签打开：{}";
 }
 
 pub mod not_found_page {

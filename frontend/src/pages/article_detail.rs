@@ -134,11 +134,14 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let article_data = (*article).clone();
     let is_lightbox_open = use_state(|| false);
     let preview_image_url = use_state_eq(|| None::<String>);
+    let preview_image_failed = use_state(|| false);
 
     let open_image_preview = {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
+        let preview_image_failed = preview_image_failed.clone();
         Callback::from(move |src: String| {
+            preview_image_failed.set(false);
             preview_image_url.set(Some(src));
             is_lightbox_open.set(true);
         })
@@ -147,24 +150,29 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let close_lightbox_click = {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
+        let preview_image_failed = preview_image_failed.clone();
         Callback::from(move |_| {
             is_lightbox_open.set(false);
             preview_image_url.set(None);
+            preview_image_failed.set(false);
         })
     };
 
     {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
+        let preview_image_failed = preview_image_failed.clone();
         use_effect_with(*is_lightbox_open, move |is_open| {
             let keydown_listener_opt = if *is_open {
                 let handle = is_lightbox_open.clone();
                 let preview_url = preview_image_url.clone();
+                let failed = preview_image_failed.clone();
                 let listener =
                     wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
                         if event.key() == "Escape" {
                             handle.set(false);
                             preview_url.set(None);
+                            failed.set(false);
                         }
                     })
                         as Box<dyn FnMut(_)>);
@@ -192,6 +200,16 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             }
         });
     }
+
+    let stop_lightbox_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
+    let mark_preview_failed = {
+        let preview_image_failed = preview_image_failed.clone();
+        Callback::from(move |_: Event| preview_image_failed.set(true))
+    };
+    let mark_preview_loaded = {
+        let preview_image_failed = preview_image_failed.clone();
+        Callback::from(move |_: Event| preview_image_failed.set(false))
+    };
 
     // Initialize markdown rendering after content is loaded
     use_effect_with(article_data.clone(), |article_opt| {
@@ -683,7 +701,17 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             >
                                 { "X" }
                             </button>
-                            <div class={classes!("max-h-full", "max-w-full", "cursor-pointer")} onclick={close_lightbox_click.clone()}>
+                            <div
+                                class={classes!(
+                                    "max-h-full",
+                                    "max-w-full",
+                                    "rounded-[var(--radius)]",
+                                    "bg-black/35",
+                                    "p-2",
+                                    "shadow-[var(--shadow-lg)]"
+                                )}
+                                onclick={stop_lightbox_bubble.clone()}
+                            >
                                 {
                                     if let Some(src) = (*preview_image_url).clone() {
                                         let alt_text = article_data
@@ -691,17 +719,46 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                             .map(|article| article.title.clone())
                                             .unwrap_or_else(|| t::DEFAULT_IMAGE_ALT.to_string());
                                         html! {
-                                            <img
-                                                src={src}
-                                                alt={alt_text}
-                                                class={classes!(
-                                                    "max-h-[90vh]",
-                                                    "max-w-[90vw]",
-                                                    "object-contain",
-                                                    "cursor-pointer"
-                                                )}
-                                                loading="lazy"
-                                            />
+                                            <>
+                                                <img
+                                                    src={src.clone()}
+                                                    alt={alt_text}
+                                                    class={classes!(
+                                                        "block",
+                                                        "max-h-[90vh]",
+                                                        "max-w-[90vw]",
+                                                        "h-auto",
+                                                        "w-auto",
+                                                        "object-contain"
+                                                    )}
+                                                    loading="eager"
+                                                    decoding="async"
+                                                    onerror={mark_preview_failed.clone()}
+                                                    onload={mark_preview_loaded.clone()}
+                                                />
+                                                {
+                                                    if *preview_image_failed {
+                                                        html! {
+                                                            <div class={classes!(
+                                                                "mt-3",
+                                                                "max-w-[90vw]",
+                                                                "rounded-[var(--radius)]",
+                                                                "border",
+                                                                "border-red-400/50",
+                                                                "bg-black/70",
+                                                                "px-3",
+                                                                "py-2",
+                                                                "text-sm",
+                                                                "text-red-100"
+                                                            )}>
+                                                                { fill_one(t::IMAGE_PREVIEW_FAILED, &src) }
+                                                            </div>
+                                                        }
+                                                    } else {
+                                                        html! {}
+                                                    }
+                                                }
+                                            </>
                                         }
                                     } else {
                                         html! {}

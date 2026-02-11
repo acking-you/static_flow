@@ -31,7 +31,7 @@ Body content.
         let content = std::fs::read_to_string(file.path()).expect("read markdown");
         let (frontmatter, body) = utils::parse_markdown(&content).expect("parse markdown");
 
-        assert_eq!(frontmatter.title, "Hello");
+        assert_eq!(frontmatter.title.as_deref(), Some("Hello"));
         assert_eq!(frontmatter.summary.as_deref(), Some("Short summary"));
         assert_eq!(frontmatter.tags, Some(vec!["rust".to_string(), "wasm".to_string()]));
         assert_eq!(frontmatter.category.as_deref(), Some("Tech"));

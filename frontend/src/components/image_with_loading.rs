@@ -24,6 +24,10 @@ pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
         let image_loaded = image_loaded.clone();
         Callback::from(move |_: Event| image_loaded.set(true))
     };
+    let on_image_error = {
+        let image_loaded = image_loaded.clone();
+        Callback::from(move |_: Event| image_loaded.set(true))
+    };
 
     let container_classes = classes!(
         props.container_class.clone(),
@@ -40,7 +44,7 @@ pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
     );
 
     html! {
-        <div class={container_classes}>
+        <div class={container_classes} onclick={props.onclick.clone()}>
             {
                 if !*image_loaded {
                     html! {
@@ -50,7 +54,8 @@ pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
                             "bg-gradient-to-br",
                             "from-[var(--surface-alt)]",
                             "to-[var(--surface)]",
-                            "animate-pulse"
+                            "animate-pulse",
+                            "pointer-events-none"
                         )} />
                     }
                 } else {
@@ -64,7 +69,7 @@ pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
                 loading={props.loading.clone().unwrap_or(AttrValue::from("lazy"))}
                 decoding={props.decoding.clone()}
                 onload={on_image_load}
-                onclick={props.onclick.clone()}
+                onerror={on_image_error}
             />
         </div>
     }

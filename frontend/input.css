@@ -2494,7 +2494,7 @@ button[aria-current="page"]:hover {
   left: auto;
   width: min(320px, 28vw);
   max-height: calc(100vh - var(--header-height-desktop) - 4rem);
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2504,6 +2504,8 @@ button[aria-current="page"]:hover {
   backdrop-filter: blur(50px) saturate(var(--acrylic-saturate));
   -webkit-backdrop-filter: blur(50px) saturate(var(--acrylic-saturate));
   transition: box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+  display: flex;
+  flex-direction: column;
 }
 
 .article-toc[data-side="left"] {
@@ -2561,34 +2563,69 @@ button[aria-current="page"]:hover {
   letter-spacing: 0.04em;
 }
 
+.toc-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.toc-collapse-btn,
 /* 关闭按钮（仅移动端显示） */
 .toc-close-btn {
-  display: none;
   width: 2rem;
   height: 2rem;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 1.25rem;
+  font-size: 1rem;
   cursor: pointer;
   border-radius: 50%;
   transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
+.toc-close-btn {
+  display: none;
+}
+
+.toc-collapse-btn:hover,
 .toc-close-btn:hover {
   background: rgba(0, 0, 0, 0.05);
   color: var(--text);
 }
 
+[data-theme="dark"] .toc-collapse-btn:hover,
 [data-theme="dark"] .toc-close-btn:hover,
+[theme="dark"] .toc-collapse-btn:hover,
 [theme="dark"] .toc-close-btn:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.toc-collapse-btn i {
+  transition: transform 0.2s ease;
+}
+
+.article-toc.collapsed {
+  width: min(260px, 24vw);
+  max-height: none;
+  overflow: hidden;
+}
+
+.article-toc.collapsed .article-toc-list {
+  display: none;
 }
 
 .article-toc-list {
   list-style: none;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-gutter: stable;
 }
 
 .toc-item {
@@ -2679,6 +2716,7 @@ button[aria-current="page"]:hover {
     transition: transform 0.3s ease;
     z-index: 70;
     backdrop-filter: none;
+    overflow: hidden;
   }
 
   .article-toc.mobile-open {
@@ -2688,8 +2726,21 @@ button[aria-current="page"]:hover {
   /* 显示关闭按钮 */
   .toc-close-btn {
     display: flex;
-    align-items: center;
-    justify-content: center;
+  }
+
+  .toc-collapse-btn {
+    display: none;
+  }
+
+  .article-toc.collapsed {
+    width: 85vw;
+    max-width: 320px;
+    max-height: 100vh;
+    overflow: hidden;
+  }
+
+  .article-toc.collapsed .article-toc-list {
+    display: block;
   }
 
   /* 标题样式调整 */

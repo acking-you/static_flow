@@ -1,0 +1,4 @@
+interface:
+  display_name: "StaticFlow CLI Publisher"
+  short_description: "Publish, query, and manage StaticFlow blog content in LanceDB via sf-cli"
+  default_prompt: "Use this skill to publish Markdown posts and images into LanceDB, manage database tables and indexes, run local API queries, and verify publication results — all through sf-cli."
