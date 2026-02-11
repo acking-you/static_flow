@@ -145,6 +145,7 @@ print_check_urls() {
   echo
   echo "[7) GET /api/semantic-search?q=]"
   echo "- ${base}/api/semantic-search?q=%E5%89%8D%E7%AB%AF%20%E6%B8%B2%E6%9F%93"
+  echo "- ${base}/api/semantic-search?q=%E5%89%8D%E7%AB%AF%20%E6%B8%B2%E6%9F%93&enhanced_highlight=true"
 
   echo
   echo "[8) GET /api/images]"

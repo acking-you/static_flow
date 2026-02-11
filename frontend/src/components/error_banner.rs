@@ -1,6 +1,8 @@
 use yew::{prelude::*, use_effect_with};
 use yew_hooks::prelude::use_timeout;
 
+use crate::i18n::current::error_banner as t;
+
 #[allow(dead_code)]
 #[derive(Properties, PartialEq)]
 pub struct ErrorBannerProps {
@@ -99,7 +101,7 @@ pub fn error_banner(props: &ErrorBannerProps) -> Html {
         <div class={wrapper_classes} role="alert" aria-live="assertive">
             <span class="text-2xl" aria-hidden="true">{"⚠️"}</span>
             <div class="flex-1 space-y-1">
-                <p class="font-semibold text-base">{"发生错误"}</p>
+                <p class="font-semibold text-base">{t::TITLE}</p>
                 <p>{ props.message.clone() }</p>
             </div>
             <button
@@ -119,7 +121,7 @@ pub fn error_banner(props: &ErrorBannerProps) -> Html {
                     "hover:bg-black/10",
                     "dark:hover:bg-white/15"
                 )}
-                aria-label="关闭错误提示"
+                aria-label={t::CLOSE_ARIA}
                 onclick={close_button}
             >
                 {"×"}

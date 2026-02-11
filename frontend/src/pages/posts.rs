@@ -5,7 +5,11 @@ use static_flow_shared::ArticleListItem;
 use yew::prelude::*;
 use yew_router::prelude::{use_location, Link};
 
-use crate::{components::scroll_to_top_button::ScrollToTopButton, router::Route};
+use crate::{
+    components::scroll_to_top_button::ScrollToTopButton,
+    i18n::{current::posts_page as t, fill_one},
+    router::Route,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PostsQuery {
@@ -86,14 +90,14 @@ pub fn posts_page() -> Html {
 
     let description = if total_posts == 0 {
         if query.has_filters() {
-            "当前筛选下暂无文章，换个标签或分类试试？".to_string()
+            t::DESC_EMPTY_FILTERED.to_string()
         } else {
-            "暂时还没有文章，敬请期待。".to_string()
+            t::DESC_EMPTY_ALL.to_string()
         }
     } else if query.has_filters() {
-        format!("共找到 {} 篇文章匹配当前筛选。", total_posts)
+        fill_one(t::DESC_FILTERED_TEMPLATE, total_posts)
     } else {
-        format!("现在共有 {} 篇文章，按年份倒序排列。", total_posts)
+        fill_one(t::DESC_ALL_TEMPLATE, total_posts)
     };
 
     let toggle_year = {
@@ -131,7 +135,7 @@ pub fn posts_page() -> Html {
                         "text-[var(--muted)]",
                         "mb-6",
                         "font-semibold"
-                    )}>{ "Latest Articles" }</p>
+                    )}>{ t::HERO_INDEX }</p>
 
                     <h1 class={classes!(
                         "text-5xl",
@@ -142,7 +146,7 @@ pub fn posts_page() -> Html {
                         "tag-title"
                     )}
                     style="font-family: 'Fraunces', serif;">
-                        { "时间线" }
+                        { t::HERO_TITLE }
                     </h1>
 
                     <p class={classes!(
@@ -193,7 +197,7 @@ pub fn posts_page() -> Html {
                                         "!rounded-full"
                                     )}>
                                         <i class={classes!("fas", "fa-times", "mr-1")}></i>
-                                        { "清除" }
+                                        { t::FILTER_CLEAR }
                                     </Link<Route>>
                                 </div>
                             }
@@ -220,7 +224,7 @@ pub fn posts_page() -> Html {
                             )}>
                                 <i class={classes!("fas", "fa-inbox", "text-6xl", "text-[var(--muted)]", "mb-6")}></i>
                                 <p class={classes!("text-xl", "text-[var(--muted)]")}>
-                                    { "暂无文章可展示。" }
+                                    { t::EMPTY }
                                 </p>
                             </div>
                         }
@@ -275,7 +279,7 @@ pub fn posts_page() -> Html {
                                                     "text-sm",
                                                     "font-medium"
                                                 )}>
-                                                    { format!("{} 篇", total_count) }
+                                                    { fill_one(t::YEAR_COUNT_TEMPLATE, total_count) }
                                                 </div>
                                             </div>
 
@@ -395,9 +399,9 @@ pub fn posts_page() -> Html {
                                             {
                                                 if should_collapse {
                                                     let button_label = if is_expanded {
-                                                        "收起".to_string()
+                                                        t::COLLAPSE.to_string()
                                                     } else {
-                                                        format!("展开剩余 {} 篇", remaining)
+                                                        fill_one(t::EXPAND_REMAINING_TEMPLATE, remaining)
                                                     };
                                                     let toggle_cb = toggle_year.clone();
                                                     let year_for_toggle = year_value;
@@ -523,7 +527,7 @@ fn render_timeline_with_state(
                                                 "uppercase",
                                                 "text-[var(--muted)]"
                                             )}>
-                                                { format!("Published on {}", format_month_day(&article.date)) }
+                                                { fill_one(t::PUBLISHED_ON_TEMPLATE, format_month_day(&article.date)) }
                                             </span>
                                         </div>
                                     </div>
@@ -533,9 +537,9 @@ fn render_timeline_with_state(
                         {
                             if should_collapse {
                                 let button_label = if is_expanded {
-                                    "收起".to_string()
+                                    t::COLLAPSE.to_string()
                                 } else {
-                                    format!("展开剩余 {} 篇", remaining)
+                                    fill_one(t::EXPAND_REMAINING_TEMPLATE, remaining)
                                 };
                                 if let Some(toggle_cb) = toggle_year {
                                     let toggle_cb = toggle_cb.clone();
@@ -547,7 +551,7 @@ fn render_timeline_with_state(
                                             class={classes!("btn-fluent-ghost", "mt-3")}
                                             {onclick}
                                             aria-expanded={is_expanded.to_string()}
-                                            aria-label={format!("切换 {year_value} 年文章折叠状态")}
+                                            aria-label={fill_one(t::YEAR_TOGGLE_ARIA_TEMPLATE, year_value)}
                                         >
                                             { button_label }
                                         </button>

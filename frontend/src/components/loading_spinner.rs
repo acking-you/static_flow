@@ -1,5 +1,7 @@
 use yew::prelude::*;
 
+use crate::i18n::current::{common as common_text, loading_spinner as spinner_text};
+
 #[derive(Clone, PartialEq)]
 pub enum SpinnerSize {
     Small,
@@ -33,7 +35,7 @@ pub fn loading_spinner(props: &LoadingSpinnerProps) -> Html {
         <div
             class={classes!("flex", "items-center", "justify-center", "p-6")}
             role="status"
-            aria-label="Loading"
+            aria-label={spinner_text::ARIA_LABEL}
         >
             <div
                 style={spinner_style}
@@ -47,7 +49,7 @@ pub fn loading_spinner(props: &LoadingSpinnerProps) -> Html {
                     "animate-spin"
                 )}
             />
-            <span class={classes!("sr-only")}>{ "加载中..." }</span>
+            <span class={classes!("sr-only")}>{ common_text::LOADING }</span>
         </div>
     };
 

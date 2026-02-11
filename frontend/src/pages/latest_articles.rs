@@ -12,6 +12,7 @@ use crate::{
         scroll_to_top_button::ScrollToTopButton,
     },
     hooks::use_pagination,
+    i18n::current::latest_articles_page as t,
 };
 
 #[function_component(LatestArticlesPage)]
@@ -152,7 +153,7 @@ pub fn latest_articles_page() -> Html {
                         "text-[var(--muted)]",
                         "mb-6",
                         "font-semibold"
-                    )}>{ "Latest Articles" }</p>
+                    )}>{ t::HERO_INDEX }</p>
 
                     <h1 class={classes!(
                         "text-5xl",
@@ -162,7 +163,7 @@ pub fn latest_articles_page() -> Html {
                         "leading-tight"
                     )}
                     style="font-family: 'Fraunces', serif;">
-                        { "最新文章" }
+                        { t::HERO_TITLE }
                     </h1>
 
                     <p class={classes!(
@@ -173,7 +174,7 @@ pub fn latest_articles_page() -> Html {
                         "mx-auto",
                         "leading-relaxed"
                     )}>
-                        { "甄选近期发布的内容，持续更新" }
+                        { t::HERO_DESC }
                     </p>
                 </div>
 
@@ -200,7 +201,7 @@ pub fn latest_articles_page() -> Html {
                             )}>
                                 <i class={classes!("fas", "fa-inbox", "text-6xl", "text-[var(--muted)]", "mb-6")}></i>
                                 <p class={classes!("text-xl", "text-[var(--muted)]")}>
-                                    { "暂无文章" }
+                                    { t::EMPTY }
                                 </p>
                             </div>
                         }

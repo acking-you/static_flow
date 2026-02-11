@@ -66,12 +66,15 @@ cd cli
 cd ../backend
 LANCEDB_URI=../data/lancedb ../target/release/static-flow-backend
 
-# 启动前端（另一个终端）
-cd ../frontend
-trunk serve --open
+# 启动前端（另一个终端，可指定后端 URL）
+cd ..
+./scripts/start_frontend_with_api.sh \
+  --api-base "http://127.0.0.1:3000/api" \
+  --open
+# 若不传 --api-base，脚本默认: http://127.0.0.1:39080/api
 ```
 
-后端: `http://localhost:3000` | 前端: `http://localhost:8080`
+后端: `http://127.0.0.1:3000` | 前端（默认）: `http://127.0.0.1:38080`
 
 ## CLI 命令
 
@@ -186,6 +189,10 @@ cd cli
 | `GET /api/categories` | 分类列表 |
 
 > 可观测性：每个 backend 响应都会返回 `x-request-id` 与 `x-trace-id`，并且 backend/shared 的请求内日志会带同一组 ID，便于串联排障。
+
+> 查询路径可观测：日志会输出 `query/path/fastest_path/is_fastest/reason/rows/elapsed_ms`，可直接判断是否命中索引或发生回退。
+
+> 语义高亮模式：`/api/semantic-search` 默认走快速高亮；追加 `&enhanced_highlight=true` 可启用高精度片段重排（更慢）。
 
 > 检索说明：若你更新了代码但仍看到“英文语义检索无结果”，请重新编译二进制（`cargo build --release -p sf-cli -p static-flow-backend`），旧二进制不会包含向量列回退逻辑。
 

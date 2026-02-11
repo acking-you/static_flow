@@ -7,6 +7,7 @@ use crate::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
     },
+    i18n::{current::category_detail_page as t, fill_one},
     pages::posts::group_articles_by_year,
     router::Route,
 };
@@ -22,7 +23,7 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
     let filter_value = if normalized.is_empty() { None } else { Some(normalized) };
     let display_category = filter_value
         .clone()
-        .unwrap_or_else(|| "未命名分类".to_string());
+        .unwrap_or_else(|| t::UNNAMED.to_string());
 
     let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
@@ -58,9 +59,9 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
     let grouped_by_year = group_articles_by_year(&filtered);
 
     let empty_message = if let Some(category_value) = filter_value.as_ref() {
-        format!("分类「{}」下暂无文章，换个分类看看？", category_value)
+        fill_one(t::EMPTY_TEMPLATE, category_value)
     } else {
-        "请输入有效的分类名称。".to_string()
+        t::INVALID_NAME.to_string()
     };
 
     html! {
@@ -105,7 +106,7 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                         "uppercase"
                     )}>
                         <i class="fas fa-folder-open"></i>
-                        <span>{ "Category Collection" }</span>
+                        <span>{ t::COLLECTION_BADGE }</span>
                     </div>
 
                     <h1 class={classes!(
@@ -126,9 +127,9 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                         "font-light"
                     )}>
                         if total_posts > 0 {
-                            { format!("{} 篇精选内容", total_posts) }
+                            { fill_one(t::HIGHLIGHT_COUNT_TEMPLATE, total_posts) }
                         } else {
-                            { "暂无内容" }
+                            { t::NO_CONTENT }
                         }
                     </p>
 
@@ -281,7 +282,7 @@ fn render_category_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -> 
                                     "text-[var(--muted)]",
                                     "font-medium"
                                 )}>
-                                    { format!("{} 篇文章", posts.len()) }
+                                    { fill_one(t::YEAR_POSTS_TEMPLATE, posts.len()) }
                                 </div>
                             </div>
                         </div>

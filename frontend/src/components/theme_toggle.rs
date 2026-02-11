@@ -1,6 +1,8 @@
 use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
+use crate::i18n::current::theme_toggle as t;
+
 fn is_dark_theme() -> bool {
     web_sys::window()
         .and_then(|win| win.document())
@@ -37,7 +39,7 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
         })
     };
 
-    let label = if *theme_state { "切换到亮色模式" } else { "切换到暗色模式" };
+    let label = if *theme_state { t::SWITCH_TO_LIGHT } else { t::SWITCH_TO_DARK };
 
     let icon_class = if *theme_state { "fa-sun" } else { "fa-moon" };
 

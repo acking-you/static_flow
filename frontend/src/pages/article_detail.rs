@@ -15,6 +15,7 @@ use crate::{
         toc_button::TocButton,
         tooltip::{TooltipIconButton, TooltipPosition},
     },
+    i18n::{current::article_detail_page as t, fill_one},
     router::Route,
     utils::{image_url, markdown_to_html},
 };
@@ -373,7 +374,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     )}
                                     onclick={open_featured_preview}
                                 >
-                                    { "查看原图" }
+                                    { t::VIEW_ORIGINAL_IMAGE }
                                 </button>
                             </div>
                         }
@@ -422,7 +423,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         "gap-3",
                         "text-[0.9rem]",
                         "text-[var(--muted)]"
-                    )} aria-label="文章元信息">
+                    )} aria-label={t::ARTICLE_META_ARIA}>
                         <span class={classes!(
                             "inline-flex",
                             "items-center",
@@ -456,7 +457,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             "gap-[0.35rem]"
                         )}>
                             <i class={classes!("far", "fa-file-alt")} aria-hidden="true"></i>
-                            { format!("{} 字", word_count) }
+                            { fill_one(t::WORD_COUNT_TEMPLATE, word_count) }
                         </span>
                         <span class={classes!(
                             "inline-flex",
@@ -464,12 +465,12 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             "gap-[0.35rem]"
                         )}>
                             <i class={classes!("far", "fa-clock")} aria-hidden="true"></i>
-                            { format!("约 {} 分钟", article.read_time) }
+                            { fill_one(t::READ_TIME_TEMPLATE, article.read_time) }
                         </span>
                     </div>
                 </header>
 
-                <section class={classes!("article-content")} aria-label="文章正文">
+                <section class={classes!("article-content")} aria-label={t::ARTICLE_BODY_ARIA}>
                     { content }
                 </section>
 
@@ -486,7 +487,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         "text-[var(--muted)]",
                         "tracking-[0.15em]",
                         "uppercase"
-                    )}>{ "标签" }</h2>
+                    )}>{ t::TAGS_TITLE }</h2>
                     <ul class={classes!(
                         "list-none",
                         "flex",
@@ -536,7 +537,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         "text-[var(--muted)]",
                         "tracking-[0.15em]",
                         "uppercase"
-                    )}>{ "相关推荐" }</h2>
+                    )}>{ t::RELATED_TITLE }</h2>
                     if *related_loading {
                         <div class={classes!(
                             "flex",
@@ -545,11 +546,11 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             "text-[var(--muted)]"
                         )}>
                             <LoadingSpinner size={SpinnerSize::Small} />
-                            <span>{ "加载相关推荐中..." }</span>
+                            <span>{ t::RELATED_LOADING }</span>
                         </div>
                     } else if related_articles.is_empty() {
                         <p class={classes!("text-[var(--muted)]", "m-0")}>
-                            { "暂无相关推荐" }
+                            { t::NO_RELATED }
                         </p>
                     } else {
                         <div class={classes!(
@@ -604,11 +605,11 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         "text-[2.25rem]",
                         "leading-[1.25]",
                         "sm:text-[1.65rem]"
-                    )}>{ "文章未找到" }</h1>
+                    )}>{ t::NOT_FOUND_TITLE }</h1>
                     <p class={classes!(
                         "m-0",
                         "text-[var(--muted)]"
-                    )}>{ "抱歉，没有找到对应的文章，请返回列表重试。" }</p>
+                    )}>{ t::NOT_FOUND_DESC }</p>
                 </div>
             </section>
         }
@@ -628,7 +629,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 )}>
                     <TooltipIconButton
                         icon={IconName::ArrowLeft}
-                        tooltip="返回"
+                        tooltip={t::BACK_TOOLTIP}
                         position={TooltipPosition::Right}
                         onclick={handle_back}
                         size={20}
@@ -677,7 +678,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     "text-white",
                                     "hover:bg-black"
                                 )}
-                                aria-label="关闭图片"
+                                aria-label={t::CLOSE_IMAGE_ARIA}
                                 onclick={close_lightbox_click.clone()}
                             >
                                 { "X" }
@@ -688,7 +689,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                         let alt_text = article_data
                                             .as_ref()
                                             .map(|article| article.title.clone())
-                                            .unwrap_or_else(|| "文章图片".to_string());
+                                            .unwrap_or_else(|| t::DEFAULT_IMAGE_ALT.to_string());
                                         html! {
                                             <img
                                                 src={src}

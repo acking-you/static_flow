@@ -1,5 +1,7 @@
 use yew::prelude::*;
 
+use crate::i18n::{current::pagination as t, fill_one};
+
 #[derive(Properties, PartialEq)]
 pub struct PaginationProps {
     pub current_page: usize,
@@ -81,13 +83,13 @@ pub fn pagination(props: &PaginationProps) -> Html {
     let next_classes = classes!(base_btn_classes.clone(), "text-[var(--text)]");
 
     html! {
-        <nav class="flex flex-wrap items-center gap-2" aria-label="分页">
+        <nav class="flex flex-wrap items-center gap-2" aria-label={t::ARIA_NAV}>
             <button
                 type="button"
                 class={prev_classes}
                 disabled={prev_disabled}
                 onclick={prev_onclick}
-                aria-label="上一页"
+                aria-label={t::ARIA_PREV}
             >
                 {"<"}
             </button>
@@ -120,7 +122,7 @@ pub fn pagination(props: &PaginationProps) -> Html {
                                 key={format!("page-{page}")}
                                 type="button"
                                 class={page_classes.clone()}
-                                aria-label={format!("跳转到第 {page} 页")}
+                                aria-label={fill_one(t::ARIA_GOTO_PAGE_TEMPLATE, page)}
                                 aria-current={if page == current_page {
                                     Some(AttrValue::from("page"))
                                 } else {
@@ -164,7 +166,7 @@ pub fn pagination(props: &PaginationProps) -> Html {
                 class={next_classes}
                 disabled={next_disabled}
                 onclick={next_onclick}
-                aria-label="下一页"
+                aria-label={t::ARIA_NEXT}
             >
                 {">"}
             </button>

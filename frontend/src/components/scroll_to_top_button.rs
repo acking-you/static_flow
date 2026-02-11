@@ -2,9 +2,12 @@ use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::window;
 use yew::prelude::*;
 
-use crate::components::{
-    icons::IconName,
-    tooltip::{TooltipIconButton, TooltipPosition},
+use crate::{
+    components::{
+        icons::IconName,
+        tooltip::{TooltipIconButton, TooltipPosition},
+    },
+    i18n::current::scroll_to_top as t,
 };
 
 #[function_component(ScrollToTopButton)]
@@ -69,7 +72,7 @@ pub fn scroll_to_top_button() -> Html {
             )}>
                 <TooltipIconButton
                     icon={IconName::ArrowUp}
-                    tooltip="回到顶部"
+                    tooltip={t::TOOLTIP}
                     position={TooltipPosition::Top}
                     onclick={onclick}
                     size={20}

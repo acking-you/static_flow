@@ -38,6 +38,9 @@ frontend/
 ├── src/
 │   ├── main.rs          # App entry point and root app initialization
 │   ├── router.rs        # Yew Router route definitions
+│   ├── i18n/            # Centralized UI copy and locale selection
+│   │   ├── mod.rs       # Locale switch + template helpers
+│   │   └── zh_cn.rs     # Chinese copy bundle (current default)
 │   ├── models.rs        # Shared data structures for posts, tags, etc.
 │   ├── utils.rs         # Small helpers (storage, formatting, etc.)
 │   ├── components/      # Header, footer, theme toggle, article card, ...
@@ -63,3 +66,13 @@ frontend/
 - Flesh out loading & skeleton states for article pages once the API is wired
 - Add integration/visual regression tests or snapshots once the routes stabilize
 - Polish search interactions (keyboard shortcuts, history) and wire to backend
+
+## UI Copy & Localization
+
+- All user-facing frontend copy is centralized in `src/i18n/`.
+- Current active locale is `i18n::current` (currently aliased to `zh_cn`).
+- To add another language later:
+  1. Add a new locale file (for example `en_us.rs`) under `src/i18n/`.
+  2. Keep key/module structure aligned with `zh_cn.rs`.
+  3. Switch `pub use zh_cn as current;` in `src/i18n/mod.rs` to the target locale.
+- Dynamic copy templates use `fill_one` / `fill_two` helpers in `src/i18n/mod.rs`.

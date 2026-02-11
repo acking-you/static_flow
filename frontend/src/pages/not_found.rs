@@ -1,7 +1,10 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-use crate::router::Route;
+use crate::{
+    i18n::current::{common as common_text, not_found_page as t},
+    router::Route,
+};
 
 #[function_component(NotFoundPage)]
 pub fn not_found_page() -> Html {
@@ -15,46 +18,46 @@ pub fn not_found_page() -> Html {
                             <span class="terminal-dot terminal-dot-red"></span>
                             <span class="terminal-dot terminal-dot-yellow"></span>
                             <span class="terminal-dot terminal-dot-green"></span>
-                            <span class="terminal-title">{ "error.sh" }</span>
+                            <span class="terminal-title">{ t::TERMINAL_TITLE }</span>
                         </div>
 
                         // Command showing 404 error
                         <div class="terminal-line">
-                            <span class="terminal-prompt">{ "$ " }</span>
-                            <span class="terminal-content">{ "curl http://localhost:8080$(location.pathname)" }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                            <span class="terminal-content">{ t::CMD_LOOKUP }</span>
                         </div>
 
                         // Error output
                         <div class="terminal-line" style="margin-top: 1rem;">
-                            <span class="terminal-prompt" style="color: var(--error, #ef4444);">{ "ERROR: " }</span>
-                            <span class="terminal-content" style="color: var(--error, #ef4444);">{ "404 Not Found" }</span>
+                            <span class="terminal-prompt" style="color: var(--error, #ef4444);">{ t::ERROR_PREFIX }</span>
+                            <span class="terminal-content" style="color: var(--error, #ef4444);">{ t::ERROR_CODE }</span>
                         </div>
 
                         <div class="terminal-line">
-                            <span class="terminal-prompt">{ "> " }</span>
-                            <span class="terminal-content">{ "The requested resource could not be found on this server." }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
+                            <span class="terminal-content">{ t::ERROR_DETAIL }</span>
                         </div>
 
                         // Helpful message
                         <div class="terminal-line" style="margin-top: 1.5rem;">
-                            <span class="terminal-prompt">{ "$ " }</span>
-                            <span class="terminal-content">{ "cat /var/log/suggestions.log" }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                            <span class="terminal-content">{ t::CMD_SUGGESTIONS }</span>
                         </div>
 
                         <div class="terminal-line">
-                            <span class="terminal-prompt">{ "> " }</span>
-                            <span class="terminal-content">{ "抱歉，你要找的页面走丢了... 可能是被外星人劫持了 👽" }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
+                            <span class="terminal-content">{ t::SUGGESTION_1 }</span>
                         </div>
 
                         <div class="terminal-line">
-                            <span class="terminal-prompt">{ "> " }</span>
-                            <span class="terminal-content">{ "建议：检查 URL 拼写，或者返回首页重新探索。" }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
+                            <span class="terminal-content">{ t::SUGGESTION_2 }</span>
                         </div>
 
                         // Navigation options
                         <div class="terminal-line" style="margin-top: 1.5rem;">
-                            <span class="terminal-prompt">{ "$ " }</span>
-                            <span class="terminal-content">{ "ls -l ./available_routes/" }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                            <span class="terminal-content">{ t::CMD_AVAILABLE_ROUTES }</span>
                         </div>
 
                         <div class={classes!("flex", "flex-wrap", "gap-3", "mt-4", "ml-8")}>
@@ -63,21 +66,21 @@ pub fn not_found_page() -> Html {
                                 classes={classes!("btn-fluent-primary", "!px-6", "!py-2.5", "!text-sm")}
                             >
                                 <i class="fas fa-home mr-2"></i>
-                                { "返回首页" }
+                                { t::BTN_HOME }
                             </Link<Route>>
                             <Link<Route>
                                 to={Route::LatestArticles}
                                 classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
                             >
                                 <i class="fas fa-newspaper mr-2"></i>
-                                { "最新文章" }
+                                { t::BTN_LATEST }
                             </Link<Route>>
                             <Link<Route>
                                 to={Route::Posts}
                                 classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
                             >
                                 <i class="fas fa-archive mr-2"></i>
-                                { "文章归档" }
+                                { t::BTN_ARCHIVE }
                             </Link<Route>>
                         </div>
 
@@ -95,7 +98,7 @@ pub fn not_found_page() -> Html {
 
                         // Blinking cursor
                         <div class="terminal-line" style="margin-top: 1rem;">
-                            <span class="terminal-prompt">{ "$ " }</span>
+                            <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                             <span class="terminal-cursor"></span>
                         </div>
                     </div>

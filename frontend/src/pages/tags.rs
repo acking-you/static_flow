@@ -6,6 +6,7 @@ use crate::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
     },
+    i18n::{current::tags_page as t, fill_one, fill_two},
     router::Route,
 };
 
@@ -62,7 +63,7 @@ pub fn tags_page() -> Html {
                         "text-[var(--muted)]",
                         "mb-6",
                         "font-semibold"
-                    )}>{ "Tag Index" }</p>
+                    )}>{ t::HERO_INDEX }</p>
 
                     <h1 class={classes!(
                         "tag-title",
@@ -73,7 +74,7 @@ pub fn tags_page() -> Html {
                         "leading-tight"
                     )}
                     style="font-family: 'Fraunces', serif;">
-                        { "标签索引" }
+                        { t::HERO_TITLE }
                     </h1>
 
                     <p class={classes!(
@@ -84,7 +85,7 @@ pub fn tags_page() -> Html {
                         "mx-auto",
                         "leading-relaxed"
                     )}>
-                        { format!("汇总 {} 个标签，覆盖 {} 篇文章", total_tags, total_articles) }
+                        { fill_two(t::HERO_DESC_TEMPLATE, total_tags, total_articles) }
                     </p>
 
                     // Decorative badges
@@ -112,7 +113,7 @@ pub fn tags_page() -> Html {
                             "font-semibold"
                         )}>
                             <i class={classes!("fas", "fa-tags", "text-[var(--primary)]")}></i>
-                            <span>{ format!("{} 标签", total_tags) }</span>
+                            <span>{ fill_one(t::TAG_COUNT_TEMPLATE, total_tags) }</span>
                         </div>
                         <div class={classes!(
                             "inline-flex",
@@ -130,7 +131,7 @@ pub fn tags_page() -> Html {
                             "font-semibold"
                         )}>
                             <i class={classes!("fas", "fa-book", "text-[var(--primary)]")}></i>
-                            <span>{ format!("{} 文章", total_articles) }</span>
+                            <span>{ fill_one(t::ARTICLE_COUNT_TEMPLATE, total_articles) }</span>
                         </div>
                     </div>
                 </div>
@@ -174,7 +175,7 @@ pub fn tags_page() -> Html {
                                         "mb-6"
                                     )}></i>
                                     <p class={classes!("text-xl", "text-[var(--muted)]")}>
-                                        { "暂无标签" }
+                                        { t::EMPTY }
                                     </p>
                                 </div>
                             }
@@ -192,7 +193,7 @@ pub fn tags_page() -> Html {
                                         "mx-auto"
                                     )}
                                     role="list"
-                                    aria-label="标签云"
+                                    aria-label={t::CLOUD_ARIA}
                                 >
                                     { for tag_stats.iter().enumerate().map(|(idx, tag_info)| {
                                         let weight = (tag_info.count as f32 / max_count).max(0.35);

@@ -20,6 +20,8 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
     pub q: String,
+    #[serde(default)]
+    pub enhanced_highlight: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,7 +171,7 @@ pub async fn semantic_search(
 
     let results = state
         .store
-        .semantic_search(keyword, 10)
+        .semantic_search(keyword, 10, query.enhanced_highlight)
         .await
         .map_err(|e| internal_error("Failed to run semantic search", e))?;
 

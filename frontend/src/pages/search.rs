@@ -8,6 +8,7 @@ use crate::{
         scroll_to_top_button::ScrollToTopButton,
     },
     hooks::use_pagination,
+    i18n::{current::search as t, fill_one},
     router::Route,
     utils::image_url,
 };
@@ -30,6 +31,10 @@ pub fn search_page() -> Html {
         .to_lowercase();
     let mode =
         if matches!(mode.as_str(), "semantic" | "image") { mode } else { "keyword".to_string() };
+    let enhanced_highlight = query
+        .as_ref()
+        .and_then(|q| q.enhanced_highlight)
+        .unwrap_or(false);
     let results = use_state(Vec::<SearchResult>::new);
     let loading = use_state(|| false);
     let image_catalog = use_state(Vec::<ImageInfo>::new);
@@ -45,39 +50,43 @@ pub fn search_page() -> Html {
         let keyword = keyword.clone();
         let mode = mode.clone();
 
-        use_effect_with((keyword.clone(), mode.clone()), move |(kw, mode)| {
-            if mode == "image" || kw.trim().is_empty() {
-                loading.set(false);
-                results.set(vec![]);
-            } else {
-                loading.set(true);
-                let results = results.clone();
-                let loading = loading.clone();
-                let query_text = kw.clone();
-                let use_semantic = mode == "semantic";
+        use_effect_with(
+            (keyword.clone(), mode.clone(), enhanced_highlight),
+            move |(kw, mode, enhanced_highlight)| {
+                if mode == "image" || kw.trim().is_empty() {
+                    loading.set(false);
+                    results.set(vec![]);
+                } else {
+                    loading.set(true);
+                    let results = results.clone();
+                    let loading = loading.clone();
+                    let query_text = kw.clone();
+                    let use_semantic = mode == "semantic";
+                    let use_enhanced_highlight = *enhanced_highlight;
 
-                wasm_bindgen_futures::spawn_local(async move {
-                    let response = if use_semantic {
-                        semantic_search_articles(&query_text).await
-                    } else {
-                        crate::api::search_articles(&query_text).await
-                    };
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let response = if use_semantic {
+                            semantic_search_articles(&query_text, use_enhanced_highlight).await
+                        } else {
+                            crate::api::search_articles(&query_text).await
+                        };
 
-                    match response {
-                        Ok(data) => {
-                            results.set(data);
-                            loading.set(false);
-                        },
-                        Err(e) => {
-                            web_sys::console::error_1(&format!("Search failed: {}", e).into());
-                            loading.set(false);
-                        },
-                    }
-                });
-            }
+                        match response {
+                            Ok(data) => {
+                                results.set(data);
+                                loading.set(false);
+                            },
+                            Err(e) => {
+                                web_sys::console::error_1(&format!("Search failed: {}", e).into());
+                                loading.set(false);
+                            },
+                        }
+                    });
+                }
 
-            || ()
-        });
+                || ()
+            },
+        );
     }
 
     {
@@ -146,8 +155,12 @@ pub fn search_page() -> Html {
 
     let encoded_query = urlencoding::encode(&keyword);
     let keyword_href = crate::config::route_path(&format!("/search?q={}", encoded_query));
+    let semantic_base = format!("/search?mode=semantic&q={}", encoded_query);
+    let semantic_fast_href = crate::config::route_path(&semantic_base);
+    let semantic_precise_href =
+        crate::config::route_path(&format!("{semantic_base}&enhanced_highlight=true"));
     let semantic_href =
-        crate::config::route_path(&format!("/search?mode=semantic&q={}", encoded_query));
+        if enhanced_highlight { semantic_precise_href.clone() } else { semantic_fast_href.clone() };
     let image_href = crate::config::route_path("/search?mode=image");
 
     let hero_label = if mode == "image" {
@@ -200,7 +213,7 @@ pub fn search_page() -> Html {
                         "opacity-50"
                     )}
                     style="font-family: 'Space Mono', monospace;">
-                        { "// SEARCH_ENGINE" }
+                        { t::SEARCH_ENGINE_BADGE }
                     </p>
 
                     <h1 class={classes!(
@@ -227,19 +240,28 @@ pub fn search_page() -> Html {
                         "opacity-80"
                     )}>
                         if mode == "image" {
-                            { "请选择一张图片开始相似图片搜索" }
+                            { t::IMAGE_MODE_HINT }
                         } else if keyword.is_empty() {
-                            { "请在上方搜索框输入关键词" }
+                            { t::EMPTY_KEYWORD_HINT }
                         } else if *loading {
                             <span class={classes!("search-status-loading")}>
                                 <i class={classes!("fas", "fa-spinner", "fa-spin", "mr-2")}></i>
-                                { "正在扫描数据库..." }
+                                { t::SEARCH_LOADING }
+                            </span>
+                        } else if mode == "keyword" && results.is_empty() {
+                            { fill_one(t::KEYWORD_MISS_TEMPLATE, &keyword) }
+                        } else if mode == "keyword" {
+                            <span class={classes!("search-status-found")}>
+                                { fill_one(
+                                    t::KEYWORD_FOUND_TEMPLATE,
+                                    results.len().to_string(),
+                                ) }
                             </span>
                         } else if results.is_empty() {
-                            { format!("未找到包含 \"{}\" 的文章", keyword) }
+                            { fill_one(t::SEMANTIC_MISS_TEMPLATE, &keyword) }
                         } else {
                             <span class={classes!("search-status-found")}>
-                                { format!("找到 {} 篇相关文章", results.len()) }
+                                { fill_one(t::SEMANTIC_FOUND_TEMPLATE, results.len().to_string()) }
                             </span>
                         }
                     </p>
@@ -283,16 +305,16 @@ pub fn search_page() -> Html {
                             <span style="font-family: 'Space Mono', monospace;">
                                 if mode == "image" {
                                     if *image_loading {
-                                        { "SCANNING" }
+                                        { t::STATUS_SCANNING }
                                     } else if selected_image_id.is_some() {
                                         { format!("{} RESULTS", image_results.len()) }
                                     } else {
-                                        { "READY" }
+                                        { t::STATUS_READY }
                                     }
                                 } else if keyword.is_empty() {
-                                    { "READY" }
+                                    { t::STATUS_READY }
                                 } else if *loading {
-                                    { "SCANNING" }
+                                    { t::STATUS_SCANNING }
                                 } else {
                                     { format!("{} RESULTS", results.len()) }
                                 }
@@ -322,7 +344,7 @@ pub fn search_page() -> Html {
                                 if mode != "keyword" { "hover:border-[var(--primary)]/60" } else { "" }
                             )}
                         >
-                            { "Keyword" }
+                            { t::MODE_KEYWORD }
                         </a>
                         <a
                             href={semantic_href}
@@ -335,7 +357,7 @@ pub fn search_page() -> Html {
                                 if mode != "semantic" { "hover:border-[var(--primary)]/60" } else { "" }
                             )}
                         >
-                            { "Semantic" }
+                            { t::MODE_SEMANTIC }
                         </a>
                         <a
                             href={image_href}
@@ -348,9 +370,101 @@ pub fn search_page() -> Html {
                                 if mode != "image" { "hover:border-[var(--primary)]/60" } else { "" }
                             )}
                         >
-                            { "Image" }
+                            { t::MODE_IMAGE }
                         </a>
                     </div>
+
+                    if mode == "semantic" {
+                        <div class={classes!(
+                            "mt-6",
+                            "flex",
+                            "items-center",
+                            "justify-center",
+                            "gap-3",
+                            "flex-wrap"
+                        )}>
+                            <span class={classes!(
+                                "text-xs",
+                                "uppercase",
+                                "tracking-[0.2em]",
+                                "text-[var(--muted)]",
+                                "font-semibold"
+                            )}
+                            style="font-family: 'Space Mono', monospace;">
+                                { t::HIGHLIGHT_PRECISION }
+                            </span>
+                            <a
+                                href={semantic_fast_href.clone()}
+                                class={classes!(
+                                    mode_button_base.clone(),
+                                    "text-xs",
+                                    if !enhanced_highlight { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                    if !enhanced_highlight { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                    if !enhanced_highlight { "bg-[var(--primary)]/10" } else { "" },
+                                    if enhanced_highlight { "hover:text-[var(--primary)]" } else { "" },
+                                    if enhanced_highlight { "hover:border-[var(--primary)]/60" } else { "" }
+                                )}
+                            >
+                                { t::HIGHLIGHT_FAST }
+                            </a>
+                            <a
+                                href={semantic_precise_href.clone()}
+                                class={classes!(
+                                    mode_button_base.clone(),
+                                    "text-xs",
+                                    if enhanced_highlight { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                    if enhanced_highlight { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                    if enhanced_highlight { "bg-[var(--primary)]/10" } else { "" },
+                                    if !enhanced_highlight { "hover:text-[var(--primary)]" } else { "" },
+                                    if !enhanced_highlight { "hover:border-[var(--primary)]/60" } else { "" }
+                                )}
+                            >
+                                { t::HIGHLIGHT_ENHANCED }
+                            </a>
+                        </div>
+                    }
+
+                    if mode == "keyword" && !keyword.is_empty() {
+                        <div class={classes!(
+                            "mt-6",
+                            "mx-auto",
+                            "max-w-3xl",
+                            "rounded-xl",
+                            "border",
+                            "border-[var(--primary)]/30",
+                            "bg-[var(--primary)]/5",
+                            "px-4",
+                            "py-3",
+                            "flex",
+                            "items-center",
+                            "justify-center",
+                            "gap-3",
+                            "flex-wrap",
+                            "text-sm",
+                            "text-[var(--muted)]"
+                        )}>
+                            <i class={classes!("fas", "fa-lightbulb", "text-[var(--primary)]")}></i>
+                            <span>
+                                { t::KEYWORD_GUIDE_BANNER }
+                            </span>
+                            <a
+                                href={semantic_fast_href.clone()}
+                                class={classes!(
+                                    "px-3",
+                                    "py-1.5",
+                                    "rounded-lg",
+                                    "border",
+                                    "border-[var(--primary)]/60",
+                                    "text-[var(--primary)]",
+                                    "font-semibold",
+                                    "hover:bg-[var(--primary)]/10",
+                                    "transition-colors"
+                                )}
+                            >
+                                { t::SWITCH_TO_SEMANTIC }
+                            </a>
+                        </div>
+                    }
                 </div>
 
                 // Search Results
@@ -364,7 +478,7 @@ pub fn search_page() -> Html {
                                 "tracking-[0.3em]",
                                 "font-semibold"
                             )} style="font-family: 'Space Mono', monospace;">
-                                { "IMAGE CATALOG" }
+                                { t::IMAGE_CATALOG }
                             </div>
 
                             if *image_loading && image_catalog.is_empty() {
@@ -384,7 +498,7 @@ pub fn search_page() -> Html {
                                         "text-2xl",
                                         "text-[var(--primary)]"
                                     )}></i>
-                                    <span style="font-family: 'Space Mono', monospace;">{ "加载图片中..." }</span>
+                                    <span style="font-family: 'Space Mono', monospace;">{ t::IMAGE_LOADING }</span>
                                 </div>
                             } else if image_catalog.is_empty() {
                                 <div class={classes!(
@@ -402,7 +516,7 @@ pub fn search_page() -> Html {
                                         "text-base",
                                         "text-[var(--muted)]"
                                     )}>
-                                        { "暂无图片，请先运行 sf-cli write-images." }
+                                        { t::IMAGE_EMPTY_HINT }
                                     </p>
                                 </div>
                             } else {
@@ -460,7 +574,7 @@ pub fn search_page() -> Html {
                                     "tracking-[0.3em]",
                                     "font-semibold"
                                 )} style="font-family: 'Space Mono', monospace;">
-                                    { "SIMILAR IMAGES" }
+                                    { t::SIMILAR_IMAGES }
                                 </div>
 
                                 if *image_loading {
@@ -480,7 +594,7 @@ pub fn search_page() -> Html {
                                             "text-2xl",
                                             "text-[var(--primary)]"
                                         )}></i>
-                                        <span style="font-family: 'Space Mono', monospace;">{ "检索相似图片..." }</span>
+                                        <span style="font-family: 'Space Mono', monospace;">{ t::IMAGE_SEARCHING }</span>
                                     </div>
                                 } else if image_results.is_empty() {
                                     <div class={classes!(
@@ -495,7 +609,7 @@ pub fn search_page() -> Html {
                                         "border-[var(--primary)]/30"
                                     )}>
                                         <p class={classes!("text-base", "text-[var(--muted)]")}>
-                                            { "暂无相似图片结果" }
+                                            { t::IMAGE_NO_SIMILAR }
                                         </p>
                                     </div>
                                 } else {
@@ -541,7 +655,7 @@ pub fn search_page() -> Html {
                                     "border-[var(--primary)]/30"
                                 )}>
                                     <p class={classes!("text-base", "text-[var(--muted)]")}>
-                                        { "点击上方图片开始搜索相似图片" }
+                                        { t::IMAGE_SELECT_HINT }
                                     </p>
                                 </div>
                             }
@@ -564,7 +678,7 @@ pub fn search_page() -> Html {
                                 "text-2xl",
                                 "text-[var(--primary)]"
                             )}></i>
-                            <span style="font-family: 'Space Mono', monospace;">{ "正在扫描..." }</span>
+                            <span style="font-family: 'Space Mono', monospace;">{ t::SEARCHING_SHORT }</span>
                         </div>
                     } else if !results.is_empty() {
                         <>
@@ -613,11 +727,39 @@ pub fn search_page() -> Html {
                                 "opacity-50"
                             )}></i>
                             <p class={classes!("text-xl", "mb-2", "font-bold")} style="font-family: 'Space Mono', monospace;">
-                                { "NO RESULTS FOUND" }
+                                { t::NO_RESULTS_TITLE }
                             </p>
                             <p class={classes!("text-base", "text-[var(--muted)]", "opacity-70")}>
-                                { "试试其他关键词？" }
+                                if mode == "keyword" {
+                                    { t::KEYWORD_EMPTY_CARD_DESC }
+                                } else {
+                                    { t::SEMANTIC_EMPTY_CARD_DESC }
+                                }
                             </p>
+                            if mode == "keyword" {
+                                <div class={classes!("mt-4")}>
+                                    <a
+                                        href={semantic_fast_href.clone()}
+                                        class={classes!(
+                                            "inline-flex",
+                                            "items-center",
+                                            "gap-2",
+                                            "px-4",
+                                            "py-2",
+                                            "rounded-lg",
+                                            "border",
+                                            "border-[var(--primary)]/60",
+                                            "text-[var(--primary)]",
+                                            "font-semibold",
+                                            "hover:bg-[var(--primary)]/10",
+                                            "transition-colors"
+                                        )}
+                                    >
+                                        <i class={classes!("fas", "fa-brain")}></i>
+                                        { t::SWITCH_TO_SEMANTIC_CTA }
+                                    </a>
+                                </div>
+                            }
                         </div>
                     }
                 </div>
@@ -626,6 +768,7 @@ pub fn search_page() -> Html {
         </main>
     }
 }
+
 
 fn render_search_result(result: &SearchResult) -> Html {
     // 将 HTML 字符串转换为安全的 VNode
@@ -673,7 +816,7 @@ fn render_search_result(result: &SearchResult) -> Html {
                 )}
                 style="font-family: 'Space Mono', monospace;">
                     <i class={classes!("fas", "fa-database")}></i>
-                    { "MATCH" }
+                    { t::MATCH_BADGE }
                 </div>
 
                 <h2 class={classes!(
@@ -790,4 +933,5 @@ fn render_search_result(result: &SearchResult) -> Html {
 struct SearchPageQuery {
     q: Option<String>,
     mode: Option<String>,
+    enhanced_highlight: Option<bool>,
 }

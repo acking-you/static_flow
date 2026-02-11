@@ -276,7 +276,13 @@ pub async fn search_articles(keyword: &str) -> Result<Vec<SearchResult>, String>
 }
 
 /// Semantic search articles (vector search).
-pub async fn semantic_search_articles(keyword: &str) -> Result<Vec<SearchResult>, String> {
+///
+/// When `enhanced_highlight` is true, backend will run semantic snippet
+/// reranking to improve highlight precision at extra latency cost.
+pub async fn semantic_search_articles(
+    keyword: &str,
+    enhanced_highlight: bool,
+) -> Result<Vec<SearchResult>, String> {
     if keyword.trim().is_empty() {
         return Ok(vec![]);
     }
@@ -288,7 +294,10 @@ pub async fn semantic_search_articles(keyword: &str) -> Result<Vec<SearchResult>
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/semantic-search?q={}", API_BASE, urlencoding::encode(keyword));
+        let mut url = format!("{}/semantic-search?q={}", API_BASE, urlencoding::encode(keyword));
+        if enhanced_highlight {
+            url.push_str("&enhanced_highlight=true");
+        }
 
         let response = Request::get(&url)
             .send()

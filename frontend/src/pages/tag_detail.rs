@@ -7,6 +7,7 @@ use crate::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
     },
+    i18n::{current::tag_detail_page as t, fill_one},
     pages::posts::group_articles_by_year,
     router::Route,
 };
@@ -22,7 +23,7 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
     let filter_value = if normalized.is_empty() { None } else { Some(normalized) };
     let display_tag = filter_value
         .clone()
-        .unwrap_or_else(|| "未命名标签".to_string());
+        .unwrap_or_else(|| t::UNNAMED.to_string());
 
     let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
@@ -58,9 +59,9 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
     let grouped_by_year = group_articles_by_year(&filtered);
 
     let empty_message = if let Some(tag_value) = filter_value.as_ref() {
-        format!("标签「{}」下暂无文章，换个标签看看？", tag_value)
+        fill_one(t::EMPTY_TEMPLATE, tag_value)
     } else {
-        "请输入有效的标签名称。".to_string()
+        t::INVALID_NAME.to_string()
     };
 
     html! {
@@ -104,7 +105,7 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
                         "uppercase"
                     )}>
                         <i class="fas fa-tag"></i>
-                        <span>{ "Tag Archive" }</span>
+                        <span>{ t::ARCHIVE_BADGE }</span>
                     </div>
 
                     <h1 class={classes!(
@@ -125,9 +126,9 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
                         "font-light"
                     )}>
                         if total_posts > 0 {
-                            { format!("{} 篇收录文章", total_posts) }
+                            { fill_one(t::COLLECTED_COUNT_TEMPLATE, total_posts) }
                         } else {
-                            { "暂无文章" }
+                            { t::NO_CONTENT }
                         }
                     </p>
 

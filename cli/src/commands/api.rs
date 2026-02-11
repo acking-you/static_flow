@@ -74,6 +74,7 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
         },
         ApiCommands::SemanticSearch {
             q,
+            enhanced_highlight,
         } => {
             let keyword = q.trim();
             let response = if keyword.is_empty() {
@@ -83,7 +84,9 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
                     query: q,
                 }
             } else {
-                let results = store.semantic_search(keyword, 10).await?;
+                let results = store
+                    .semantic_search(keyword, 10, enhanced_highlight)
+                    .await?;
                 SearchResponse {
                     total: results.len(),
                     results,

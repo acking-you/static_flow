@@ -8,6 +8,13 @@
 - 协议: HTTP/1.1
 - 数据格式: JSON（图片接口返回二进制）
 - 请求追踪: backend 会透传/生成 `x-request-id` 与 `x-trace-id`，并在 backend/shared 请求内日志输出同一组 ID
+- 查询路径日志: shared 层会输出 `Query path selected` / `Query completed`，字段包含：
+  - `query`（逻辑查询名）
+  - `path`（当前实际路径，如 `vector_index`、`vector_scan`、`scan_fallback`）
+  - `fastest_path`（理论最快路径）
+  - `is_fastest`（当前是否走到最快路径）
+  - `reason`（为何走该路径，例如缺索引、回退原因）
+  - `rows` / `elapsed_ms`（返回行数与耗时）
 
 ## CORS 说明
 
@@ -81,19 +88,24 @@ curl "http://localhost:3000/api/search?q=rust"
 
 ### 6) 语义搜索
 
-`GET /api/semantic-search?q=关键词`
+`GET /api/semantic-search?q=关键词[&enhanced_highlight=true]`
+
+参数：
+- `enhanced_highlight`（可选，默认 `false`）：是否启用高精度 highlight 片段重排（更准确但更慢）
 
 实现说明：
 - 默认按 query 语言选择向量列（英文→`vector_en`，中文→`vector_zh`）
 - 若主向量列无结果，会自动回退到另一语言向量列再检索一次（例如 `vector_en` 为空时，英文 query 会回退 `vector_zh`）
 - `highlight` 为“语义片段”：从正文中分块候选，按语义相似度（余弦）+ 词面重叠加权，选最佳片段
 - 若最佳片段存在词面命中，会做 `<mark>` 标注；否则返回最相关语义片段（而非随机摘要）
+- 语义检索会记录 `semantic_search.highlight` 阶段耗时；当 `enhanced_highlight=false` 时走 `fast_excerpt`，当 `true` 时走 `semantic_snippet_rerank`
 
 示例：
 
 ```bash
 curl "http://localhost:3000/api/semantic-search?q=异步编程"
 curl "http://localhost:3000/api/semantic-search?q=web"
+curl "http://localhost:3000/api/semantic-search?q=web&enhanced_highlight=true"
 ```
 
 ### 7) 图片列表

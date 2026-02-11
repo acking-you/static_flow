@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use anyhow::{Context, Result};
 use arrow_array::{
@@ -143,15 +143,43 @@ impl StaticFlowDataStore {
         category: Option<&str>,
     ) -> Result<Vec<ArticleListItem>> {
         let table = self.articles_table().await?;
-        fetch_article_list(&table, tag, category).await
+        let path = if tag.is_some() || category.is_some() { "filtered_scan" } else { "full_scan" };
+        let reason =
+            format!("tag_filter={}; category_filter={}", tag.is_some(), category.is_some());
+
+        log_query_path("list_articles", path, path, &reason);
+        let started = Instant::now();
+        let articles = fetch_article_list(&table, tag, category).await?;
+        log_query_result("list_articles", path, articles.len(), started.elapsed().as_millis());
+        Ok(articles)
     }
 
     pub async fn get_article(&self, id: &str) -> Result<Option<Article>> {
         let table = self.articles_table().await?;
-        fetch_article_detail(&table, id).await
+        let path = "id_filter_scan";
+
+        log_query_path(
+            "get_article",
+            path,
+            path,
+            "id equality filter (no scalar index configured)",
+        );
+        let started = Instant::now();
+        let article = fetch_article_detail(&table, id).await?;
+        log_query_result(
+            "get_article",
+            path,
+            usize::from(article.is_some()),
+            started.elapsed().as_millis(),
+        );
+        Ok(article)
     }
 
     pub async fn list_tags(&self) -> Result<Vec<TagInfo>> {
+        let path = "aggregate_from_articles_scan";
+        log_query_path("list_tags", path, path, "aggregated from list_articles in-memory");
+
+        let started = Instant::now();
         let articles = self.list_articles(None, None).await?;
         let mut tag_counts: HashMap<String, usize> = HashMap::new();
         for article in articles {
@@ -168,20 +196,37 @@ impl StaticFlowDataStore {
             })
             .collect::<Vec<_>>();
         tags.sort_by(|a, b| a.name.cmp(&b.name));
+
+        log_query_result("list_tags", path, tags.len(), started.elapsed().as_millis());
         Ok(tags)
     }
 
     pub async fn list_categories(&self) -> Result<Vec<CategoryInfo>> {
+        let started = Instant::now();
         let articles = self.list_articles(None, None).await?;
         let mut category_counts: HashMap<String, usize> = HashMap::new();
         for article in articles {
             *category_counts.entry(article.category).or_insert(0) += 1;
         }
 
+        let mut used_taxonomy_lookup = false;
         let mut description_map: HashMap<String, String> = HashMap::new();
         if let Some(table) = self.taxonomies_table().await? {
+            used_taxonomy_lookup = true;
             description_map = fetch_category_descriptions(&table).await?;
         }
+
+        let path = if used_taxonomy_lookup {
+            "aggregate_scan_plus_taxonomy_lookup"
+        } else {
+            "aggregate_scan_only"
+        };
+        let reason = if used_taxonomy_lookup {
+            "taxonomies table found"
+        } else {
+            "taxonomies table missing, fallback to category name as description"
+        };
+        log_query_path("list_categories", path, "aggregate_scan_plus_taxonomy_lookup", reason);
 
         let mut categories = category_counts
             .into_iter()
@@ -199,60 +244,143 @@ impl StaticFlowDataStore {
             })
             .collect::<Vec<_>>();
         categories.sort_by(|a, b| a.name.cmp(&b.name));
+
+        log_query_result("list_categories", path, categories.len(), started.elapsed().as_millis());
         Ok(categories)
     }
 
     pub async fn search_articles(&self, keyword: &str) -> Result<Vec<SearchResult>> {
         let table = self.articles_table().await?;
+        let fts_index = inspect_index_for_column(&table, "content", true).await;
+        let primary_path = if fts_index.is_some() { "fts_index" } else { "fts_without_index" };
+        let primary_reason = index_reason("content", fts_index.as_ref());
 
+        log_query_path("search_articles.primary", primary_path, "fts_index", &primary_reason);
+
+        let primary_started = Instant::now();
         match search_with_fts(&table, keyword).await {
-            Ok(results) if !results.is_empty() => Ok(results),
+            Ok(results) if !results.is_empty() => {
+                log_query_result(
+                    "search_articles.primary",
+                    primary_path,
+                    results.len(),
+                    primary_started.elapsed().as_millis(),
+                );
+                Ok(results)
+            },
             Ok(_) => {
-                tracing::info!("FTS returned no rows, falling back to scan; keyword={keyword}");
+                log_query_result(
+                    "search_articles.primary",
+                    primary_path,
+                    0,
+                    primary_started.elapsed().as_millis(),
+                );
+
+                let fallback_path = "scan_fallback";
+                log_query_path(
+                    "search_articles.fallback",
+                    fallback_path,
+                    "fts_index",
+                    "fts returned 0 rows; fallback to in-memory scan",
+                );
+
+                let fallback_started = Instant::now();
                 let fallback_results = fallback_search(&table, keyword).await?;
-                tracing::info!(
-                    "Scan fallback completed; keyword={keyword}; rows={}",
-                    fallback_results.len()
+                log_query_result(
+                    "search_articles.fallback",
+                    fallback_path,
+                    fallback_results.len(),
+                    fallback_started.elapsed().as_millis(),
                 );
                 Ok(fallback_results)
             },
             Err(err) => {
-                tracing::warn!(
-                    "FTS search failed, falling back to scan; keyword={keyword}; error={err}"
+                log_query_result(
+                    "search_articles.primary",
+                    primary_path,
+                    0,
+                    primary_started.elapsed().as_millis(),
                 );
+
+                let fallback_path = "scan_fallback";
+                let fallback_reason = format!("fts query failed; error={err}");
+                log_query_path(
+                    "search_articles.fallback",
+                    fallback_path,
+                    "fts_index",
+                    &fallback_reason,
+                );
+
+                let fallback_started = Instant::now();
                 let fallback_results = fallback_search(&table, keyword).await?;
-                tracing::info!(
-                    "Scan fallback completed after FTS failure; keyword={keyword}; rows={}",
-                    fallback_results.len()
+                log_query_result(
+                    "search_articles.fallback",
+                    fallback_path,
+                    fallback_results.len(),
+                    fallback_started.elapsed().as_millis(),
                 );
                 Ok(fallback_results)
             },
         }
     }
 
-    pub async fn semantic_search(&self, keyword: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    pub async fn semantic_search(
+        &self,
+        keyword: &str,
+        limit: usize,
+        enhanced_highlight: bool,
+    ) -> Result<Vec<SearchResult>> {
         let table = self.articles_table().await?;
+        let total_started = Instant::now();
 
         let mut search_language = detect_language(keyword);
         let mut query_embedding = embed_text_with_language(keyword, search_language);
-        let mut rows = run_semantic_vector_search(
-            &table,
-            vector_column_for_language(search_language),
-            query_embedding.as_slice(),
-            limit,
-        )
-        .await?;
+        let primary_column = vector_column_for_language(search_language);
+        let primary_index = inspect_index_for_column(&table, primary_column, false).await;
+        let primary_path = if primary_index.is_some() { "vector_index" } else { "vector_scan" };
+        let primary_reason = index_reason(primary_column, primary_index.as_ref());
+
+        log_query_path(
+            "semantic_search.primary",
+            primary_path,
+            "vector_index",
+            &format!("{primary_reason}; limit={limit}; enhanced_highlight={enhanced_highlight}"),
+        );
+
+        let primary_started = Instant::now();
+        let mut rows =
+            run_semantic_vector_search(&table, primary_column, query_embedding.as_slice(), limit)
+                .await?;
+        log_query_result(
+            "semantic_search.primary",
+            primary_path,
+            rows.len(),
+            primary_started.elapsed().as_millis(),
+        );
+
+        let mut selected_column = primary_column;
+        let mut selected_path = primary_path;
 
         if rows.is_empty() {
-            let primary_column = vector_column_for_language(search_language);
             let fallback_language = alternate_embedding_language(search_language);
             let fallback_column = vector_column_for_language(fallback_language);
-            tracing::info!(
-                "Semantic search primary returned no rows; keyword={keyword}; \
-                 primary_column={primary_column}; trying fallback_column={fallback_column}"
+            let fallback_index = inspect_index_for_column(&table, fallback_column, false).await;
+            let fallback_path =
+                if fallback_index.is_some() { "vector_index" } else { "vector_scan" };
+            let fallback_reason = format!(
+                "primary_rows=0; {}",
+                index_reason(fallback_column, fallback_index.as_ref())
+            );
+
+            log_query_path(
+                "semantic_search.fallback",
+                fallback_path,
+                "vector_index",
+                &fallback_reason,
             );
 
             let fallback_embedding = embed_text_with_language(keyword, fallback_language);
+            let fallback_started = Instant::now();
             let fallback_rows = run_semantic_vector_search(
                 &table,
                 fallback_column,
@@ -260,25 +388,35 @@ impl StaticFlowDataStore {
                 limit,
             )
             .await?;
+            log_query_result(
+                "semantic_search.fallback",
+                fallback_path,
+                fallback_rows.len(),
+                fallback_started.elapsed().as_millis(),
+            );
 
             if !fallback_rows.is_empty() {
-                tracing::info!(
-                    "Semantic fallback succeeded; keyword={keyword}; \
-                     fallback_column={fallback_column}; rows={}",
-                    fallback_rows.len()
-                );
                 search_language = fallback_language;
                 query_embedding = fallback_embedding;
                 rows = fallback_rows;
-            } else {
-                tracing::info!(
-                    "Semantic fallback returned no rows; keyword={keyword}; \
-                     fallback_column={fallback_column}"
-                );
+                selected_column = fallback_column;
+                selected_path = fallback_path;
             }
         }
 
-        Ok(rows
+        let highlight_path =
+            if enhanced_highlight { "semantic_snippet_rerank" } else { "fast_excerpt" };
+        let highlight_reason =
+            if enhanced_highlight { "enhanced_highlight=true" } else { "enhanced_highlight=false" };
+        log_query_path(
+            "semantic_search.highlight",
+            highlight_path,
+            "fast_excerpt",
+            highlight_reason,
+        );
+
+        let highlight_started = Instant::now();
+        let results = rows
             .into_iter()
             .map(|row| SearchResult {
                 id: row.id,
@@ -286,26 +424,69 @@ impl StaticFlowDataStore {
                 summary: row.summary.clone(),
                 category: row.category,
                 date: row.date,
-                highlight: extract_semantic_highlight(
-                    &row.content,
-                    &row.summary,
-                    keyword,
-                    query_embedding.as_slice(),
-                    search_language,
-                ),
+                highlight: if enhanced_highlight {
+                    extract_semantic_highlight(
+                        &row.content,
+                        &row.summary,
+                        keyword,
+                        query_embedding.as_slice(),
+                        search_language,
+                    )
+                } else {
+                    extract_fast_semantic_highlight(&row.content, &row.summary, keyword)
+                },
                 tags: row.tags,
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        log_query_result(
+            "semantic_search.highlight",
+            highlight_path,
+            results.len(),
+            highlight_started.elapsed().as_millis(),
+        );
+        tracing::info!(
+            "Semantic search final path; query=semantic_search; selected_path={selected_path}; \
+             selected_column={selected_column}; highlight_path={highlight_path}; rows={}; \
+             total_elapsed_ms={}",
+            results.len(),
+            total_started.elapsed().as_millis()
+        );
+
+        Ok(results)
     }
 
     pub async fn related_articles(&self, id: &str, limit: usize) -> Result<Vec<ArticleListItem>> {
         let table = self.articles_table().await?;
+        let total_started = Instant::now();
 
         let vector = fetch_article_vector(&table, id).await?;
         let (vector, vector_column) = match vector {
             Some(value) => value,
-            None => return Ok(vec![]),
+            None => {
+                log_query_path(
+                    "related_articles",
+                    "short_circuit_no_vector",
+                    "vector_index",
+                    "source article has no vector_en/vector_zh",
+                );
+                log_query_result(
+                    "related_articles",
+                    "short_circuit_no_vector",
+                    0,
+                    total_started.elapsed().as_millis(),
+                );
+                return Ok(vec![]);
+            },
         };
+
+        let index_diag = inspect_index_for_column(&table, vector_column, false).await;
+        let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
+        let reason = format!(
+            "source_column={vector_column}; {}; limit={limit}",
+            index_reason(vector_column, index_diag.as_ref())
+        );
+        log_query_path("related_articles", path, "vector_index", &reason);
 
         let filter = format!("{vector_column} IS NOT NULL AND id != '{}'", escape_literal(id));
         let vector_query = table
@@ -313,6 +494,7 @@ impl StaticFlowDataStore {
             .nearest_to(vector.as_slice())
             .context("failed to build related query")?;
 
+        let started = Instant::now();
         let batches = vector_query
             .column(vector_column)
             .only_if(filter)
@@ -333,12 +515,18 @@ impl StaticFlowDataStore {
             .await?;
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
-        batches_to_article_list(&batch_list)
+        let results = batches_to_article_list(&batch_list)?;
+        log_query_result("related_articles", path, results.len(), started.elapsed().as_millis());
+
+        Ok(results)
     }
 
     pub async fn list_images(&self) -> Result<Vec<ImageInfo>> {
         let table = self.images_table().await?;
+        let path = "projection_scan";
+        log_query_path("list_images", path, path, "projection scan on images table");
 
+        let started = Instant::now();
         let batches = table
             .query()
             .select(Select::columns(&["id", "filename"]))
@@ -346,17 +534,39 @@ impl StaticFlowDataStore {
             .await?;
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
-        batches_to_images(&batch_list)
+        let images = batches_to_images(&batch_list)?;
+        log_query_result("list_images", path, images.len(), started.elapsed().as_millis());
+        Ok(images)
     }
 
     pub async fn search_images(&self, id: &str, limit: usize) -> Result<Vec<ImageInfo>> {
         let table = self.images_table().await?;
+        let total_started = Instant::now();
 
         let vector = fetch_image_vector(&table, id).await?;
         let vector = match vector {
             Some(value) => value,
-            None => return Ok(vec![]),
+            None => {
+                log_query_path(
+                    "search_images",
+                    "short_circuit_no_vector",
+                    "vector_index",
+                    "source image has no vector",
+                );
+                log_query_result(
+                    "search_images",
+                    "short_circuit_no_vector",
+                    0,
+                    total_started.elapsed().as_millis(),
+                );
+                return Ok(vec![]);
+            },
         };
+
+        let index_diag = inspect_index_for_column(&table, "vector", false).await;
+        let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
+        let reason = format!("{}; limit={limit}", index_reason("vector", index_diag.as_ref()));
+        log_query_path("search_images", path, "vector_index", &reason);
 
         let filter = format!("id != '{}'", escape_literal(id));
         let vector_query = table
@@ -364,6 +574,7 @@ impl StaticFlowDataStore {
             .nearest_to(vector.as_slice())
             .context("failed to build image search query")?;
 
+        let started = Instant::now();
         let batches = vector_query
             .only_if(filter)
             .limit(limit)
@@ -372,7 +583,9 @@ impl StaticFlowDataStore {
             .await?;
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
-        batches_to_images(&batch_list)
+        let images = batches_to_images(&batch_list)?;
+        log_query_result("search_images", path, images.len(), started.elapsed().as_millis());
+        Ok(images)
     }
 
     pub async fn get_image(
@@ -381,9 +594,13 @@ impl StaticFlowDataStore {
         prefer_thumbnail: bool,
     ) -> Result<Option<ImageBlob>> {
         let table = self.images_table().await?;
+        let path = "id_or_filename_filter_scan";
+        let reason = format!("prefer_thumbnail={prefer_thumbnail}");
+        log_query_path("get_image", path, path, &reason);
 
         let escaped = escape_literal(id_or_filename);
         let filter = format!("filename = '{}' OR id = '{}'", escaped, escaped);
+        let started = Instant::now();
         let batches = table
             .query()
             .only_if(filter)
@@ -394,6 +611,12 @@ impl StaticFlowDataStore {
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
         let image = extract_image_bytes(&batch_list, prefer_thumbnail)?;
+        log_query_result(
+            "get_image",
+            path,
+            usize::from(image.is_some()),
+            started.elapsed().as_millis(),
+        );
 
         Ok(image.map(|(bytes, filename)| ImageBlob {
             mime_type: image_mime_type(&filename).to_string(),
@@ -401,6 +624,102 @@ impl StaticFlowDataStore {
             filename,
         }))
     }
+}
+
+
+#[derive(Debug, Clone)]
+struct IndexDiagnostic {
+    name: String,
+    index_type: String,
+    indexed_rows: Option<u64>,
+    unindexed_rows: Option<u64>,
+}
+
+fn log_query_path(query: &str, path: &str, fastest_path: &str, reason: &str) {
+    tracing::info!(
+        "Query path selected; query={query}; path={path}; fastest_path={fastest_path};          \
+         is_fastest={}; reason={reason}",
+        path == fastest_path
+    );
+}
+
+fn log_query_result(query: &str, path: &str, rows: usize, elapsed_ms: u128) {
+    tracing::info!(
+        "Query completed; query={query}; path={path}; rows={rows}; elapsed_ms={elapsed_ms}"
+    );
+}
+
+fn index_reason(column: &str, index: Option<&IndexDiagnostic>) -> String {
+    match index {
+        Some(index) => format!(
+            "column={column}; index={}; type={}; indexed_rows={}; unindexed_rows={}",
+            index.name,
+            index.index_type,
+            optional_count_text(index.indexed_rows),
+            optional_count_text(index.unindexed_rows)
+        ),
+        None => format!("column={column}; no_index_found"),
+    }
+}
+
+fn optional_count_text(value: Option<u64>) -> String {
+    match value {
+        Some(value) => value.to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+fn is_fts_index_type(index_type: &lancedb::index::IndexType) -> bool {
+    index_type.to_string().to_ascii_uppercase().contains("FTS")
+}
+
+async fn inspect_index_for_column(
+    table: &Table,
+    column: &str,
+    require_fts: bool,
+) -> Option<IndexDiagnostic> {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return None;
+    }
+
+    let indexes = match table.list_indices().await {
+        Ok(indexes) => indexes,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to inspect indices; table={}; column={column}; error={err}",
+                table.name()
+            );
+            return None;
+        },
+    };
+
+    let index = indexes.into_iter().find(|index| {
+        index.columns.len() == 1
+            && index.columns[0] == column
+            && (!require_fts || is_fts_index_type(&index.index_type))
+    })?;
+
+    let (indexed_rows, unindexed_rows) = match table.index_stats(&index.name).await {
+        Ok(Some(stats)) => {
+            (Some(stats.num_indexed_rows as u64), Some(stats.num_unindexed_rows as u64))
+        },
+        Ok(None) => (None, None),
+        Err(err) => {
+            tracing::warn!(
+                "Failed to inspect index stats; table={}; index={}; column={column}; error={err}",
+                table.name(),
+                index.name
+            );
+            (None, None)
+        },
+    };
+
+    Some(IndexDiagnostic {
+        name: index.name,
+        index_type: index.index_type.to_string(),
+        indexed_rows,
+        unindexed_rows,
+    })
 }
 
 async fn fetch_category_descriptions(table: &Table) -> Result<HashMap<String, String>> {
@@ -1015,6 +1334,78 @@ fn excerpt_with_ellipsis(text: &str, max_chars: usize) -> String {
     excerpt
 }
 
+/// Build a low-cost semantic-search highlight without running snippet
+/// reranking.
+///
+/// This is the default path when `enhanced_highlight=false`.
+///
+/// Strategy:
+/// - Prefer lexical `<mark>` on `content` when possible.
+/// - If `content` has no lexical hit, try lexical `<mark>` on `summary`.
+/// - If there is still no lexical hit, return a short excerpt from `summary`.
+/// - If `summary` is empty, return a short excerpt from `content`.
+fn extract_fast_semantic_highlight(content: &str, summary: &str, keyword: &str) -> String {
+    const MAX_SNIPPET_CHARS: usize = 180;
+
+    let content = content.trim();
+    let summary = summary.trim();
+    let keyword = keyword.trim();
+
+    if !keyword.is_empty() {
+        if !content.is_empty() && find_case_insensitive_match_range(content, keyword).is_some() {
+            return extract_highlight(content, keyword);
+        }
+
+        if !summary.is_empty() && find_case_insensitive_match_range(summary, keyword).is_some() {
+            return extract_highlight(summary, keyword);
+        }
+    }
+
+    if !summary.is_empty() {
+        return excerpt_with_ellipsis(summary, MAX_SNIPPET_CHARS);
+    }
+
+    excerpt_with_ellipsis(content, MAX_SNIPPET_CHARS)
+}
+
+/// Build a semantic-search highlight snippet with optional lexical emphasis.
+///
+/// This function is intentionally more expensive than the fast path because it
+/// reranks candidate snippets using embeddings.
+///
+/// Flow (high precision mode):
+///
+/// ```text
+/// Query + Article Content
+///          |
+///          v
+/// [1] Lexical hit in full content?
+///      | yes --------------------------> return extract_highlight(content, keyword)
+///      | no
+///      v
+/// [2] Split content into snippet candidates
+///      (paragraph / sentence chunks)
+///          |
+///          v
+/// [3] For each candidate:
+///      - embed candidate
+///      - compute cosine(query_embedding, candidate_embedding)
+///      - compute lexical overlap score
+///      - final_score = semantic_score + lexical_score * 0.15
+///          |
+///          v
+/// [4] Pick best-scoring snippet
+///      | lexical overlap token found --> return extract_highlight(best_snippet, token)
+///      | no overlap                  --> return excerpt(best_snippet)
+///          |
+///          v
+/// [5] If no candidate exists: fallback to summary/content excerpt
+/// ```
+///
+/// Why this exists:
+/// - Vector retrieval answers "which article is relevant".
+/// - This stage answers "which fragment of that article should be shown".
+/// - The result improves UX, especially when query terms are paraphrased.
 fn extract_semantic_highlight(
     content: &str,
     summary: &str,

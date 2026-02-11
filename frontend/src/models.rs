@@ -7,6 +7,8 @@ pub use static_flow_shared::{Article, ArticleListItem};
 
 #[cfg(feature = "mock")]
 use crate::api::{CategoryInfo, SearchResult, TagInfo};
+#[cfg(feature = "mock")]
+use crate::i18n::{current::mock as mock_text, fill_one, fill_two};
 
 // =============== Mock 数据 ===============
 
@@ -59,8 +61,8 @@ fn mock_articles_full() -> Vec<Article> {
 
         let author = authors[(i as usize) % authors.len()].to_string();
         let id = format!("post-{:03}", i);
-        let title = format!("示例文章 {} - {} 技术与思考", i, cat_name);
-        let summary = format!("这是一篇关于 {} 的示例文章，涵盖实践要点与思考。", cat_name);
+        let title = fill_two(mock_text::ARTICLE_TITLE_TEMPLATE, i, cat_name);
+        let summary = fill_one(mock_text::ARTICLE_SUMMARY_TEMPLATE, cat_name);
         let date = format!("2024-{:02}-{:02}", (i % 12).max(1), (10 + i % 18));
         let read_time = 3 + (i as u32 % 8);
 

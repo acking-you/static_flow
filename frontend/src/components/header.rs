@@ -8,6 +8,7 @@ use crate::{
         theme_toggle::ThemeToggle,
         tooltip::{TooltipIconButton, TooltipPosition},
     },
+    i18n::current::{common as common_text, header as t},
     router::Route,
 };
 
@@ -161,10 +162,10 @@ pub fn header() -> Html {
 
     // Icon-based navigation
     let nav_items = [
-        ("最新", Route::LatestArticles, "fa-clock"),
-        ("文章", Route::Posts, "fa-file-lines"),
-        ("标签", Route::Tags, "fa-tag"),
-        ("分类", Route::Categories, "fa-folder-open"),
+        (t::NAV_LATEST, Route::LatestArticles, "fa-clock"),
+        (t::NAV_POSTS, Route::Posts, "fa-file-lines"),
+        (t::NAV_TAGS, Route::Tags, "fa-tag"),
+        (t::NAV_CATEGORIES, Route::Categories, "fa-folder-open"),
     ];
     let image_search_href = crate::config::route_path("/search?mode=image");
 
@@ -193,7 +194,7 @@ pub fn header() -> Html {
                     <div>
                         <Link<Route> to={Route::Home} classes="brand-logo">
                             <span class="brand-logo-shine"></span>
-                            {"L_B__"}
+                            {t::BRAND_NAME}
                             <span class="brand-logo-cursor"></span>
                         </Link<Route>>
                     </div>
@@ -201,7 +202,7 @@ pub fn header() -> Html {
                     // Actions - right-aligned
                     <div class={classes!("ml-auto", "flex", "items-center", "gap-2")}>
                         // Icon navigation
-                        <nav class={classes!("flex", "items-center", "gap-1")} aria-label="主导航">
+                        <nav class={classes!("flex", "items-center", "gap-1")} aria-label={t::NAV_MAIN_ARIA}>
                             { for nav_items.iter().map(|(label, route, icon)| {
                                 html! {
                                     <Link<Route> to={route.clone()} classes={classes!(
@@ -237,7 +238,7 @@ pub fn header() -> Html {
                                     "hover:scale-110"
                                 )}
                             >
-                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title="图片搜索"></i>
+                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_SEARCH_TITLE}></i>
                             </a>
                         </nav>
 
@@ -245,7 +246,7 @@ pub fn header() -> Html {
                         <div class={classes!("flex", "items-center", "gap-1")}>
                             <input
                                 type="text"
-                                placeholder="搜索..."
+                                placeholder={common_text::SEARCH_PLACEHOLDER}
                                 value={(*search_query).clone()}
                                 oninput={on_search_input.clone()}
                                 onkeypress={on_search_keypress.clone()}
@@ -275,7 +276,7 @@ pub fn header() -> Html {
                                     "hover:text-[var(--primary)]",
                                     "hover:bg-[var(--surface-alt)]"
                                 )}
-                                aria-label="搜索"
+                                aria-label={t::SEARCH_ARIA}
                             >
                                 <i class="fas fa-search"></i>
                             </button>
@@ -294,7 +295,7 @@ pub fn header() -> Html {
                                     "hover:bg-[var(--surface-alt)]",
                                     "disabled:opacity-30", "disabled:pointer-events-none"
                                 )}
-                                aria-label="清空"
+                                aria-label={t::CLEAR_ARIA}
                             >
                                 <i class="fas fa-times text-sm"></i>
                             </button>
@@ -324,7 +325,7 @@ pub fn header() -> Html {
                     <div>
                         <Link<Route> to={Route::Home} classes="brand-logo">
                             <span class="brand-logo-shine"></span>
-                            {"L_B__"}
+                            {t::BRAND_NAME}
                             <span class="brand-logo-cursor"></span>
                         </Link<Route>>
                     </div>
@@ -333,7 +334,7 @@ pub fn header() -> Html {
                     <button
                         type="button"
                         class={hamburger_classes}
-                        aria-label="打开菜单"
+                        aria-label={t::OPEN_MENU_ARIA}
                         aria-expanded={(*mobile_menu_open).to_string()}
                         onclick={toggle_mobile_menu.clone()}
                     >
@@ -385,7 +386,7 @@ pub fn header() -> Html {
                     <div class={classes!("absolute", "right-5", "top-5", "z-10")}>
                         <TooltipIconButton
                             icon={IconName::ArrowLeft}
-                            tooltip="关闭"
+                            tooltip={t::CLOSE_TOOLTIP}
                             position={TooltipPosition::Bottom}
                             onclick={close_mobile_menu.clone()}
                             size={20}
@@ -403,7 +404,7 @@ pub fn header() -> Html {
                     <div class={classes!("flex", "gap-2", "items-center", "mb-3")}>
                         <input
                             type="text"
-                            placeholder="搜索..."
+                            placeholder={common_text::SEARCH_PLACEHOLDER}
                             value={(*search_query).clone()}
                             oninput={mobile_search_input.clone()}
                             onkeypress={mobile_search_keypress.clone()}
@@ -450,7 +451,7 @@ pub fn header() -> Html {
                     </div>
 
                     // Navigation
-                    <nav class={classes!("flex", "flex-col", "gap-3")} aria-label="移动端导航">
+                    <nav class={classes!("flex", "flex-col", "gap-3")} aria-label={t::MOBILE_NAV_ARIA}>
                         { for nav_items.iter().map(|(label, route, icon)| {
                             let close_cb = close_mobile_menu.clone();
                             html! {
@@ -489,7 +490,7 @@ pub fn header() -> Html {
                                 )}
                             >
                                 <i class={classes!("fas", "fa-image", "text-[var(--muted)]", "w-5")}></i>
-                                <span class="font-medium">{ "图片搜索" }</span>
+                                <span class="font-medium">{ t::IMAGE_SEARCH_TITLE }</span>
                             </a>
                         </div>
                     </nav>

@@ -68,12 +68,15 @@ cd cli
 cd ../backend
 LANCEDB_URI=../data/lancedb ../target/release/static-flow-backend
 
-# Start frontend (another terminal)
-cd ../frontend
-trunk serve --open
+# Start frontend with configurable backend URL (another terminal)
+cd ..
+./scripts/start_frontend_with_api.sh \
+  --api-base "http://127.0.0.1:3000/api" \
+  --open
+# If omitted, script default is: http://127.0.0.1:39080/api
 ```
 
-Backend: `http://localhost:3000` | Frontend: `http://localhost:8080`
+Backend: `http://127.0.0.1:3000` | Frontend (default): `http://127.0.0.1:38080`
 
 ## CLI Tools
 
@@ -189,6 +192,10 @@ cd cli
 | `GET /api/categories` | Category list |
 
 > Observability: every backend response includes `x-request-id` and `x-trace-id`. The same IDs appear in backend/shared logs for request-level correlation.
+
+> Query-path observability: logs include `query/path/fastest_path/is_fastest/reason/rows/elapsed_ms` to show whether index paths are used or fallbacks are triggered.
+
+> Semantic highlight mode: `/api/semantic-search` defaults to fast highlight; append `&enhanced_highlight=true` for higher-precision snippet reranking (slower).
 
 ## Key Env Vars
 

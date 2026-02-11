@@ -2,6 +2,7 @@ mod api;
 mod components;
 mod config;
 pub mod hooks;
+mod i18n;
 mod models;
 mod pages;
 mod router;

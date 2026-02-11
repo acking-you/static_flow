@@ -193,6 +193,9 @@ pub enum ApiCommands {
         /// Search keyword.
         #[arg(long)]
         q: String,
+        /// Enable high-precision semantic highlight reranking (slower).
+        #[arg(long)]
+        enhanced_highlight: bool,
     },
     /// GET /api/tags
     ListTags,

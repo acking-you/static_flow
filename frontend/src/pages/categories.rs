@@ -6,6 +6,7 @@ use crate::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         scroll_to_top_button::ScrollToTopButton,
     },
+    i18n::{current::categories_page as t, fill_one, fill_two},
     router::Route,
 };
 
@@ -63,7 +64,7 @@ pub fn categories_page() -> Html {
                         "text-[var(--muted)]",
                         "mb-6",
                         "font-semibold"
-                    )}>{ "Category Index" }</p>
+                    )}>{ t::HERO_INDEX }</p>
 
                     <h1 class={classes!(
                         "category-title",
@@ -74,7 +75,7 @@ pub fn categories_page() -> Html {
                         "leading-tight"
                     )}
                     style="font-family: 'Fraunces', serif;">
-                        { "知识图谱" }
+                        { t::HERO_TITLE }
                     </h1>
 
                     <p class={classes!(
@@ -86,7 +87,7 @@ pub fn categories_page() -> Html {
                         "leading-relaxed",
                         "mb-8"
                     )}>
-                        { format!("探索 {} 个领域，汇聚 {} 篇文章", total_categories, total_articles) }
+                        { fill_two(t::HERO_DESC_TEMPLATE, total_categories, total_articles) }
                     </p>
 
                     // Geometric decorative brackets - 几何装饰括号
@@ -125,7 +126,7 @@ pub fn categories_page() -> Html {
                             "dark:text-sky-400"
                         )}>
                             <i class={classes!("fas", "fa-th-large")}></i>
-                            <span>{ format!("{} CATEGORIES", total_categories) }</span>
+                            <span>{ fill_one(t::HERO_BADGE_TEMPLATE, total_categories) }</span>
                         </div>
                         <div class={classes!(
                             "w-12",
@@ -172,7 +173,7 @@ pub fn categories_page() -> Html {
                                     "mb-6"
                                 )}></i>
                                 <p class={classes!("text-xl", "text-[var(--muted)]")}>
-                                    { "暂无分类" }
+                                    { t::EMPTY }
                                 </p>
                             </div>
                         }
@@ -272,7 +273,7 @@ pub fn categories_page() -> Html {
                                                         "group-hover:to-sky-500/20"
                                                     )}>
                                                         <i class={classes!("far", "fa-file-alt")}></i>
-                                                        <span>{ format!("{} 篇", category.count) }</span>
+                                                        <span>{ fill_one(t::COUNT_TEMPLATE, category.count) }</span>
                                                     </span>
 
                                                     // Arrow icon

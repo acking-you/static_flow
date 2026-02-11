@@ -2,9 +2,12 @@ use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use yew::prelude::*;
 
-use crate::components::{
-    icons::IconName,
-    tooltip::{TooltipIconButton, TooltipPosition},
+use crate::{
+    components::{
+        icons::IconName,
+        tooltip::{TooltipIconButton, TooltipPosition},
+    },
+    i18n::current::toc_button as t,
 };
 
 /// 目录移动端切换按钮组件
@@ -66,7 +69,7 @@ pub fn toc_button() -> Html {
         )}>
             <TooltipIconButton
                 icon={IconName::List}
-                tooltip="目录"
+                tooltip={t::TOOLTIP}
                 position={TooltipPosition::Top}
                 onclick={on_click}
                 size={20}
