@@ -83,6 +83,12 @@ cd cli
 # Build CLI binary
 make bin-cli
 
+# Run full CLI E2E checks (docs + images + CRUD + API)
+cd ..
+./scripts/test_cli_e2e.sh
+# or: BUILD_PROFILE=release ./scripts/test_cli_e2e.sh
+cd cli
+
 # Initialize LanceDB
 ../target/release/sf-cli init --db-path ../data/lancedb
 
@@ -111,6 +117,11 @@ make bin-cli
   --dir ../content/images \
   --recursive \
   --generate-thumbnail
+
+# Thumbnail implementation details
+# - Generated only with --generate-thumbnail; size controlled by --thumbnail-size (default 256)
+# - Stored as PNG bytes in images.thumbnail
+# - GET /api/images/:id-or-filename?thumb=true prefers thumbnail and falls back to original data
 
 # Sync a local notes folder (markdown + image files)
 # - Auto imports referenced local images into `images` table
@@ -167,7 +178,7 @@ make bin-cli
 | `GET /api/search?q=` | Full-text search |
 | `GET /api/semantic-search?q=` | Semantic search (vector) |
 | `GET /api/images` | Image catalog |
-| `GET /api/images/:id-or-filename` | Read image binary from LanceDB |
+| `GET /api/images/:id-or-filename` | Read image binary from LanceDB (`?thumb=true`, fallback to original if thumbnail missing) |
 | `GET /api/image-search?id=` | Similar images |
 | `GET /api/tags` | Tag list |
 | `GET /api/categories` | Category list |

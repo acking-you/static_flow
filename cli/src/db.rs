@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use arrow_array::{RecordBatch, RecordBatchIterator};
@@ -95,14 +95,27 @@ pub async fn upsert_images(table: &Table, records: &[ImageRecord]) -> Result<()>
     if records.is_empty() {
         return Ok(());
     }
-    let batch = build_image_batch(records)?;
-    let schema = batch.schema();
-    let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
 
-    let mut merge = table.merge_insert(&["id"]);
-    merge.when_matched_update_all(None);
-    merge.when_not_matched_insert_all();
-    merge.execute(Box::new(batches)).await?;
+    // NOTE:
+    // LanceDB merge_insert on multi-row image batches (binary + vector columns)
+    // may insert duplicate ids in some versions. Use per-row merge to guarantee
+    // deterministic upsert semantics.
+    let mut seen = HashSet::new();
+    for record in records {
+        if !seen.insert(record.id.clone()) {
+            continue;
+        }
+
+        let batch = build_image_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+
+        let mut merge = table.merge_insert(&["id"]);
+        merge.when_matched_update_all(None);
+        merge.when_not_matched_insert_all();
+        merge.execute(Box::new(batches)).await?;
+    }
+
     Ok(())
 }
 

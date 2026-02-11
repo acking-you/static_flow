@@ -108,6 +108,12 @@ curl "http://localhost:3000/api/images/1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65
 curl "http://localhost:3000/api/images/wallhaven-5yyyw9.png?thumb=true" --output thumb.png
 ```
 
+缩略图实现细节：
+- `thumb=true` 时优先返回 `images.thumbnail`，若该字段为空会自动回退 `images.data`。
+- `images.thumbnail` 由 CLI 写入时生成（`write-images --generate-thumbnail` 或 `sync-notes --generate-thumbnail`），并统一编码为 PNG。
+- 缩略图尺寸由 CLI 参数 `--thumbnail-size` 控制，默认 `256`。
+- 当前 `Content-Type` 按 `filename` 后缀推断，因此某些情况下（如原图 jpg 且返回 thumbnail）响应头与字节实际编码可能不一致。
+
 ### 9) 以图搜图
 
 `GET /api/image-search?id=<image_id>`
@@ -138,7 +144,7 @@ curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31
 - `articles` 表：文章元数据、正文、文本向量
 - `images` 表：图片二进制、缩略图、视觉向量
 
-图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。
+图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。`thumb=true` 时优先 `thumbnail`，为空则回退 `data`。
 
 ---
 

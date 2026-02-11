@@ -81,6 +81,12 @@ cd cli
 # 编译 CLI 二进制
 make bin-cli
 
+# 一键跑完整 CLI 回归测试（docs + images + CRUD + API）
+cd ..
+./scripts/test_cli_e2e.sh
+# 或：BUILD_PROFILE=release ./scripts/test_cli_e2e.sh
+cd cli
+
 # 初始化 LanceDB 表结构
 ../target/release/sf-cli init --db-path ../data/lancedb
 
@@ -109,6 +115,11 @@ make bin-cli
   --dir ../content/images \
   --recursive \
   --generate-thumbnail
+
+# 缩略图实现细节
+# - 仅在 --generate-thumbnail 时生成，尺寸由 --thumbnail-size 控制（默认 256）
+# - 缩略图统一存为 PNG 二进制到 images.thumbnail
+# - 读取 /api/images/:id-or-filename?thumb=true 时，thumbnail 为空会自动回退原图 data
 
 # 同步本地笔记目录（markdown + 图片）
 # - 自动把 markdown 中引用的本地图片写入 images 表
@@ -165,7 +176,7 @@ make bin-cli
 | `GET /api/search?q=` | 全文搜索 |
 | `GET /api/semantic-search?q=` | 语义搜索（向量） |
 | `GET /api/images` | 图片列表 |
-| `GET /api/images/:id-or-filename` | 从 LanceDB 读取图片二进制 |
+| `GET /api/images/:id-or-filename` | 从 LanceDB 读取图片二进制（支持 `?thumb=true`，无缩略图则回退原图） |
 | `GET /api/image-search?id=` | 以图搜图 |
 | `GET /api/tags` | 标签列表 |
 | `GET /api/categories` | 分类列表 |

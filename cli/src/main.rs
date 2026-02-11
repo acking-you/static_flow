@@ -16,7 +16,10 @@ async fn main() -> Result<()> {
     // Override with RUST_LOG when debugging.
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 
     let cli = cli::Cli::parse();
     commands::run(cli).await

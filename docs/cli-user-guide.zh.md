@@ -33,6 +33,26 @@ make bin-cli
 - `images`
 - `taxonomies`
 
+### 1.3 一键全量测试（推荐）
+
+```bash
+# 默认编译 debug 二进制并全量验证
+./scripts/test_cli_e2e.sh
+
+# 需要 release 验证时
+BUILD_PROFILE=release ./scripts/test_cli_e2e.sh
+
+# 指定已有 binary 与工作目录
+CLI_BIN=./bin/sf-cli WORKDIR=./tmp/cli-e2e ./scripts/test_cli_e2e.sh
+```
+
+脚本会自动：
+- 读取 `docs/*.md` 内容生成分类、标签、摘要
+- 写入 `articles` / `taxonomies`
+- 导入 `content/images/*` 到 `images`
+- 生成临时 notes 再执行 `sync-notes`（验证图片重写）
+- 覆盖 `query`、`db`、`api` 全量能力并做断言校验
+
 ---
 
 ## 2. 数据模型总览（无硬编码词典）
@@ -139,6 +159,14 @@ flowchart LR
 | `vector` | `FixedSizeList<Float32>` | 是 | 图像向量 |
 | `metadata` | `Utf8` | 是 | JSON 字符串（宽高、来源、字节数等） |
 | `created_at` | `Timestamp(ms)` | 是 | 创建时间戳 |
+
+### 3.2.1 `thumbnail` 生成与读取细节
+
+- 仅在 `write-images --generate-thumbnail` 或 `sync-notes --generate-thumbnail` 时生成缩略图；默认不生成。
+- 尺寸由 `--thumbnail-size` 控制（默认 `256`），使用等比缩放到 `size x size` 边界框内。
+- 缩略图统一编码为 **PNG 二进制**，存储在 `images.thumbnail`；原图二进制存储在 `images.data`。
+- 读取时（backend 与 `sf-cli api get-image` 一致）：`?thumb=true` 会优先返回 `thumbnail`，若 `thumbnail` 为空自动回退 `data` 原图。
+- 当前实现中，HTTP `Content-Type` 按 `filename` 后缀推断；因此当原图是 `jpg` 且 `thumb=true` 时，响应头可能是 `image/jpeg`，但响应字节实际是 PNG（实现细节，调试时请留意）。
 
 ## 3.3 `taxonomies` 字段
 

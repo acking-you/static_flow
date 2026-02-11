@@ -55,8 +55,9 @@ pub const DEFAULT_IMAGE_MODEL: ImageEmbeddingModelChoice = ImageEmbeddingModelCh
 pub const IMAGE_VECTOR_DIM: usize = DEFAULT_IMAGE_MODEL.dim();
 
 #[cfg(not(target_arch = "wasm32"))]
-static FASTEMBED_IMAGE_MODEL: OnceLock<Mutex<HashMap<ImageEmbeddingModelChoice, ImageEmbedding>>> =
-    OnceLock::new();
+static FASTEMBED_IMAGE_MODEL: OnceLock<
+    Mutex<HashMap<ImageEmbeddingModelChoice, Option<ImageEmbedding>>>,
+> = OnceLock::new();
 
 /// Generate a semantic embedding for an image (bytes should be an encoded
 /// image).
@@ -89,16 +90,17 @@ fn fastembed_image_embedding(bytes: &[u8], model: ImageEmbeddingModelChoice) -> 
         let options = ImageInitOptions::new(model.to_fastembed());
         match ImageEmbedding::try_new(options) {
             Ok(instance) => {
-                entry.insert(instance);
+                entry.insert(Some(instance));
             },
             Err(err) => {
                 tracing::warn!("fastembed image init failed, using hash embedding fallback: {err}");
+                entry.insert(None);
                 return None;
             },
         }
     }
 
-    let instance = guard.get_mut(&model)?;
+    let instance = guard.get_mut(&model)?.as_mut()?;
     match instance.embed_bytes(&[bytes], None) {
         Ok(mut embeddings) => embeddings.pop(),
         Err(err) => {

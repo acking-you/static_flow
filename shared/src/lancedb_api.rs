@@ -243,6 +243,7 @@ impl StaticFlowDataStore {
                 "date",
                 "featured_image",
                 "read_time",
+                "_distance",
             ]))
             .execute()
             .await?;
@@ -293,6 +294,7 @@ impl StaticFlowDataStore {
                 "date",
                 "featured_image",
                 "read_time",
+                "_distance",
             ]))
             .execute()
             .await?;
@@ -332,7 +334,7 @@ impl StaticFlowDataStore {
         let batches = vector_query
             .only_if(filter)
             .limit(limit)
-            .select(Select::columns(&["id", "filename"]))
+            .select(Select::columns(&["id", "filename", "_distance"]))
             .execute()
             .await?;
 
@@ -517,7 +519,19 @@ async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResul
         .query()
         .full_text_search(FullTextSearchQuery::new(keyword.to_string()))
         .limit(10)
-        .select(Select::columns(&["id", "title", "summary", "content", "tags", "category", "date"]))
+        .select(Select::columns(&[
+            "id",
+            "title",
+            "summary",
+            "content",
+            "tags",
+            "category",
+            "author",
+            "date",
+            "featured_image",
+            "read_time",
+            "_score",
+        ]))
         .execute()
         .await?;
 
@@ -541,7 +555,18 @@ async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResul
 async fn fallback_search(table: &Table, keyword: &str) -> Result<Vec<SearchResult>> {
     let batches = table
         .query()
-        .select(Select::columns(&["id", "title", "summary", "content", "tags", "category", "date"]))
+        .select(Select::columns(&[
+            "id",
+            "title",
+            "summary",
+            "content",
+            "tags",
+            "category",
+            "author",
+            "date",
+            "featured_image",
+            "read_time",
+        ]))
         .execute()
         .await?;
 

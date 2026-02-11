@@ -74,3 +74,4 @@ shared/.fastembed_cache/
 
 data/
 bin/
+tmp/

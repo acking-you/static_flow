@@ -23,7 +23,7 @@ pub enum Commands {
         #[arg(long, default_value = "./data/lancedb")]
         db_path: PathBuf,
     },
-    /// Ensure all expected indexes for articles/images tables.
+    /// Ensure all expected indexes for managed tables.
     EnsureIndexes {
         /// LanceDB directory path.
         #[arg(long, default_value = "./data/lancedb")]
@@ -115,7 +115,7 @@ pub enum Commands {
         /// LanceDB directory path.
         #[arg(long, default_value = "./data/lancedb")]
         db_path: PathBuf,
-        /// Table name (articles/images).
+        /// Table name (articles/images/taxonomies).
         #[arg(long)]
         table: String,
         /// SQL filter expression.
