@@ -215,6 +215,8 @@ CLI 有 3 组命令：
 同时会：
 - upsert `articles`
 - upsert `taxonomies`（`kind=category` 和 `kind=tag`）
+- 默认自动执行 index-only optimize，保障新写入文章可立即被 FTS 检索覆盖
+- 批量流水线可通过 `--no-auto-optimize` 关闭
 
 ### 5.3 批量写入图片
 
@@ -225,6 +227,8 @@ CLI 有 3 组命令：
   --recursive \
   --generate-thumbnail
 ```
+
+默认自动执行 index-only optimize；批量流水线可加 `--no-auto-optimize`。
 
 ### 5.4 同步本地笔记目录
 
@@ -241,6 +245,8 @@ CLI 有 3 组命令：
 - 重写图片链接为 `images/<sha256_id>`
 - 写入 `articles`
 - 写入 `taxonomies`
+- 默认自动执行 index-only optimize（`articles` / `images`）
+- 批量流水线可通过 `--no-auto-optimize` 关闭
 
 ### 5.5 直接 JSON upsert（底层调试）
 
@@ -349,10 +355,21 @@ CLI 有 3 组命令：
 - `images.vector`：向量索引
 - `taxonomies`：当前不建向量索引
 
+关键说明：
+- `ensure-indexes` 负责“建索引定义”。
+- `optimize` 负责“把新写入行纳入索引覆盖”。
+- `write-article` / `write-images` / `sync-notes` 默认会自动执行 index-only optimize。
+- 若你显式使用了 `--no-auto-optimize`，请手动执行：
+
+```bash
+./bin/sf-cli db --db-path ./data/lancedb optimize articles
+./bin/sf-cli db --db-path ./data/lancedb optimize images
+```
+
 ### 9.2 搜索路径
 
 - 关键词检索：`api search`（优先 FTS，失败回退扫描）
-- 语义检索：`api semantic-search`
+- 语义检索：`api semantic-search`（主语言向量列无结果时自动回退另一列，如英文 query 回退到 `vector_zh`；highlight 通过语义分块打分选择最相关片段）
 - 相关文章：`api related-articles`
 - 以图搜图：`api search-images`
 
@@ -404,8 +421,8 @@ CLI 会返回：
 ## 12. 一条建议（实践）
 
 在生产流程中建议固定这条链路：
-1. `sync-notes` 持续导入
-2. `ensure-indexes` 定期执行
+1. `sync-notes` 持续导入（默认自动 optimize）
+2. 批量场景如关闭了 auto optimize，则在批次末尾执行 `ensure-indexes` + `db optimize ...`
 3. 用 `api` 子命令做线上问题复现（无需起 backend）
 4. 用 `db query-rows ... --format vertical` 精确排查单行数据
 

@@ -10,7 +10,9 @@ use static_flow_shared::{
 };
 
 use crate::{
-    db::{connect_db, ensure_vector_index, upsert_articles, upsert_taxonomies},
+    db::{
+        connect_db, ensure_vector_index, optimize_table_indexes, upsert_articles, upsert_taxonomies,
+    },
     schema::{ArticleRecord, TaxonomyRecord},
     utils::{estimate_read_time, parse_markdown, parse_tags, parse_vector, Frontmatter},
 };
@@ -25,6 +27,7 @@ pub struct WriteArticleOptions {
     pub vector_en: Option<String>,
     pub vector_zh: Option<String>,
     pub language: Option<String>,
+    pub auto_optimize: bool,
 }
 
 pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> Result<()> {
@@ -38,6 +41,7 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         vector_en,
         vector_zh,
         language,
+        auto_optimize,
     } = options;
 
     let db = connect_db(db_path).await?;
@@ -180,6 +184,12 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
     }
     if let Err(err) = ensure_vector_index(&table, "vector_zh").await {
         tracing::warn!("Failed to create vector index on articles (vector_zh): {err}");
+    }
+
+    if auto_optimize {
+        if let Err(err) = optimize_table_indexes(&table).await {
+            tracing::warn!("Failed to optimize articles indexes after write-article: {err}");
+        }
     }
 
     tracing::info!("Article written to LanceDB.");

@@ -31,6 +31,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             vector_en,
             vector_zh,
             language,
+            no_auto_optimize,
         } => {
             write_article::run(&db_path, &file, write_article::WriteArticleOptions {
                 id,
@@ -42,6 +43,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 vector_en,
                 vector_zh,
                 language,
+                auto_optimize: !no_auto_optimize,
             })
             .await
         },
@@ -54,6 +56,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             language,
             default_category,
             default_author,
+            no_auto_optimize,
         } => {
             sync_notes::run(&db_path, &dir, sync_notes::SyncNotesOptions {
                 recursive,
@@ -62,6 +65,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 language,
                 default_category,
                 default_author,
+                auto_optimize: !no_auto_optimize,
             })
             .await
         },
@@ -71,7 +75,18 @@ pub async fn run(cli: Cli) -> Result<()> {
             recursive,
             generate_thumbnail,
             thumbnail_size,
-        } => write_images::run(&db_path, &dir, recursive, generate_thumbnail, thumbnail_size).await,
+            no_auto_optimize,
+        } => {
+            write_images::run(
+                &db_path,
+                &dir,
+                recursive,
+                generate_thumbnail,
+                thumbnail_size,
+                !no_auto_optimize,
+            )
+            .await
+        },
         Commands::Query {
             db_path,
             table,

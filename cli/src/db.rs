@@ -3,7 +3,12 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 use anyhow::{Context, Result};
 use arrow_array::{RecordBatch, RecordBatchIterator};
 use arrow_schema::Schema;
-use lancedb::{connect, index::Index, Connection, Table};
+use lancedb::{
+    connect,
+    index::Index,
+    table::{OptimizeAction, OptimizeOptions},
+    Connection, Table,
+};
 
 use crate::schema::{
     build_article_batch, build_image_batch, build_taxonomy_batch, ArticleRecord, ImageRecord,
@@ -74,6 +79,13 @@ pub async fn ensure_vector_index(table: &Table, column: &str) -> Result<()> {
             }
         },
     }
+}
+
+pub async fn optimize_table_indexes(table: &Table) -> Result<()> {
+    let _ = table
+        .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+        .await?;
+    Ok(())
 }
 
 pub async fn upsert_articles(table: &Table, records: &[ArticleRecord]) -> Result<()> {

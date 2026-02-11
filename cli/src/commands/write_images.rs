@@ -5,7 +5,7 @@ use image::{GenericImageView, ImageFormat};
 use static_flow_shared::embedding::embed_image_bytes;
 
 use crate::{
-    db::{connect_db, ensure_vector_index, upsert_images},
+    db::{connect_db, ensure_vector_index, optimize_table_indexes, upsert_images},
     schema::ImageRecord,
     utils::{collect_image_files, encode_thumbnail, hash_bytes, relative_filename},
 };
@@ -16,6 +16,7 @@ pub async fn run(
     recursive: bool,
     generate_thumbnail: bool,
     thumbnail_size: u32,
+    auto_optimize: bool,
 ) -> Result<()> {
     let db = connect_db(db_path).await?;
     let table = db
@@ -79,6 +80,12 @@ pub async fn run(
 
     if let Err(err) = ensure_vector_index(&table, "vector").await {
         tracing::warn!("Failed to create vector index on images: {err}");
+    }
+
+    if auto_optimize {
+        if let Err(err) = optimize_table_indexes(&table).await {
+            tracing::warn!("Failed to optimize images indexes after write-images: {err}");
+        }
     }
 
     tracing::info!("Wrote {} images to LanceDB.", records.len());

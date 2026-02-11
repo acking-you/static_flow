@@ -97,6 +97,9 @@ cd cli
 # - taxonomies 表用于分类/标签元数据（无向量索引）
 ../target/release/sf-cli ensure-indexes --db-path ../data/lancedb
 
+# write-article / write-images / sync-notes 默认会自动执行 index-only optimize
+# 用于把新写入数据纳入索引覆盖；批量流水线可通过 --no-auto-optimize 关闭
+
 # 写入单篇文章
 ../target/release/sf-cli write-article \
   --db-path ../data/lancedb \
@@ -147,6 +150,7 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb list-indexes articles --with-stats
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
+../target/release/sf-cli db --db-path ../data/lancedb optimize images
 
 # 核心表结构
 # - articles：文章内容/元数据 + 向量
@@ -174,12 +178,16 @@ cd cli
 | `GET /api/articles/:id` | 文章详情 |
 | `GET /api/articles/:id/related` | 相关文章（向量相似） |
 | `GET /api/search?q=` | 全文搜索 |
-| `GET /api/semantic-search?q=` | 语义搜索（向量） |
+| `GET /api/semantic-search?q=` | 语义搜索（向量，含跨语言回退与语义片段高亮） |
 | `GET /api/images` | 图片列表 |
 | `GET /api/images/:id-or-filename` | 从 LanceDB 读取图片二进制（支持 `?thumb=true`，无缩略图则回退原图） |
 | `GET /api/image-search?id=` | 以图搜图 |
 | `GET /api/tags` | 标签列表 |
 | `GET /api/categories` | 分类列表 |
+
+> 可观测性：每个 backend 响应都会返回 `x-request-id` 与 `x-trace-id`，并且 backend/shared 的请求内日志会带同一组 ID，便于串联排障。
+
+> 检索说明：若你更新了代码但仍看到“英文语义检索无结果”，请重新编译二进制（`cargo build --release -p sf-cli -p static-flow-backend`），旧二进制不会包含向量列回退逻辑。
 
 ## 关键环境变量
 

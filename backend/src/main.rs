@@ -1,4 +1,5 @@
 mod handlers;
+mod request_context;
 mod routes;
 mod state;
 
@@ -7,7 +8,8 @@ use std::env;
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_LOG_FILTER: &str = "warn,static_flow_backend=info";
+const DEFAULT_LOG_FILTER: &str =
+    "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -15,7 +17,10 @@ async fn main() -> Result<()> {
     // Override with RUST_LOG for troubleshooting.
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .compact()
+        .with_env_filter(filter)
+        .init();
 
     // Load environment variables
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());

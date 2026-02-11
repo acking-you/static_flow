@@ -13,7 +13,10 @@ use static_flow_shared::{
 };
 
 use crate::{
-    db::{connect_db, ensure_vector_index, upsert_articles, upsert_images, upsert_taxonomies},
+    db::{
+        connect_db, ensure_vector_index, optimize_table_indexes, upsert_articles, upsert_images,
+        upsert_taxonomies,
+    },
     schema::{ArticleRecord, ImageRecord, TaxonomyRecord},
     utils::{
         collect_markdown_files, encode_thumbnail, estimate_read_time, hash_bytes,
@@ -45,6 +48,7 @@ pub struct SyncNotesOptions {
     pub language: Option<String>,
     pub default_category: String,
     pub default_author: String,
+    pub auto_optimize: bool,
 }
 
 pub async fn run(db_path: &Path, dir: &Path, options: SyncNotesOptions) -> Result<()> {
@@ -55,6 +59,7 @@ pub async fn run(db_path: &Path, dir: &Path, options: SyncNotesOptions) -> Resul
         language,
         default_category,
         default_author,
+        auto_optimize,
     } = options;
     let db = connect_db(db_path).await?;
     let articles_table = db
@@ -100,6 +105,15 @@ pub async fn run(db_path: &Path, dir: &Path, options: SyncNotesOptions) -> Resul
     }
     if let Err(err) = ensure_vector_index(&images_table, "vector").await {
         tracing::warn!("Failed to create vector index on images: {err}");
+    }
+
+    if auto_optimize {
+        if let Err(err) = optimize_table_indexes(&articles_table).await {
+            tracing::warn!("Failed to optimize articles indexes after sync-notes: {err}");
+        }
+        if let Err(err) = optimize_table_indexes(&images_table).await {
+            tracing::warn!("Failed to optimize images indexes after sync-notes: {err}");
+        }
     }
 
     tracing::info!("Synced notes: {} articles, {} images.", outcome.articles, outcome.images);

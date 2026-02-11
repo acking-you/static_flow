@@ -1,11 +1,12 @@
 use axum::{
     http::{HeaderValue, Method},
+    middleware,
     routing::get,
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::{handlers, state::AppState};
+use crate::{handlers, request_context, state::AppState};
 
 pub fn create_router(state: AppState) -> Router {
     let allow_origin_env = std::env::var("ALLOWED_ORIGINS").ok();
@@ -55,6 +56,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/images", get(handlers::list_images))
         .route("/api/image-search", get(handlers::search_images))
         .with_state(state)
+        .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(cors)
 }
 

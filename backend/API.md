@@ -7,6 +7,7 @@
 - Base URL（生产示例，可选云端 Nginx）: `https://api.yourdomain.com/api`
 - 协议: HTTP/1.1
 - 数据格式: JSON（图片接口返回二进制）
+- 请求追踪: backend 会透传/生成 `x-request-id` 与 `x-trace-id`，并在 backend/shared 请求内日志输出同一组 ID
 
 ## CORS 说明
 
@@ -68,6 +69,10 @@ curl http://localhost:3000/api/articles/post-001/related
 
 `GET /api/search?q=关键词`
 
+实现说明：
+- 优先使用 LanceDB FTS（BM25）
+- 若 FTS 查询失败或返回空结果，自动回退到扫描匹配（保证可用性）
+
 示例：
 
 ```bash
@@ -78,10 +83,17 @@ curl "http://localhost:3000/api/search?q=rust"
 
 `GET /api/semantic-search?q=关键词`
 
+实现说明：
+- 默认按 query 语言选择向量列（英文→`vector_en`，中文→`vector_zh`）
+- 若主向量列无结果，会自动回退到另一语言向量列再检索一次（例如 `vector_en` 为空时，英文 query 会回退 `vector_zh`）
+- `highlight` 为“语义片段”：从正文中分块候选，按语义相似度（余弦）+ 词面重叠加权，选最佳片段
+- 若最佳片段存在词面命中，会做 `<mark>` 标注；否则返回最相关语义片段（而非随机摘要）
+
 示例：
 
 ```bash
 curl "http://localhost:3000/api/semantic-search?q=异步编程"
+curl "http://localhost:3000/api/semantic-search?q=web"
 ```
 
 ### 7) 图片列表
@@ -182,6 +194,15 @@ ALLOWED_ORIGINS=https://acking-you.github.io \
 
 ```bash
 ./target/release/sf-cli sync-notes --db-path ./data/lancedb --dir ./content --recursive --generate-thumbnail
+```
+
+默认会自动执行 index-only optimize，把新写入数据纳入索引覆盖。
+如使用了 `--no-auto-optimize`（批量场景），请在批次末尾手动执行：
+
+```bash
+./target/release/sf-cli db --db-path ./data/lancedb ensure-indexes
+./target/release/sf-cli db --db-path ./data/lancedb optimize articles
+./target/release/sf-cli db --db-path ./data/lancedb optimize images
 ```
 
 ### Q3: 是否仍需把图片放到后端静态目录？

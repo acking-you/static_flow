@@ -99,6 +99,10 @@ cd cli
 # - taxonomies table stores category/tag metadata (no vector index)
 ../target/release/sf-cli ensure-indexes --db-path ../data/lancedb
 
+# By default, write-article / write-images / sync-notes auto-run index-only optimize
+# to refresh index coverage for newly written rows.
+# Disable per command with: --no-auto-optimize
+
 # Write single article
 ../target/release/sf-cli write-article \
   --db-path ../data/lancedb \
@@ -149,6 +153,7 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb list-indexes articles --with-stats
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
+../target/release/sf-cli db --db-path ../data/lancedb optimize images
 
 # Managed tables
 # - articles: article body/metadata + vectors
@@ -176,12 +181,14 @@ cd cli
 | `GET /api/articles/:id` | Article detail |
 | `GET /api/articles/:id/related` | Related articles (vector similarity) |
 | `GET /api/search?q=` | Full-text search |
-| `GET /api/semantic-search?q=` | Semantic search (vector) |
+| `GET /api/semantic-search?q=` | Semantic search (vector, with cross-language fallback and semantic snippet highlight) |
 | `GET /api/images` | Image catalog |
 | `GET /api/images/:id-or-filename` | Read image binary from LanceDB (`?thumb=true`, fallback to original if thumbnail missing) |
 | `GET /api/image-search?id=` | Similar images |
 | `GET /api/tags` | Tag list |
 | `GET /api/categories` | Category list |
+
+> Observability: every backend response includes `x-request-id` and `x-trace-id`. The same IDs appear in backend/shared logs for request-level correlation.
 
 ## Key Env Vars
 

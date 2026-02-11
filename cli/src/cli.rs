@@ -64,6 +64,9 @@ pub enum Commands {
         /// Optional language hint for auto-embedding (en/zh).
         #[arg(long, value_parser = ["en", "zh"])]
         language: Option<String>,
+        /// Disable automatic index optimization after write.
+        #[arg(long)]
+        no_auto_optimize: bool,
     },
     /// Sync a local notes directory (markdown + images) into LanceDB.
     SyncNotes {
@@ -91,6 +94,9 @@ pub enum Commands {
         /// Default author used when frontmatter author is missing.
         #[arg(long, default_value = "Unknown")]
         default_author: String,
+        /// Disable automatic index optimization after sync.
+        #[arg(long)]
+        no_auto_optimize: bool,
     },
     /// Batch write images into LanceDB.
     WriteImages {
@@ -109,6 +115,9 @@ pub enum Commands {
         /// Thumbnail size (pixels).
         #[arg(long, default_value_t = 256)]
         thumbnail_size: u32,
+        /// Disable automatic index optimization after image write.
+        #[arg(long)]
+        no_auto_optimize: bool,
     },
     /// Query a table and print the first rows.
     Query {

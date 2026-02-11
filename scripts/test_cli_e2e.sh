@@ -191,7 +191,8 @@ while IFS=$'\t' read -r file category cat_desc tags summary; do
         --tags "$tags" \
         --category "$category" \
         --category-description "$cat_desc" \
-        --language zh
+        --language zh \
+        --no-auto-optimize
 done < "$META_FILE"
 
 "$CLI_BIN" api --db-path "$DB_PATH" list-articles > "$OUT_DIR/list_articles.json"
@@ -203,7 +204,7 @@ jq -e '.categories | length > 0 and all(.[]; (.description | type == "string") a
     || fail "category descriptions should be non-empty"
 
 step "Writing image directory into images table"
-"$CLI_BIN" write-images --db-path "$DB_PATH" --dir ./content/images --recursive --generate-thumbnail
+"$CLI_BIN" write-images --db-path "$DB_PATH" --dir ./content/images --recursive --generate-thumbnail --no-auto-optimize
 
 "$CLI_BIN" api --db-path "$DB_PATH" list-images > "$OUT_DIR/list_images_after_write.json"
 image_total=$(jq -r '.total' "$OUT_DIR/list_images_after_write.json")
@@ -237,7 +238,7 @@ NOTE
 done < "$META_FILE"
 
 step "Syncing notes directory"
-"$CLI_BIN" sync-notes --db-path "$DB_PATH" --dir "$NOTES_DIR" --recursive --generate-thumbnail --language zh --default-category Notes --default-author boliu
+"$CLI_BIN" sync-notes --db-path "$DB_PATH" --dir "$NOTES_DIR" --recursive --generate-thumbnail --language zh --default-category Notes --default-author boliu --no-auto-optimize
 
 "$CLI_BIN" api --db-path "$DB_PATH" list-articles > "$OUT_DIR/list_articles_after_sync.json"
 article_total_after_sync=$(jq -r '.total' "$OUT_DIR/list_articles_after_sync.json")
@@ -309,7 +310,7 @@ jq -e '.images | any(.id == "e2e-temp-image") | not' "$OUT_DIR/list_images_after
 "$CLI_BIN" db --db-path "$DB_PATH" count-rows taxonomies
 "$CLI_BIN" db --db-path "$DB_PATH" drop-table taxonomies --yes
 "$CLI_BIN" db --db-path "$DB_PATH" create-table taxonomies
-"$CLI_BIN" sync-notes --db-path "$DB_PATH" --dir "$NOTES_DIR" --recursive --generate-thumbnail --language zh --default-category Notes --default-author boliu
+"$CLI_BIN" sync-notes --db-path "$DB_PATH" --dir "$NOTES_DIR" --recursive --generate-thumbnail --language zh --default-category Notes --default-author boliu --no-auto-optimize
 
 step "Running API command set"
 "$CLI_BIN" api --db-path "$DB_PATH" list-articles --category Web > "$OUT_DIR/api_list_articles_web.json"
