@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use web_sys::HtmlInputElement;
 use yew::{events::InputEvent, prelude::*};
 use yew_router::prelude::*;
@@ -15,7 +16,34 @@ use crate::{
 #[function_component(Header)]
 pub fn header() -> Html {
     let mobile_menu_open = use_state(|| false);
-    let search_query = use_state(String::new);
+    let location = use_location();
+    let route = use_route::<Route>();
+    let location_sync_key = location
+        .as_ref()
+        .map(|loc| format!("{}{}", loc.path(), loc.query_str()))
+        .unwrap_or_default();
+    let initial_query = location
+        .as_ref()
+        .and_then(|loc| loc.query::<HeaderSearchQuery>().ok())
+        .and_then(|query| query.q)
+        .unwrap_or_default();
+    let search_query = use_state(|| initial_query);
+
+    {
+        let search_query = search_query.clone();
+        let location = location.clone();
+        use_effect_with(location_sync_key, move |_| {
+            let next = location
+                .as_ref()
+                .and_then(|item| item.query::<HeaderSearchQuery>().ok())
+                .and_then(|query| query.q)
+                .unwrap_or_default();
+            if *search_query != next {
+                search_query.set(next);
+            }
+            || ()
+        });
+    }
 
     let toggle_mobile_menu = {
         let mobile_menu_open = mobile_menu_open.clone();
@@ -44,11 +72,13 @@ pub fn header() -> Html {
     // 执行搜索
     let do_search = {
         let search_query = search_query.clone();
+        let route = route.clone();
+        let location = location.clone();
         Callback::from(move |_: MouseEvent| {
             let query = (*search_query).trim();
             if !query.is_empty() {
                 let encoded_query = urlencoding::encode(query);
-                let search_url = crate::config::route_path(&format!("/search?q={}", encoded_query));
+                let search_url = build_search_url(route.clone(), location.clone(), &encoded_query);
                 if let Some(window) = web_sys::window() {
                     if let Ok(history) = window.history() {
                         let _ = history.push_state_with_url(
@@ -68,13 +98,15 @@ pub fn header() -> Html {
     // Enter键搜索
     let on_search_keypress = {
         let search_query = search_query.clone();
+        let route = route.clone();
+        let location = location.clone();
         Callback::from(move |e: KeyboardEvent| {
             if e.key() == "Enter" {
                 let query = (*search_query).trim();
                 if !query.is_empty() {
                     let encoded_query = urlencoding::encode(query);
                     let search_url =
-                        crate::config::route_path(&format!("/search?q={}", encoded_query));
+                        build_search_url(route.clone(), location.clone(), &encoded_query);
                     if let Some(window) = web_sys::window() {
                         if let Ok(history) = window.history() {
                             let _ = history.push_state_with_url(
@@ -503,4 +535,50 @@ pub fn header() -> Html {
             </div>
         </>
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+struct HeaderSearchQuery {
+    q: Option<String>,
+    mode: Option<String>,
+    enhanced_highlight: Option<bool>,
+    limit: Option<usize>,
+    all: Option<bool>,
+    max_distance: Option<f32>,
+}
+
+fn build_search_url(
+    route: Option<Route>,
+    location: Option<Location>,
+    encoded_query: &str,
+) -> String {
+    let mut params = vec![format!("q={encoded_query}")];
+    if matches!(route, Some(Route::Search)) {
+        if let Some(current) = location.and_then(|loc| loc.query::<HeaderSearchQuery>().ok()) {
+            if let Some(mode) = current
+                .mode
+                .filter(|value| matches!(value.as_str(), "keyword" | "semantic" | "image"))
+            {
+                if mode != "keyword" {
+                    params.push(format!("mode={}", urlencoding::encode(&mode)));
+                }
+            }
+            if current.enhanced_highlight.unwrap_or(false) {
+                params.push("enhanced_highlight=true".to_string());
+            }
+            if let Some(limit) = current.limit.filter(|value| *value > 0) {
+                params.push(format!("limit={limit}"));
+            }
+            if current.all.unwrap_or(false) {
+                params.push("all=true".to_string());
+            }
+            if let Some(max_distance) = current
+                .max_distance
+                .filter(|value| value.is_finite() && *value >= 0.0)
+            {
+                params.push(format!("max_distance={max_distance}"));
+            }
+        }
+    }
+    crate::config::route_path(&format!("/search?{}", params.join("&")))
 }

@@ -12,15 +12,23 @@ use crate::{
 #[function_component(HomePage)]
 pub fn home_page() -> Html {
     let total_articles = use_state(|| 0usize);
+    let total_tags = use_state(|| 0usize);
+    let total_categories = use_state(|| 0usize);
 
     {
         let total_articles = total_articles.clone();
+        let total_tags = total_tags.clone();
+        let total_categories = total_categories.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
-                match crate::api::fetch_articles(None, None).await {
-                    Ok(data) => total_articles.set(data.len()),
+                match crate::api::fetch_site_stats().await {
+                    Ok(stats) => {
+                        total_articles.set(stats.total_articles);
+                        total_tags.set(stats.total_tags);
+                        total_categories.set(stats.total_categories);
+                    },
                     Err(e) => {
-                        console::error_1(&format!("Failed to fetch articles: {}", e).into());
+                        console::error_1(&format!("Failed to fetch home stats: {}", e).into());
                     },
                 }
             });
@@ -35,10 +43,10 @@ pub fn home_page() -> Html {
             t::STATS_ARTICLES.to_string(),
             Some(Route::Posts),
         ),
-        (IconName::Hash, "12".to_string(), t::STATS_TAGS.to_string(), Some(Route::Tags)),
+        (IconName::Hash, total_tags.to_string(), t::STATS_TAGS.to_string(), Some(Route::Tags)),
         (
             IconName::Folder,
-            "5".to_string(),
+            total_categories.to_string(),
             t::STATS_CATEGORIES.to_string(),
             Some(Route::Categories),
         ),

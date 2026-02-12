@@ -8,8 +8,9 @@ description: >-
   (3) sync a notes/vault directory (bulk Markdown + images),
   (4) query, inspect, update, or delete articles/images/taxonomies in LanceDB,
   (5) manage LanceDB tables (init, create, drop, describe, optimize, index),
-  (6) run backend-equivalent API queries locally (list articles, search, semantic search, related articles, image search),
-  (7) verify publication results or debug data integrity issues.
+  (6) reclaim LanceDB storage immediately with one-command prune (`db optimize --all --prune-now`),
+  (7) run backend-equivalent API queries locally (list articles, search, semantic search, related articles, image search),
+  (8) verify publication results or debug data integrity issues.
   The skill auto-infers missing metadata (`summary`, `tags`, `category`, `category_description`)
   from article content, handles local image import from Markdown/Obsidian `![[]]` syntax,
   and enforces a strict precondition → publish → verify workflow.
@@ -45,6 +46,7 @@ Execute content publication and database management workflows for StaticFlow usi
 
 ### Enforce Metadata Requirements
 At publish time, `summary`, `tags`, `category`, and `category_description` must all be present in the final write payload.
+Also preserve source article date: the stored `articles.date` must match the note's creation date.
 
 For blog publication, resolve metadata from these sources in order:
 1. Frontmatter in the Markdown file.
@@ -63,6 +65,13 @@ If any field is missing:
 3. Continue publication without blocking on user input.
 4. Report generated values in the final publish summary.
 
+### Preserve Source Creation Date
+Keep publication date consistent with the original note:
+1. If the user provides `--date`, use it (highest priority).
+2. Otherwise if frontmatter `date` exists, keep it unchanged.
+3. If frontmatter `date` is missing, derive from source file timestamp (`YYYY-MM-DD`, prefer file birth time when available, otherwise mtime) and pass it via `--date`.
+4. Do not silently fallback to "today" when date preservation is required by the user.
+
 ### Metadata Inference Rules
 - `summary`: generate 1 concise sentence from title + opening paragraphs.
 - `tags`: derive 3-8 domain tags from title/headings/keywords; output comma-separated.
@@ -79,13 +88,14 @@ If any field is missing:
 2. Detect local image usage in Markdown body and frontmatter `featured_image`.
 3. Confirm where metadata comes from:
    - Preferred: frontmatter fields in the Markdown file.
-   - Fallback: explicit CLI flags (`--summary`, `--tags`, `--category`, `--category-description`) using inferred values when needed.
+   - Fallback: explicit CLI flags (`--summary`, `--tags`, `--category`, `--category-description`, optional `--date`) using inferred values when needed.
 4. If frontmatter is complete, basic publish is valid:
    - `<cli> write-article --db-path <db_path> --file <markdown>`
 5. If any required field is missing from frontmatter, use explicit flags:
    - `<cli> write-article --db-path <db_path> --file <markdown> --summary \"...\" --tags \"tag1,tag2\" --category \"...\" --category-description \"...\"`
 6. Optional flags:
    - `--id <custom_id>`: override the default article ID (file stem).
+   - `--date <YYYY-MM-DD>`: override frontmatter date for publication date control.
    - `--language <en|zh>`: language hint for auto-embedding.
    - `--vector <json>` / `--vector-en <json>` / `--vector-zh <json>`: pre-computed embedding vectors.
    - `--no-auto-optimize`: skip automatic index optimization after write.
@@ -153,7 +163,22 @@ Use `<cli> db --db-path <db_path> <subcommand>` for direct table operations.
 - `ensure-indexes [--table <name>]` — ensure all expected indexes for managed tables.
 - `list-indexes <table> [--with-stats]` — list indexes and optional coverage stats.
 - `drop-index <table> <index_name>` — drop an index by name.
-- `optimize <table> [--all]` — optimize index coverage (default) or full table optimization.
+- `optimize <table> [--all] [--prune-now]` — optimize index coverage (default) or full table optimization; `--prune-now` triggers immediate aggressive prune (`older_than=0`, `delete_unverified=true`).
+
+### One-Click Immediate Prune
+Use this when the user asks to reclaim space now (without waiting retention windows):
+
+```
+<cli> db --db-path <db_path> optimize <table> --all --prune-now
+```
+
+Run across all managed tables:
+
+```
+for t in articles images taxonomies; do
+  <cli> db --db-path <db_path> optimize "$t" --all --prune-now
+done
+```
 
 ---
 

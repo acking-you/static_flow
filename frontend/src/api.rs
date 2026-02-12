@@ -27,6 +27,13 @@ pub struct CategoryInfo {
     pub description: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SiteStats {
+    pub total_articles: usize,
+    pub total_tags: usize,
+    pub total_categories: usize,
+}
+
 #[cfg(not(feature = "mock"))]
 #[derive(Debug, Deserialize)]
 struct ArticleListResponse {
@@ -199,6 +206,57 @@ pub async fn fetch_categories() -> Result<Vec<CategoryInfo>, String> {
     }
 }
 
+/// Fetch site-level counts for home page stats.
+pub async fn fetch_site_stats() -> Result<SiteStats, String> {
+    #[cfg(feature = "mock")]
+    {
+        use std::collections::HashSet;
+
+        let articles = models::get_mock_articles();
+        let mut tags = HashSet::new();
+        let mut categories = HashSet::new();
+
+        for article in &articles {
+            for tag in &article.tags {
+                let normalized = tag.trim().to_lowercase();
+                if !normalized.is_empty() {
+                    tags.insert(normalized);
+                }
+            }
+
+            let normalized_category = article.category.trim().to_lowercase();
+            if !normalized_category.is_empty() {
+                categories.insert(normalized_category);
+            }
+        }
+
+        return Ok(SiteStats {
+            total_articles: articles.len(),
+            total_tags: tags.len(),
+            total_categories: categories.len(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/stats", API_BASE);
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SearchResult {
     pub id: String,
@@ -242,20 +300,39 @@ struct ImageSearchResponse {
     query_id: String,
 }
 
+#[cfg(not(feature = "mock"))]
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ImageTextSearchResponse {
+    images: Vec<ImageInfo>,
+    total: usize,
+    query: String,
+}
+
 /// 搜索文章
-pub async fn search_articles(keyword: &str) -> Result<Vec<SearchResult>, String> {
+pub async fn search_articles(
+    keyword: &str,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
     if keyword.trim().is_empty() {
         return Ok(vec![]);
     }
 
     #[cfg(feature = "mock")]
     {
-        return Ok(models::mock_search(keyword));
+        let mut results = models::mock_search(keyword);
+        if let Some(limit) = limit {
+            results.truncate(limit);
+        }
+        return Ok(results);
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/search?q={}", API_BASE, urlencoding::encode(keyword));
+        let mut url = format!("{}/search?q={}", API_BASE, urlencoding::encode(keyword));
+        if let Some(limit) = limit {
+            url.push_str(&format!("&limit={limit}"));
+        }
 
         let response = Request::get(&url)
             .send()
@@ -282,6 +359,8 @@ pub async fn search_articles(keyword: &str) -> Result<Vec<SearchResult>, String>
 pub async fn semantic_search_articles(
     keyword: &str,
     enhanced_highlight: bool,
+    limit: Option<usize>,
+    max_distance: Option<f32>,
 ) -> Result<Vec<SearchResult>, String> {
     if keyword.trim().is_empty() {
         return Ok(vec![]);
@@ -289,7 +368,11 @@ pub async fn semantic_search_articles(
 
     #[cfg(feature = "mock")]
     {
-        return Ok(models::mock_search(keyword));
+        let mut results = models::mock_search(keyword);
+        if let Some(limit) = limit {
+            results.truncate(limit);
+        }
+        return Ok(results);
     }
 
     #[cfg(not(feature = "mock"))]
@@ -297,6 +380,12 @@ pub async fn semantic_search_articles(
         let mut url = format!("{}/semantic-search?q={}", API_BASE, urlencoding::encode(keyword));
         if enhanced_highlight {
             url.push_str("&enhanced_highlight=true");
+        }
+        if let Some(limit) = limit {
+            url.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(max_distance) = max_distance {
+            url.push_str(&format!("&max_distance={max_distance}"));
         }
 
         let response = Request::get(&url)
@@ -381,7 +470,11 @@ pub async fn fetch_images() -> Result<Vec<ImageInfo>, String> {
 }
 
 /// Search images by an existing image id.
-pub async fn search_images_by_id(image_id: &str) -> Result<Vec<ImageInfo>, String> {
+pub async fn search_images_by_id(
+    image_id: &str,
+    limit: Option<usize>,
+    max_distance: Option<f32>,
+) -> Result<Vec<ImageInfo>, String> {
     if image_id.trim().is_empty() {
         return Ok(vec![]);
     }
@@ -393,7 +486,13 @@ pub async fn search_images_by_id(image_id: &str) -> Result<Vec<ImageInfo>, Strin
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/image-search?id={}", API_BASE, urlencoding::encode(image_id));
+        let mut url = format!("{}/image-search?id={}", API_BASE, urlencoding::encode(image_id));
+        if let Some(limit) = limit {
+            url.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(max_distance) = max_distance {
+            url.push_str(&format!("&max_distance={max_distance}"));
+        }
 
         let response = Request::get(&url)
             .send()
@@ -405,6 +504,49 @@ pub async fn search_images_by_id(image_id: &str) -> Result<Vec<ImageInfo>, Strin
         }
 
         let json_response: ImageSearchResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+
+        Ok(json_response.images)
+    }
+}
+
+/// Search images with text query (text-to-image).
+pub async fn search_images_by_text(
+    keyword: &str,
+    limit: Option<usize>,
+    max_distance: Option<f32>,
+) -> Result<Vec<ImageInfo>, String> {
+    if keyword.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    #[cfg(feature = "mock")]
+    {
+        return Ok(vec![]);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/image-search-text?q={}", API_BASE, urlencoding::encode(keyword));
+        if let Some(limit) = limit {
+            url.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(max_distance) = max_distance {
+            url.push_str(&format!("&max_distance={max_distance}"));
+        }
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        let json_response: ImageTextSearchResponse = response
             .json()
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;

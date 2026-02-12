@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use static_flow_shared::{
     lancedb_api::{
         ArticleListResponse, CategoriesResponse, ImageListResponse, ImageSearchResponse,
-        SearchResponse, TagsResponse,
+        ImageTextSearchResponse, SearchResponse, StatsResponse, TagsResponse,
     },
     Article,
 };
@@ -22,11 +22,28 @@ pub struct SearchQuery {
     pub q: String,
     #[serde(default)]
     pub enhanced_highlight: bool,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub max_distance: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ImageSearchQuery {
     pub id: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub max_distance: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImageTextSearchQuery {
+    pub q: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub max_distance: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +147,23 @@ pub async fn list_categories(
     }))
 }
 
+pub async fn get_stats(
+    State(state): State<AppState>,
+) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(stats) = read_cache(state.stats_cache.as_ref()).await {
+        return Ok(Json(stats));
+    }
+
+    let stats = state
+        .store
+        .fetch_stats()
+        .await
+        .map_err(|e| internal_error("Failed to fetch stats", e))?;
+
+    write_cache(state.stats_cache.as_ref(), stats.clone()).await;
+    Ok(Json(stats))
+}
+
 pub async fn search_articles(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
@@ -145,7 +179,7 @@ pub async fn search_articles(
 
     let results = state
         .store
-        .search_articles(keyword)
+        .search_articles(keyword, normalize_limit(query.limit))
         .await
         .map_err(|e| internal_error("Failed to search articles", e))?;
 
@@ -171,7 +205,12 @@ pub async fn semantic_search(
 
     let results = state
         .store
-        .semantic_search(keyword, 10, query.enhanced_highlight)
+        .semantic_search(
+            keyword,
+            normalize_limit(query.limit),
+            normalize_max_distance(query.max_distance),
+            query.enhanced_highlight,
+        )
         .await
         .map_err(|e| internal_error("Failed to run semantic search", e))?;
 
@@ -219,7 +258,11 @@ pub async fn search_images(
 ) -> Result<Json<ImageSearchResponse>, (StatusCode, Json<ErrorResponse>)> {
     let images = state
         .store
-        .search_images(&query.id, 12)
+        .search_images(
+            &query.id,
+            normalize_limit(query.limit),
+            normalize_max_distance(query.max_distance),
+        )
         .await
         .map_err(|e| internal_error("Failed to search images", e))?;
 
@@ -227,6 +270,36 @@ pub async fn search_images(
         total: images.len(),
         images,
         query_id: query.id,
+    }))
+}
+
+pub async fn search_images_by_text(
+    State(state): State<AppState>,
+    Query(query): Query<ImageTextSearchQuery>,
+) -> Result<Json<ImageTextSearchResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let keyword = query.q.trim();
+    if keyword.is_empty() {
+        return Ok(Json(ImageTextSearchResponse {
+            total: 0,
+            images: vec![],
+            query: query.q,
+        }));
+    }
+
+    let images = state
+        .store
+        .search_images_by_text(
+            keyword,
+            normalize_limit(query.limit),
+            normalize_max_distance(query.max_distance),
+        )
+        .await
+        .map_err(|e| internal_error("Failed to search images by text", e))?;
+
+    Ok(Json(ImageTextSearchResponse {
+        total: images.len(),
+        images,
+        query: query.q,
     }))
 }
 
@@ -262,9 +335,7 @@ pub async fn serve_image(
         .unwrap())
 }
 
-async fn read_cache<T: Clone>(
-    cache: &tokio::sync::RwLock<Option<(Vec<T>, Instant)>>,
-) -> Option<Vec<T>> {
+async fn read_cache<T: Clone>(cache: &tokio::sync::RwLock<Option<(T, Instant)>>) -> Option<T> {
     let cache = cache.read().await;
     match cache.as_ref() {
         Some((items, cached_at)) if cached_at.elapsed() < CACHE_TTL => Some(items.clone()),
@@ -272,7 +343,7 @@ async fn read_cache<T: Clone>(
     }
 }
 
-async fn write_cache<T>(cache: &tokio::sync::RwLock<Option<(Vec<T>, Instant)>>, items: Vec<T>) {
+async fn write_cache<T>(cache: &tokio::sync::RwLock<Option<(T, Instant)>>, items: T) {
     let mut cache = cache.write().await;
     *cache = Some((items, Instant::now()));
 }
@@ -286,4 +357,12 @@ fn internal_error(message: &str, err: impl std::fmt::Display) -> (StatusCode, Js
             code: 500,
         }),
     )
+}
+
+fn normalize_limit(limit: Option<usize>) -> Option<usize> {
+    limit.filter(|value| *value > 0)
+}
+
+fn normalize_max_distance(max_distance: Option<f32>) -> Option<f32> {
+    max_distance.filter(|value| value.is_finite() && *value >= 0.0)
 }

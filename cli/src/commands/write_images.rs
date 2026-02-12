@@ -7,7 +7,10 @@ use static_flow_shared::embedding::embed_image_bytes;
 use crate::{
     db::{connect_db, ensure_vector_index, optimize_table_indexes, upsert_images},
     schema::ImageRecord,
-    utils::{collect_image_files, encode_thumbnail, hash_bytes, relative_filename},
+    utils::{
+        collect_image_files, encode_thumbnail, hash_bytes, rasterize_svg_for_embedding,
+        relative_filename,
+    },
 };
 
 pub async fn run(
@@ -43,24 +46,40 @@ pub async fn run(
             "bytes": bytes.len(),
         });
 
-        let (vector, thumbnail) = match image::load_from_memory(&bytes) {
-            Ok(img) => {
-                let (w, h) = img.dimensions();
-                let format = ImageFormat::from_path(&path).ok();
-                metadata["width"] = serde_json::json!(w);
-                metadata["height"] = serde_json::json!(h);
-                metadata["format"] = serde_json::json!(format.map(|f| format!("{:?}", f)));
-                let thumb = if generate_thumbnail {
-                    Some(encode_thumbnail(&img, thumbnail_size)?)
-                } else {
-                    None
-                };
-                (embed_image_bytes(&bytes), thumb)
-            },
-            Err(_) => {
-                metadata["format"] = serde_json::json!(None::<String>);
-                (embed_image_bytes(&bytes), None)
-            },
+        let rasterized_svg = rasterize_svg_for_embedding(&path, &bytes)?;
+        let (vector, thumbnail) = if let Some(rasterized) = rasterized_svg {
+            metadata["width"] = serde_json::json!(rasterized.width);
+            metadata["height"] = serde_json::json!(rasterized.height);
+            metadata["format"] = serde_json::json!("Svg");
+            metadata["embedding_input"] = serde_json::json!("svg_rasterized_png");
+            let thumb = if generate_thumbnail {
+                image::load_from_memory(&rasterized.png_bytes)
+                    .ok()
+                    .and_then(|img| encode_thumbnail(&img, thumbnail_size).ok())
+            } else {
+                None
+            };
+            (embed_image_bytes(&rasterized.png_bytes), thumb)
+        } else {
+            match image::load_from_memory(&bytes) {
+                Ok(img) => {
+                    let (w, h) = img.dimensions();
+                    let format = ImageFormat::from_path(&path).ok();
+                    metadata["width"] = serde_json::json!(w);
+                    metadata["height"] = serde_json::json!(h);
+                    metadata["format"] = serde_json::json!(format.map(|f| format!("{:?}", f)));
+                    let thumb = if generate_thumbnail {
+                        Some(encode_thumbnail(&img, thumbnail_size)?)
+                    } else {
+                        None
+                    };
+                    (embed_image_bytes(&bytes), thumb)
+                },
+                Err(_) => {
+                    metadata["format"] = serde_json::json!(None::<String>);
+                    (embed_image_bytes(&bytes), None)
+                },
+            }
         };
 
         records.push(ImageRecord {

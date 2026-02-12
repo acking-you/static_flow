@@ -6,8 +6,11 @@ use std::{
 use anyhow::{Context, Result};
 use gray_matter::{engine::YAML, Matter};
 use image::{DynamicImage, ImageFormat};
+use resvg::{tiny_skia, usvg};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+const SVG_EMBED_MAX_SIDE: u32 = 1024;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Frontmatter {
@@ -81,7 +84,7 @@ pub fn encode_thumbnail(image: &DynamicImage, size: u32) -> Result<Vec<u8>> {
 
 pub fn collect_image_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    let exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+    let exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 
     if recursive {
         for entry in walkdir::WalkDir::new(dir)
@@ -106,6 +109,34 @@ pub fn collect_image_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> 
     }
 
     Ok(files)
+}
+
+#[derive(Debug, Clone)]
+pub struct RasterizedSvgForEmbedding {
+    pub png_bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub fn rasterize_svg_for_embedding(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<Option<RasterizedSvgForEmbedding>> {
+    if !is_svg_extension(path) && !looks_like_svg(bytes) {
+        return Ok(None);
+    }
+
+    match rasterize_svg_to_png(bytes, SVG_EMBED_MAX_SIDE) {
+        Ok(rasterized) => Ok(Some(rasterized)),
+        Err(err) => {
+            tracing::warn!(
+                "Failed to rasterize SVG for embedding (fallback to raw bytes): path={}, \
+                 error={err}",
+                path.display()
+            );
+            Ok(None)
+        },
+    }
 }
 
 pub fn collect_markdown_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
@@ -166,4 +197,46 @@ fn has_image_extension(path: &Path, exts: &[&str]) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| exts.iter().any(|item| ext.eq_ignore_ascii_case(item)))
         .unwrap_or(false)
+}
+
+fn is_svg_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false)
+}
+
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let sample_len = bytes.len().min(2048);
+    let sample = std::str::from_utf8(&bytes[..sample_len]).unwrap_or_default();
+    let lowered = sample.to_ascii_lowercase();
+    lowered.contains("<svg")
+}
+
+fn rasterize_svg_to_png(bytes: &[u8], max_side: u32) -> Result<RasterizedSvgForEmbedding> {
+    let options = usvg::Options::default();
+    let tree = usvg::Tree::from_data(bytes, &options).context("failed to parse svg")?;
+
+    let size = tree.size();
+    let src_width = size.width().round().max(1.0);
+    let src_height = size.height().round().max(1.0);
+    let max_src_side = src_width.max(src_height);
+    let scale = (max_side as f32 / max_src_side).min(1.0);
+    let target_width = (src_width * scale).round().max(1.0) as u32;
+    let target_height = (src_height * scale).round().max(1.0) as u32;
+
+    let mut pixmap =
+        tiny_skia::Pixmap::new(target_width, target_height).context("failed to allocate pixmap")?;
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    let mut pixmap_mut = pixmap.as_mut();
+    resvg::render(&tree, transform, &mut pixmap_mut);
+    let png_bytes = pixmap
+        .encode_png()
+        .context("failed to encode rasterized svg")?;
+
+    Ok(RasterizedSvgForEmbedding {
+        png_bytes,
+        width: target_width,
+        height: target_height,
+    })
 }

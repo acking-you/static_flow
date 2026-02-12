@@ -75,3 +75,7 @@ shared/.fastembed_cache/
 data/
 bin/
 tmp/
+
+# Local agent entry files (symlinked to external path)
+AGENTS.md
+CLAUDE.md

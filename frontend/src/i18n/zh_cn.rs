@@ -97,7 +97,12 @@ pub mod home {
 }
 
 pub mod search {
-    pub const IMAGE_MODE_HINT: &str = "请选择一张图片开始相似图片搜索";
+    pub const IMAGE_MODE_HINT: &str = "可输入文字检索图片，或选择一张图片开始相似图片搜索";
+    pub const IMAGE_TEXT_RESULTS: &str = "TEXT TO IMAGE";
+    pub const IMAGE_TEXT_SEARCHING: &str = "检索文本相关图片...";
+    pub const IMAGE_TEXT_NO_RESULTS: &str = "暂无文搜图结果";
+    pub const IMAGE_TEXT_MISS_TEMPLATE: &str = "未找到与「{}」语义相关的图片";
+    pub const IMAGE_TEXT_FOUND_TEMPLATE: &str = "找到 {} 张语义相关图片";
     pub const EMPTY_KEYWORD_HINT: &str = "请在上方搜索框输入关键词";
     pub const SEARCH_LOADING: &str = "正在扫描数据库...";
 
@@ -122,9 +127,19 @@ pub mod search {
     pub const MODE_KEYWORD: &str = "Keyword";
     pub const MODE_SEMANTIC: &str = "Semantic";
     pub const MODE_IMAGE: &str = "Image";
+    pub const RESULT_SCOPE: &str = "Result Scope";
+    pub const RESULT_SCOPE_LIMITED_TEMPLATE: &str = "默认 {} 条";
+    pub const RESULT_SCOPE_ALL: &str = "全部召回";
+    pub const DISTANCE_FILTER: &str = "Distance Filter";
+    pub const DISTANCE_FILTER_OFF: &str = "关闭";
+    pub const DISTANCE_FILTER_STRICT: &str = "<= 0.8";
+    pub const DISTANCE_FILTER_RELAXED: &str = "<= 1.2";
+    pub const DISTANCE_FILTER_INPUT_PLACEHOLDER: &str = "输入最大距离";
+    pub const DISTANCE_FILTER_APPLY: &str = "应用";
     pub const HIGHLIGHT_PRECISION: &str = "Highlight Precision";
     pub const HIGHLIGHT_FAST: &str = "Fast (Default)";
     pub const HIGHLIGHT_ENHANCED: &str = "Enhanced (Slower)";
+    pub const IMAGE_TEXT_QUERY_TEMPLATE: &str = "当前描述：{}";
     pub const IMAGE_CATALOG: &str = "IMAGE CATALOG";
     pub const IMAGE_LOADING: &str = "加载图片中...";
     pub const IMAGE_EMPTY_HINT: &str = "暂无图片，请先运行 sf-cli write-images.";
@@ -132,6 +147,12 @@ pub mod search {
     pub const IMAGE_SEARCHING: &str = "检索相似图片...";
     pub const IMAGE_NO_SIMILAR: &str = "暂无相似图片结果";
     pub const IMAGE_SELECT_HINT: &str = "点击上方图片开始搜索相似图片";
+    pub const IMAGE_SCROLL_LOADING: &str = "滚动中，正在加载更多图片...";
+    pub const IMAGE_SCROLL_HINT: &str = "继续向下滚动加载更多";
+    pub const LIGHTBOX_CLOSE_ARIA: &str = "关闭图片预览";
+    pub const LIGHTBOX_DOWNLOAD: &str = "下载";
+    pub const LIGHTBOX_IMAGE_ALT: &str = "预览图片";
+    pub const LIGHTBOX_PREVIEW_FAILED: &str = "图片加载失败，可尝试在新标签打开：{}";
     pub const SEARCHING_SHORT: &str = "正在扫描...";
     pub const MATCH_BADGE: &str = "MATCH";
 }

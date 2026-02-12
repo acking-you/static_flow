@@ -53,6 +53,10 @@ pub enum Commands {
         /// provide `category_description`; stored in taxonomies table).
         #[arg(long)]
         category_description: Option<String>,
+        /// Article publication date in `YYYY-MM-DD` format. Overrides
+        /// frontmatter `date` when provided.
+        #[arg(long)]
+        date: Option<String>,
         /// Import local image links from markdown into `images` and rewrite
         /// links.
         #[arg(long)]
@@ -225,6 +229,12 @@ pub enum ApiCommands {
         #[arg(long)]
         id: String,
     },
+    /// GET /api/image-search-text?q=
+    SearchImagesText {
+        /// Text query.
+        #[arg(long)]
+        q: String,
+    },
     /// GET /api/images/:id-or-filename
     GetImage {
         /// Image id or filename.
@@ -349,6 +359,20 @@ pub enum DbCommands {
         /// Run full optimization instead of index-only optimization.
         #[arg(long)]
         all: bool,
+        /// Run an aggressive prune pass immediately after optimization
+        /// (older_than=0, delete_unverified=true).
+        #[arg(long)]
+        prune_now: bool,
+    },
+    /// Recompute embeddings for SVG rows in `images` table using rasterized
+    /// PNG input while keeping original SVG bytes.
+    ReembedSvgImages {
+        /// Optional upper bound of rows to update in this run.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Print candidates only, do not write changes.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Upsert one article row from JSON payload.
     UpsertArticle {

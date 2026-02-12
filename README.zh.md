@@ -107,6 +107,7 @@ cd cli
 ../target/release/sf-cli write-article \
   --db-path ../data/lancedb \
   --file ../content/post-001.md \
+  --date "2026-02-12" \
   --summary "文章摘要" \
   --tags "rust,wasm" \
   --category "Tech" \
@@ -114,6 +115,8 @@ cd cli
 
 # 也可写在 markdown frontmatter 中
 # category_description: "Rust 与 WASM 的工程实践"
+# date: "2026-02-12"
+# 若两者同时提供，以 CLI --date 为准。
 
 # 批量写入图片
 ../target/release/sf-cli write-images \
@@ -154,6 +157,10 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
+# 一键立即激进清理（优化后立刻 prune）
+../target/release/sf-cli db --db-path ../data/lancedb optimize images --all --prune-now
+# 对三张核心表统一立即清理
+for t in articles images taxonomies; do ../target/release/sf-cli db --db-path ../data/lancedb optimize "$t" --all --prune-now; done
 
 # 核心表结构
 # - articles：文章内容/元数据 + 向量

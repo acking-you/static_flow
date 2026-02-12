@@ -23,7 +23,7 @@ use crate::{
     schema::{ArticleRecord, ImageRecord, TaxonomyRecord},
     utils::{
         encode_thumbnail, estimate_read_time, hash_bytes, parse_markdown, parse_tags, parse_vector,
-        Frontmatter,
+        rasterize_svg_for_embedding, Frontmatter,
     },
 };
 
@@ -36,6 +36,7 @@ pub struct WriteArticleOptions {
     pub tags: Option<String>,
     pub category: Option<String>,
     pub category_description: Option<String>,
+    pub date: Option<String>,
     pub import_local_images: bool,
     pub media_roots: Vec<PathBuf>,
     pub generate_thumbnail: bool,
@@ -67,6 +68,7 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         tags,
         category,
         category_description,
+        date: cli_date,
         import_local_images,
         media_roots,
         generate_thumbnail,
@@ -109,7 +111,7 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         category: frontmatter_category,
         category_description: frontmatter_category_description,
         author,
-        date,
+        date: frontmatter_date,
         featured_image,
         read_time,
     } = frontmatter;
@@ -203,7 +205,12 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
     };
 
     let read_time = read_time.unwrap_or_else(|| estimate_read_time(&body));
-    let date = date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let cli_date = normalize_cli_date(cli_date)?;
+    let date = cli_date
+        .or(frontmatter_date
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
     let author = author.unwrap_or_else(|| "Unknown".to_string());
 
     let combined_text = format!("{} {} {}", title, summary, body);
@@ -407,13 +414,7 @@ fn rewrite_image_links(
         let Some(raw_path) = capture.get(1).map(|m| m.as_str().to_string()) else {
             continue;
         };
-        import_local_markdown_image(
-            &raw_path,
-            markdown_path,
-            config,
-            state,
-            &mut path_mapping,
-        )?;
+        import_local_markdown_image(&raw_path, markdown_path, config, state, &mut path_mapping)?;
     }
 
     for capture in obsidian_image_regex.captures_iter(markdown) {
@@ -424,13 +425,7 @@ fn rewrite_image_links(
         if raw_path.is_empty() {
             continue;
         }
-        import_local_markdown_image(
-            &raw_path,
-            markdown_path,
-            config,
-            state,
-            &mut path_mapping,
-        )?;
+        import_local_markdown_image(&raw_path, markdown_path, config, state, &mut path_mapping)?;
     }
 
     let rewritten_standard = image_regex
@@ -650,8 +645,7 @@ fn resolve_featured_image(
         return Some(featured);
     }
 
-    let Some(resolved) =
-        resolve_local_asset_path(&featured, markdown_path, &config.media_roots)
+    let Some(resolved) = resolve_local_asset_path(&featured, markdown_path, &config.media_roots)
     else {
         state.unresolved.insert(featured.clone());
         tracing::warn!(
@@ -701,19 +695,34 @@ fn build_image_record(path: &Path, config: &ImageImportConfig) -> Result<ImageRe
         "source": path.display().to_string(),
     });
 
-    let (vector, thumbnail) = match image::load_from_memory(&bytes) {
-        Ok(img) => {
-            let (w, h) = img.dimensions();
-            metadata["width"] = serde_json::json!(w);
-            metadata["height"] = serde_json::json!(h);
-            let thumb = if config.generate_thumbnail {
-                Some(encode_thumbnail(&img, config.thumbnail_size)?)
-            } else {
-                None
-            };
-            (embed_image_bytes(&bytes), thumb)
-        },
-        Err(_) => (embed_image_bytes(&bytes), None),
+    let rasterized_svg = rasterize_svg_for_embedding(path, &bytes)?;
+    let (vector, thumbnail) = if let Some(rasterized) = rasterized_svg {
+        metadata["width"] = serde_json::json!(rasterized.width);
+        metadata["height"] = serde_json::json!(rasterized.height);
+        metadata["embedding_input"] = serde_json::json!("svg_rasterized_png");
+        let thumb = if config.generate_thumbnail {
+            image::load_from_memory(&rasterized.png_bytes)
+                .ok()
+                .and_then(|img| encode_thumbnail(&img, config.thumbnail_size).ok())
+        } else {
+            None
+        };
+        (embed_image_bytes(&rasterized.png_bytes), thumb)
+    } else {
+        match image::load_from_memory(&bytes) {
+            Ok(img) => {
+                let (w, h) = img.dimensions();
+                metadata["width"] = serde_json::json!(w);
+                metadata["height"] = serde_json::json!(h);
+                let thumb = if config.generate_thumbnail {
+                    Some(encode_thumbnail(&img, config.thumbnail_size)?)
+                } else {
+                    None
+                };
+                (embed_image_bytes(&bytes), thumb)
+            },
+            Err(_) => (embed_image_bytes(&bytes), None),
+        }
     };
 
     Ok(ImageRecord {
@@ -738,12 +747,26 @@ fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
+fn normalize_cli_date(date: Option<String>) -> Result<Option<String>> {
+    let Some(date) = date else {
+        return Ok(None);
+    };
+    let date = date.trim();
+    if date.is_empty() {
+        return Ok(None);
+    }
+
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .with_context(|| format!("invalid --date `{date}`; expected YYYY-MM-DD"))?;
+    Ok(Some(date.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
 
     use super::{
-        first_markdown_heading, is_local_image_path, looks_like_obsidian_size,
+        first_markdown_heading, is_local_image_path, looks_like_obsidian_size, normalize_cli_date,
         parse_obsidian_embed_target, resolve_local_asset_path, resolve_title,
     };
 
@@ -829,5 +852,17 @@ mod tests {
         assert_eq!(resolved, Some(media_file));
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn normalize_cli_date_accepts_valid_yyyy_mm_dd() {
+        let date = normalize_cli_date(Some("2026-02-12".to_string())).expect("valid date");
+        assert_eq!(date.as_deref(), Some("2026-02-12"));
+    }
+
+    #[test]
+    fn normalize_cli_date_rejects_invalid_format() {
+        let err = normalize_cli_date(Some("2026/02/12".to_string())).expect_err("invalid date");
+        assert!(err.to_string().contains("expected YYYY-MM-DD"), "unexpected error: {err}");
     }
 }

@@ -76,6 +76,9 @@ curl http://localhost:3000/api/articles/post-001/related
 
 `GET /api/search?q=关键词`
 
+查询参数：
+- `limit`（可选）返回结果上限；不传则不限制，尽可能返回全部召回结果
+
 实现说明：
 - 优先使用 LanceDB FTS（BM25）
 - 若 FTS 查询失败或返回空结果，自动回退到扫描匹配（保证可用性）
@@ -84,6 +87,7 @@ curl http://localhost:3000/api/articles/post-001/related
 
 ```bash
 curl "http://localhost:3000/api/search?q=rust"
+curl "http://localhost:3000/api/search?q=rust&limit=50"
 ```
 
 ### 6) 语义搜索
@@ -92,6 +96,8 @@ curl "http://localhost:3000/api/search?q=rust"
 
 参数：
 - `enhanced_highlight`（可选，默认 `false`）：是否启用高精度 highlight 片段重排（更准确但更慢）
+- `limit`（可选）：返回结果上限；不传则不限制，尽可能返回全部召回结果
+- `max_distance`（可选）：向量距离上界，作用于返回结果中的 `_distance` 字段；越小越严格，不传则不过滤距离
 
 实现说明：
 - 默认按 query 语言选择向量列（英文→`vector_en`，中文→`vector_zh`）
@@ -106,7 +112,35 @@ curl "http://localhost:3000/api/search?q=rust"
 curl "http://localhost:3000/api/semantic-search?q=异步编程"
 curl "http://localhost:3000/api/semantic-search?q=web"
 curl "http://localhost:3000/api/semantic-search?q=web&enhanced_highlight=true"
+curl "http://localhost:3000/api/semantic-search?q=web&limit=50"
+curl "http://localhost:3000/api/semantic-search?q=web&limit=50&max_distance=0.8"
 ```
+
+#### `max_distance` 参数原理与示例
+
+作用机制（语义搜索 / 以图搜图一致）：
+1. 先把 query 转成向量，执行 `nearest_to(...)` 找最近邻候选。
+2. 若传了 `max_distance`，会在 LanceDB 侧应用 `distance_range(None, max_distance)`，即仅保留 `_distance <= max_distance` 的结果。
+3. 最后再按 `limit` 截断返回数量。
+
+理解重点：
+- `max_distance` 控制“质量门槛”（相似度阈值），`limit` 控制“最多返回多少条”。
+- 当语料较集中、阈值较宽松时，即使设置了 `max_distance` 也可能召回很多结果；这属于正常现象。
+- 距离数值的尺度取决于索引的距离类型（`distance_type`），不同库/模型间不能直接照搬阈值。
+
+可复现实验（示例）：
+1. 先不设阈值：`/api/semantic-search?q=datafusion&limit=200`，观察结果条数和 `_distance` 分布。
+2. 设宽松阈值：`/api/semantic-search?q=datafusion&limit=200&max_distance=1.2`，通常条数会减少。
+3. 设严格阈值：`/api/semantic-search?q=datafusion&limit=200&max_distance=0.8`，通常条数进一步减少，相关性更高。
+
+如果要查看当前索引的距离类型，可执行：
+
+```bash
+./bin/sf-cli db --db-path ./data/lancedb list-indexes articles --with-stats
+./bin/sf-cli db --db-path ./data/lancedb list-indexes images --with-stats
+```
+
+输出中的 `distance=...` 就是该索引使用的距离度量类型。
 
 ### 7) 图片列表
 
@@ -142,10 +176,36 @@ curl "http://localhost:3000/api/images/wallhaven-5yyyw9.png?thumb=true" --output
 
 `GET /api/image-search?id=<image_id>`
 
+查询参数：
+- `limit`（可选）返回结果上限；不传则不限制，尽可能返回全部召回结果
+- `max_distance`（可选）向量距离上界，作用于 `_distance` 字段；越小越严格，不传则不过滤距离（见上文“`max_distance` 参数原理与示例”）
+
 示例：
 
 ```bash
 curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65fcd4f95f5f6c68ca68cfb7b"
+curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65fcd4f95f5f6c68ca68cfb7b&limit=24"
+curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65fcd4f95f5f6c68ca68cfb7b&limit=24&max_distance=0.8"
+```
+
+### 10) 文搜图（Text-to-Image）
+
+`GET /api/image-search-text?q=关键词`
+
+查询参数：
+- `limit`（可选）返回结果上限；不传则不限制，尽可能返回全部召回结果
+- `max_distance`（可选）向量距离上界，作用于 `_distance` 字段；越小越严格，不传则不过滤距离（见上文“`max_distance` 参数原理与示例”）
+
+实现说明：
+- 文本 query 使用 CLIP 文本编码器生成向量，再在 `images.vector` 上执行最近邻检索。
+- 为保证图文在同一向量空间，文搜图与图片向量写入使用同一 CLIP 语义空间。
+
+示例：
+
+```bash
+curl "http://localhost:3000/api/image-search-text?q=rust mascot"
+curl "http://localhost:3000/api/image-search-text?q=database architecture&limit=24"
+curl "http://localhost:3000/api/image-search-text?q=clickhouse execution pipeline&limit=24&max_distance=0.8"
 ```
 
 ---
@@ -169,6 +229,10 @@ curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31
 - `images` 表：图片二进制、缩略图、视觉向量
 
 图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。`thumb=true` 时优先 `thumbnail`，为空则回退 `data`。
+
+SVG 写入说明：
+- `images.data` 仍保存原始 SVG 字节（原格式不变）。
+- 写入时若检测到 SVG，会先光栅化为 PNG 作为 embedding 输入，再写入 `images.vector`（用于向量检索）。
 
 ---
 
@@ -217,6 +281,20 @@ ALLOWED_ORIGINS=https://acking-you.github.io \
 ./target/release/sf-cli db --db-path ./data/lancedb optimize images
 ```
 
+若需要立刻清理旧版本并回收空间，可直接一键执行：
+
+```bash
+./target/release/sf-cli db --db-path ./data/lancedb optimize images --all --prune-now
+```
+
+批量处理三张核心表：
+
+```bash
+for t in articles images taxonomies; do
+  ./target/release/sf-cli db --db-path ./data/lancedb optimize "$t" --all --prune-now
+done
+```
+
 ### Q3: 是否仍需把图片放到后端静态目录？
 
 不需要。当前实现支持图片二进制直接写入 LanceDB，再通过 `/api/images/:id-or-filename` 读取。
@@ -225,6 +303,16 @@ ALLOWED_ORIGINS=https://acking-you.github.io \
 
 `/api/categories` 的 `description` 来自 `taxonomies` 表（`kind=category`）。
 可通过 `sf-cli write-article --category-description ...` 或 `sync-notes`（frontmatter）写入。
+
+### Q3.2: 如何保证文章日期与原文一致？
+
+`write-article` 现已支持 `--date YYYY-MM-DD`：
+
+```bash
+./target/release/sf-cli write-article --db-path ./data/lancedb --file ./post.md --date 2026-02-10 ...
+```
+
+日期优先级为：`--date` > frontmatter `date` > 当天日期。
 
 ### Q4: 如何不用启动 backend，直接调试同款 API 逻辑？
 

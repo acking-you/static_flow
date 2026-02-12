@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use static_flow_shared::lancedb_api::{
     ArticleListResponse, CategoriesResponse, ImageListResponse, ImageSearchResponse,
-    SearchResponse, StaticFlowDataStore, TagsResponse,
+    ImageTextSearchResponse, SearchResponse, StaticFlowDataStore, TagsResponse,
 };
 
 use crate::cli::ApiCommands;
@@ -63,7 +63,7 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
                     query: q,
                 }
             } else {
-                let results = store.search_articles(keyword).await?;
+                let results = store.search_articles(keyword, Some(10)).await?;
                 SearchResponse {
                     total: results.len(),
                     results,
@@ -85,7 +85,7 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
                 }
             } else {
                 let results = store
-                    .semantic_search(keyword, 10, enhanced_highlight)
+                    .semantic_search(keyword, Some(10), None, enhanced_highlight)
                     .await?;
                 SearchResponse {
                     total: results.len(),
@@ -117,12 +117,32 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
         ApiCommands::SearchImages {
             id,
         } => {
-            let images = store.search_images(&id, 12).await?;
+            let images = store.search_images(&id, Some(12), None).await?;
             print_json(&ImageSearchResponse {
                 total: images.len(),
                 images,
                 query_id: id,
             })
+        },
+        ApiCommands::SearchImagesText {
+            q,
+        } => {
+            let keyword = q.trim();
+            let response = if keyword.is_empty() {
+                ImageTextSearchResponse {
+                    images: vec![],
+                    total: 0,
+                    query: q,
+                }
+            } else {
+                let images = store.search_images_by_text(keyword, Some(24), None).await?;
+                ImageTextSearchResponse {
+                    total: images.len(),
+                    images,
+                    query: q,
+                }
+            };
+            print_json(&response)
         },
         ApiCommands::GetImage {
             id_or_filename,

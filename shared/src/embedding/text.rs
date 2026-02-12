@@ -43,6 +43,7 @@ pub enum TextEmbeddingModel {
     BgeLargeEnV15,
     BgeSmallZhV15,
     BgeLargeZhV15,
+    ClipVitB32,
 }
 
 impl TextEmbeddingModel {
@@ -54,6 +55,7 @@ impl TextEmbeddingModel {
             TextEmbeddingModel::BgeLargeEnV15 => 1024,
             TextEmbeddingModel::BgeSmallZhV15 => 512,
             TextEmbeddingModel::BgeLargeZhV15 => 1024,
+            TextEmbeddingModel::ClipVitB32 => 512,
         }
     }
 
@@ -66,6 +68,7 @@ impl TextEmbeddingModel {
             TextEmbeddingModel::BgeLargeEnV15 => EmbeddingModel::BGELargeENV15,
             TextEmbeddingModel::BgeSmallZhV15 => EmbeddingModel::BGESmallZHV15,
             TextEmbeddingModel::BgeLargeZhV15 => EmbeddingModel::BGELargeZHV15,
+            TextEmbeddingModel::ClipVitB32 => EmbeddingModel::ClipVitB32,
         }
     }
 }

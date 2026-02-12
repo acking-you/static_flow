@@ -1,17 +1,20 @@
 use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
-use static_flow_shared::lancedb_api::{CategoryInfo, StaticFlowDataStore, TagInfo};
+use static_flow_shared::lancedb_api::{CategoryInfo, StaticFlowDataStore, StatsResponse, TagInfo};
 use tokio::sync::RwLock;
 
-type CacheEntry<T> = Option<(Vec<T>, Instant)>;
-type SharedCache<T> = Arc<RwLock<CacheEntry<T>>>;
+type ListCacheEntry<T> = Option<(Vec<T>, Instant)>;
+type SharedListCache<T> = Arc<RwLock<ListCacheEntry<T>>>;
+type ValueCacheEntry<T> = Option<(T, Instant)>;
+type SharedValueCache<T> = Arc<RwLock<ValueCacheEntry<T>>>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub(crate) store: Arc<StaticFlowDataStore>,
-    pub(crate) tags_cache: SharedCache<TagInfo>,
-    pub(crate) categories_cache: SharedCache<CategoryInfo>,
+    pub(crate) tags_cache: SharedListCache<TagInfo>,
+    pub(crate) categories_cache: SharedListCache<CategoryInfo>,
+    pub(crate) stats_cache: SharedValueCache<StatsResponse>,
 }
 
 impl AppState {
@@ -21,6 +24,7 @@ impl AppState {
             store: Arc::new(store),
             tags_cache: Arc::new(RwLock::new(None)),
             categories_cache: Arc::new(RwLock::new(None)),
+            stats_cache: Arc::new(RwLock::new(None)),
         })
     }
 }

@@ -20,7 +20,7 @@ use crate::{
     schema::{ArticleRecord, ImageRecord, TaxonomyRecord},
     utils::{
         collect_markdown_files, encode_thumbnail, estimate_read_time, hash_bytes,
-        markdown_filename, normalize_markdown_path, parse_markdown,
+        markdown_filename, normalize_markdown_path, parse_markdown, rasterize_svg_for_embedding,
     },
 };
 
@@ -145,14 +145,13 @@ async fn sync_notes(
     let mut taxonomy_store: HashMap<String, TaxonomyRecord> = HashMap::new();
 
     // Pre-query fallback cover once for the entire batch.
-    let fallback_cover =
-        match crate::db::query_fallback_cover(images_table, articles_table).await {
-            Ok(cover) => cover,
-            Err(err) => {
-                tracing::warn!("Failed to query fallback cover: {err}");
-                None
-            },
-        };
+    let fallback_cover = match crate::db::query_fallback_cover(images_table, articles_table).await {
+        Ok(cover) => cover,
+        Err(err) => {
+            tracing::warn!("Failed to query fallback cover: {err}");
+            None
+        },
+    };
 
     for markdown_path in markdown_files {
         let markdown_text = fs::read_to_string(&markdown_path)
@@ -420,19 +419,34 @@ fn build_image_record(path: &Path, config: &SyncConfig) -> Result<ImageRecord> {
         "source": path.display().to_string(),
     });
 
-    let (vector, thumbnail) = match image::load_from_memory(&bytes) {
-        Ok(img) => {
-            let (w, h) = img.dimensions();
-            metadata["width"] = serde_json::json!(w);
-            metadata["height"] = serde_json::json!(h);
-            let thumb = if config.generate_thumbnail {
-                Some(encode_thumbnail(&img, config.thumbnail_size)?)
-            } else {
-                None
-            };
-            (static_flow_shared::embedding::embed_image_bytes(&bytes), thumb)
-        },
-        Err(_) => (static_flow_shared::embedding::embed_image_bytes(&bytes), None),
+    let rasterized_svg = rasterize_svg_for_embedding(path, &bytes)?;
+    let (vector, thumbnail) = if let Some(rasterized) = rasterized_svg {
+        metadata["width"] = serde_json::json!(rasterized.width);
+        metadata["height"] = serde_json::json!(rasterized.height);
+        metadata["embedding_input"] = serde_json::json!("svg_rasterized_png");
+        let thumb = if config.generate_thumbnail {
+            image::load_from_memory(&rasterized.png_bytes)
+                .ok()
+                .and_then(|img| encode_thumbnail(&img, config.thumbnail_size).ok())
+        } else {
+            None
+        };
+        (static_flow_shared::embedding::embed_image_bytes(&rasterized.png_bytes), thumb)
+    } else {
+        match image::load_from_memory(&bytes) {
+            Ok(img) => {
+                let (w, h) = img.dimensions();
+                metadata["width"] = serde_json::json!(w);
+                metadata["height"] = serde_json::json!(h);
+                let thumb = if config.generate_thumbnail {
+                    Some(encode_thumbnail(&img, config.thumbnail_size)?)
+                } else {
+                    None
+                };
+                (static_flow_shared::embedding::embed_image_bytes(&bytes), thumb)
+            },
+            Err(_) => (static_flow_shared::embedding::embed_image_bytes(&bytes), None),
+        }
     };
 
     Ok(ImageRecord {

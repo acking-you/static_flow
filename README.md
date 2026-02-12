@@ -110,6 +110,7 @@ cd cli
 ../target/release/sf-cli write-article \
   --db-path ../data/lancedb \
   --file ../content/post-001.md \
+  --date "2026-02-12" \
   --summary "Article summary" \
   --tags "rust,wasm" \
   --category "Tech" \
@@ -117,6 +118,8 @@ cd cli
 
 # Optional in markdown frontmatter for sync/write
 # category_description: "Engineering notes about Rust + WASM"
+# date: "2026-02-12"
+# If both are present, CLI --date overrides frontmatter date.
 
 # Batch write images
 ../target/release/sf-cli write-images \
@@ -157,6 +160,10 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
+# One-command immediate aggressive prune (optimize + prune now)
+../target/release/sf-cli db --db-path ../data/lancedb optimize images --all --prune-now
+# Run immediate prune across all managed tables
+for t in articles images taxonomies; do ../target/release/sf-cli db --db-path ../data/lancedb optimize "$t" --all --prune-now; done
 
 # Managed tables
 # - articles: article body/metadata + vectors

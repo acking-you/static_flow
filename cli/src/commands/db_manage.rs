@@ -2,13 +2,16 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow::util::pretty::pretty_format_batches;
+use arrow_array::{Array, BinaryArray, RecordBatch, StringArray, TimestampMillisecondArray};
 use arrow_schema::{DataType, TimeUnit};
+use chrono::Duration as ChronoDuration;
 use futures::TryStreamExt;
 use lancedb::{
     query::{ExecutableQuery, QueryBase, Select},
     table::{OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
+use static_flow_shared::embedding::embed_image_bytes;
 
 use crate::{
     cli::QueryOutputFormat,
@@ -17,6 +20,7 @@ use crate::{
         upsert_images,
     },
     schema::{article_schema, image_schema, taxonomy_schema, ArticleRecord, ImageRecord},
+    utils::rasterize_svg_for_embedding,
 };
 
 #[derive(Debug, Clone)]
@@ -272,7 +276,7 @@ pub async fn drop_index(db_path: &Path, table: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn optimize_table(db_path: &Path, table: &str, all: bool) -> Result<()> {
+pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: bool) -> Result<()> {
     let db = connect_db(db_path).await?;
     let table = open_table(&db, table).await?;
 
@@ -280,10 +284,136 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool) -> Result<()
         if all { OptimizeAction::All } else { OptimizeAction::Index(OptimizeOptions::default()) };
 
     let _ = table.optimize(action).await?;
+
+    if prune_now {
+        let _ = table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(ChronoDuration::zero()),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await?;
+        tracing::info!(
+            "Immediate prune completed for `{}` (older_than=0, delete_unverified=true).",
+            table.name()
+        );
+    }
+
     tracing::info!(
         "Optimization completed for `{}` ({})",
         table.name(),
         if all { "all" } else { "index-only" }
+    );
+    Ok(())
+}
+
+pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: bool) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, "images").await?;
+
+    let batches = table
+        .query()
+        .only_if("filename LIKE '%.svg' OR filename LIKE '%.SVG'")
+        .select(Select::columns(&["id", "filename", "data", "thumbnail", "metadata", "created_at"]))
+        .execute()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    if batches.is_empty() {
+        tracing::info!("No SVG rows found in `images`.");
+        return Ok(());
+    }
+
+    let mut updates = Vec::<ImageRecord>::new();
+    let mut scanned = 0usize;
+    let mut candidates = 0usize;
+    let mut skipped_rasterize = 0usize;
+
+    for batch in &batches {
+        let ids = downcast_string(batch, "id")?;
+        let filenames = downcast_string(batch, "filename")?;
+        let data = downcast_binary(batch, "data")?;
+        let thumbs = downcast_binary(batch, "thumbnail")?;
+        let metadata = downcast_string(batch, "metadata")?;
+        let created = downcast_timestamp_ms(batch, "created_at")?;
+
+        for row in 0..batch.num_rows() {
+            scanned += 1;
+            if let Some(max) = limit {
+                if candidates >= max {
+                    break;
+                }
+            }
+
+            let filename = filenames.value(row).to_string();
+            let bytes = data.value(row).to_vec();
+            let Some(rasterized) =
+                rasterize_svg_for_embedding(Path::new(&filename), bytes.as_slice())?
+            else {
+                skipped_rasterize += 1;
+                continue;
+            };
+            candidates += 1;
+
+            let mut metadata_value = serde_json::from_str::<serde_json::Value>(metadata.value(row))
+                .unwrap_or_else(|_| serde_json::json!({}));
+            if !metadata_value.is_object() {
+                metadata_value = serde_json::json!({
+                    "raw_metadata": metadata_value,
+                });
+            }
+            metadata_value["width"] = serde_json::json!(rasterized.width);
+            metadata_value["height"] = serde_json::json!(rasterized.height);
+            metadata_value["embedding_input"] = serde_json::json!("svg_rasterized_png");
+
+            let thumbnail =
+                if thumbs.is_null(row) { None } else { Some(thumbs.value(row).to_vec()) };
+
+            updates.push(ImageRecord {
+                id: ids.value(row).to_string(),
+                filename,
+                data: bytes,
+                thumbnail,
+                vector: embed_image_bytes(&rasterized.png_bytes),
+                metadata: metadata_value.to_string(),
+                created_at: created.value(row),
+            });
+        }
+    }
+
+    if candidates == 0 {
+        tracing::info!(
+            "No SVG rows were eligible for re-embedding (scanned={}, skipped_rasterize={}).",
+            scanned,
+            skipped_rasterize
+        );
+        return Ok(());
+    }
+
+    if dry_run {
+        tracing::info!(
+            "Dry run: {} SVG rows would be re-embedded (scanned={}, skipped_rasterize={}).",
+            candidates,
+            scanned,
+            skipped_rasterize
+        );
+        return Ok(());
+    }
+
+    for chunk in updates.chunks(32) {
+        upsert_images(&table, chunk).await?;
+    }
+
+    if let Err(err) = ensure_vector_index(&table, "vector").await {
+        tracing::warn!("Failed to ensure vector index after SVG re-embed: {err}");
+    }
+
+    tracing::info!(
+        "SVG re-embed completed: updated={}, scanned={}, skipped_rasterize={}",
+        candidates,
+        scanned,
+        skipped_rasterize
     );
     Ok(())
 }
@@ -595,4 +725,43 @@ fn format_vertical_batches(batches: &[arrow_array::RecordBatch]) -> Result<Strin
     }
 
     Ok(output)
+}
+
+fn downcast_string<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a StringArray> {
+    let index = batch
+        .schema()
+        .index_of(column)
+        .with_context(|| format!("missing column `{column}`"))?;
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| anyhow!("column `{column}` is not StringArray"))
+}
+
+fn downcast_binary<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a BinaryArray> {
+    let index = batch
+        .schema()
+        .index_of(column)
+        .with_context(|| format!("missing column `{column}`"))?;
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| anyhow!("column `{column}` is not BinaryArray"))
+}
+
+fn downcast_timestamp_ms<'a>(
+    batch: &'a RecordBatch,
+    column: &str,
+) -> Result<&'a TimestampMillisecondArray> {
+    let index = batch
+        .schema()
+        .index_of(column)
+        .with_context(|| format!("missing column `{column}`"))?;
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<TimestampMillisecondArray>()
+        .ok_or_else(|| anyhow!("column `{column}` is not TimestampMillisecondArray"))
 }

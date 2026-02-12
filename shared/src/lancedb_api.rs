@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use anyhow::{Context, Result};
 use arrow_array::{
@@ -15,7 +18,10 @@ use lancedb::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    embedding::{detect_language, embed_text_with_language, TextEmbeddingLanguage},
+    embedding::{
+        detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
+        TextEmbeddingModel,
+    },
     normalize_taxonomy_key, Article, ArticleListItem,
 };
 
@@ -57,6 +63,13 @@ pub struct ImageSearchResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImageTextSearchResponse {
+    pub images: Vec<ImageInfo>,
+    pub total: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ArticleListResponse {
     pub articles: Vec<ArticleListItem>,
     pub total: usize,
@@ -83,6 +96,13 @@ pub struct CategoryInfo {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CategoriesResponse {
     pub categories: Vec<CategoryInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StatsResponse {
+    pub total_articles: usize,
+    pub total_tags: usize,
+    pub total_categories: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -249,16 +269,84 @@ impl StaticFlowDataStore {
         Ok(categories)
     }
 
-    pub async fn search_articles(&self, keyword: &str) -> Result<Vec<SearchResult>> {
+    pub async fn fetch_stats(&self) -> Result<StatsResponse> {
+        let table = self.articles_table().await?;
+
+        let article_path = "count_rows";
+        log_query_path(
+            "fetch_stats.articles",
+            article_path,
+            article_path,
+            "table.count_rows(None)",
+        );
+        let article_started = Instant::now();
+        let total_articles = table.count_rows(None).await? as usize;
+        log_query_result(
+            "fetch_stats.articles",
+            article_path,
+            total_articles,
+            article_started.elapsed().as_millis(),
+        );
+
+        let tags_path = "projection_scan";
+        log_query_path(
+            "fetch_stats.tags",
+            tags_path,
+            tags_path,
+            "projection scan on tags column and count distinct values",
+        );
+        let tags_started = Instant::now();
+        let total_tags = count_unique_tags(&table).await?;
+        log_query_result(
+            "fetch_stats.tags",
+            tags_path,
+            total_tags,
+            tags_started.elapsed().as_millis(),
+        );
+
+        let categories_path = "projection_scan";
+        log_query_path(
+            "fetch_stats.categories",
+            categories_path,
+            categories_path,
+            "projection scan on category column and count distinct values",
+        );
+        let categories_started = Instant::now();
+        let total_categories = count_unique_categories(&table).await?;
+        log_query_result(
+            "fetch_stats.categories",
+            categories_path,
+            total_categories,
+            categories_started.elapsed().as_millis(),
+        );
+
+        Ok(StatsResponse {
+            total_articles,
+            total_tags,
+            total_categories,
+        })
+    }
+
+    pub async fn search_articles(
+        &self,
+        keyword: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
         let table = self.articles_table().await?;
         let fts_index = inspect_index_for_column(&table, "content", true).await;
         let primary_path = if fts_index.is_some() { "fts_index" } else { "fts_without_index" };
-        let primary_reason = index_reason("content", fts_index.as_ref());
+        let primary_reason = format!(
+            "{}; result_limit={}",
+            index_reason("content", fts_index.as_ref()),
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
 
         log_query_path("search_articles.primary", primary_path, "fts_index", &primary_reason);
 
         let primary_started = Instant::now();
-        match search_with_fts(&table, keyword).await {
+        match search_with_fts(&table, keyword, limit).await {
             Ok(results) if !results.is_empty() => {
                 log_query_result(
                     "search_articles.primary",
@@ -285,7 +373,7 @@ impl StaticFlowDataStore {
                 );
 
                 let fallback_started = Instant::now();
-                let fallback_results = fallback_search(&table, keyword).await?;
+                let fallback_results = fallback_search(&table, keyword, limit).await?;
                 log_query_result(
                     "search_articles.fallback",
                     fallback_path,
@@ -312,7 +400,7 @@ impl StaticFlowDataStore {
                 );
 
                 let fallback_started = Instant::now();
-                let fallback_results = fallback_search(&table, keyword).await?;
+                let fallback_results = fallback_search(&table, keyword, limit).await?;
                 log_query_result(
                     "search_articles.fallback",
                     fallback_path,
@@ -327,7 +415,8 @@ impl StaticFlowDataStore {
     pub async fn semantic_search(
         &self,
         keyword: &str,
-        limit: usize,
+        limit: Option<usize>,
+        max_distance: Option<f32>,
         enhanced_highlight: bool,
     ) -> Result<Vec<SearchResult>> {
         let table = self.articles_table().await?;
@@ -344,13 +433,27 @@ impl StaticFlowDataStore {
             "semantic_search.primary",
             primary_path,
             "vector_index",
-            &format!("{primary_reason}; limit={limit}; enhanced_highlight={enhanced_highlight}"),
+            &format!(
+                "{primary_reason}; result_limit={}; max_distance={}; \
+                 enhanced_highlight={enhanced_highlight}",
+                limit
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                max_distance
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
         );
 
         let primary_started = Instant::now();
-        let mut rows =
-            run_semantic_vector_search(&table, primary_column, query_embedding.as_slice(), limit)
-                .await?;
+        let mut rows = run_semantic_vector_search(
+            &table,
+            primary_column,
+            query_embedding.as_slice(),
+            limit,
+            max_distance,
+        )
+        .await?;
         log_query_result(
             "semantic_search.primary",
             primary_path,
@@ -386,6 +489,7 @@ impl StaticFlowDataStore {
                 fallback_column,
                 fallback_embedding.as_slice(),
                 limit,
+                max_distance,
             )
             .await?;
             log_query_result(
@@ -539,7 +643,75 @@ impl StaticFlowDataStore {
         Ok(images)
     }
 
-    pub async fn search_images(&self, id: &str, limit: usize) -> Result<Vec<ImageInfo>> {
+    pub async fn search_images_by_text(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+        max_distance: Option<f32>,
+    ) -> Result<Vec<ImageInfo>> {
+        let table = self.images_table().await?;
+        let total_started = Instant::now();
+
+        let query_embedding = embed_text_with_model(query, TextEmbeddingModel::ClipVitB32);
+
+        let index_diag = inspect_index_for_column(&table, "vector", false).await;
+        let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
+        let reason = format!(
+            "{}; query_model=clip_vit_b32_text; result_limit={}; max_distance={}",
+            index_reason("vector", index_diag.as_ref()),
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            max_distance
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        log_query_path("search_images_by_text", path, "vector_index", &reason);
+
+        let filter = "vector IS NOT NULL".to_string();
+        let candidate_count = table.count_rows(Some(filter.clone())).await? as usize;
+        if candidate_count == 0 {
+            log_query_result("search_images_by_text", path, 0, total_started.elapsed().as_millis());
+            return Ok(vec![]);
+        }
+        let effective_limit = limit.unwrap_or(candidate_count).min(candidate_count);
+        if effective_limit == 0 {
+            log_query_result("search_images_by_text", path, 0, total_started.elapsed().as_millis());
+            return Ok(vec![]);
+        }
+
+        let vector_query = table
+            .query()
+            .nearest_to(query_embedding.as_slice())
+            .context("failed to build text-image search query")?;
+
+        let started = Instant::now();
+        let mut vector_query = vector_query.only_if(filter).limit(effective_limit);
+        if max_distance.is_some() {
+            vector_query = vector_query.distance_range(None, max_distance);
+        }
+        let batches = vector_query
+            .select(Select::columns(&["id", "filename", "_distance"]))
+            .execute()
+            .await?;
+
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let images = batches_to_images(&batch_list)?;
+        log_query_result(
+            "search_images_by_text",
+            path,
+            images.len(),
+            started.elapsed().as_millis(),
+        );
+        Ok(images)
+    }
+
+    pub async fn search_images(
+        &self,
+        id: &str,
+        limit: Option<usize>,
+        max_distance: Option<f32>,
+    ) -> Result<Vec<ImageInfo>> {
         let table = self.images_table().await?;
         let total_started = Instant::now();
 
@@ -565,19 +737,41 @@ impl StaticFlowDataStore {
 
         let index_diag = inspect_index_for_column(&table, "vector", false).await;
         let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
-        let reason = format!("{}; limit={limit}", index_reason("vector", index_diag.as_ref()));
+        let reason = format!(
+            "{}; result_limit={}; max_distance={}",
+            index_reason("vector", index_diag.as_ref()),
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            max_distance
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
         log_query_path("search_images", path, "vector_index", &reason);
 
-        let filter = format!("id != '{}'", escape_literal(id));
+        let filter = format!("id != '{}' AND vector IS NOT NULL", escape_literal(id));
+        let candidate_count = table.count_rows(Some(filter.clone())).await? as usize;
+        if candidate_count == 0 {
+            log_query_result("search_images", path, 0, total_started.elapsed().as_millis());
+            return Ok(vec![]);
+        }
+        let effective_limit = limit.unwrap_or(candidate_count).min(candidate_count);
+        if effective_limit == 0 {
+            log_query_result("search_images", path, 0, total_started.elapsed().as_millis());
+            return Ok(vec![]);
+        }
+
         let vector_query = table
             .query()
             .nearest_to(vector.as_slice())
             .context("failed to build image search query")?;
 
         let started = Instant::now();
+        let mut vector_query = vector_query.only_if(filter).limit(effective_limit);
+        if max_distance.is_some() {
+            vector_query = vector_query.distance_range(None, max_distance);
+        }
         let batches = vector_query
-            .only_if(filter)
-            .limit(limit)
             .select(Select::columns(&["id", "filename", "_distance"]))
             .execute()
             .await?;
@@ -807,6 +1001,54 @@ async fn fetch_article_list(
     Ok(articles)
 }
 
+async fn count_unique_tags(table: &Table) -> Result<usize> {
+    let batches = table
+        .query()
+        .select(Select::columns(&["tags"]))
+        .execute()
+        .await?;
+
+    let batch_list = batches.try_collect::<Vec<_>>().await?;
+    let mut unique_tags: HashSet<String> = HashSet::new();
+
+    for batch in &batch_list {
+        let tags = list_array(batch, "tags")?;
+        for row in 0..batch.num_rows() {
+            for tag in value_string_list(tags, row) {
+                let normalized = tag.trim().to_lowercase();
+                if !normalized.is_empty() {
+                    unique_tags.insert(normalized);
+                }
+            }
+        }
+    }
+
+    Ok(unique_tags.len())
+}
+
+async fn count_unique_categories(table: &Table) -> Result<usize> {
+    let batches = table
+        .query()
+        .select(Select::columns(&["category"]))
+        .execute()
+        .await?;
+
+    let batch_list = batches.try_collect::<Vec<_>>().await?;
+    let mut unique_categories: HashSet<String> = HashSet::new();
+
+    for batch in &batch_list {
+        let categories = string_array(batch, "category")?;
+        for row in 0..batch.num_rows() {
+            let normalized = normalize_taxonomy_key(&value_string(categories, row));
+            if !normalized.is_empty() {
+                unique_categories.insert(normalized);
+            }
+        }
+    }
+
+    Ok(unique_categories.len())
+}
+
 async fn fetch_article_detail(table: &Table, id: &str) -> Result<Option<Article>> {
     let filter = format!("id = '{}'", escape_literal(id));
     let batches = table
@@ -884,17 +1126,33 @@ async fn run_semantic_vector_search(
     table: &Table,
     vector_column: &str,
     query_embedding: &[f32],
-    limit: usize,
+    limit: Option<usize>,
+    max_distance: Option<f32>,
 ) -> Result<Vec<SearchArticleRow>> {
+    let filter = format!("{vector_column} IS NOT NULL");
+    let candidate_count = table.count_rows(Some(filter.clone())).await? as usize;
+    if candidate_count == 0 {
+        return Ok(vec![]);
+    }
+    let effective_limit = limit.unwrap_or(candidate_count).min(candidate_count);
+    if effective_limit == 0 {
+        return Ok(vec![]);
+    }
+
     let vector_query = table
         .query()
         .nearest_to(query_embedding)
         .context("failed to build semantic query")?;
 
-    let batches = vector_query
+    let mut vector_query = vector_query
         .column(vector_column)
-        .only_if(format!("{vector_column} IS NOT NULL"))
-        .limit(limit)
+        .only_if(filter)
+        .limit(effective_limit);
+    if max_distance.is_some() {
+        vector_query = vector_query.distance_range(None, max_distance);
+    }
+
+    let batches = vector_query
         .select(Select::columns(&[
             "id",
             "title",
@@ -923,11 +1181,23 @@ struct SearchArticleRow {
     date: String,
 }
 
-async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResult>> {
-    let batches = table
+async fn search_with_fts(
+    table: &Table,
+    keyword: &str,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>> {
+    if limit == Some(0) {
+        return Ok(vec![]);
+    }
+
+    let mut query = table
         .query()
-        .full_text_search(FullTextSearchQuery::new(keyword.to_string()))
-        .limit(10)
+        .full_text_search(FullTextSearchQuery::new(keyword.to_string()));
+    if let Some(limit) = limit {
+        query = query.limit(limit);
+    }
+
+    let batches = query
         .select(Select::columns(&[
             "id", "title", "summary", "content", "tags", "category", "date", "_score",
         ]))
@@ -951,7 +1221,11 @@ async fn search_with_fts(table: &Table, keyword: &str) -> Result<Vec<SearchResul
         .collect())
 }
 
-async fn fallback_search(table: &Table, keyword: &str) -> Result<Vec<SearchResult>> {
+async fn fallback_search(
+    table: &Table,
+    keyword: &str,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>> {
     let batches = table
         .query()
         .select(Select::columns(&["id", "title", "summary", "content", "tags", "category", "date"]))
@@ -997,7 +1271,14 @@ async fn fallback_search(table: &Table, keyword: &str) -> Result<Vec<SearchResul
     }
 
     results.sort_by(|a, b| b.1.cmp(&a.1));
-    Ok(results.into_iter().map(|(result, _)| result).collect())
+    let mut results = results
+        .into_iter()
+        .map(|(result, _)| result)
+        .collect::<Vec<_>>();
+    if let Some(limit) = limit {
+        results.truncate(limit);
+    }
+    Ok(results)
 }
 
 fn batches_to_search_rows(batches: &[RecordBatch]) -> Result<Vec<SearchArticleRow>> {

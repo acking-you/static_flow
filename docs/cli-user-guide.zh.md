@@ -140,7 +140,7 @@ flowchart LR
 | `tags` | `List<Utf8>` | 是 | 标签数组 | CLI 参数或 frontmatter |
 | `category` | `Utf8` | 是 | 分类名 | CLI 参数或 frontmatter |
 | `author` | `Utf8` | 是 | 作者 | frontmatter 或默认值 |
-| `date` | `Utf8` | 是 | 日期字符串（YYYY-MM-DD） | frontmatter 或当前日期 |
+| `date` | `Utf8` | 是 | 日期字符串（YYYY-MM-DD） | `--date` > frontmatter > 当前日期 |
 | `featured_image` | `Utf8?` | 否 | 封面图引用 | 常见形态：`images/<image_id>` |
 | `read_time` | `Int32` | 是 | 预计阅读分钟 | frontmatter 或自动估算 |
 | `vector_en` | `FixedSizeList<Float32>?` | 否 | 英文语义向量 | 自动 embedding 或显式传入 |
@@ -206,6 +206,7 @@ CLI 有 3 组命令：
 ./bin/sf-cli write-article \
   --db-path ./data/lancedb \
   --file ./content/post-001.md \
+  --date "2026-02-10" \
   --summary "文章摘要" \
   --tags "rust,wasm" \
   --category "Tech" \
@@ -217,6 +218,11 @@ CLI 有 3 组命令：
 - upsert `taxonomies`（`kind=category` 和 `kind=tag`）
 - 默认自动执行 index-only optimize，保障新写入文章可立即被 FTS 检索覆盖
 - 批量流水线可通过 `--no-auto-optimize` 关闭
+
+日期优先级说明：
+- 显式传入 `--date` 时，覆盖 frontmatter `date`
+- 未传 `--date` 时使用 frontmatter `date`
+- 两者都缺失时回退为当天日期
 
 ### 5.3 批量写入图片
 
@@ -366,6 +372,20 @@ CLI 有 3 组命令：
 ./bin/sf-cli db --db-path ./data/lancedb optimize images
 ```
 
+若你希望立即回收旧版本数据（不等保留窗口），可以直接一键：
+
+```bash
+./bin/sf-cli db --db-path ./data/lancedb optimize images --all --prune-now
+```
+
+或对三张核心表统一执行：
+
+```bash
+for t in articles images taxonomies; do
+  ./bin/sf-cli db --db-path ./data/lancedb optimize "$t" --all --prune-now
+done
+```
+
 ### 9.2 搜索路径
 
 - 关键词检索：`api search`（优先 FTS，失败回退扫描）
@@ -423,7 +443,8 @@ CLI 会返回：
 在生产流程中建议固定这条链路：
 1. `sync-notes` 持续导入（默认自动 optimize）
 2. 批量场景如关闭了 auto optimize，则在批次末尾执行 `ensure-indexes` + `db optimize ...`
-3. 用 `api` 子命令做线上问题复现（无需起 backend）
-4. 用 `db query-rows ... --format vertical` 精确排查单行数据
+3. 需要立刻回收空间时，执行 `db optimize <table> --all --prune-now`
+4. 用 `api` 子命令做线上问题复现（无需起 backend）
+5. 用 `db query-rows ... --format vertical` 精确排查单行数据
 
 这样可以把“数据落库、检索效果、API 输出”统一在一条 CLI 调试链路里。

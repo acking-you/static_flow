@@ -27,6 +27,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             tags,
             category,
             category_description,
+            date,
             import_local_images,
             media_roots,
             generate_thumbnail,
@@ -43,6 +44,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 tags,
                 category,
                 category_description,
+                date,
                 import_local_images,
                 media_roots,
                 generate_thumbnail,
@@ -183,7 +185,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             DbCommands::Optimize {
                 table,
                 all,
-            } => db_manage::optimize_table(&db_path, &table, all).await,
+                prune_now,
+            } => db_manage::optimize_table(&db_path, &table, all, prune_now).await,
+            DbCommands::ReembedSvgImages {
+                limit,
+                dry_run,
+            } => db_manage::reembed_svg_images(&db_path, limit, dry_run).await,
             DbCommands::UpsertArticle {
                 json,
             } => db_manage::upsert_article_json(&db_path, &json).await,
