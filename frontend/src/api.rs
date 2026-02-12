@@ -361,6 +361,10 @@ pub async fn semantic_search_articles(
     enhanced_highlight: bool,
     limit: Option<usize>,
     max_distance: Option<f32>,
+    hybrid: bool,
+    hybrid_rrf_k: Option<f32>,
+    hybrid_vector_limit: Option<usize>,
+    hybrid_fts_limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
     if keyword.trim().is_empty() {
         return Ok(vec![]);
@@ -386,6 +390,18 @@ pub async fn semantic_search_articles(
         }
         if let Some(max_distance) = max_distance {
             url.push_str(&format!("&max_distance={max_distance}"));
+        }
+        if hybrid {
+            url.push_str("&hybrid=true");
+        }
+        if let Some(rrf_k) = hybrid_rrf_k {
+            url.push_str(&format!("&hybrid_rrf_k={rrf_k}"));
+        }
+        if let Some(vector_limit) = hybrid_vector_limit {
+            url.push_str(&format!("&hybrid_vector_limit={vector_limit}"));
+        }
+        if let Some(fts_limit) = hybrid_fts_limit {
+            url.push_str(&format!("&hybrid_fts_limit={fts_limit}"));
         }
 
         let response = Request::get(&url)

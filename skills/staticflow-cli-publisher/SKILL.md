@@ -10,7 +10,8 @@ description: >-
   (5) manage LanceDB tables (init, create, drop, describe, optimize, index),
   (6) reclaim LanceDB storage immediately with one-command prune (`db optimize --all --prune-now`),
   (7) run backend-equivalent API queries locally (list articles, search, semantic search, related articles, image search),
-  (8) verify publication results or debug data integrity issues.
+  (8) verify publication results or debug data integrity issues,
+  (9) enforce reasoning-driven bilingual `detailed_summary` quality before publication.
   The skill auto-infers missing metadata (`summary`, `tags`, `category`, `category_description`)
   from article content, handles local image import from Markdown/Obsidian `![[]]` syntax,
   and enforces a strict precondition → publish → verify workflow.
@@ -22,6 +23,8 @@ Execute content publication and database management workflows for StaticFlow usi
 
 ## Load Extra Context
 - Read `references/publish-checklist.md` before running any publish commands.
+- If article summary needs generation/refinement, read and apply:
+  - `../article-summary-architect/SKILL.md`
 - Read project docs only as needed:
   - `README.md`
   - `docs/cli-user-guide.zh.md`
@@ -43,6 +46,23 @@ Execute content publication and database management workflows for StaticFlow usi
 ---
 
 ## Publication Workflows
+
+### Reasoning-First Detailed Summary Gate (Run Before Publish)
+
+For long-form Markdown publication, ensure `detailed_summary.zh/en` quality before write:
+1. If `detailed_summary` is missing, stale, or unstructured, invoke `article-summary-architect`.
+2. Generate/refresh bilingual summaries with internal type-aware reasoning.
+3. Require concise, evidence-grounded content that includes:
+   - natural opening定位句（如“这是一篇xxx文章”）
+   - 3-5 semantic sections with bullets
+   - core problem and conclusion
+   - minimal trustworthy reasoning path
+   - validation/boundary notes when relevant
+4. Do not force a rigid template; keep style natural and readable.
+5. Continue to publish only after summary quality checks pass.
+6. Include summary status in the final publish report:
+   - generated vs reused
+   - quality-gate result
 
 ### Enforce Metadata Requirements
 At publish time, `summary`, `tags`, `category`, and `category_description` must all be present in the final write payload.

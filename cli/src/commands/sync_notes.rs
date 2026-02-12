@@ -14,13 +14,16 @@ use static_flow_shared::{
 
 use crate::{
     db::{
-        connect_db, ensure_vector_index, optimize_table_indexes, upsert_articles, upsert_images,
-        upsert_taxonomies,
+        connect_db, ensure_table, ensure_vector_index, optimize_table_indexes, upsert_articles,
+        upsert_images, upsert_taxonomies,
     },
-    schema::{ArticleRecord, ImageRecord, TaxonomyRecord},
+    schema::{
+        article_schema, image_schema, taxonomy_schema, ArticleRecord, ImageRecord, TaxonomyRecord,
+    },
     utils::{
         collect_markdown_files, encode_thumbnail, estimate_read_time, hash_bytes,
         markdown_filename, normalize_markdown_path, parse_markdown, rasterize_svg_for_embedding,
+        Frontmatter,
     },
 };
 
@@ -62,21 +65,9 @@ pub async fn run(db_path: &Path, dir: &Path, options: SyncNotesOptions) -> Resul
         auto_optimize,
     } = options;
     let db = connect_db(db_path).await?;
-    let articles_table = db
-        .open_table("articles")
-        .execute()
-        .await
-        .context("articles table not found; run `sf-cli init` first")?;
-    let images_table = db
-        .open_table("images")
-        .execute()
-        .await
-        .context("images table not found; run `sf-cli init` first")?;
-    let taxonomies_table = db
-        .open_table("taxonomies")
-        .execute()
-        .await
-        .context("taxonomies table not found; run `sf-cli init` first")?;
+    let articles_table = ensure_table(&db, "articles", article_schema()).await?;
+    let images_table = ensure_table(&db, "images", image_schema()).await?;
+    let taxonomies_table = ensure_table(&db, "taxonomies", taxonomy_schema()).await?;
 
     let language = match language.as_deref() {
         Some("en") => Some(TextEmbeddingLanguage::English),
@@ -157,11 +148,23 @@ async fn sync_notes(
         let markdown_text = fs::read_to_string(&markdown_path)
             .with_context(|| format!("failed to read markdown {}", markdown_path.display()))?;
         let (frontmatter, body) = parse_markdown(&markdown_text)?;
+        let Frontmatter {
+            title: frontmatter_title,
+            summary: frontmatter_summary,
+            content_en: frontmatter_content_en,
+            detailed_summary: frontmatter_detailed_summary,
+            detailed_summary_zh,
+            detailed_summary_en,
+            tags: frontmatter_tags,
+            category: frontmatter_category,
+            category_description: frontmatter_category_description,
+            author: frontmatter_author,
+            date: frontmatter_date,
+            featured_image: featured_image_source,
+            read_time: frontmatter_read_time,
+        } = frontmatter;
 
-        let featured_image_source = frontmatter.featured_image.clone();
-
-        let title = frontmatter
-            .title
+        let title = frontmatter_title
             .as_deref()
             .unwrap_or_default()
             .trim()
@@ -172,32 +175,35 @@ async fn sync_notes(
 
         let article_id = normalize_markdown_path(&relative_article_id(dir, &markdown_path));
 
-        let summary = frontmatter
-            .summary
+        let summary = frontmatter_summary
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| build_summary(&body));
-        let tags = frontmatter
-            .tags
+        let content_en = Frontmatter::normalized_content_en(frontmatter_content_en);
+        let detailed_summary = Frontmatter::normalized_detailed_summary(
+            frontmatter_detailed_summary,
+            detailed_summary_zh,
+            detailed_summary_en,
+        );
+        let detailed_summary_json = detailed_summary
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .context("failed to encode frontmatter detailed_summary as JSON")?;
+        let tags = frontmatter_tags
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| vec!["notes".to_string()]);
-        let category = frontmatter
-            .category
+        let category = frontmatter_category
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| config.default_category.clone());
-        let category_description = frontmatter
-            .category_description
+        let category_description = frontmatter_category_description
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let author = frontmatter
-            .author
+        let author = frontmatter_author
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| config.default_author.clone());
-        let date = frontmatter
-            .date
-            .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
-        let read_time = frontmatter
-            .read_time
-            .unwrap_or_else(|| estimate_read_time(&body));
+        let date =
+            frontmatter_date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let read_time = frontmatter_read_time.unwrap_or_else(|| estimate_read_time(&body));
 
         upsert_taxonomy_entry(
             &mut taxonomy_store,
@@ -245,7 +251,9 @@ async fn sync_notes(
             id: article_id,
             title,
             content: rewritten_body,
+            content_en,
             summary,
+            detailed_summary: detailed_summary_json,
             tags,
             category,
             author,

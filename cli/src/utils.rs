@@ -9,6 +9,7 @@ use image::{DynamicImage, ImageFormat};
 use resvg::{tiny_skia, usvg};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use static_flow_shared::LocalizedText;
 
 const SVG_EMBED_MAX_SIDE: u32 = 1024;
 
@@ -16,6 +17,10 @@ const SVG_EMBED_MAX_SIDE: u32 = 1024;
 pub struct Frontmatter {
     pub title: Option<String>,
     pub summary: Option<String>,
+    pub content_en: Option<String>,
+    pub detailed_summary: Option<LocalizedText>,
+    pub detailed_summary_zh: Option<String>,
+    pub detailed_summary_en: Option<String>,
     pub tags: Option<Vec<String>>,
     pub category: Option<String>,
     pub category_description: Option<String>,
@@ -23,6 +28,32 @@ pub struct Frontmatter {
     pub date: Option<String>,
     pub featured_image: Option<String>,
     pub read_time: Option<i32>,
+}
+
+impl Frontmatter {
+    pub fn normalized_content_en(self_content_en: Option<String>) -> Option<String> {
+        self_content_en
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn normalized_detailed_summary(
+        detailed_summary: Option<LocalizedText>,
+        detailed_summary_zh: Option<String>,
+        detailed_summary_en: Option<String>,
+    ) -> Option<LocalizedText> {
+        let mut merged = detailed_summary.unwrap_or(LocalizedText {
+            zh: None,
+            en: None,
+        });
+        if detailed_summary_zh.is_some() {
+            merged.zh = detailed_summary_zh;
+        }
+        if detailed_summary_en.is_some() {
+            merged.en = detailed_summary_en;
+        }
+        merged.normalized()
+    }
 }
 
 pub fn parse_markdown(content: &str) -> Result<(Frontmatter, String)> {

@@ -88,6 +88,8 @@ fn mock_articles_full() -> Vec<Article> {
             title,
             summary,
             content,
+            content_en: None,
+            detailed_summary: None,
             tags,
             category: cat_name.to_string(),
             author,

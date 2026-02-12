@@ -11,6 +11,12 @@ mod tests {
         let markdown = r#"---
 title: "Hello"
 summary: "Short summary"
+content_en: |
+  # English Heading
+  English body.
+detailed_summary:
+  zh: "中文测试总结"
+  en: "English test summary"
 tags:
   - rust
   - wasm
@@ -33,6 +39,25 @@ Body content.
 
         assert_eq!(frontmatter.title.as_deref(), Some("Hello"));
         assert_eq!(frontmatter.summary.as_deref(), Some("Short summary"));
+        assert!(frontmatter
+            .content_en
+            .as_deref()
+            .unwrap_or_default()
+            .contains("English Heading"));
+        assert_eq!(
+            frontmatter
+                .detailed_summary
+                .as_ref()
+                .and_then(|value| value.zh.as_deref()),
+            Some("中文测试总结")
+        );
+        assert_eq!(
+            frontmatter
+                .detailed_summary
+                .as_ref()
+                .and_then(|value| value.en.as_deref()),
+            Some("English test summary")
+        );
         assert_eq!(frontmatter.tags, Some(vec!["rust".to_string(), "wasm".to_string()]));
         assert_eq!(frontmatter.category.as_deref(), Some("Tech"));
         assert_eq!(frontmatter.author.as_deref(), Some("Ada"));

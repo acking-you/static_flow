@@ -17,7 +17,9 @@ pub struct ArticleRecord {
     pub id: String,
     pub title: String,
     pub content: String,
+    pub content_en: Option<String>,
     pub summary: String,
+    pub detailed_summary: Option<String>,
     pub tags: Vec<String>,
     pub category: String,
     pub author: String,
@@ -57,7 +59,9 @@ pub fn article_schema() -> Arc<Schema> {
         Field::new("id", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, false),
         Field::new("content", DataType::Utf8, false),
+        Field::new("content_en", DataType::Utf8, true),
         Field::new("summary", DataType::Utf8, false),
+        Field::new("detailed_summary", DataType::Utf8, true),
         Field::new(
             "tags",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
@@ -124,7 +128,9 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
     let mut id_builder = StringBuilder::new();
     let mut title_builder = StringBuilder::new();
     let mut content_builder = StringBuilder::new();
+    let mut content_en_builder = StringBuilder::new();
     let mut summary_builder = StringBuilder::new();
+    let mut detailed_summary_builder = StringBuilder::new();
     let mut tags_builder = ListBuilder::new(StringBuilder::new());
     let mut category_builder = StringBuilder::new();
     let mut author_builder = StringBuilder::new();
@@ -144,7 +150,17 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
         id_builder.append_value(&record.id);
         title_builder.append_value(&record.title);
         content_builder.append_value(&record.content);
+        if let Some(content_en) = &record.content_en {
+            content_en_builder.append_value(content_en);
+        } else {
+            content_en_builder.append_null();
+        }
         summary_builder.append_value(&record.summary);
+        if let Some(detailed_summary) = &record.detailed_summary {
+            detailed_summary_builder.append_value(detailed_summary);
+        } else {
+            detailed_summary_builder.append_null();
+        }
 
         for tag in &record.tags {
             tags_builder.values().append_value(tag);
@@ -216,7 +232,9 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
         Arc::new(id_builder.finish()),
         Arc::new(title_builder.finish()),
         Arc::new(content_builder.finish()),
+        Arc::new(content_en_builder.finish()),
         Arc::new(summary_builder.finish()),
+        Arc::new(detailed_summary_builder.finish()),
         Arc::new(tags_builder.finish()),
         Arc::new(category_builder.finish()),
         Arc::new(author_builder.finish()),

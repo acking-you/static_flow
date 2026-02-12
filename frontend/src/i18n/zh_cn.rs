@@ -76,7 +76,7 @@ pub mod home {
     pub const CMD_SHOW_README: &str = "cat ./README.md";
     pub const INTRO: &str = "可视化博客 + Skill \
                              工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
-                             统一存储文章与图片，支持全文检索与语义检索。";
+                             统一存储文章与图片，支持全文语义以及混合检索。";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
     pub const BTN_VIEW_ARTICLES: &str = "查看文章";
@@ -139,6 +139,17 @@ pub mod search {
     pub const HIGHLIGHT_PRECISION: &str = "Highlight Precision";
     pub const HIGHLIGHT_FAST: &str = "Fast (Default)";
     pub const HIGHLIGHT_ENHANCED: &str = "Enhanced (Slower)";
+    pub const HYBRID_PANEL_TITLE: &str = "Hybrid Search";
+    pub const HYBRID_PANEL_DESC: &str =
+        "混合检索会把向量召回与关键词召回做 RRF 融合，通常在语义与精确匹配之间更稳。";
+    pub const HYBRID_ADVANCED_SHOW: &str = "展开高级参数";
+    pub const HYBRID_ADVANCED_HIDE: &str = "收起高级参数";
+    pub const HYBRID_ON: &str = "Hybrid ON";
+    pub const HYBRID_OFF: &str = "Hybrid OFF";
+    pub const HYBRID_RRF_K: &str = "RRF K（默认 60）";
+    pub const HYBRID_VECTOR_LIMIT: &str = "Vector 候选窗口";
+    pub const HYBRID_FTS_LIMIT: &str = "FTS 候选窗口";
+    pub const HYBRID_APPLY: &str = "应用 Hybrid 参数";
     pub const IMAGE_TEXT_QUERY_TEMPLATE: &str = "当前描述：{}";
     pub const IMAGE_CATALOG: &str = "IMAGE CATALOG";
     pub const IMAGE_LOADING: &str = "加载图片中...";
@@ -226,10 +237,20 @@ pub mod article_detail_page {
     pub const VIEW_ORIGINAL_IMAGE: &str = "查看原图";
     pub const ARTICLE_META_ARIA: &str = "文章元信息";
     pub const ARTICLE_BODY_ARIA: &str = "文章正文";
+    pub const DETAILED_SUMMARY_ARIA: &str = "文章详细总结";
     pub const TAGS_TITLE: &str = "标签";
     pub const RELATED_TITLE: &str = "相关推荐";
     pub const RELATED_LOADING: &str = "加载相关推荐中...";
     pub const NO_RELATED: &str = "暂无相关推荐";
+    pub const LANG_SWITCH_LABEL: &str = "语言";
+    pub const LANG_SWITCH_ZH: &str = "中文";
+    pub const LANG_SWITCH_EN: &str = "English";
+    pub const DETAILED_SUMMARY_TITLE_ZH: &str = "快速导读";
+    pub const DETAILED_SUMMARY_TITLE_EN: &str = "Quick Brief";
+    pub const OPEN_BRIEF_BUTTON_ZH: &str = "查看导读";
+    pub const OPEN_BRIEF_BUTTON_EN: &str = "Open Brief";
+    pub const CLOSE_BRIEF_ARIA: &str = "关闭快速导读";
+    pub const CLOSE_BRIEF_BUTTON: &str = "关闭";
 
     pub const WORD_COUNT_TEMPLATE: &str = "{} 字";
     pub const READ_TIME_TEMPLATE: &str = "约 {} 分钟";

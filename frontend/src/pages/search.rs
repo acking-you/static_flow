@@ -45,6 +45,20 @@ pub fn search_page() -> Html {
         .as_ref()
         .and_then(|q| q.enhanced_highlight)
         .unwrap_or(false);
+    let hybrid = query.as_ref().and_then(|q| q.hybrid).unwrap_or(false);
+    let hybrid_rrf_k = query
+        .as_ref()
+        .and_then(|q| q.hybrid_rrf_k)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(60.0);
+    let hybrid_vector_limit = query
+        .as_ref()
+        .and_then(|q| q.hybrid_vector_limit)
+        .filter(|value| *value > 0);
+    let hybrid_fts_limit = query
+        .as_ref()
+        .and_then(|q| q.hybrid_fts_limit)
+        .filter(|value| *value > 0);
     let fetch_all = query.as_ref().and_then(|q| q.all).unwrap_or(false);
     let requested_limit = query
         .as_ref()
@@ -76,6 +90,18 @@ pub fn search_page() -> Html {
             .map(|value| value.to_string())
             .unwrap_or_default()
     });
+    let semantic_advanced_open = use_state(|| hybrid);
+    let hybrid_rrf_k_input = use_state(|| hybrid_rrf_k.to_string());
+    let hybrid_vector_limit_input = use_state(|| {
+        hybrid_vector_limit
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    });
+    let hybrid_fts_limit_input = use_state(|| {
+        hybrid_fts_limit
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    });
     let (visible_results, current_page, total_pages, go_to_page) =
         use_pagination((*results).clone(), SEARCH_PAGE_SIZE);
 
@@ -86,10 +112,34 @@ pub fn search_page() -> Html {
         let mode = mode.clone();
         let active_limit = active_limit;
         let max_distance = max_distance;
+        let hybrid = hybrid;
+        let hybrid_rrf_k = hybrid_rrf_k;
+        let hybrid_vector_limit = hybrid_vector_limit;
+        let hybrid_fts_limit = hybrid_fts_limit;
 
         use_effect_with(
-            (keyword.clone(), mode.clone(), enhanced_highlight, active_limit, max_distance),
-            move |(kw, mode, enhanced_highlight, active_limit, max_distance)| {
+            (
+                keyword.clone(),
+                mode.clone(),
+                enhanced_highlight,
+                active_limit,
+                max_distance,
+                hybrid,
+                hybrid_rrf_k,
+                hybrid_vector_limit,
+                hybrid_fts_limit,
+            ),
+            move |(
+                kw,
+                mode,
+                enhanced_highlight,
+                active_limit,
+                max_distance,
+                hybrid,
+                hybrid_rrf_k,
+                hybrid_vector_limit,
+                hybrid_fts_limit,
+            )| {
                 if mode == "image" || kw.trim().is_empty() {
                     loading.set(false);
                     results.set(vec![]);
@@ -102,6 +152,10 @@ pub fn search_page() -> Html {
                     let use_enhanced_highlight = *enhanced_highlight;
                     let limit = *active_limit;
                     let max_distance = *max_distance;
+                    let hybrid_enabled = *hybrid;
+                    let hybrid_rrf_k = *hybrid_rrf_k;
+                    let hybrid_vector_limit = *hybrid_vector_limit;
+                    let hybrid_fts_limit = *hybrid_fts_limit;
 
                     wasm_bindgen_futures::spawn_local(async move {
                         let response = if use_semantic {
@@ -110,6 +164,10 @@ pub fn search_page() -> Html {
                                 use_enhanced_highlight,
                                 limit,
                                 max_distance,
+                                hybrid_enabled,
+                                if hybrid_enabled { Some(hybrid_rrf_k) } else { None },
+                                if hybrid_enabled { hybrid_vector_limit } else { None },
+                                if hybrid_enabled { hybrid_fts_limit } else { None },
                             )
                             .await
                         } else {
@@ -231,6 +289,34 @@ pub fn search_page() -> Html {
             }
             || ()
         });
+    }
+
+    {
+        let mode = mode.clone();
+        let semantic_advanced_open = semantic_advanced_open.clone();
+        let hybrid_rrf_k_input = hybrid_rrf_k_input.clone();
+        let hybrid_vector_limit_input = hybrid_vector_limit_input.clone();
+        let hybrid_fts_limit_input = hybrid_fts_limit_input.clone();
+        use_effect_with(
+            (mode.clone(), hybrid, hybrid_rrf_k, hybrid_vector_limit, hybrid_fts_limit),
+            move |(mode, hybrid, hybrid_rrf_k, hybrid_vector_limit, hybrid_fts_limit)| {
+                if mode == "semantic" {
+                    semantic_advanced_open.set(*hybrid);
+                    hybrid_rrf_k_input.set(hybrid_rrf_k.to_string());
+                    hybrid_vector_limit_input.set(
+                        hybrid_vector_limit
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                    );
+                    hybrid_fts_limit_input.set(
+                        hybrid_fts_limit
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                    );
+                }
+                || ()
+            },
+        );
     }
 
     {
@@ -465,8 +551,18 @@ pub fn search_page() -> Html {
         })
     };
 
-    let keyword_href =
-        build_search_href(None, &keyword, false, Some(requested_limit), fetch_all, None);
+    let keyword_href = build_search_href(
+        None,
+        &keyword,
+        false,
+        Some(requested_limit),
+        fetch_all,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     let semantic_fast_href = build_search_href(
         Some("semantic"),
         &keyword,
@@ -474,6 +570,10 @@ pub fn search_page() -> Html {
         Some(requested_limit),
         fetch_all,
         max_distance,
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
     let semantic_precise_href = build_search_href(
         Some("semantic"),
@@ -482,10 +582,25 @@ pub fn search_page() -> Html {
         Some(requested_limit),
         fetch_all,
         max_distance,
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
     let semantic_href =
         if enhanced_highlight { semantic_precise_href.clone() } else { semantic_fast_href.clone() };
-    let image_href = build_search_href(Some("image"), &keyword, false, None, false, max_distance);
+    let image_href = build_search_href(
+        Some("image"),
+        &keyword,
+        false,
+        None,
+        false,
+        max_distance,
+        false,
+        None,
+        None,
+        None,
+    );
     let scoped_max_distance = if mode == "semantic" { max_distance } else { None };
     let limited_href = build_search_href(
         Some(mode.as_str()),
@@ -494,6 +609,10 @@ pub fn search_page() -> Html {
         Some(requested_limit),
         false,
         scoped_max_distance,
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
     let all_results_href = build_search_href(
         Some(mode.as_str()),
@@ -502,6 +621,10 @@ pub fn search_page() -> Html {
         None,
         true,
         scoped_max_distance,
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
     let semantic_limit_for_mode = if fetch_all { None } else { Some(requested_limit) };
     let semantic_distance_off_href = build_search_href(
@@ -511,6 +634,10 @@ pub fn search_page() -> Html {
         semantic_limit_for_mode,
         fetch_all,
         None,
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
     let semantic_distance_strict_href = build_search_href(
         Some("semantic"),
@@ -519,6 +646,10 @@ pub fn search_page() -> Html {
         semantic_limit_for_mode,
         fetch_all,
         Some(0.8),
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
     let semantic_distance_relaxed_href = build_search_href(
         Some("semantic"),
@@ -527,16 +658,120 @@ pub fn search_page() -> Html {
         semantic_limit_for_mode,
         fetch_all,
         Some(1.2),
+        hybrid,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
     );
-    let image_distance_off_href =
-        build_search_href(Some("image"), &keyword, false, None, false, None);
+    let image_distance_off_href = build_search_href(
+        Some("image"),
+        &keyword,
+        false,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     let parsed_image_distance_input = image_distance_input
         .trim()
         .parse::<f32>()
         .ok()
         .filter(|value| value.is_finite() && *value >= 0.0);
-    let image_distance_apply_href =
-        build_search_href(Some("image"), &keyword, false, None, false, parsed_image_distance_input);
+    let image_distance_apply_href = build_search_href(
+        Some("image"),
+        &keyword,
+        false,
+        None,
+        false,
+        parsed_image_distance_input,
+        false,
+        None,
+        None,
+        None,
+    );
+
+    let on_hybrid_rrf_k_input = {
+        let hybrid_rrf_k_input = hybrid_rrf_k_input.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<web_sys::HtmlInputElement>() {
+                hybrid_rrf_k_input.set(target.value());
+            }
+        })
+    };
+    let on_hybrid_vector_limit_input = {
+        let hybrid_vector_limit_input = hybrid_vector_limit_input.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<web_sys::HtmlInputElement>() {
+                hybrid_vector_limit_input.set(target.value());
+            }
+        })
+    };
+    let on_hybrid_fts_limit_input = {
+        let hybrid_fts_limit_input = hybrid_fts_limit_input.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<web_sys::HtmlInputElement>() {
+                hybrid_fts_limit_input.set(target.value());
+            }
+        })
+    };
+    let parsed_hybrid_rrf_k_input = hybrid_rrf_k_input
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let parsed_hybrid_vector_limit_input = hybrid_vector_limit_input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0);
+    let parsed_hybrid_fts_limit_input = hybrid_fts_limit_input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0);
+    let semantic_hybrid_off_href = build_search_href(
+        Some("semantic"),
+        &keyword,
+        enhanced_highlight,
+        semantic_limit_for_mode,
+        fetch_all,
+        max_distance,
+        false,
+        None,
+        None,
+        None,
+    );
+    let semantic_hybrid_on_href = build_search_href(
+        Some("semantic"),
+        &keyword,
+        enhanced_highlight,
+        semantic_limit_for_mode,
+        fetch_all,
+        max_distance,
+        true,
+        Some(hybrid_rrf_k),
+        hybrid_vector_limit,
+        hybrid_fts_limit,
+    );
+    let semantic_hybrid_apply_href = build_search_href(
+        Some("semantic"),
+        &keyword,
+        enhanced_highlight,
+        semantic_limit_for_mode,
+        fetch_all,
+        max_distance,
+        hybrid,
+        parsed_hybrid_rrf_k_input.or(Some(hybrid_rrf_k)),
+        parsed_hybrid_vector_limit_input,
+        parsed_hybrid_fts_limit_input,
+    );
+    let toggle_semantic_advanced = {
+        let semantic_advanced_open = semantic_advanced_open.clone();
+        Callback::from(move |_| semantic_advanced_open.set(!*semantic_advanced_open))
+    };
     let on_image_distance_input = {
         let image_distance_input = image_distance_input.clone();
         Callback::from(move |event: InputEvent| {
@@ -1013,6 +1248,202 @@ pub fn search_page() -> Html {
                             >
                                 { t::HIGHLIGHT_ENHANCED }
                             </a>
+                        </div>
+                    }
+
+                    if mode == "semantic" && !keyword.is_empty() {
+                        <div class={classes!(
+                            "mt-4",
+                            "mx-auto",
+                            "max-w-4xl",
+                            "rounded-xl",
+                            "border",
+                            "border-[var(--primary)]/30",
+                            "bg-[var(--surface)]",
+                            "liquid-glass",
+                            "px-4",
+                            "py-4"
+                        )}>
+                            <div class={classes!(
+                                "flex",
+                                "items-center",
+                                "justify-between",
+                                "gap-3",
+                                "flex-wrap"
+                            )}>
+                                <span class={classes!(
+                                    "text-xs",
+                                    "uppercase",
+                                    "tracking-[0.2em]",
+                                    "text-[var(--muted)]",
+                                    "font-semibold"
+                                )}
+                                style="font-family: 'Space Mono', monospace;">
+                                    { t::HYBRID_PANEL_TITLE }
+                                </span>
+                                <button
+                                    type="button"
+                                    onclick={toggle_semantic_advanced}
+                                    class={classes!(
+                                        mode_button_base.clone(),
+                                        "text-xs",
+                                        "border-[var(--border)]",
+                                        "text-[var(--muted)]",
+                                        "hover:text-[var(--primary)]",
+                                        "hover:border-[var(--primary)]/60"
+                                    )}
+                                >
+                                    {
+                                        if *semantic_advanced_open {
+                                            t::HYBRID_ADVANCED_HIDE
+                                        } else {
+                                            t::HYBRID_ADVANCED_SHOW
+                                        }
+                                    }
+                                </button>
+                            </div>
+                            <p class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>
+                                { t::HYBRID_PANEL_DESC }
+                            </p>
+
+                            if *semantic_advanced_open {
+                                <div class={classes!(
+                                    "mt-4",
+                                    "flex",
+                                    "items-center",
+                                    "justify-center",
+                                    "gap-3",
+                                    "flex-wrap"
+                                )}>
+                                    <a
+                                        href={semantic_hybrid_off_href}
+                                        class={classes!(
+                                            mode_button_base.clone(),
+                                            "text-xs",
+                                            if !hybrid { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                            if !hybrid { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                            if !hybrid { "bg-[var(--primary)]/10" } else { "" },
+                                            if hybrid { "hover:text-[var(--primary)]" } else { "" },
+                                            if hybrid { "hover:border-[var(--primary)]/60" } else { "" }
+                                        )}
+                                    >
+                                        { t::HYBRID_OFF }
+                                    </a>
+                                    <a
+                                        href={semantic_hybrid_on_href}
+                                        class={classes!(
+                                            mode_button_base.clone(),
+                                            "text-xs",
+                                            if hybrid { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                            if hybrid { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                            if hybrid { "bg-[var(--primary)]/10" } else { "" },
+                                            if !hybrid { "hover:text-[var(--primary)]" } else { "" },
+                                            if !hybrid { "hover:border-[var(--primary)]/60" } else { "" }
+                                        )}
+                                    >
+                                        { t::HYBRID_ON }
+                                    </a>
+                                </div>
+                            }
+
+                            if *semantic_advanced_open && hybrid {
+                                <div class={classes!(
+                                    "mt-4",
+                                    "grid",
+                                    "grid-cols-1",
+                                    "md:grid-cols-3",
+                                    "gap-3"
+                                )}>
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        min="1"
+                                        value={(*hybrid_rrf_k_input).clone()}
+                                        placeholder={t::HYBRID_RRF_K}
+                                        oninput={on_hybrid_rrf_k_input}
+                                        class={classes!(
+                                            "h-10",
+                                            "rounded-lg",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "px-3",
+                                            "text-sm",
+                                            "text-[var(--text)]",
+                                            "outline-none",
+                                            "focus:border-[var(--primary)]",
+                                            "transition-colors"
+                                        )}
+                                    />
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        min="1"
+                                        value={(*hybrid_vector_limit_input).clone()}
+                                        placeholder={t::HYBRID_VECTOR_LIMIT}
+                                        oninput={on_hybrid_vector_limit_input}
+                                        class={classes!(
+                                            "h-10",
+                                            "rounded-lg",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "px-3",
+                                            "text-sm",
+                                            "text-[var(--text)]",
+                                            "outline-none",
+                                            "focus:border-[var(--primary)]",
+                                            "transition-colors"
+                                        )}
+                                    />
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        min="1"
+                                        value={(*hybrid_fts_limit_input).clone()}
+                                        placeholder={t::HYBRID_FTS_LIMIT}
+                                        oninput={on_hybrid_fts_limit_input}
+                                        class={classes!(
+                                            "h-10",
+                                            "rounded-lg",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "px-3",
+                                            "text-sm",
+                                            "text-[var(--text)]",
+                                            "outline-none",
+                                            "focus:border-[var(--primary)]",
+                                            "transition-colors"
+                                        )}
+                                    />
+                                </div>
+                            }
+
+                            if *semantic_advanced_open && hybrid {
+                                <div class={classes!(
+                                    "mt-3",
+                                    "flex",
+                                    "items-center",
+                                    "justify-center",
+                                    "gap-3",
+                                    "flex-wrap"
+                                )}>
+                                    <a
+                                        href={semantic_hybrid_apply_href}
+                                        class={classes!(
+                                            mode_button_base.clone(),
+                                            "text-xs",
+                                            "border-[var(--border)]",
+                                            "text-[var(--muted)]",
+                                            "hover:text-[var(--primary)]",
+                                            "hover:border-[var(--primary)]/60"
+                                        )}
+                                    >
+                                        { t::HYBRID_APPLY }
+                                    </a>
+                                </div>
+                            }
                         </div>
                     }
 
@@ -1849,6 +2280,10 @@ struct SearchPageQuery {
     q: Option<String>,
     mode: Option<String>,
     enhanced_highlight: Option<bool>,
+    hybrid: Option<bool>,
+    hybrid_rrf_k: Option<f32>,
+    hybrid_vector_limit: Option<usize>,
+    hybrid_fts_limit: Option<usize>,
     limit: Option<usize>,
     all: Option<bool>,
     max_distance: Option<f32>,
@@ -1861,6 +2296,10 @@ fn build_search_href(
     limit: Option<usize>,
     all: bool,
     max_distance: Option<f32>,
+    hybrid: bool,
+    hybrid_rrf_k: Option<f32>,
+    hybrid_vector_limit: Option<usize>,
+    hybrid_fts_limit: Option<usize>,
 ) -> String {
     let has_keyword = !keyword.trim().is_empty();
     let mut params = Vec::new();
@@ -1886,6 +2325,18 @@ fn build_search_href(
         if matches!(mode, Some("semantic") | Some("image")) {
             if let Some(max_distance) = max_distance {
                 params.push(format!("max_distance={max_distance}"));
+            }
+        }
+        if mode == Some("semantic") && hybrid {
+            params.push("hybrid=true".to_string());
+            if let Some(rrf_k) = hybrid_rrf_k.filter(|value| value.is_finite() && *value > 0.0) {
+                params.push(format!("hybrid_rrf_k={rrf_k}"));
+            }
+            if let Some(vector_limit) = hybrid_vector_limit.filter(|value| *value > 0) {
+                params.push(format!("hybrid_vector_limit={vector_limit}"));
+            }
+            if let Some(fts_limit) = hybrid_fts_limit.filter(|value| *value > 0) {
+                params.push(format!("hybrid_fts_limit={fts_limit}"));
             }
         }
     }

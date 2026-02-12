@@ -22,7 +22,7 @@ use crate::{
         detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
         TextEmbeddingModel,
     },
-    normalize_taxonomy_key, Article, ArticleListItem,
+    normalize_taxonomy_key, Article, ArticleListItem, LocalizedText,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -418,6 +418,10 @@ impl StaticFlowDataStore {
         limit: Option<usize>,
         max_distance: Option<f32>,
         enhanced_highlight: bool,
+        hybrid: bool,
+        hybrid_rrf_k: Option<f32>,
+        hybrid_vector_limit: Option<usize>,
+        hybrid_fts_limit: Option<usize>,
     ) -> Result<Vec<SearchResult>> {
         let table = self.articles_table().await?;
         let total_started = Instant::now();
@@ -445,12 +449,14 @@ impl StaticFlowDataStore {
             ),
         );
 
+        let effective_vector_limit = if hybrid { hybrid_vector_limit.or(limit) } else { limit };
+
         let primary_started = Instant::now();
         let mut rows = run_semantic_vector_search(
             &table,
             primary_column,
             query_embedding.as_slice(),
-            limit,
+            effective_vector_limit,
             max_distance,
         )
         .await?;
@@ -488,7 +494,7 @@ impl StaticFlowDataStore {
                 &table,
                 fallback_column,
                 fallback_embedding.as_slice(),
-                limit,
+                effective_vector_limit,
                 max_distance,
             )
             .await?;
@@ -506,6 +512,104 @@ impl StaticFlowDataStore {
                 selected_column = fallback_column;
                 selected_path = fallback_path;
             }
+        }
+
+        if hybrid {
+            let lexical_limit = hybrid_fts_limit.or(limit);
+            let fts_index = inspect_index_for_column(&table, "content", true).await;
+            let lexical_primary_path =
+                if fts_index.is_some() { "fts_index" } else { "fts_without_index" };
+            let lexical_primary_reason = format!(
+                "{}; result_limit={}",
+                index_reason("content", fts_index.as_ref()),
+                lexical_limit
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            );
+            log_query_path(
+                "semantic_search.hybrid.lexical_primary",
+                lexical_primary_path,
+                "fts_index",
+                &lexical_primary_reason,
+            );
+
+            let lexical_started = Instant::now();
+            let lexical_rows = match search_with_fts_rows(&table, keyword, lexical_limit).await {
+                Ok(rows) => {
+                    log_query_result(
+                        "semantic_search.hybrid.lexical_primary",
+                        lexical_primary_path,
+                        rows.len(),
+                        lexical_started.elapsed().as_millis(),
+                    );
+                    if rows.is_empty() {
+                        let fallback_path = "scan_fallback";
+                        log_query_path(
+                            "semantic_search.hybrid.lexical_fallback",
+                            fallback_path,
+                            "fts_index",
+                            "fts returned 0 rows in hybrid lexical path; fallback to scan",
+                        );
+                        let fallback_started = Instant::now();
+                        let fallback_rows =
+                            fallback_search_rows(&table, keyword, lexical_limit).await?;
+                        log_query_result(
+                            "semantic_search.hybrid.lexical_fallback",
+                            fallback_path,
+                            fallback_rows.len(),
+                            fallback_started.elapsed().as_millis(),
+                        );
+                        fallback_rows
+                    } else {
+                        rows
+                    }
+                },
+                Err(err) => {
+                    log_query_result(
+                        "semantic_search.hybrid.lexical_primary",
+                        lexical_primary_path,
+                        0,
+                        lexical_started.elapsed().as_millis(),
+                    );
+                    let fallback_path = "scan_fallback";
+                    log_query_path(
+                        "semantic_search.hybrid.lexical_fallback",
+                        fallback_path,
+                        "fts_index",
+                        &format!("fts query failed in hybrid lexical path; error={err}"),
+                    );
+                    let fallback_started = Instant::now();
+                    let rows = fallback_search_rows(&table, keyword, lexical_limit).await?;
+                    log_query_result(
+                        "semantic_search.hybrid.lexical_fallback",
+                        fallback_path,
+                        rows.len(),
+                        fallback_started.elapsed().as_millis(),
+                    );
+                    rows
+                },
+            };
+
+            let rrf_k = hybrid_rrf_k
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(60.0);
+            rows = fuse_hybrid_rrf(rows, lexical_rows, rrf_k);
+            if let Some(limit) = limit {
+                rows.truncate(limit);
+            }
+            selected_path = "hybrid_rrf";
+            selected_column = "hybrid(vector_en/vector_zh + content_fts)";
+            tracing::info!(
+                "Hybrid semantic fusion applied; query=semantic_search; rrf_k={rrf_k}; \
+                 vector_window={}; lexical_window={}; fused_rows={}",
+                effective_vector_limit
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                lexical_limit
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                rows.len()
+            );
         }
 
         let highlight_path =
@@ -1051,26 +1155,64 @@ async fn count_unique_categories(table: &Table) -> Result<usize> {
 
 async fn fetch_article_detail(table: &Table, id: &str) -> Result<Option<Article>> {
     let filter = format!("id = '{}'", escape_literal(id));
-    let batches = table
-        .query()
-        .only_if(filter)
-        .limit(1)
-        .select(Select::columns(&[
-            "id",
-            "title",
-            "summary",
-            "content",
-            "tags",
-            "category",
-            "author",
-            "date",
-            "featured_image",
-            "read_time",
-        ]))
-        .execute()
-        .await?;
+    let full_columns = [
+        "id",
+        "title",
+        "summary",
+        "content",
+        "content_en",
+        "detailed_summary",
+        "tags",
+        "category",
+        "author",
+        "date",
+        "featured_image",
+        "read_time",
+    ];
+    let base_columns = [
+        "id",
+        "title",
+        "summary",
+        "content",
+        "tags",
+        "category",
+        "author",
+        "date",
+        "featured_image",
+        "read_time",
+    ];
 
-    let batch_list = batches.try_collect::<Vec<_>>().await?;
+    let query = table
+        .query()
+        .only_if(filter.clone())
+        .limit(1)
+        .select(Select::columns(&full_columns));
+    let batch_list = match query.execute().await {
+        Ok(batches) => batches.try_collect::<Vec<_>>().await?,
+        Err(err) => {
+            let err_text = err.to_string();
+            let has_missing_new_columns = err_text.contains("content_en")
+                || err_text.contains("detailed_summary")
+                || err_text.contains("missing column");
+            if !has_missing_new_columns {
+                return Err(err.into());
+            }
+
+            tracing::warn!(
+                "Article table appears to be on legacy schema (missing \
+                 content_en/detailed_summary). Falling back to base detail query: {err_text}"
+            );
+            table
+                .query()
+                .only_if(filter)
+                .limit(1)
+                .select(Select::columns(&base_columns))
+                .execute()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+        },
+    };
     batches_to_article_detail(&batch_list)
 }
 
@@ -1170,7 +1312,7 @@ async fn run_semantic_vector_search(
     batches_to_search_rows(&batch_list)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SearchArticleRow {
     id: String,
     title: String,
@@ -1181,11 +1323,11 @@ struct SearchArticleRow {
     date: String,
 }
 
-async fn search_with_fts(
+async fn search_with_fts_rows(
     table: &Table,
     keyword: &str,
     limit: Option<usize>,
-) -> Result<Vec<SearchResult>> {
+) -> Result<Vec<SearchArticleRow>> {
     if limit == Some(0) {
         return Ok(vec![]);
     }
@@ -1205,7 +1347,15 @@ async fn search_with_fts(
         .await?;
 
     let batch_list = batches.try_collect::<Vec<_>>().await?;
-    let rows = batches_to_search_rows(&batch_list)?;
+    batches_to_search_rows(&batch_list)
+}
+
+async fn search_with_fts(
+    table: &Table,
+    keyword: &str,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>> {
+    let rows = search_with_fts_rows(table, keyword, limit).await?;
 
     Ok(rows
         .into_iter()
@@ -1221,11 +1371,11 @@ async fn search_with_fts(
         .collect())
 }
 
-async fn fallback_search(
+async fn fallback_search_rows(
     table: &Table,
     keyword: &str,
     limit: Option<usize>,
-) -> Result<Vec<SearchResult>> {
+) -> Result<Vec<SearchArticleRow>> {
     let batches = table
         .query()
         .select(Select::columns(&["id", "title", "summary", "content", "tags", "category", "date"]))
@@ -1236,7 +1386,7 @@ async fn fallback_search(
     let rows = batches_to_search_rows(&batch_list)?;
 
     let keyword_lower = keyword.to_lowercase();
-    let mut results = Vec::new();
+    let mut scored = Vec::new();
     for row in rows {
         let mut score = 0;
         if row.title.to_lowercase().contains(&keyword_lower) {
@@ -1253,32 +1403,91 @@ async fn fallback_search(
                 score += 3;
             }
         }
-
         if score > 0 {
-            results.push((
-                SearchResult {
-                    highlight: extract_highlight(&row.content, keyword),
-                    id: row.id,
-                    title: row.title,
-                    summary: row.summary,
-                    category: row.category,
-                    date: row.date,
-                    tags: row.tags,
-                },
-                score,
-            ));
+            scored.push((row, score));
         }
     }
 
-    results.sort_by(|a, b| b.1.cmp(&a.1));
-    let mut results = results
-        .into_iter()
-        .map(|(result, _)| result)
-        .collect::<Vec<_>>();
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut rows = scored.into_iter().map(|(row, _)| row).collect::<Vec<_>>();
     if let Some(limit) = limit {
-        results.truncate(limit);
+        rows.truncate(limit);
     }
-    Ok(results)
+    Ok(rows)
+}
+
+async fn fallback_search(
+    table: &Table,
+    keyword: &str,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>> {
+    let rows = fallback_search_rows(table, keyword, limit).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| SearchResult {
+            highlight: extract_highlight(&row.content, keyword),
+            id: row.id,
+            title: row.title,
+            summary: row.summary,
+            category: row.category,
+            date: row.date,
+            tags: row.tags,
+        })
+        .collect())
+}
+
+fn fuse_hybrid_rrf(
+    vector_rows: Vec<SearchArticleRow>,
+    lexical_rows: Vec<SearchArticleRow>,
+    rrf_k: f32,
+) -> Vec<SearchArticleRow> {
+    #[derive(Debug)]
+    struct RrfAccum {
+        score: f32,
+        best_rank: usize,
+        row: SearchArticleRow,
+    }
+
+    let mut fused: HashMap<String, RrfAccum> = HashMap::new();
+    let rrf_score = |rank: usize| -> f32 { 1.0 / (rrf_k + rank as f32 + 1.0) };
+
+    for (rank, row) in vector_rows.into_iter().enumerate() {
+        let row_id = row.id.clone();
+        let boost = rrf_score(rank);
+        let entry = fused.entry(row_id).or_insert_with(|| RrfAccum {
+            score: 0.0,
+            best_rank: rank,
+            row: row.clone(),
+        });
+        entry.score += boost;
+        if rank < entry.best_rank {
+            entry.best_rank = rank;
+            entry.row = row;
+        }
+    }
+
+    for (rank, row) in lexical_rows.into_iter().enumerate() {
+        let row_id = row.id.clone();
+        let boost = rrf_score(rank);
+        let entry = fused.entry(row_id).or_insert_with(|| RrfAccum {
+            score: 0.0,
+            best_rank: rank,
+            row: row.clone(),
+        });
+        entry.score += boost;
+        if rank < entry.best_rank {
+            entry.best_rank = rank;
+            entry.row = row;
+        }
+    }
+
+    let mut merged = fused.into_values().collect::<Vec<_>>();
+    merged.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.row.id.cmp(&b.row.id))
+    });
+    merged.into_iter().map(|entry| entry.row).collect()
 }
 
 fn batches_to_search_rows(batches: &[RecordBatch]) -> Result<Vec<SearchArticleRow>> {
@@ -1345,6 +1554,8 @@ fn batches_to_articles(batches: &[RecordBatch]) -> Result<Vec<Article>> {
         let title = string_array(batch, "title")?;
         let summary = string_array(batch, "summary")?;
         let content = string_array(batch, "content")?;
+        let content_en = optional_string_array(batch, "content_en");
+        let detailed_summary = optional_string_array(batch, "detailed_summary");
         let tags = list_array(batch, "tags")?;
         let category = string_array(batch, "category")?;
         let author = string_array(batch, "author")?;
@@ -1358,6 +1569,10 @@ fn batches_to_articles(batches: &[RecordBatch]) -> Result<Vec<Article>> {
                 title: value_string(title, row),
                 summary: value_string(summary, row),
                 content: value_string(content, row),
+                content_en: content_en.and_then(|array| value_string_opt(array, row)),
+                detailed_summary: detailed_summary
+                    .and_then(|array| value_string_opt(array, row))
+                    .and_then(parse_localized_text),
                 tags: value_string_list(tags, row),
                 category: value_string(category, row),
                 author: value_string(author, row),
@@ -1440,6 +1655,14 @@ fn string_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArra
         .with_context(|| format!("column {name} is not StringArray"))
 }
 
+fn optional_string_array<'a>(batch: &'a RecordBatch, name: &str) -> Option<&'a StringArray> {
+    batch
+        .schema()
+        .index_of(name)
+        .ok()
+        .and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>())
+}
+
 fn list_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ListArray> {
     column(batch, name)?
         .as_any()
@@ -1478,6 +1701,27 @@ fn value_string_opt(array: &StringArray, row: usize) -> Option<String> {
         None
     } else {
         Some(array.value(row).to_string())
+    }
+}
+
+fn parse_localized_text(raw: String) -> Option<LocalizedText> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    match serde_json::from_str::<LocalizedText>(trimmed) {
+        Ok(parsed) => parsed.normalized(),
+        Err(err) => {
+            tracing::warn!(
+                "Failed to parse detailed_summary as JSON; fallback to zh-only text: {err}"
+            );
+            LocalizedText {
+                zh: Some(trimmed.to_string()),
+                en: None,
+            }
+            .normalized()
+        },
     }
 }
 

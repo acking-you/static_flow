@@ -17,10 +17,12 @@ use static_flow_shared::{
 
 use crate::{
     db::{
-        connect_db, ensure_vector_index, optimize_table_indexes, upsert_articles, upsert_images,
-        upsert_taxonomies,
+        connect_db, ensure_table, ensure_vector_index, optimize_table_indexes, upsert_articles,
+        upsert_images, upsert_taxonomies,
     },
-    schema::{ArticleRecord, ImageRecord, TaxonomyRecord},
+    schema::{
+        article_schema, image_schema, taxonomy_schema, ArticleRecord, ImageRecord, TaxonomyRecord,
+    },
     utils::{
         encode_thumbnail, estimate_read_time, hash_bytes, parse_markdown, parse_tags, parse_vector,
         rasterize_svg_for_embedding, Frontmatter,
@@ -81,23 +83,10 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
     } = options;
 
     let db = connect_db(db_path).await?;
-    let table = db
-        .open_table("articles")
-        .execute()
-        .await
-        .context("articles table not found; run `sf-cli init` first")?;
-    let taxonomies_table = db
-        .open_table("taxonomies")
-        .execute()
-        .await
-        .context("taxonomies table not found; run `sf-cli init` first")?;
+    let table = ensure_table(&db, "articles", article_schema()).await?;
+    let taxonomies_table = ensure_table(&db, "taxonomies", taxonomy_schema()).await?;
     let images_table = if import_local_images {
-        Some(
-            db.open_table("images")
-                .execute()
-                .await
-                .context("images table not found; run `sf-cli init` first")?,
-        )
+        Some(ensure_table(&db, "images", image_schema()).await?)
     } else {
         None
     };
@@ -107,6 +96,10 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
     let Frontmatter {
         title: frontmatter_title,
         summary: frontmatter_summary,
+        content_en: frontmatter_content_en,
+        detailed_summary: frontmatter_detailed_summary,
+        detailed_summary_zh,
+        detailed_summary_en,
         tags: frontmatter_tags,
         category: frontmatter_category,
         category_description: frontmatter_category_description,
@@ -129,6 +122,17 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         .or(frontmatter_summary)
         .filter(|value| !value.trim().is_empty())
         .context("summary is required (pass --summary or add summary to frontmatter)")?;
+    let content_en = Frontmatter::normalized_content_en(frontmatter_content_en);
+    let detailed_summary = Frontmatter::normalized_detailed_summary(
+        frontmatter_detailed_summary,
+        detailed_summary_zh,
+        detailed_summary_en,
+    );
+    let detailed_summary_json = detailed_summary
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("failed to encode frontmatter detailed_summary as JSON")?;
     let tags = if let Some(tags) = tags {
         parse_tags(&tags)
     } else if let Some(tags) = frontmatter_tags {
@@ -261,7 +265,9 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         id,
         title,
         content: body,
+        content_en,
         summary,
+        detailed_summary: detailed_summary_json,
         tags: tags.clone(),
         category: category.clone(),
         author,

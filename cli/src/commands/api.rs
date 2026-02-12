@@ -85,7 +85,16 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
                 }
             } else {
                 let results = store
-                    .semantic_search(keyword, Some(10), None, enhanced_highlight)
+                    .semantic_search(
+                        keyword,
+                        Some(10),
+                        None,
+                        enhanced_highlight,
+                        false,
+                        None,
+                        None,
+                        None,
+                    )
                     .await?;
                 SearchResponse {
                     total: results.len(),

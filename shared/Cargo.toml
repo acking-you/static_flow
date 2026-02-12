@@ -13,3 +13,4 @@ arrow-array = { workspace = true }
 fastembed = "5"
 futures = "0.3"
 lancedb = { workspace = true }
+serde_json = { workspace = true }

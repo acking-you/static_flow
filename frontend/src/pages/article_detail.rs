@@ -29,6 +29,12 @@ pub struct ArticleDetailProps {
 type ImageClickListener =
     (web_sys::Element, wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArticleContentLanguage {
+    Zh,
+    En,
+}
+
 #[function_component(ArticleDetailPage)]
 pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let route = use_route::<Route>();
@@ -132,9 +138,52 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     }
 
     let article_data = (*article).clone();
+    let content_language = use_state(|| ArticleContentLanguage::Zh);
     let is_lightbox_open = use_state(|| false);
+    let is_brief_open = use_state(|| false);
     let preview_image_url = use_state_eq(|| None::<String>);
     let preview_image_failed = use_state(|| false);
+    let switch_to_zh = {
+        let content_language = content_language.clone();
+        Callback::from(move |_| content_language.set(ArticleContentLanguage::Zh))
+    };
+    let switch_to_en = {
+        let content_language = content_language.clone();
+        Callback::from(move |_| content_language.set(ArticleContentLanguage::En))
+    };
+
+    {
+        let content_language = content_language.clone();
+        use_effect_with(article_data.clone(), move |article_opt| {
+            if let Some(article) = article_opt {
+                let has_zh = !article.content.trim().is_empty();
+                let has_en = article
+                    .content_en
+                    .as_deref()
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false);
+                let next_language = if has_zh {
+                    ArticleContentLanguage::Zh
+                } else if has_en {
+                    ArticleContentLanguage::En
+                } else {
+                    ArticleContentLanguage::Zh
+                };
+                if *content_language != next_language {
+                    content_language.set(next_language);
+                }
+            }
+            || ()
+        });
+    }
+
+    {
+        let is_brief_open = is_brief_open.clone();
+        use_effect_with(article_id.clone(), move |_| {
+            is_brief_open.set(false);
+            || ()
+        });
+    }
 
     let open_image_preview = {
         let is_lightbox_open = is_lightbox_open.clone();
@@ -145,6 +194,16 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             preview_image_url.set(Some(src));
             is_lightbox_open.set(true);
         })
+    };
+
+    let open_brief_click = {
+        let is_brief_open = is_brief_open.clone();
+        Callback::from(move |_| is_brief_open.set(true))
+    };
+
+    let close_brief_click = {
+        let is_brief_open = is_brief_open.clone();
+        Callback::from(move |_| is_brief_open.set(false))
     };
 
     let close_lightbox_click = {
@@ -201,7 +260,45 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         });
     }
 
+    {
+        let is_brief_open = is_brief_open.clone();
+        use_effect_with(*is_brief_open, move |is_open| {
+            let keydown_listener_opt = if *is_open {
+                let handle = is_brief_open.clone();
+                let listener =
+                    wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
+                        if event.key() == "Escape" {
+                            handle.set(false);
+                        }
+                    })
+                        as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "keydown",
+                        listener.as_ref().unchecked_ref(),
+                    );
+                }
+                Some(listener)
+            } else {
+                None
+            };
+
+            move || {
+                if let Some(listener) = keydown_listener_opt {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "keydown",
+                            listener.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     let stop_lightbox_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
+    let stop_brief_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
     let mark_preview_failed = {
         let preview_image_failed = preview_image_failed.clone();
         Callback::from(move |_: Event| preview_image_failed.set(true))
@@ -211,9 +308,16 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         Callback::from(move |_: Event| preview_image_failed.set(false))
     };
 
-    // Initialize markdown rendering after content is loaded
-    use_effect_with(article_data.clone(), |article_opt| {
-        if article_opt.is_some() {
+    let markdown_render_key = if let Some(article) = article_data.as_ref() {
+        let lang_key = if *content_language == ArticleContentLanguage::En { "en" } else { "zh" };
+        format!("{}:{lang_key}", article.id)
+    } else {
+        String::new()
+    };
+
+    // Initialize markdown rendering after content/language is loaded
+    use_effect_with(markdown_render_key.clone(), |render_key| {
+        if !render_key.is_empty() {
             // Use setTimeout to ensure DOM is fully updated
             if let Some(win) = window() {
                 let callback = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
@@ -251,10 +355,10 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     {
         let open_image_preview = open_image_preview.clone();
-        use_effect_with(article_data.clone(), move |article_opt| {
+        use_effect_with(markdown_render_key.clone(), move |render_key| {
             let mut listeners: Vec<ImageClickListener> = Vec::new();
 
-            if article_opt.is_some() {
+            if !render_key.is_empty() {
                 if let Some(document) = window().and_then(|win| win.document()) {
                     if let Ok(node_list) = document.query_selector_all(".article-content img") {
                         for idx in 0..node_list.length() {
@@ -311,13 +415,113 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let body = if *loading {
         loading_view
     } else if let Some(article) = article_data.clone() {
-        let word_count = article
-            .content
+        let has_zh_content = !article.content.trim().is_empty();
+        let has_en_content = article
+            .content_en
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let show_language_toggle = has_zh_content && has_en_content;
+        let active_content = if *content_language == ArticleContentLanguage::En && has_en_content {
+            article
+                .content_en
+                .as_deref()
+                .unwrap_or(article.content.as_str())
+        } else {
+            article.content.as_str()
+        };
+        let active_detailed_summary = article.detailed_summary.as_ref().and_then(|summary| {
+            let preferred = if *content_language == ArticleContentLanguage::En {
+                summary.en.as_ref().or(summary.zh.as_ref())
+            } else {
+                summary.zh.as_ref().or(summary.en.as_ref())
+            };
+            preferred
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+        let has_detailed_summary = active_detailed_summary.is_some();
+        let word_count = active_content
             .chars()
             .filter(|c| !c.is_whitespace())
             .count();
-        let render_html = markdown_to_html(&article.content);
+        let render_html = markdown_to_html(active_content);
         let content = Html::from_html_unchecked(AttrValue::from(render_html));
+        let detailed_summary_html = active_detailed_summary
+            .as_ref()
+            .map(|summary| Html::from_html_unchecked(AttrValue::from(markdown_to_html(summary))));
+        let zh_button_class = if *content_language == ArticleContentLanguage::Zh {
+            classes!(
+                "rounded-full",
+                "border",
+                "border-[var(--primary)]",
+                "bg-[var(--primary)]",
+                "px-3",
+                "py-1",
+                "text-xs",
+                "font-semibold",
+                "uppercase",
+                "tracking-[0.08em]",
+                "text-white"
+            )
+        } else {
+            classes!(
+                "rounded-full",
+                "border",
+                "border-[var(--border)]",
+                "bg-[var(--surface)]",
+                "px-3",
+                "py-1",
+                "text-xs",
+                "font-semibold",
+                "uppercase",
+                "tracking-[0.08em]",
+                "text-[var(--muted)]",
+                "hover:border-[var(--primary)]",
+                "hover:text-[var(--primary)]"
+            )
+        };
+        let en_button_class = if *content_language == ArticleContentLanguage::En {
+            classes!(
+                "rounded-full",
+                "border",
+                "border-[var(--primary)]",
+                "bg-[var(--primary)]",
+                "px-3",
+                "py-1",
+                "text-xs",
+                "font-semibold",
+                "uppercase",
+                "tracking-[0.08em]",
+                "text-white"
+            )
+        } else {
+            classes!(
+                "rounded-full",
+                "border",
+                "border-[var(--border)]",
+                "bg-[var(--surface)]",
+                "px-3",
+                "py-1",
+                "text-xs",
+                "font-semibold",
+                "uppercase",
+                "tracking-[0.08em]",
+                "text-[var(--muted)]",
+                "hover:border-[var(--primary)]",
+                "hover:text-[var(--primary)]"
+            )
+        };
+        let summary_title = if *content_language == ArticleContentLanguage::En {
+            t::DETAILED_SUMMARY_TITLE_EN
+        } else {
+            t::DETAILED_SUMMARY_TITLE_ZH
+        };
+        let brief_button_text = if *content_language == ArticleContentLanguage::En {
+            t::OPEN_BRIEF_BUTTON_EN
+        } else {
+            t::OPEN_BRIEF_BUTTON_ZH
+        };
 
         html! {
             <article class={classes!(
@@ -435,6 +639,108 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     )}>
                         { article.title.clone() }
                     </h1>
+                    {
+                        if show_language_toggle || has_detailed_summary {
+                            html! {
+                                <div class={classes!(
+                                    "flex",
+                                    "flex-wrap",
+                                    "items-center",
+                                    "gap-3"
+                                )}>
+                                    {
+                                        if show_language_toggle {
+                                            html! {
+                                                <div class={classes!(
+                                                    "inline-flex",
+                                                    "items-center",
+                                                    "gap-2",
+                                                    "self-start",
+                                                    "rounded-full",
+                                                    "border",
+                                                    "border-[var(--border)]",
+                                                    "bg-[var(--surface)]",
+                                                    "px-2",
+                                                    "py-2"
+                                                )}>
+                                                    <span class={classes!(
+                                                        "px-2",
+                                                        "text-[0.72rem]",
+                                                        "font-semibold",
+                                                        "uppercase",
+                                                        "tracking-[0.12em]",
+                                                        "text-[var(--muted)]"
+                                                    )}>{ t::LANG_SWITCH_LABEL }</span>
+                                                    <button
+                                                        type="button"
+                                                        class={zh_button_class}
+                                                        aria-pressed={if *content_language == ArticleContentLanguage::Zh {
+                                                            "true"
+                                                        } else {
+                                                            "false"
+                                                        }}
+                                                        onclick={switch_to_zh.clone()}
+                                                    >
+                                                        { t::LANG_SWITCH_ZH }
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        class={en_button_class}
+                                                        aria-pressed={if *content_language == ArticleContentLanguage::En {
+                                                            "true"
+                                                        } else {
+                                                            "false"
+                                                        }}
+                                                        onclick={switch_to_en.clone()}
+                                                    >
+                                                        { t::LANG_SWITCH_EN }
+                                                    </button>
+                                                </div>
+                                            }
+                                        } else {
+                                            html! {}
+                                        }
+                                    }
+                                    {
+                                        if has_detailed_summary {
+                                            html! {
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "inline-flex",
+                                                        "items-center",
+                                                        "gap-2",
+                                                        "rounded-full",
+                                                        "border",
+                                                        "border-[var(--primary)]/45",
+                                                        "bg-[var(--surface)]",
+                                                        "px-3",
+                                                        "py-2",
+                                                        "text-xs",
+                                                        "font-semibold",
+                                                        "uppercase",
+                                                        "tracking-[0.1em]",
+                                                        "text-[var(--primary)]",
+                                                        "transition-[var(--transition-base)]",
+                                                        "hover:bg-[var(--primary)]",
+                                                        "hover:text-white"
+                                                    )}
+                                                    onclick={open_brief_click.clone()}
+                                                >
+                                                    <i class={classes!("fas", "fa-list-check")} aria-hidden="true"></i>
+                                                    { brief_button_text }
+                                                </button>
+                                            }
+                                        } else {
+                                            html! {}
+                                        }
+                                    }
+                                </div>
+                            }
+                        } else {
+                            html! {}
+                        }
+                    }
                     <div class={classes!(
                         "flex",
                         "flex-wrap",
@@ -582,6 +888,113 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         </div>
                     }
                 </section>
+                {
+                    if *is_brief_open {
+                        html! {
+                            <div
+                                class={classes!(
+                                    "fixed",
+                                    "inset-0",
+                                    "z-[95]",
+                                    "flex",
+                                    "items-center",
+                                    "justify-center",
+                                    "bg-black/55",
+                                    "p-4",
+                                    "backdrop-blur-sm"
+                                )}
+                                role="dialog"
+                                aria-modal="true"
+                                aria-label={t::DETAILED_SUMMARY_ARIA}
+                                onclick={close_brief_click.clone()}
+                            >
+                                <section
+                                    class={classes!(
+                                        "w-full",
+                                        "max-w-[760px]",
+                                        "max-h-[85vh]",
+                                        "overflow-auto",
+                                        "rounded-[var(--radius)]",
+                                        "border",
+                                        "border-[var(--border)]",
+                                        "bg-[var(--surface)]",
+                                        "px-6",
+                                        "py-5",
+                                        "shadow-[var(--shadow-lg)]",
+                                        "sm:px-4",
+                                        "sm:py-4"
+                                    )}
+                                    onclick={stop_brief_bubble.clone()}
+                                >
+                                    <div class={classes!(
+                                        "mb-4",
+                                        "flex",
+                                        "items-center",
+                                        "justify-between",
+                                        "gap-3"
+                                    )}>
+                                        <p class={classes!(
+                                            "m-0",
+                                            "inline-flex",
+                                            "items-center",
+                                            "gap-2",
+                                            "text-sm",
+                                            "font-semibold",
+                                            "uppercase",
+                                            "tracking-[0.12em]",
+                                            "text-[var(--primary)]"
+                                        )}>
+                                            <i class={classes!("fas", "fa-list-check")} aria-hidden="true"></i>
+                                            { summary_title }
+                                        </p>
+                                        <button
+                                            type="button"
+                                            class={classes!(
+                                                "rounded-full",
+                                                "border",
+                                                "border-[var(--border)]",
+                                                "bg-[var(--surface)]",
+                                                "px-3",
+                                                "py-1",
+                                                "text-xs",
+                                                "font-semibold",
+                                                "tracking-[0.08em]",
+                                                "text-[var(--muted)]",
+                                                "hover:border-[var(--primary)]",
+                                                "hover:text-[var(--primary)]"
+                                            )}
+                                            aria-label={t::CLOSE_BRIEF_ARIA}
+                                            onclick={close_brief_click.clone()}
+                                        >
+                                            { t::CLOSE_BRIEF_BUTTON }
+                                        </button>
+                                    </div>
+                                    {
+                                        if let Some(summary_html) = detailed_summary_html.clone() {
+                                            html! {
+                                                <div class={classes!(
+                                                    "article-content",
+                                                    "text-[0.97rem]",
+                                                    "leading-[1.8]"
+                                                )}>
+                                                    { summary_html }
+                                                </div>
+                                            }
+                                        } else {
+                                            html! {
+                                                <p class={classes!("m-0", "text-[var(--muted)]")}>
+                                                    { "No brief available." }
+                                                </p>
+                                            }
+                                        }
+                                    }
+                                </section>
+                            </div>
+                        }
+                    } else {
+                        html! {}
+                    }
+                }
             </article>
         }
     } else {
@@ -633,10 +1046,12 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         }
     };
 
+    let is_overlay_open = *is_lightbox_open || *is_brief_open;
+
     html! {
         <main class={classes!("main", "mt-[var(--space-lg)]")}>
-            // Fixed back button - hide when lightbox is open
-            if !*is_lightbox_open {
+            // Fixed back button - hide when any overlay is open
+            if !is_overlay_open {
                 <div class={classes!(
                     "fixed",
                     "left-8",
@@ -771,8 +1186,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     html! {}
                 }
             }
-            // Hide scroll-to-top button and TOC button when lightbox is open
-            if !*is_lightbox_open {
+            // Hide scroll-to-top button and TOC button when overlay is open
+            if !is_overlay_open {
                 <ScrollToTopButton />
                 <TocButton />
             }

@@ -2,13 +2,13 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use arrow_array::{Array, RecordBatch, RecordBatchIterator, StringArray};
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Schema};
 use futures::TryStreamExt;
 use lancedb::{
     connect,
     index::Index,
     query::{ExecutableQuery, QueryBase, Select},
-    table::{OptimizeAction, OptimizeOptions},
+    table::{NewColumnTransform, OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
 
@@ -27,14 +27,82 @@ pub async fn connect_db(db_path: &Path) -> Result<Connection> {
 }
 
 pub async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> Result<Table> {
-    match db.open_table(name).execute().await {
-        Ok(table) => Ok(table),
+    let table = match db.open_table(name).execute().await {
+        Ok(table) => table,
         Err(_) => {
             let batch = RecordBatch::new_empty(schema.clone());
-            let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+            let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
             db.create_table(name, Box::new(batches)).execute().await?;
-            Ok(db.open_table(name).execute().await?)
+            db.open_table(name).execute().await?
         },
+    };
+
+    ensure_table_columns(&table, schema.as_ref()).await?;
+    Ok(table)
+}
+
+async fn ensure_table_columns(table: &Table, expected_schema: &Schema) -> Result<()> {
+    let existing_schema = table.schema().await?;
+    let existing_columns = existing_schema
+        .fields()
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect::<HashSet<_>>();
+
+    let mut missing_columns = Vec::new();
+    for field in expected_schema.fields() {
+        if existing_columns.contains(field.name()) {
+            continue;
+        }
+        if !field.is_nullable() {
+            anyhow::bail!(
+                "table `{}` missing required non-nullable column `{}`; manual migration needed",
+                table.name(),
+                field.name()
+            );
+        }
+
+        let sql_type = sql_type_for_column_cast(field.data_type()).with_context(|| {
+            format!(
+                "unsupported nullable column type for auto-migration: `{}` ({}) on table `{}`",
+                field.name(),
+                field.data_type(),
+                table.name()
+            )
+        })?;
+        missing_columns.push((field.name().to_string(), format!("cast(NULL as {sql_type})")));
+    }
+
+    if missing_columns.is_empty() {
+        return Ok(());
+    }
+
+    let preview = missing_columns
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::info!(
+        "Auto-migrating table `{}` by adding missing nullable columns: {}",
+        table.name(),
+        preview
+    );
+
+    table
+        .add_columns(NewColumnTransform::SqlExpressions(missing_columns), None)
+        .await
+        .with_context(|| format!("failed to add missing columns to table `{}`", table.name()))?;
+
+    Ok(())
+}
+
+fn sql_type_for_column_cast(data_type: &DataType) -> Result<&'static str> {
+    match data_type {
+        DataType::Utf8 => Ok("string"),
+        DataType::Int32 => Ok("int32"),
+        DataType::Timestamp(_, _) => Ok("timestamp_ms"),
+        DataType::Binary => Ok("binary"),
+        _ => anyhow::bail!("unsupported data type: {data_type}"),
     }
 }
 

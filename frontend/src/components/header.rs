@@ -542,6 +542,10 @@ struct HeaderSearchQuery {
     q: Option<String>,
     mode: Option<String>,
     enhanced_highlight: Option<bool>,
+    hybrid: Option<bool>,
+    hybrid_rrf_k: Option<f32>,
+    hybrid_vector_limit: Option<usize>,
+    hybrid_fts_limit: Option<usize>,
     limit: Option<usize>,
     all: Option<bool>,
     max_distance: Option<f32>,
@@ -577,6 +581,21 @@ fn build_search_url(
                 .filter(|value| value.is_finite() && *value >= 0.0)
             {
                 params.push(format!("max_distance={max_distance}"));
+            }
+            if current.hybrid.unwrap_or(false) {
+                params.push("hybrid=true".to_string());
+                if let Some(rrf_k) = current
+                    .hybrid_rrf_k
+                    .filter(|value| value.is_finite() && *value > 0.0)
+                {
+                    params.push(format!("hybrid_rrf_k={rrf_k}"));
+                }
+                if let Some(vector_limit) = current.hybrid_vector_limit.filter(|value| *value > 0) {
+                    params.push(format!("hybrid_vector_limit={vector_limit}"));
+                }
+                if let Some(fts_limit) = current.hybrid_fts_limit.filter(|value| *value > 0) {
+                    params.push(format!("hybrid_fts_limit={fts_limit}"));
+                }
             }
         }
     }

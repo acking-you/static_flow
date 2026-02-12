@@ -7845,6 +7845,7 @@ dependencies = [
  "futures",
  "lancedb",
  "serde",
+ "serde_json",
  "tracing",
 ]
 

@@ -8,7 +8,7 @@ mod tests {
     #[test]
     fn article_schema_has_expected_fields() {
         let schema = schema::article_schema();
-        assert_eq!(schema.fields().len(), 14);
+        assert_eq!(schema.fields().len(), 16);
 
         let id_field = schema.field_with_name("id").expect("id field");
         assert_eq!(id_field.data_type(), &DataType::Utf8);
@@ -84,7 +84,11 @@ mod tests {
                 id: "post-1".to_string(),
                 title: "Title One".to_string(),
                 content: "Content One".to_string(),
+                content_en: Some("Content One EN".to_string()),
                 summary: "Summary One".to_string(),
+                detailed_summary: Some(
+                    "{\"zh\":\"细化总结\",\"en\":\"Detailed summary\"}".to_string(),
+                ),
                 tags: vec!["rust".to_string(), "cli".to_string()],
                 category: "Tech".to_string(),
                 author: "Ada".to_string(),
@@ -100,7 +104,9 @@ mod tests {
                 id: "post-2".to_string(),
                 title: "Title Two".to_string(),
                 content: "Content Two".to_string(),
+                content_en: None,
                 summary: "Summary Two".to_string(),
+                detailed_summary: None,
                 tags: vec!["wasm".to_string()],
                 category: "Web".to_string(),
                 author: "Grace".to_string(),
@@ -150,6 +156,18 @@ mod tests {
             .expect("featured_image array");
         assert_eq!(featured_array.value(0), "hero.jpg");
         assert!(featured_array.is_null(1));
+
+        let content_en_idx = batch
+            .schema()
+            .index_of("content_en")
+            .expect("content_en column");
+        let content_en_array = batch
+            .column(content_en_idx)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("content_en array");
+        assert_eq!(content_en_array.value(0), "Content One EN");
+        assert!(content_en_array.is_null(1));
 
         let vector_en_idx = batch
             .schema()

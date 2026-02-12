@@ -23,6 +23,14 @@ pub struct SearchQuery {
     #[serde(default)]
     pub enhanced_highlight: bool,
     #[serde(default)]
+    pub hybrid: bool,
+    #[serde(default)]
+    pub hybrid_rrf_k: Option<f32>,
+    #[serde(default)]
+    pub hybrid_vector_limit: Option<usize>,
+    #[serde(default)]
+    pub hybrid_fts_limit: Option<usize>,
+    #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
     pub max_distance: Option<f32>,
@@ -210,6 +218,10 @@ pub async fn semantic_search(
             normalize_limit(query.limit),
             normalize_max_distance(query.max_distance),
             query.enhanced_highlight,
+            query.hybrid,
+            normalize_positive_f32(query.hybrid_rrf_k),
+            normalize_limit(query.hybrid_vector_limit),
+            normalize_limit(query.hybrid_fts_limit),
         )
         .await
         .map_err(|e| internal_error("Failed to run semantic search", e))?;
@@ -365,4 +377,8 @@ fn normalize_limit(limit: Option<usize>) -> Option<usize> {
 
 fn normalize_max_distance(max_distance: Option<f32>) -> Option<f32> {
     max_distance.filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn normalize_positive_f32(value: Option<f32>) -> Option<f32> {
+    value.filter(|item| item.is_finite() && *item > 0.0)
 }

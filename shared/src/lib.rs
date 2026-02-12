@@ -6,11 +6,40 @@ pub mod embedding;
 pub mod lancedb_api;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocalizedText {
+    pub zh: Option<String>,
+    pub en: Option<String>,
+}
+
+impl LocalizedText {
+    pub fn normalized(self) -> Option<Self> {
+        let zh = self
+            .zh
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let en = self
+            .en
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if zh.is_none() && en.is_none() {
+            None
+        } else {
+            Some(Self {
+                zh,
+                en,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Article {
     pub id: String,
     pub title: String,
     pub summary: String,
     pub content: String,
+    pub content_en: Option<String>,
+    pub detailed_summary: Option<LocalizedText>,
     pub tags: Vec<String>,
     pub category: String,
     pub author: String,
