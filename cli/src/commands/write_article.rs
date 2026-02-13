@@ -12,7 +12,7 @@ use static_flow_shared::{
         detect_language, embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage,
         TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH,
     },
-    normalize_taxonomy_key,
+    normalize_taxonomy_key, LocalizedText,
 };
 
 use crate::{
@@ -39,6 +39,9 @@ pub struct WriteArticleOptions {
     pub category: Option<String>,
     pub category_description: Option<String>,
     pub date: Option<String>,
+    pub content_en_file: Option<PathBuf>,
+    pub summary_zh_file: Option<PathBuf>,
+    pub summary_en_file: Option<PathBuf>,
     pub import_local_images: bool,
     pub media_roots: Vec<PathBuf>,
     pub generate_thumbnail: bool,
@@ -71,6 +74,9 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         category,
         category_description,
         date: cli_date,
+        content_en_file,
+        summary_zh_file,
+        summary_en_file,
         import_local_images,
         media_roots,
         generate_thumbnail,
@@ -118,16 +124,24 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
             .to_string()
     });
 
+    let content_en_from_file =
+        read_optional_text_file(content_en_file.as_deref(), "--content-en-file")?;
+    let detailed_summary_from_files =
+        read_detailed_summary_files(summary_zh_file.as_deref(), summary_en_file.as_deref())?;
+
     let summary = summary
         .or(frontmatter_summary)
         .filter(|value| !value.trim().is_empty())
         .context("summary is required (pass --summary or add summary to frontmatter)")?;
-    let content_en = Frontmatter::normalized_content_en(frontmatter_content_en);
-    let detailed_summary = Frontmatter::normalized_detailed_summary(
-        frontmatter_detailed_summary,
-        detailed_summary_zh,
-        detailed_summary_en,
-    );
+    let content_en =
+        Frontmatter::normalized_content_en(content_en_from_file.or(frontmatter_content_en));
+    let detailed_summary = detailed_summary_from_files.or_else(|| {
+        Frontmatter::normalized_detailed_summary(
+            frontmatter_detailed_summary,
+            detailed_summary_zh,
+            detailed_summary_en,
+        )
+    });
     let detailed_summary_json = detailed_summary
         .as_ref()
         .map(serde_json::to_string)
@@ -753,6 +767,47 @@ fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
+fn read_optional_text_file(path: Option<&Path>, arg_name: &str) -> Result<Option<String>> {
+    match path {
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("failed to read {arg_name} {}", path.display()))
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
+fn read_detailed_summary_files(
+    summary_zh_file: Option<&Path>,
+    summary_en_file: Option<&Path>,
+) -> Result<Option<LocalizedText>> {
+    let pair = match (summary_zh_file, summary_en_file) {
+        (Some(zh), Some(en)) => Some((zh, en)),
+        (None, None) => None,
+        _ => {
+            anyhow::bail!(
+                "detailed summary from files requires both --summary-zh-file and --summary-en-file"
+            )
+        },
+    };
+
+    match pair {
+        Some((zh_path, en_path)) => {
+            let zh = fs::read_to_string(zh_path).with_context(|| {
+                format!("failed to read --summary-zh-file {}", zh_path.display())
+            })?;
+            let en = fs::read_to_string(en_path).with_context(|| {
+                format!("failed to read --summary-en-file {}", en_path.display())
+            })?;
+            Ok(LocalizedText {
+                zh: Some(zh),
+                en: Some(en),
+            }
+            .normalized())
+        },
+        None => Ok(None),
+    }
+}
+
 fn normalize_cli_date(date: Option<String>) -> Result<Option<String>> {
     let Some(date) = date else {
         return Ok(None);
@@ -773,7 +828,8 @@ mod tests {
 
     use super::{
         first_markdown_heading, is_local_image_path, looks_like_obsidian_size, normalize_cli_date,
-        parse_obsidian_embed_target, resolve_local_asset_path, resolve_title,
+        parse_obsidian_embed_target, read_detailed_summary_files, resolve_local_asset_path,
+        resolve_title,
     };
 
     #[test]
@@ -870,5 +926,36 @@ mod tests {
     fn normalize_cli_date_rejects_invalid_format() {
         let err = normalize_cli_date(Some("2026/02/12".to_string())).expect_err("invalid date");
         assert!(err.to_string().contains("expected YYYY-MM-DD"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn detailed_summary_files_require_both_paths() {
+        let err = read_detailed_summary_files(Some(Path::new("zh.md")), None)
+            .expect_err("missing english file should fail");
+        assert!(err.to_string().contains("--summary-zh-file"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn detailed_summary_files_load_bilingual_content() {
+        let unique = format!(
+            "sf-cli-write-article-summary-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let base = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&base).expect("create temp directory");
+
+        let zh_path = base.join("summary.zh.md");
+        let en_path = base.join("summary.en.md");
+        fs::write(&zh_path, " 中文导读 ").expect("write zh summary");
+        fs::write(&en_path, " English summary ").expect("write en summary");
+
+        let summary = read_detailed_summary_files(Some(&zh_path), Some(&en_path))
+            .expect("summary file read should succeed")
+            .expect("summary should exist");
+
+        assert_eq!(summary.zh.as_deref(), Some("中文导读"));
+        assert_eq!(summary.en.as_deref(), Some("English summary"));
+
+        let _ = fs::remove_dir_all(base);
     }
 }

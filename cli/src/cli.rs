@@ -57,6 +57,15 @@ pub enum Commands {
         /// frontmatter `date` when provided.
         #[arg(long)]
         date: Option<String>,
+        /// Path to translated English markdown for `content_en`.
+        #[arg(long)]
+        content_en_file: Option<PathBuf>,
+        /// Path to Chinese detailed summary markdown.
+        #[arg(long)]
+        summary_zh_file: Option<PathBuf>,
+        /// Path to English detailed summary markdown.
+        #[arg(long)]
+        summary_en_file: Option<PathBuf>,
         /// Import local image links from markdown into `images` and rewrite
         /// links.
         #[arg(long)]

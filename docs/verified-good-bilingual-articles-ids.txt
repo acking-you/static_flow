@@ -1,0 +1,8 @@
+# Verified good bilingual translation + detailed summary article IDs
+# Scope confirmed by user on 2026-02-13
+
+frontend-infinite-loading-header-location-loop
+lancedb-hybrid-search-implementation-deep-dive
+allocator-impl-comparison
+opensearch-research-and-elasticsearch-comparison-2025-12-25
+lancedb-update-upsert-deep-dive

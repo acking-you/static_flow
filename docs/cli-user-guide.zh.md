@@ -210,7 +210,10 @@ CLI 有 3 组命令：
   --summary "文章摘要" \
   --tags "rust,wasm" \
   --category "Tech" \
-  --category-description "Rust 与 WASM 工程实践"
+  --category-description "Rust 与 WASM 工程实践" \
+  --content-en-file ./tmp/content_en.md \
+  --summary-zh-file ./tmp/detailed_summary_zh.md \
+  --summary-en-file ./tmp/detailed_summary_en.md
 ```
 
 同时会：
@@ -223,6 +226,10 @@ CLI 有 3 组命令：
 - 显式传入 `--date` 时，覆盖 frontmatter `date`
 - 未传 `--date` 时使用 frontmatter `date`
 - 两者都缺失时回退为当天日期
+
+双语字段写入说明：
+- `--content-en-file` 可显式写入 `articles.content_en`（覆盖 frontmatter `content_en`）
+- `--summary-zh-file` + `--summary-en-file` 成对提供时写入 `articles.detailed_summary`（覆盖 frontmatter `detailed_summary`）
 
 ### 5.3 批量写入图片
 

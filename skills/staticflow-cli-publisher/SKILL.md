@@ -55,6 +55,7 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
    - `tags`
    - `category`
    - `category_description`
+   - when bilingual publish is requested: `content_en` and `detailed_summary.zh/en`
 3. Metadata priority:
    - frontmatter
    - explicit user CLI args
@@ -71,6 +72,8 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
      - `<cli> write-article --db-path <db_path> --file <post.md>`
    - frontmatter incomplete:
      - `<cli> write-article --db-path <db_path> --file <post.md> --summary "..." --tags "a,b" --category "..." --category-description "..."`
+   - explicit bilingual files (preferred for non-frontmatter workflow):
+     - `<cli> write-article --db-path <db_path> --file <post.md> --summary "..." --tags "a,b" --category "..." --category-description "..." --content-en-file <content_en.md> --summary-zh-file <summary_zh.md> --summary-en-file <summary_en.md>`
 7. Local image import (optional):
    - `--import-local-images`
    - optional `--media-root <path>` (repeatable)
@@ -84,6 +87,7 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
    - article id
    - inferred metadata (if any)
    - summary generated/reused
+   - bilingual fields generated/reused (`content_en`, `detailed_summary.zh/en`)
    - image import count and warnings
 
 ### B) Image Batch (`write-images`)

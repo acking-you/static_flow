@@ -35,6 +35,7 @@ Required fields in final payload:
 - `tags`
 - `category`
 - `category_description`
+- if bilingual output is required: `content_en` and `detailed_summary.zh/en`
 
 Resolution priority:
 1. Frontmatter
@@ -62,6 +63,21 @@ With explicit metadata (frontmatter incomplete):
   --category "Tech" \
   --category-description "Engineering notes for Rust and WASM"
 ```
+
+With explicit bilingual files (without frontmatter bilingual fields):
+```bash
+<cli> write-article \
+  --db-path <db_path> \
+  --file <post.md> \
+  --summary "Post summary" \
+  --tags "rust,wasm" \
+  --category "Tech" \
+  --category-description "Engineering notes for Rust and WASM" \
+  --content-en-file <content_en.md> \
+  --summary-zh-file <summary_zh.md> \
+  --summary-en-file <summary_en.md>
+```
+`--summary-zh-file` and `--summary-en-file` must be provided together.
 
 With local image import:
 ```bash

@@ -168,12 +168,20 @@ cd cli
   --summary "Article summary" \
   --tags "rust,wasm" \
   --category "Tech" \
-  --category-description "Engineering notes about Rust + WASM"
+  --category-description "Engineering notes about Rust + WASM" \
+  --content-en-file ../tmp/content_en.md \
+  --summary-zh-file ../tmp/detailed_summary_zh.md \
+  --summary-en-file ../tmp/detailed_summary_en.md
 
 # Optional in markdown frontmatter for sync/write
 # category_description: "Engineering notes about Rust + WASM"
 # date: "2026-02-12"
+# content_en: |
+# detailed_summary:
+#   zh: |
+#   en: |
 # If both are present, CLI --date overrides frontmatter date.
+# `--summary-zh-file` and `--summary-en-file` must be provided together.
 
 # Batch write images
 ../target/release/sf-cli write-images \

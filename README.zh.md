@@ -165,12 +165,20 @@ cd cli
   --summary "文章摘要" \
   --tags "rust,wasm" \
   --category "Tech" \
-  --category-description "Engineering notes about Rust + WASM"
+  --category-description "Engineering notes about Rust + WASM" \
+  --content-en-file ../tmp/content_en.md \
+  --summary-zh-file ../tmp/detailed_summary_zh.md \
+  --summary-en-file ../tmp/detailed_summary_en.md
 
 # 也可写在 markdown frontmatter 中
 # category_description: "Rust 与 WASM 的工程实践"
 # date: "2026-02-12"
+# content_en: |
+# detailed_summary:
+#   zh: |
+#   en: |
 # 若两者同时提供，以 CLI --date 为准。
+# `--summary-zh-file` 与 `--summary-en-file` 必须成对提供。
 
 # 批量写入图片
 ../target/release/sf-cli write-images \
