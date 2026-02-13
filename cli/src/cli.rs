@@ -320,6 +320,21 @@ pub enum DbCommands {
         #[arg(long)]
         all: bool,
     },
+    /// Update one article's bilingual fields from files.
+    UpdateArticleBilingual {
+        /// Article id in `articles.id`.
+        #[arg(long)]
+        id: String,
+        /// Path to translated English markdown for `content_en`.
+        #[arg(long)]
+        content_en_file: Option<PathBuf>,
+        /// Path to Chinese detailed summary markdown.
+        #[arg(long)]
+        summary_zh_file: Option<PathBuf>,
+        /// Path to English detailed summary markdown.
+        #[arg(long)]
+        summary_en_file: Option<PathBuf>,
+    },
     /// Delete rows by SQL filter.
     DeleteRows {
         /// Table name.

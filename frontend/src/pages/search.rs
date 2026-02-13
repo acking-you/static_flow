@@ -626,6 +626,21 @@ pub fn search_page() -> Html {
         hybrid_vector_limit,
         hybrid_fts_limit,
     );
+    let hybrid_default_scope_hint = if fetch_all {
+        t::HYBRID_DEFAULT_SCOPE_ALL.to_string()
+    } else {
+        fill_one(t::HYBRID_DEFAULT_SCOPE_LIMIT_TEMPLATE, requested_limit)
+    };
+    let hybrid_vector_limit_placeholder = if fetch_all {
+        t::HYBRID_VECTOR_LIMIT_ALL.to_string()
+    } else {
+        fill_one(t::HYBRID_VECTOR_LIMIT_SCOPE_TEMPLATE, requested_limit)
+    };
+    let hybrid_fts_limit_placeholder = if fetch_all {
+        t::HYBRID_FTS_LIMIT_ALL.to_string()
+    } else {
+        fill_one(t::HYBRID_FTS_LIMIT_SCOPE_TEMPLATE, requested_limit)
+    };
     let semantic_limit_for_mode = if fetch_all { None } else { Some(requested_limit) };
     let semantic_distance_off_href = build_search_href(
         Some("semantic"),
@@ -1305,6 +1320,9 @@ pub fn search_page() -> Html {
                             <p class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>
                                 { t::HYBRID_PANEL_DESC }
                             </p>
+                            <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]")}>
+                                { hybrid_default_scope_hint.clone() }
+                            </p>
 
                             if *semantic_advanced_open {
                                 <div class={classes!(
@@ -1380,7 +1398,7 @@ pub fn search_page() -> Html {
                                         step="1"
                                         min="1"
                                         value={(*hybrid_vector_limit_input).clone()}
-                                        placeholder={t::HYBRID_VECTOR_LIMIT}
+                                        placeholder={hybrid_vector_limit_placeholder.clone()}
                                         oninput={on_hybrid_vector_limit_input}
                                         class={classes!(
                                             "h-10",
@@ -1401,7 +1419,7 @@ pub fn search_page() -> Html {
                                         step="1"
                                         min="1"
                                         value={(*hybrid_fts_limit_input).clone()}
-                                        placeholder={t::HYBRID_FTS_LIMIT}
+                                        placeholder={hybrid_fts_limit_placeholder.clone()}
                                         oninput={on_hybrid_fts_limit_input}
                                         class={classes!(
                                             "h-10",

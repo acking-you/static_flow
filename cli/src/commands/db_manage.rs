@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow::util::pretty::pretty_format_batches;
@@ -182,6 +182,91 @@ pub async fn update_rows(
     tracing::info!(
         "Update applied on `{}`: rows_updated={}, version={}",
         table.name(),
+        result.rows_updated,
+        result.version
+    );
+    Ok(())
+}
+
+pub async fn update_article_bilingual(
+    db_path: &Path,
+    id: &str,
+    content_en_file: Option<&Path>,
+    summary_zh_file: Option<&Path>,
+    summary_en_file: Option<&Path>,
+) -> Result<()> {
+    if content_en_file.is_none() && summary_zh_file.is_none() && summary_en_file.is_none() {
+        bail!(
+            "nothing to update: provide --content-en-file and/or both --summary-zh-file \
+             --summary-en-file"
+        )
+    }
+
+    let summary_pair = match (summary_zh_file, summary_en_file) {
+        (Some(zh), Some(en)) => Some((zh, en)),
+        (None, None) => None,
+        _ => bail!("summary update requires both --summary-zh-file and --summary-en-file"),
+    };
+
+    let content_en = match content_en_file {
+        Some(path) => Some(
+            fs::read_to_string(path)
+                .with_context(|| format!("failed to read --content-en-file {}", path.display()))?,
+        ),
+        None => None,
+    };
+
+    let detailed_summary = match summary_pair {
+        Some((zh_path, en_path)) => {
+            let zh = fs::read_to_string(zh_path).with_context(|| {
+                format!("failed to read --summary-zh-file {}", zh_path.display())
+            })?;
+            let en = fs::read_to_string(en_path).with_context(|| {
+                format!("failed to read --summary-en-file {}", en_path.display())
+            })?;
+            Some(
+                serde_json::json!({
+                    "zh": zh,
+                    "en": en,
+                })
+                .to_string(),
+            )
+        },
+        None => None,
+    };
+
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, "articles").await?;
+
+    let mut builder = table
+        .update()
+        .only_if(format!("id = {}", sql_string_literal(id)));
+    if let Some(value) = &content_en {
+        builder = builder.column("content_en", sql_string_literal(value));
+    }
+    if let Some(value) = &detailed_summary {
+        builder = builder.column("detailed_summary", sql_string_literal(value));
+    }
+
+    let result = match builder.execute().await {
+        Ok(result) => result,
+        Err(err) => {
+            return Err(friendly_table_error(
+                &table,
+                "update article bilingual fields",
+                err.to_string(),
+            )
+            .await);
+        },
+    };
+
+    if result.rows_updated == 0 {
+        bail!("article not found: `{id}`")
+    }
+
+    tracing::info!(
+        "Article bilingual update applied: id=`{}`, rows_updated={}, version={}",
+        id,
         result.rows_updated,
         result.version
     );
@@ -482,6 +567,10 @@ fn parse_assignment(assignment: &str) -> Result<(String, String)> {
     }
 
     Ok((column.to_string(), expr.to_string()))
+}
+
+fn sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn format_datatype(data_type: &DataType) -> String {

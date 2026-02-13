@@ -1,10 +1,12 @@
 # StaticFlow Publish Checklist
 
-## 1. Resolve CLI Binary
-Try in order:
+## 1. CLI and DB Preflight
+Resolve CLI in order:
 1. `./bin/sf-cli`
-2. `../target/release/sf-cli`
-3. `sf-cli`
+2. `./target/release/sf-cli`
+3. `./target/debug/sf-cli`
+4. `../target/release/sf-cli`
+5. `sf-cli`
 
 Smoke test:
 ```bash
@@ -16,42 +18,41 @@ Build if missing:
 cargo build -p sf-cli --release
 ```
 
-## 2. Verify DB Readiness
-List tables:
+Check DB tables:
 ```bash
 <cli> db --db-path <db_path> list-tables
 ```
-Required:
-- `articles`
-- `images`
-- `taxonomies`
+Required: `articles`, `images`, `taxonomies`
 
-Initialize if approved by user:
+Init DB only with user approval:
 ```bash
 <cli> init --db-path <db_path>
 ```
 
-## 3. Required Metadata for Blog Post
-Must exist before publication:
+## 2. Metadata Gate (Before `write-article`)
+Required fields in final payload:
 - `summary`
 - `tags`
 - `category`
 - `category_description`
 
-Allowed sources:
-- Markdown frontmatter
-- CLI args (`--summary`, `--tags`, `--category`, `--category-description`)
-- Skill inference from article content + existing taxonomy rows
+Resolution priority:
+1. Frontmatter
+2. Explicit CLI args
+3. Inference from article content + existing taxonomies
 
-If any required field is missing from frontmatter, infer it and pass explicit CLI flags.
+Date policy:
+1. If user provides `--date`, use it.
+2. Else keep frontmatter `date`.
+3. Else derive from file birth time/mtime and pass `--date` (`YYYY-MM-DD`).
 
-## 4. Single Post Publish Commands
-Basic (only when frontmatter already contains `summary`, `tags`, `category`, and `category_description`):
+## 3. Article Publish Commands
+Basic (frontmatter complete):
 ```bash
 <cli> write-article --db-path <db_path> --file <post.md>
 ```
 
-With explicit metadata flags (required when frontmatter is incomplete):
+With explicit metadata (frontmatter incomplete):
 ```bash
 <cli> write-article \
   --db-path <db_path> \
@@ -62,24 +63,7 @@ With explicit metadata flags (required when frontmatter is incomplete):
   --category-description "Engineering notes for Rust and WASM"
 ```
 
-With local image import (still provide full metadata if frontmatter is incomplete):
-```bash
-<cli> write-article \
-  --db-path <db_path> \
-  --file <post.md> \
-  --summary "Post summary" \
-  --tags "rust,wasm" \
-  --category "Tech" \
-  --category-description "Engineering notes for Rust and WASM" \
-  --import-local-images
-```
-
-Supports both:
-- Standard Markdown image links: `![](relative/path.png)`
-- Obsidian image embeds: `![[relative/path.png]]`, `![[relative/path.png|caption]]`
-- Global media fallback roots: `--media-root <vault_or_assets_dir>` (repeatable)
-
-With thumbnail generation for imported images:
+With local image import:
 ```bash
 <cli> write-article \
   --db-path <db_path> \
@@ -89,115 +73,72 @@ With thumbnail generation for imported images:
   --category "Tech" \
   --category-description "Engineering notes for Rust and WASM" \
   --import-local-images \
+  --media-root <assets_dir> \
   --generate-thumbnail \
   --thumbnail-size 256
 ```
 
-### How category/tags are persisted
-- `articles` table:
-  - `category` column stores one category name.
-  - `tags` column stores the tag array.
-- `taxonomies` table:
-  - upsert one row for category: `kind=category`, `key=normalize(category)`.
-  - upsert one row per tag: `kind=tag`, `key=normalize(tag)`.
-  - `description` for category comes from `category_description` in the same publish run.
+Image syntax supported:
+- `![](relative/path.png)`
+- `![[relative/path.png]]`
+- `![[relative/path.png|alias]]`
 
-### Metadata inference policy
-- `summary`: one concise sentence based on title + opening section.
-- `tags`: 3-8 topic tags derived from title/headings.
-- `category`: infer one primary domain category when missing.
-- `category_description`: reuse existing DB taxonomy description first; otherwise generate a concise description.
-
-## 5. Image Directory Publish
+## 4. Batch Publish Commands
+Image directory:
 ```bash
-<cli> write-images --db-path <db_path> --dir <image_dir> --recursive --generate-thumbnail
+<cli> write-images --db-path <db_path> --dir <image_dir> \
+  [--recursive] [--generate-thumbnail] [--thumbnail-size <n>] \
+  [--no-auto-optimize]
 ```
 
-## 6. Notes Sync Publish
+Notes directory:
 ```bash
-<cli> sync-notes --db-path <db_path> --dir <notes_dir> --recursive --generate-thumbnail
+<cli> sync-notes --db-path <db_path> --dir <notes_dir> \
+  [--recursive] [--generate-thumbnail] [--thumbnail-size <n>] \
+  [--language <en|zh>] [--default-category <name>] [--default-author <name>] \
+  [--no-auto-optimize]
 ```
-See section 8 for full flag reference.
 
-## 7. Verification Commands
-Check one article:
+## 5. Verification Commands
+Check article:
 ```bash
-<cli> query \
-  --db-path <db_path> \
-  --table articles \
-  --where "id='<article_id>'" \
-  --limit 1 \
-  --format vertical
+<cli> db --db-path <db_path> query-rows articles \
+  --where "id='<article_id>'" --limit 1 --format vertical
 ```
 
 Check taxonomy rows:
 ```bash
-<cli> query --db-path <db_path> --table taxonomies --limit 20
+<cli> db --db-path <db_path> query-rows taxonomies --limit 20
 ```
 
-Check image rows:
+Check images rows:
 ```bash
-<cli> query --db-path <db_path> --table images --limit 20
+<cli> db --db-path <db_path> query-rows images --limit 20
 ```
 
-## 8. Sync Notes Publish
+Optional API-equivalent checks:
 ```bash
-<cli> sync-notes --db-path <db_path> --dir <notes_dir> \
-  --recursive --generate-thumbnail \
-  --default-category "Notes" \
-  --default-author "Unknown" \
-  --language en
+<cli> api --db-path <db_path> get-article <article_id>
+<cli> api --db-path <db_path> search --q "<keyword>"
+<cli> api --db-path <db_path> semantic-search --q "<keyword>"
 ```
 
-Notes-specific flags:
-- `--default-category <name>`: fallback category when frontmatter is missing (default: `Notes`).
-- `--default-author <name>`: fallback author when frontmatter is missing (default: `Unknown`).
-- `--language <en|zh>`: language hint for auto-embedding.
-- `--no-auto-optimize`: skip index optimization after sync.
+## 6. Immediate Storage Reclaim (Prune Now)
+Single table:
+```bash
+<cli> db --db-path <db_path> optimize <table> --all --prune-now
+```
 
-## 9. Database Management Quick Reference
-All via `<cli> db --db-path <db_path> <subcommand>`:
+All managed tables:
+```bash
+for t in articles images taxonomies; do
+  <cli> db --db-path <db_path> optimize "$t" --all --prune-now
+done
+```
 
-| Task | Command |
-|------|---------|
-| List tables | `list-tables` |
-| Create table | `create-table <name> [--replace]` |
-| Drop table | `drop-table <name> --yes` |
-| Describe schema | `describe-table <name>` |
-| Count rows | `count-rows <table> [--where <sql>]` |
-| Query rows | `query-rows <table> [--where <sql>] [--columns <cols>] [--limit <n>] [--format vertical]` |
-| Update rows | `update-rows <table> --set "col=expr" [--where <sql>] [--all]` |
-| Delete rows | `delete-rows <table> [--where <sql>] [--all]` |
-| Upsert article | `upsert-article --json '<json>'` |
-| Upsert image | `upsert-image --json '<json>'` |
-| Ensure indexes | `ensure-indexes [--table <name>]` |
-| List indexes | `list-indexes <table> [--with-stats]` |
-| Optimize | `optimize <table> [--all]` |
-
-## 10. Local API Quick Reference
-All via `<cli> api --db-path <db_path> <subcommand>`:
-
-| Task | Command |
-|------|---------|
-| List articles | `list-articles [--tag <t>] [--category <c>]` |
-| Get article | `get-article <id>` |
-| Related articles | `related-articles <id>` |
-| Keyword search | `search --q <keyword>` |
-| Semantic search | `semantic-search --q <keyword> [--enhanced-highlight]` |
-| List tags | `list-tags` |
-| List categories | `list-categories` |
-| List images | `list-images` |
-| Search images | `search-images --id <image_id>` |
-| Export image | `get-image <id_or_filename> [--thumb] [--out <path>]` |
-
-## 11. Failure Recovery Pattern
-If failure happens during publish:
-1. Keep DB path unchanged.
+## 7. Failure Recovery
+1. Keep DB path and input files unchanged.
 2. Re-run only the failed command.
 3. Re-run verification commands.
-4. Report exactly what succeeded and what failed.
-
-If local image resolution warnings appear:
-1. Ask user to confirm Obsidian media root directories.
-2. Re-run `write-article` with `--media-root <path>` (repeat if needed).
-3. Verify no unresolved `![[...]]` remains in stored article content.
+4. Report what succeeded, what failed, and next safe command.
+5. If image resolution fails, add/fix `--media-root` and retry.

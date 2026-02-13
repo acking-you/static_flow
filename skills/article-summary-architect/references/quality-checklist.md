@@ -2,44 +2,35 @@
 
 Run this checklist before finalizing `detailed_summary`.
 
-## 1) Structural Checks
+## 1) Evidence
+1. Are key conclusions clearly supported by article content?
+2. Are there any fabricated facts, numbers, or timelines? (must be none)
+3. Are any claims overstated beyond source evidence?
 
-1. Summary starts with a natural定位句 (not machine-style schema label).
-2. Summary has 3-5 semantic sections with clear headings.
-3. Each section contains concise bullet points (2-4 typical).
-4. Chinese and English versions are semantically aligned.
+## 2) Reader Value
+1. Can readers quickly understand what the article gives them?
+2. Does the summary keep the core problem, conclusion, and practical takeaway?
+3. Is redundant or low-information text removed?
 
-## 2) Evidence Checks
+## 3) Structure and Readability
+1. Does the summary have a clear, scannable structure?
+2. Is the opening sentence natural and reader-facing?
+3. Are bullets concise and specific (not vague slogans)?
+4. Is formatting markdown-safe for frontend rendering?
 
-1. Each core claim is traceable to article body evidence.
-2. No fabricated metrics, timelines, or benchmark numbers.
-3. No claim that contradicts the article.
+## 4) Bilingual Consistency
+1. Are `zh` and `en` semantically aligned?
+2. Are major points present in both languages?
+3. Is tone/specificity broadly consistent across languages?
 
-## 3) Readability Checks
+## 5) Fit and Boundaries
+1. Is the wording appropriate for the article domain (technical or non-technical)?
+2. Are caveats/limits included when needed?
+3. Is there any unnecessary schema-style exposition? (avoid unless user asks)
 
-1. Bullets are concise and non-redundant.
-2. Reader can infer "what this article gives me" in under 20 seconds.
-3. Jargon is controlled; unexplained terms are minimized.
-4. Bullet density is appropriate (usually 8-14 per language).
-5. Not a flat bullet wall.
-
-## 4) Type-Fit Checks
-
-1. The chosen `Domain.Intent` matches dominant article evidence.
-2. Reasoning flow fits the chosen type (without forcing a fixed format).
-3. Non-technical posts are not forced into technical language.
-
-## 5) Bilingual Consistency Checks
-
-1. `zh` and `en` have semantically equivalent claims.
-2. No major point appears in only one language.
-3. Tone and specificity are consistent across both languages.
-
-## 6) Fail Conditions (Must Rewrite)
-
-Rewrite required if any of these occurs:
-1. Missing定位句 or missing core conclusion.
-2. Generic summary with no article-specific evidence.
-3. Internal type choice cannot be justified from text evidence.
-4. English/Chinese content diverges materially.
-5. Entire summary is a single undivided bullet list.
+## 6) Rewrite Triggers
+Rewrite if any of the following occurs:
+1. Generic summary that could fit many unrelated articles.
+2. Claims not grounded in source text.
+3. Major zh/en divergence.
+4. Structure too flat to scan effectively.

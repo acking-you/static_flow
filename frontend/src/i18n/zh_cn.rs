@@ -142,6 +142,10 @@ pub mod search {
     pub const HYBRID_PANEL_TITLE: &str = "Hybrid Search";
     pub const HYBRID_PANEL_DESC: &str =
         "混合检索会把向量召回与关键词召回做 RRF 融合，通常在语义与精确匹配之间更稳。";
+    pub const HYBRID_DEFAULT_SCOPE_LIMIT_TEMPLATE: &str =
+        "默认值：RRF K=60；Vector/FTS 候选窗口留空时跟随 Result Scope（当前 {}）。";
+    pub const HYBRID_DEFAULT_SCOPE_ALL: &str =
+        "默认值：RRF K=60；Vector/FTS 候选窗口留空时不设上限（全部召回模式）。";
     pub const HYBRID_ADVANCED_SHOW: &str = "展开高级参数";
     pub const HYBRID_ADVANCED_HIDE: &str = "收起高级参数";
     pub const HYBRID_ON: &str = "Hybrid ON";
@@ -149,6 +153,10 @@ pub mod search {
     pub const HYBRID_RRF_K: &str = "RRF K（默认 60）";
     pub const HYBRID_VECTOR_LIMIT: &str = "Vector 候选窗口";
     pub const HYBRID_FTS_LIMIT: &str = "FTS 候选窗口";
+    pub const HYBRID_VECTOR_LIMIT_SCOPE_TEMPLATE: &str = "Vector 候选窗口（留空跟随 {}）";
+    pub const HYBRID_VECTOR_LIMIT_ALL: &str = "Vector 候选窗口（留空不设上限）";
+    pub const HYBRID_FTS_LIMIT_SCOPE_TEMPLATE: &str = "FTS 候选窗口（留空跟随 {}）";
+    pub const HYBRID_FTS_LIMIT_ALL: &str = "FTS 候选窗口（留空不设上限）";
     pub const HYBRID_APPLY: &str = "应用 Hybrid 参数";
     pub const IMAGE_TEXT_QUERY_TEMPLATE: &str = "当前描述：{}";
     pub const IMAGE_CATALOG: &str = "IMAGE CATALOG";

@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["content_en", "detailed_summary_zh", "detailed_summary_en"],
+  "properties": {
+    "content_en": {
+      "type": "string",
+      "description": "Full English Markdown translation that preserves render-safe structure"
+    },
+    "detailed_summary_zh": {
+      "type": "string",
+      "description": "Structured Chinese detailed summary (opening sentence + sections + bullets)"
+    },
+    "detailed_summary_en": {
+      "type": "string",
+      "description": "Structured English detailed summary aligned with the Chinese version"
+    }
+  }
+}

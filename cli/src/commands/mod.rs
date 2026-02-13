@@ -166,6 +166,21 @@ pub async fn run(cli: Cli) -> Result<()> {
                 where_clause,
                 all,
             } => db_manage::update_rows(&db_path, &table, &assignments, where_clause, all).await,
+            DbCommands::UpdateArticleBilingual {
+                id,
+                content_en_file,
+                summary_zh_file,
+                summary_en_file,
+            } => {
+                db_manage::update_article_bilingual(
+                    &db_path,
+                    &id,
+                    content_en_file.as_deref(),
+                    summary_zh_file.as_deref(),
+                    summary_en_file.as_deref(),
+                )
+                .await
+            },
             DbCommands::DeleteRows {
                 table,
                 where_clause,

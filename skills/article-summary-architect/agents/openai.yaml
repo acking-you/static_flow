@@ -1,4 +1,4 @@
 interface:
   display_name: "Article Summary Architect"
-  short_description: "Classify post type first, then generate structured bilingual detailed summaries"
-  default_prompt: "Use this skill to classify a post with Domain.Intent taxonomy and produce high-quality structured detailed_summary.zh/en content for StaticFlow articles."
+  short_description: "Create high-quality bilingual detailed summaries with evidence-first, flexible structure"
+  default_prompt: "Use this skill to generate or refine `detailed_summary.zh/en` with clear reader value, grounded evidence, and natural structure without rigid templates."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Article Bilingual Translator"
+  short_description: "High-quality EN translation + bilingual summary + LanceDB write-back"
+  default_prompt: "Use this skill to translate one Chinese article into English Markdown, regenerate detailed_summary.zh/en via article-summary-architect, validate Markdown structure (especially tables), and write back to LanceDB."
