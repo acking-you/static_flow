@@ -281,18 +281,16 @@ ALLOWED_ORIGINS=https://acking-you.github.io \
 ./target/release/sf-cli db --db-path ./data/lancedb optimize images
 ```
 
-若需要立刻清理旧版本并回收空间，可直接一键执行：
+若需要立刻清理未引用/孤儿文件并回收空间，可直接一键执行：
 
 ```bash
-./target/release/sf-cli db --db-path ./data/lancedb optimize images --all --prune-now
+./target/release/sf-cli db --db-path ./data/lancedb cleanup-orphans --table images
 ```
 
 批量处理三张核心表：
 
 ```bash
-for t in articles images taxonomies; do
-  ./target/release/sf-cli db --db-path ./data/lancedb optimize "$t" --all --prune-now
-done
+./target/release/sf-cli db --db-path ./data/lancedb cleanup-orphans
 ```
 
 ### Q3: 是否仍需把图片放到后端静态目录？

@@ -372,18 +372,16 @@ CLI 有 3 组命令：
 ./bin/sf-cli db --db-path ./data/lancedb optimize images
 ```
 
-若你希望立即回收旧版本数据（不等保留窗口），可以直接一键：
+若你希望立即回收未引用/孤儿文件（不等保留窗口），可以直接一键：
 
 ```bash
-./bin/sf-cli db --db-path ./data/lancedb optimize images --all --prune-now
+./bin/sf-cli db --db-path ./data/lancedb cleanup-orphans --table images
 ```
 
 或对三张核心表统一执行：
 
 ```bash
-for t in articles images taxonomies; do
-  ./bin/sf-cli db --db-path ./data/lancedb optimize "$t" --all --prune-now
-done
+./bin/sf-cli db --db-path ./data/lancedb cleanup-orphans
 ```
 
 ### 9.2 搜索路径
@@ -443,7 +441,7 @@ CLI 会返回：
 在生产流程中建议固定这条链路：
 1. `sync-notes` 持续导入（默认自动 optimize）
 2. 批量场景如关闭了 auto optimize，则在批次末尾执行 `ensure-indexes` + `db optimize ...`
-3. 需要立刻回收空间时，执行 `db optimize <table> --all --prune-now`
+3. 需要立刻回收空间时，执行 `db cleanup-orphans [--table <table>]`
 4. 用 `api` 子命令做线上问题复现（无需起 backend）
 5. 用 `db query-rows ... --format vertical` 精确排查单行数据
 

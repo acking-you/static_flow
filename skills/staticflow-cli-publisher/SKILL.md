@@ -15,7 +15,7 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
 2. Batch import images (`write-images`) or sync a notes directory (`sync-notes`).
 3. Query/update/delete data in `articles`, `images`, and `taxonomies`.
 4. Run backend-equivalent local API queries for verification/debug.
-5. Reclaim storage immediately (`db optimize --all --prune-now`).
+5. Reclaim storage immediately (`db cleanup-orphans`).
 
 ## Execution Policy (Mandatory)
 - Context-first: read article and metadata from current context/local files first.
@@ -100,9 +100,9 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
 
 ## One-Click Immediate Prune
 - Single table:
-  - `<cli> db --db-path <db_path> optimize <table> --all --prune-now`
+  - `<cli> db --db-path <db_path> cleanup-orphans --table <table>`
 - All managed tables:
-  - `for t in articles images taxonomies; do <cli> db --db-path <db_path> optimize "$t" --all --prune-now; done`
+  - `<cli> db --db-path <db_path> cleanup-orphans`
 
 ## Error Handling
 - Missing metadata: infer and continue, but report inferred fields explicitly.

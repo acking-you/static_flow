@@ -126,14 +126,12 @@ Optional API-equivalent checks:
 ## 6. Immediate Storage Reclaim (Prune Now)
 Single table:
 ```bash
-<cli> db --db-path <db_path> optimize <table> --all --prune-now
+<cli> db --db-path <db_path> cleanup-orphans --table <table>
 ```
 
 All managed tables:
 ```bash
-for t in articles images taxonomies; do
-  <cli> db --db-path <db_path> optimize "$t" --all --prune-now
-done
+<cli> db --db-path <db_path> cleanup-orphans
 ```
 
 ## 7. Failure Recovery

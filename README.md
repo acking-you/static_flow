@@ -28,6 +28,60 @@ static-flow/
 └── content/      # Sample local markdown + images
 ```
 
+## Data Repository (Hugging Face)
+
+`static-flow` website: <https://acking-you.github.io/>
+
+This project keeps runtime content data in a separate dataset repository:
+
+- HF dataset repo: `LB7666/my_lancedb_data`
+- Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
+- Local data root: `/mnt/e/static-flow-data/lancedb`
+- Format: LanceDB table directories (`articles.lance/`, `images.lance/`, `taxonomies.lance/`)
+
+Recommended workflow:
+
+1. Write/update data via `sf-cli` (for schema/index consistency).
+2. Sync dataset changes with Git commits.
+3. Push to Hugging Face dataset remote.
+
+Quick setup (SSH + Git Xet):
+
+```bash
+# 1) Prepare SSH key and add it to https://huggingface.co/settings/keys
+ls ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -C "LB7666@hf"
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+mkdir -p ~/.ssh
+ssh-keyscan -H hf.co >> ~/.ssh/known_hosts
+chmod 600 ~/.ssh/known_hosts
+ssh -T git@hf.co
+
+# 2) Bind local data directory to HF dataset remote
+cd /mnt/e/static-flow-data/lancedb
+git init -b main
+git remote remove origin 2>/dev/null || true
+git remote add origin git@hf.co:datasets/LB7666/my_lancedb_data
+git fetch origin main
+git checkout -B main origin/main
+
+# 3) Install and enable Git Xet
+bash <(curl -fsSL https://raw.githubusercontent.com/huggingface/xet-core/main/git_xet/install.sh)
+export PATH="$HOME/.local/bin:$PATH"
+git xet install
+git xet track "*.lance"
+git xet track "*.txn"
+git xet track "*.manifest"
+
+# 4) Daily sync
+git add -A
+git commit -m "data: sync $(date '+%F %T')" || echo "no changes"
+git push origin main
+```
+
+Note: after `git xet track`, `.gitattributes` may still show `filter=lfs`; this is expected
+on Hugging Face's Xet-integrated transfer path.
+
 ## Deployment Topology (Recommended)
 
 1. Run `backend` on local machine (`127.0.0.1:3000`).
@@ -160,10 +214,10 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
-# One-command immediate aggressive prune (optimize + prune now)
-../target/release/sf-cli db --db-path ../data/lancedb optimize images --all --prune-now
-# Run immediate prune across all managed tables
-for t in articles images taxonomies; do ../target/release/sf-cli db --db-path ../data/lancedb optimize "$t" --all --prune-now; done
+# One-command orphan cleanup (prune-only, no full rewrite)
+../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans --table images
+# Run orphan cleanup across all managed tables
+../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans
 
 # Managed tables
 # - articles: article body/metadata + vectors

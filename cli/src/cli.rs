@@ -379,6 +379,16 @@ pub enum DbCommands {
         #[arg(long)]
         prune_now: bool,
     },
+    /// Cleanup unreferenced/orphan files via prune action only.
+    ///
+    /// This command intentionally avoids full-table rewrite (`--all`) and is
+    /// safer for large binary-heavy tables (for example `images`).
+    CleanupOrphans {
+        /// Optional target table (`articles`, `images`, `taxonomies`).
+        /// If omitted, runs on all managed tables.
+        #[arg(long)]
+        table: Option<String>,
+    },
     /// Recompute embeddings for SVG rows in `images` table using rasterized
     /// PNG input while keeping original SVG bytes.
     ReembedSvgImages {

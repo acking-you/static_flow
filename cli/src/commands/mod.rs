@@ -202,6 +202,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 all,
                 prune_now,
             } => db_manage::optimize_table(&db_path, &table, all, prune_now).await,
+            DbCommands::CleanupOrphans {
+                table,
+            } => db_manage::cleanup_orphans(&db_path, table.as_deref()).await,
             DbCommands::ReembedSvgImages {
                 limit,
                 dry_run,

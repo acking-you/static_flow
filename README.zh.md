@@ -26,6 +26,60 @@ static-flow/
 └── content/      # 示例 Markdown 与图片
 ```
 
+## 数据仓库（Hugging Face）
+
+`static-flow` 对应网站：<https://acking-you.github.io/>
+
+本项目将运行时数据放在独立数据集仓库中管理：
+
+- HF 数据集仓库：`LB7666/my_lancedb_data`
+- 远端地址：`git@hf.co:datasets/LB7666/my_lancedb_data`
+- 本地数据目录：`/mnt/e/static-flow-data/lancedb`
+- 存储格式：LanceDB 表目录（`articles.lance/`、`images.lance/`、`taxonomies.lance/`）
+
+推荐流程：
+
+1. 先通过 `sf-cli` 写入/更新数据（保证 schema 与索引一致）。
+2. 再用 Git 对数据快照做版本提交。
+3. 最后 push 到 Hugging Face 数据集远端。
+
+快速配置（SSH + Git Xet）：
+
+```bash
+# 1) 准备 SSH key，并把公钥添加到 https://huggingface.co/settings/keys
+ls ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -C "LB7666@hf"
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+mkdir -p ~/.ssh
+ssh-keyscan -H hf.co >> ~/.ssh/known_hosts
+chmod 600 ~/.ssh/known_hosts
+ssh -T git@hf.co
+
+# 2) 将本地数据目录绑定到 HF 数据集远端
+cd /mnt/e/static-flow-data/lancedb
+git init -b main
+git remote remove origin 2>/dev/null || true
+git remote add origin git@hf.co:datasets/LB7666/my_lancedb_data
+git fetch origin main
+git checkout -B main origin/main
+
+# 3) 安装并启用 Git Xet
+bash <(curl -fsSL https://raw.githubusercontent.com/huggingface/xet-core/main/git_xet/install.sh)
+export PATH="$HOME/.local/bin:$PATH"
+git xet install
+git xet track "*.lance"
+git xet track "*.txn"
+git xet track "*.manifest"
+
+# 4) 日常同步
+git add -A
+git commit -m "data: sync $(date '+%F %T')" || echo "no changes"
+git push origin main
+```
+
+说明：执行 `git xet track` 后，`.gitattributes` 中仍出现 `filter=lfs` 属于正常现象，
+这是 Hugging Face 的 Xet 兼容传输实现方式。
+
 ## 推荐部署拓扑
 
 1. 本地运行 `backend`（如 `127.0.0.1:3000`）。
@@ -157,10 +211,10 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
-# 一键立即激进清理（优化后立刻 prune）
-../target/release/sf-cli db --db-path ../data/lancedb optimize images --all --prune-now
-# 对三张核心表统一立即清理
-for t in articles images taxonomies; do ../target/release/sf-cli db --db-path ../data/lancedb optimize "$t" --all --prune-now; done
+# 一键立即清理孤儿文件（仅 prune，不做全量重写）
+../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans --table images
+# 对三张核心表统一清理孤儿文件
+../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans
 
 # 核心表结构
 # - articles：文章内容/元数据 + 向量

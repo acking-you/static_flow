@@ -23,6 +23,8 @@ use crate::{
     utils::rasterize_svg_for_embedding,
 };
 
+const MANAGED_TABLES: [&str; 3] = ["articles", "images", "taxonomies"];
+
 #[derive(Debug, Clone)]
 pub struct QueryRowsOptions {
     pub table: String,
@@ -392,6 +394,28 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
     Ok(())
 }
 
+pub async fn cleanup_orphans(db_path: &Path, table: Option<&str>) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let targets = resolve_cleanup_targets(table)?;
+
+    for target in targets {
+        let table = open_table(&db, target).await?;
+        let _ = table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(ChronoDuration::zero()),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await?;
+        tracing::info!(
+            "Orphan cleanup completed for `{}` (older_than=0, delete_unverified=true).",
+            table.name()
+        );
+    }
+
+    Ok(())
+}
+
 pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: bool) -> Result<()> {
     let db = connect_db(db_path).await?;
     let table = open_table(&db, "images").await?;
@@ -553,6 +577,23 @@ async fn ensure_image_indexes(db: &Connection) -> Result<()> {
         tracing::warn!("Failed to create vector index on images: {err}");
     }
     Ok(())
+}
+
+fn resolve_cleanup_targets(table: Option<&str>) -> Result<Vec<&'static str>> {
+    match table {
+        Some(name) => {
+            if MANAGED_TABLES.contains(&name) {
+                Ok(vec![MANAGED_TABLES
+                    .iter()
+                    .find(|&&candidate| candidate == name)
+                    .copied()
+                    .expect("managed table existence already checked")])
+            } else {
+                bail!("unsupported table `{name}`, expected one of: {}", MANAGED_TABLES.join(", "))
+            }
+        },
+        None => Ok(MANAGED_TABLES.to_vec()),
+    }
 }
 
 fn parse_assignment(assignment: &str) -> Result<(String, String)> {
