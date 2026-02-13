@@ -34,7 +34,7 @@ static-flow/
 
 This project keeps runtime content data in a separate dataset repository:
 
-- HF dataset repo: `LB7666/my_lancedb_data`
+- HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
 - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
 - Local data root: `/mnt/e/static-flow-data/lancedb`
 - Format: LanceDB table directories (`articles.lance/`, `images.lance/`, `taxonomies.lance/`)
