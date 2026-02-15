@@ -1693,6 +1693,21 @@ a:hover {
   padding-inline: clamp(1rem, 4vw, 2.5rem)
 }
 
+/* Desktop article TOC reservation: prevent overlap between floating TOC and content */
+@media (min-width: 1281px) {
+  body.has-desktop-toc {
+    --desktop-toc-reserve: clamp(21rem, 25vw, 24rem);
+  }
+
+  body.has-desktop-toc-right .container {
+    padding-right: calc(clamp(1rem, 4vw, 2.5rem) + var(--desktop-toc-reserve));
+  }
+
+  body.has-desktop-toc-left .container {
+    padding-left: calc(clamp(1rem, 4vw, 2.5rem) + var(--desktop-toc-reserve));
+  }
+}
+
 .page-kicker {
   margin: 0 0 .35rem;
   font-size: .9rem;

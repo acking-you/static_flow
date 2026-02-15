@@ -642,12 +642,34 @@
       }
 
       // Generate table of contents from article headings
+      const DESKTOP_TOC_BREAKPOINT = 1280;
+      const TOC_LAYOUT_CLASSES = ['has-desktop-toc', 'has-desktop-toc-left', 'has-desktop-toc-right'];
+
+      function clearDesktopTOCReservation() {
+        TOC_LAYOUT_CLASSES.forEach((className) => document.body.classList.remove(className));
+      }
+
+      function syncDesktopTOCReservation(tocContainer) {
+        clearDesktopTOCReservation();
+        if (!tocContainer || window.innerWidth <= DESKTOP_TOC_BREAKPOINT) return;
+
+        const side = tocContainer.dataset.side === 'left' ? 'left' : 'right';
+        document.body.classList.add('has-desktop-toc', `has-desktop-toc-${side}`);
+      }
+
       function generateTOC() {
         // Remove existing TOC (avoid duplicates on re-render)
         const existing = document.querySelector('.article-toc');
+        if (existing) {
+          const resizeHandler = existing.__tocResizeHandler;
+          if (typeof resizeHandler === 'function') {
+            window.removeEventListener('resize', resizeHandler);
+          }
+        }
         if (existing && existing.parentNode) {
           existing.parentNode.removeChild(existing);
         }
+        clearDesktopTOCReservation();
 
         // Check if we're on an article detail page
         const articleContent = document.querySelector('.article-content');
@@ -729,6 +751,11 @@
 
         // Enable floating drag & snap (desktop only)
         setupFloatingTOC(tocContainer);
+        syncDesktopTOCReservation(tocContainer);
+
+        const onResize = () => syncDesktopTOCReservation(tocContainer);
+        tocContainer.__tocResizeHandler = onResize;
+        window.addEventListener('resize', onResize);
 
         const collapseBtn = tocContainer.querySelector('.toc-collapse-btn');
         const syncCollapseState = (collapsed) => {
@@ -747,6 +774,7 @@
             event.stopPropagation();
             const collapsed = tocContainer.classList.toggle('collapsed');
             syncCollapseState(collapsed);
+            syncDesktopTOCReservation(tocContainer);
           });
           syncCollapseState(false);
         }
@@ -840,6 +868,7 @@
             tocContainer.style.left = 'auto';
           }
 
+          syncDesktopTOCReservation(tocContainer);
           tocContainer.classList.remove('dragging');
           dragging = false;
         };
@@ -945,9 +974,16 @@
       // Cleanup helper: remove existing TOC
       window.cleanupTOC = function() {
         const toc = document.querySelector('.article-toc');
+        if (toc) {
+          const resizeHandler = toc.__tocResizeHandler;
+          if (typeof resizeHandler === 'function') {
+            window.removeEventListener('resize', resizeHandler);
+          }
+        }
         if (toc && toc.parentNode) {
           toc.parentNode.removeChild(toc);
         }
+        clearDesktopTOCReservation();
       };
     </script>
   </body>
