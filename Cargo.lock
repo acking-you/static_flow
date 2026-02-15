@@ -7500,6 +7500,7 @@ dependencies = [
  "gray_matter",
  "image",
  "lancedb",
+ "rand 0.8.5",
  "regex",
  "resvg",
  "serde",

@@ -1,5 +1,7 @@
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::Request;
+#[cfg(not(feature = "mock"))]
+use js_sys::Date;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
 
@@ -91,6 +93,7 @@ pub async fn fetch_articles(
         if let Some(c) = category {
             params.push(format!("category={}", c));
         }
+        params.push(format!("_ts={}", Date::now() as u64));
 
         if !params.is_empty() {
             url.push('?');
@@ -98,6 +101,8 @@ pub async fn fetch_articles(
         }
 
         let response = Request::get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -124,9 +129,11 @@ pub async fn fetch_article_detail(id: &str) -> Result<Option<Article>, String> {
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/articles/{}", API_BASE, id);
+        let url = format!("{}/articles/{}?_ts={}", API_BASE, id, Date::now() as u64);
 
         let response = Request::get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;

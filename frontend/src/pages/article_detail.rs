@@ -883,7 +883,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             "md:grid-cols-2"
                         )}>
                             { for related_articles.iter().cloned().map(|article| {
-                                html! { <ArticleCard article={article} /> }
+                                html! { <ArticleCard key={article.id.clone()} article={article.clone()} /> }
                             }) }
                         </div>
                     }

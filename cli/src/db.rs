@@ -11,6 +11,7 @@ use lancedb::{
     table::{NewColumnTransform, OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
+use rand::{rngs::OsRng, Rng};
 
 use crate::schema::{
     build_article_batch, build_image_batch, build_taxonomy_batch, ArticleRecord, ImageRecord,
@@ -254,7 +255,7 @@ pub async fn query_fallback_cover(
     }
 
     if !candidates.is_empty() {
-        let pick = pick_pseudo_random(&candidates);
+        let pick = pick_random_cover(&candidates);
         tracing::info!("Fallback cover (dedicated): {pick}");
         return Ok(Some(pick));
     }
@@ -287,7 +288,7 @@ pub async fn query_fallback_cover(
     }
 
     if !candidates.is_empty() {
-        let pick = pick_pseudo_random(&candidates);
+        let pick = pick_random_cover(&candidates);
         tracing::info!("Fallback cover (existing article): {pick}");
         return Ok(Some(pick));
     }
@@ -296,7 +297,8 @@ pub async fn query_fallback_cover(
     Ok(None)
 }
 
-fn pick_pseudo_random(candidates: &[String]) -> String {
-    let index = chrono::Utc::now().timestamp_subsec_nanos() as usize % candidates.len();
+fn pick_random_cover(candidates: &[String]) -> String {
+    let mut rng = OsRng;
+    let index = rng.gen_range(0..candidates.len());
     candidates[index].clone()
 }

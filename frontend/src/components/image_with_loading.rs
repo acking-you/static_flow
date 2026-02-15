@@ -20,6 +20,15 @@ pub struct ImageWithLoadingProps {
 pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
     let image_loaded = use_state(|| false);
 
+    {
+        let image_loaded = image_loaded.clone();
+        let src_dep = props.src.clone();
+        use_effect_with(src_dep, move |_| {
+            image_loaded.set(false);
+            || ()
+        });
+    }
+
     let on_image_load = {
         let image_loaded = image_loaded.clone();
         Callback::from(move |_: Event| image_loaded.set(true))

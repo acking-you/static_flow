@@ -220,6 +220,7 @@ pub fn latest_articles_page() -> Html {
                                     { for visible_articles.iter().map(|article| {
                                         html! {
                                             <ArticleCard
+                                                key={article.id.clone()}
                                                 article={article.clone()}
                                                 on_before_navigate={Some(save_scroll_position.clone())}
                                             />
