@@ -2,23 +2,27 @@
 name: caddy-https-reverse-proxy
 description: >-
   Deploy Caddy (no Docker) on a remote Linux host to expose a local HTTP
-  backend as trusted HTTPS using DuckDNS + Let's Encrypt DNS-01, with
-  low-bandwidth fallback (download locally, upload to remote), verification,
-  and rollback.
+  backend as trusted HTTPS, prioritizing first-party domain + Let's Encrypt
+  (HTTP-01), with DuckDNS DNS-01 fallback, low-bandwidth binary transfer
+  fallback, verification, and rollback.
 ---
 
-# Caddy HTTPS Reverse Proxy (DuckDNS)
+# Caddy HTTPS Reverse Proxy (Domain-First)
 
-Use this skill to deploy or repair a production-style HTTPS reverse proxy on a
-remote Linux server where backend API is only HTTP (for example
+Use this skill to deploy or repair a production-style HTTPS reverse proxy on
+a remote Linux server where backend API is only HTTP (for example
 `127.0.0.1:39080`).
+
+Default policy:
+1. Prefer user-owned domain first (for example `api.example.com`).
+2. Use DuckDNS only as fallback when no usable own-domain is available.
 
 ## When To Use
 Use this skill when the user asks to:
 1. Add trusted HTTPS in front of an existing HTTP backend.
 2. Configure Caddy without Docker.
-3. Use DuckDNS and Let's Encrypt certificate issuance.
-4. Fix ACME failures caused by `http-01`/`tls-alpn-01` path instability.
+3. Use their own domain with Let's Encrypt automatic certificate issuance.
+4. Fallback to DuckDNS DNS-01 when own-domain path is unavailable.
 5. Prepare a backend endpoint consumable by browser frontends (for example
    GitHub Pages).
 
@@ -26,16 +30,20 @@ Use this skill when the user asks to:
 Collect and confirm these values before execution:
 1. `ssh_host`: target SSH host (IP or domain).
 2. `ssh_user`: remote SSH user.
-3. `domain`: fully-qualified DuckDNS domain (for example
-   `sfapi.duckdns.org`).
-4. `duckdns_token`: DuckDNS token for DNS update/challenge.
-5. `backend_upstream`: backend HTTP upstream (default `127.0.0.1:39080`).
-6. `contact_email`: ACME email (use a real mailbox when possible).
+3. `domain`: target HTTPS domain (prefer user-owned domain, for example
+   `api.ackingliu.top`).
+4. `backend_upstream`: backend HTTP upstream (default `127.0.0.1:39080`).
+5. `contact_email`: ACME email (use a real mailbox when possible).
 
 Optional but useful:
 1. `public_ip`: expected public IP of target server.
 2. `ssh_port`: default `22`.
 3. `use_local_download_upload`: `true` when remote network is unstable.
+4. `disable_http3`: `true` to force only `h1/h2`.
+
+DuckDNS fallback only:
+1. `duckdns_domain`: DuckDNS hostname (for example `sfapi.duckdns.org`).
+2. `duckdns_token`: DuckDNS token for DNS challenge.
 
 ## Preconditions
 1. `domain` resolves to the target public IP.
@@ -45,15 +53,26 @@ Optional but useful:
 
 ## Security Rules
 1. Never hardcode token directly in `Caddyfile`.
-2. Store token in root-only env file:
+2. If DuckDNS mode is used, store token in root-only env file:
    - `/etc/caddy/caddy.env` with mode `600`.
 3. Do not run Caddy with `--environ` in systemd ExecStart, to avoid leaking
    env vars into logs.
 4. Do not expose backend upstream port publicly.
+5. If switching from DuckDNS to own domain, remove stale DuckDNS env/drop-in.
 
 ## Deployment Workflow
 
-### Step 1: Preflight checks
+### Step 1: Select deployment mode
+Choose one mode before execution:
+1. `domain-first` (default and preferred):
+   - Use user-owned domain.
+   - Use standard Caddy + Let's Encrypt (`http-01`).
+   - No DNS plugin and no token file needed.
+2. `duckdns-fallback`:
+   - Use only when user has no usable own domain or explicitly requests it.
+   - Use Let's Encrypt DNS-01 via `dns.providers.duckdns`.
+
+### Step 2: Preflight checks
 Run on remote:
 1. `hostname && whoami && date`
 2. `sudo -n true` (or explicit sudo check)
@@ -63,12 +82,37 @@ Run on remote:
 If `public_ip` is provided and DNS does not match it, stop and ask user to fix
 DNS first.
 
-### Step 2: Install baseline packages
+### Step 3: Install baseline packages
 On remote:
 1. `sudo apt-get update -y`
 2. `sudo apt-get install -y caddy curl ca-certificates`
 
-### Step 3: Install Caddy binary with DuckDNS DNS module
+### Step 4: Configure Caddyfile (domain-first preferred)
+Create `/etc/caddy/Caddyfile`:
+
+```caddyfile
+{
+    email admin@example.com
+    servers {
+        protocols h1 h2
+    }
+}
+
+api.example.com {
+    @health path /_caddy_health
+    respond @health "ok" 200
+
+    reverse_proxy 127.0.0.1:39080
+}
+```
+
+Replace:
+1. email with `contact_email`
+2. site address with `domain`
+3. upstream with `backend_upstream`
+4. if `disable_http3` is `false`, you may remove `servers { protocols h1 h2 }`
+
+### Step 5: DuckDNS fallback path (only when needed)
 Requirement: module `dns.providers.duckdns` must exist.
 
 Preferred download URL:
@@ -92,7 +136,7 @@ Then on remote:
    - `caddy version`
    - `caddy list-modules | grep dns.providers.duckdns`
 
-### Step 4: Configure token and systemd environment
+Then configure token and systemd environment:
 Create env file:
 1. `/etc/caddy/caddy.env`
 2. content:
@@ -109,12 +153,14 @@ Create/overwrite drop-in:
    - `ExecStart=`
    - `ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile`
 
-### Step 5: Write Caddyfile
-Create `/etc/caddy/Caddyfile`:
+DuckDNS mode Caddyfile template:
 
 ```caddyfile
 {
-    email admin@sfapi.duckdns.org
+    email admin@example.com
+    servers {
+        protocols h1 h2
+    }
 }
 
 sfapi.duckdns.org {
@@ -144,7 +190,9 @@ On remote:
 5. `sudo journalctl -u caddy -n 120 --no-pager -l`
 
 Expected success signal:
-1. log contains DNS challenge flow (`challenge_type":"dns-01"`)
+1. log contains challenge flow matching selected mode:
+   - domain-first: usually `challenge_type":"http-01"` (or `tls-alpn-01`)
+   - duckdns-fallback: `challenge_type":"dns-01"`
 2. log contains certificate obtained message
 3. listeners include `:80` and `:443`
 
@@ -157,22 +205,32 @@ Verify from remote and local client:
 
 If backend is not started yet, `/_caddy_health` must still return `200` by Caddy.
 
+### Step 8: Cleanup stale fallback config (when domain-first is selected)
+If machine previously used DuckDNS mode:
+1. remove `/etc/systemd/system/caddy.service.d/env.conf` if present.
+2. remove `/etc/caddy/caddy.env` if present.
+3. `sudo systemctl daemon-reload`
+4. `sudo systemctl restart caddy`
+
 ## Firewall and Cloud-Network Notes
-If certificate issuance fails with connection resets:
-1. Keep using DNS-01 (do not depend on `http-01` only).
+If certificate issuance fails:
+1. In domain-first mode, confirm inbound `80/443` are reachable from internet.
 2. Check cloud security group allows inbound 80/443 from `0.0.0.0/0`.
 3. Check host firewall order so explicit allow for 80/443 is effective.
-4. Recheck domain A record accuracy.
+4. Recheck domain A/AAAA record accuracy.
+5. If network path for HTTP challenge is unstable, switch to DuckDNS DNS-01.
 
 ## Common Failure Patterns
-1. `dns.providers.duckdns` missing:
-   - wrong Caddy binary, reinstall plugin-enabled binary.
-2. DNS challenge fails:
-   - invalid token, wrong domain, or DNS propagation delay.
-3. Browser still warns:
+1. Browser still warns:
    - stale cert; verify with `openssl s_client` and clear CDN/proxy assumptions.
-4. `502` from Caddy:
+2. `502` from Caddy:
    - backend not running on configured `backend_upstream`.
+3. `dns.providers.duckdns` missing in DuckDNS mode:
+   - wrong Caddy binary, reinstall plugin-enabled binary.
+4. DNS challenge fails in DuckDNS mode:
+   - invalid token, wrong domain, or DNS propagation delay.
+5. TLS internal errors from some clients:
+   - verify client-side proxy/VPN interference and compare direct network path.
 
 ## Rollback
 If deployment must be reverted:
@@ -186,12 +244,13 @@ If deployment must be reverted:
 
 ## Output Contract
 When finishing this skill, report:
-1. final public HTTPS URL.
-2. Caddy version and whether DuckDNS module is present.
+1. selected mode: `domain-first` or `duckdns-fallback`.
+2. final public HTTPS URL.
 3. cert issuer + validity dates.
 4. upstream target (`backend_upstream`) configured.
-5. files created/changed:
+5. Caddy version and whether DuckDNS module is required/installed.
+6. files created/changed:
    - `/etc/caddy/Caddyfile`
-   - `/etc/caddy/caddy.env`
-   - `/etc/systemd/system/caddy.service.d/env.conf`
+   - `/etc/caddy/caddy.env` (DuckDNS mode only)
+   - `/etc/systemd/system/caddy.service.d/env.conf` (DuckDNS mode only)
    - `/usr/bin/caddy` (plus backup path)

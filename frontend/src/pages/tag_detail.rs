@@ -1,4 +1,9 @@
+use std::collections::BTreeMap;
+
+use gloo_timers::callback::Timeout;
 use static_flow_shared::ArticleListItem;
+use wasm_bindgen::JsCast;
+use web_sys::{window, Event};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -63,6 +68,67 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
     } else {
         t::INVALID_NAME.to_string()
     };
+
+    {
+        let tag = filter_value.clone();
+        let total_posts = total_posts;
+        use_effect_with((tag.clone(), total_posts), move |_| {
+            let persist = move || {
+                if crate::navigation_context::is_return_armed() {
+                    return;
+                }
+                let mut state = BTreeMap::new();
+                if let Some(tag) = tag.as_ref() {
+                    state.insert("tag".to_string(), tag.clone());
+                }
+                crate::navigation_context::save_context_for_current_page(state);
+            };
+
+            persist();
+
+            let on_scroll = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: Event| {
+                persist();
+            })
+                as Box<dyn FnMut(_)>);
+
+            if let Some(win) = window() {
+                let _ = win.add_event_listener_with_callback(
+                    "scroll",
+                    on_scroll.as_ref().unchecked_ref(),
+                );
+            }
+
+            move || {
+                if let Some(win) = window() {
+                    let _ = win.remove_event_listener_with_callback(
+                        "scroll",
+                        on_scroll.as_ref().unchecked_ref(),
+                    );
+                }
+            }
+        });
+    }
+
+    {
+        let tag = filter_value.clone();
+        let total_posts = total_posts;
+        use_effect_with((tag, total_posts), move |_| {
+            if total_posts > 0 {
+                if let Some(context) =
+                    crate::navigation_context::pop_context_if_armed_for_current_page()
+                {
+                    let scroll_y = context.scroll_y.max(0.0);
+                    Timeout::new(140, move || {
+                        if let Some(win) = window() {
+                            win.scroll_to_with_x_and_y(0.0, scroll_y);
+                        }
+                    })
+                    .forget();
+                }
+            }
+            || ()
+        });
+    }
 
     html! {
         <main class={classes!(

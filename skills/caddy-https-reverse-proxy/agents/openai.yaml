@@ -1,4 +1,4 @@
 interface:
   display_name: "Caddy HTTPS Reverse Proxy"
-  short_description: "Deploy Caddy + DuckDNS DNS-01 to expose local HTTP backend as trusted HTTPS"
-  default_prompt: "Use this skill to deploy or repair non-Docker Caddy HTTPS reverse proxy on a remote host, using DuckDNS token and Let's Encrypt DNS-01, then verify certificate and proxy health."
+  short_description: "Deploy non-Docker Caddy to expose local HTTP backend as trusted HTTPS, preferring user-owned domains"
+  default_prompt: "Use this skill to deploy or repair non-Docker Caddy HTTPS reverse proxy on a remote host. Prefer user-owned domain + Let's Encrypt first, and only use DuckDNS DNS-01 as fallback, then verify certificate and proxy health."

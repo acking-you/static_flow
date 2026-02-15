@@ -6,6 +6,10 @@ use crate::{
     pages,
 };
 
+fn is_article_detail_path(path: &str) -> bool {
+    path.contains("/posts/")
+}
+
 #[derive(Routable, Clone, PartialEq, Debug)]
 pub enum Route {
     #[cfg(not(feature = "mock"))]
@@ -124,7 +128,7 @@ fn app_router_inner() -> Html {
     // 判断是否在文章详情页（不显示Spotlight）
     let show_spotlight = location
         .as_ref()
-        .map(|loc| !loc.path().contains("/posts/"))
+        .map(|loc| !is_article_detail_path(loc.path()))
         .unwrap_or(true);
 
     html! {

@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+
+use gloo_timers::callback::Timeout;
 use wasm_bindgen::JsCast;
-use web_sys::{window, KeyboardEvent};
+use web_sys::{window, Event, KeyboardEvent};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -28,11 +31,16 @@ const DEFAULT_TEXT_SEARCH_LIMIT: usize = 50;
 const DEFAULT_IMAGE_SEARCH_LIMIT: usize = 24;
 const SEARCH_PAGE_SIZE: usize = 15;
 const IMAGE_GRID_CHUNK_SIZE: usize = 24;
+const LIGHTBOX_MIN_ZOOM: f64 = 0.5;
+const LIGHTBOX_MAX_ZOOM: f64 = 3.0;
+const LIGHTBOX_ZOOM_STEP: f64 = 0.25;
 
 #[function_component(SearchPage)]
 pub fn search_page() -> Html {
     let location = use_location();
-    let query = location.and_then(|loc| loc.query::<SearchPageQuery>().ok());
+    let query = location
+        .as_ref()
+        .and_then(|loc| loc.query::<SearchPageQuery>().ok());
     let keyword = query.as_ref().and_then(|q| q.q.clone()).unwrap_or_default();
     let mode = query
         .as_ref()
@@ -85,6 +93,7 @@ pub fn search_page() -> Html {
     let is_lightbox_open = use_state(|| false);
     let preview_image_url = use_state_eq(|| None::<String>);
     let preview_image_failed = use_state(|| false);
+    let preview_zoom = use_state(|| 1.0_f64);
     let image_distance_input = use_state(|| {
         max_distance
             .map(|value| value.to_string())
@@ -104,6 +113,197 @@ pub fn search_page() -> Html {
     });
     let (visible_results, current_page, total_pages, go_to_page) =
         use_pagination((*results).clone(), SEARCH_PAGE_SIZE);
+
+    {
+        let mode = mode.clone();
+        let keyword = keyword.clone();
+        let current_page = current_page;
+        let image_catalog_visible = *image_catalog_visible;
+        let image_text_visible = *image_text_visible;
+        let image_similar_visible = *image_similar_visible;
+        let selected_image_id = (*selected_image_id).clone();
+        use_effect_with(
+            (
+                mode.clone(),
+                keyword.clone(),
+                current_page,
+                image_catalog_visible,
+                image_text_visible,
+                image_similar_visible,
+                selected_image_id.clone(),
+            ),
+            move |_| {
+                let persist = move || {
+                    if crate::navigation_context::is_return_armed() {
+                        return;
+                    }
+                    let mut state = BTreeMap::new();
+                    state.insert("search_page".to_string(), current_page.to_string());
+                    state.insert(
+                        "image_catalog_visible".to_string(),
+                        image_catalog_visible.to_string(),
+                    );
+                    state.insert("image_text_visible".to_string(), image_text_visible.to_string());
+                    state.insert(
+                        "image_similar_visible".to_string(),
+                        image_similar_visible.to_string(),
+                    );
+                    state.insert("mode".to_string(), mode.clone());
+                    if !keyword.trim().is_empty() {
+                        state.insert("keyword".to_string(), keyword.clone());
+                    }
+                    if let Some(selected) = selected_image_id.as_ref() {
+                        state.insert("selected_image_id".to_string(), selected.clone());
+                    }
+                    crate::navigation_context::save_context_for_current_page(state);
+                };
+
+                persist();
+
+                let on_scroll = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: Event| {
+                    persist();
+                })
+                    as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "scroll",
+                        on_scroll.as_ref().unchecked_ref(),
+                    );
+                }
+
+                move || {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "scroll",
+                            on_scroll.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            },
+        );
+    }
+
+    {
+        let location = location.clone();
+        let mode = mode.clone();
+        let keyword = keyword.clone();
+        let loading_flag = *loading;
+        let image_loading_flag = *image_loading;
+        let image_text_loading_flag = *image_text_loading;
+        let go_to_page = go_to_page.clone();
+        let image_catalog_visible = image_catalog_visible.clone();
+        let image_text_visible = image_text_visible.clone();
+        let image_similar_visible = image_similar_visible.clone();
+        let selected_image_id = selected_image_id.clone();
+        let image_results = image_results.clone();
+        let image_loading = image_loading.clone();
+        let max_distance = max_distance;
+        let results_len = results.len();
+        let image_catalog_len = image_catalog.len();
+        let image_text_results_len = image_text_results.len();
+        let image_results_len = image_results.len();
+
+        use_effect_with(
+            (
+                location.clone(),
+                mode.clone(),
+                keyword.clone(),
+                loading_flag,
+                image_loading_flag,
+                image_text_loading_flag,
+                results_len,
+                image_catalog_len,
+                image_text_results_len,
+                image_results_len,
+            ),
+            move |_| {
+                if crate::navigation_context::is_return_armed() {
+                    let data_ready = if mode == "image" {
+                        if keyword.trim().is_empty() {
+                            !image_loading_flag
+                        } else {
+                            !image_text_loading_flag
+                        }
+                    } else {
+                        !loading_flag
+                    };
+
+                    if data_ready {
+                        if let Some(context) =
+                            crate::navigation_context::pop_context_if_armed_for_current_page()
+                        {
+                            if let Some(raw) = context.page_state.get("search_page") {
+                                if let Ok(page) = raw.parse::<usize>() {
+                                    go_to_page.emit(page);
+                                }
+                            }
+                            if let Some(raw) = context.page_state.get("image_catalog_visible") {
+                                if let Ok(value) = raw.parse::<usize>() {
+                                    image_catalog_visible.set(value.max(IMAGE_GRID_CHUNK_SIZE));
+                                }
+                            }
+                            if let Some(raw) = context.page_state.get("image_text_visible") {
+                                if let Ok(value) = raw.parse::<usize>() {
+                                    image_text_visible.set(value.max(IMAGE_GRID_CHUNK_SIZE));
+                                }
+                            }
+                            if let Some(raw) = context.page_state.get("image_similar_visible") {
+                                if let Ok(value) = raw.parse::<usize>() {
+                                    image_similar_visible.set(value.max(IMAGE_GRID_CHUNK_SIZE));
+                                }
+                            }
+                            if let Some(saved_image_id) =
+                                context.page_state.get("selected_image_id")
+                            {
+                                let saved = saved_image_id.trim().to_string();
+                                if !saved.is_empty() {
+                                    selected_image_id.set(Some(saved.clone()));
+                                    image_loading.set(true);
+                                    let image_results = image_results.clone();
+                                    let image_loading = image_loading.clone();
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        match search_images_by_id(
+                                            &saved,
+                                            Some(DEFAULT_IMAGE_SEARCH_LIMIT),
+                                            max_distance,
+                                        )
+                                        .await
+                                        {
+                                            Ok(data) => {
+                                                image_results.set(data);
+                                                image_loading.set(false);
+                                            },
+                                            Err(e) => {
+                                                web_sys::console::error_1(
+                                                    &format!(
+                                                        "Image search restore failed: {}",
+                                                        e
+                                                    )
+                                                    .into(),
+                                                );
+                                                image_loading.set(false);
+                                            },
+                                        }
+                                    });
+                                }
+                            }
+
+                            let scroll_y = context.scroll_y.max(0.0);
+                            Timeout::new(220, move || {
+                                if let Some(win) = window() {
+                                    win.scroll_to_with_x_and_y(0.0, scroll_y);
+                                }
+                            })
+                            .forget();
+                        }
+                    }
+                }
+
+                || ()
+            },
+        );
+    }
 
     {
         let results = results.clone();
@@ -451,9 +651,11 @@ pub fn search_page() -> Html {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
         let preview_image_failed = preview_image_failed.clone();
+        let preview_zoom = preview_zoom.clone();
         Callback::from(move |src: String| {
             preview_image_failed.set(false);
             preview_image_url.set(Some(src));
+            preview_zoom.set(1.0);
             is_lightbox_open.set(true);
         })
     };
@@ -462,10 +664,12 @@ pub fn search_page() -> Html {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
         let preview_image_failed = preview_image_failed.clone();
+        let preview_zoom = preview_zoom.clone();
         Callback::from(move |_| {
             is_lightbox_open.set(false);
             preview_image_url.set(None);
             preview_image_failed.set(false);
+            preview_zoom.set(1.0);
         })
     };
 
@@ -473,17 +677,32 @@ pub fn search_page() -> Html {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
         let preview_image_failed = preview_image_failed.clone();
+        let preview_zoom = preview_zoom.clone();
         use_effect_with(*is_lightbox_open, move |is_open| {
             let keydown_listener_opt = if *is_open {
                 let handle = is_lightbox_open.clone();
                 let preview_url = preview_image_url.clone();
                 let failed = preview_image_failed.clone();
+                let zoom = preview_zoom.clone();
                 let listener =
                     wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
-                        if event.key() == "Escape" {
-                            handle.set(false);
-                            preview_url.set(None);
-                            failed.set(false);
+                        match event.key().as_str() {
+                            "Escape" => {
+                                handle.set(false);
+                                preview_url.set(None);
+                                failed.set(false);
+                                zoom.set(1.0);
+                            },
+                            "+" | "=" => {
+                                zoom.set((*zoom + LIGHTBOX_ZOOM_STEP).min(LIGHTBOX_MAX_ZOOM));
+                            },
+                            "-" | "_" => {
+                                zoom.set((*zoom - LIGHTBOX_ZOOM_STEP).max(LIGHTBOX_MIN_ZOOM));
+                            },
+                            "0" => {
+                                zoom.set(1.0);
+                            },
+                            _ => {},
                         }
                     })
                         as Box<dyn FnMut(_)>);
@@ -520,6 +739,27 @@ pub fn search_page() -> Html {
     let mark_preview_loaded = {
         let preview_image_failed = preview_image_failed.clone();
         Callback::from(move |_: Event| preview_image_failed.set(false))
+    };
+    let zoom_in_click = {
+        let preview_zoom = preview_zoom.clone();
+        Callback::from(move |event: MouseEvent| {
+            event.stop_propagation();
+            preview_zoom.set((*preview_zoom + LIGHTBOX_ZOOM_STEP).min(LIGHTBOX_MAX_ZOOM));
+        })
+    };
+    let zoom_out_click = {
+        let preview_zoom = preview_zoom.clone();
+        Callback::from(move |event: MouseEvent| {
+            event.stop_propagation();
+            preview_zoom.set((*preview_zoom - LIGHTBOX_ZOOM_STEP).max(LIGHTBOX_MIN_ZOOM));
+        })
+    };
+    let zoom_reset_click = {
+        let preview_zoom = preview_zoom.clone();
+        Callback::from(move |event: MouseEvent| {
+            event.stop_propagation();
+            preview_zoom.set(1.0);
+        })
     };
 
     let on_image_select = {
@@ -2013,27 +2253,80 @@ pub fn search_page() -> Html {
                                 {
                                     if let Some(src) = (*preview_image_url).clone() {
                                         html! {
-                                            <a
-                                                href={src.clone()}
-                                                download=""
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                class={classes!(
-                                                    "inline-flex",
-                                                    "items-center",
-                                                    "gap-2",
-                                                    "rounded-full",
-                                                    "bg-black/70",
-                                                    "px-3",
-                                                    "py-1.5",
-                                                    "text-sm",
-                                                    "text-white",
-                                                    "hover:bg-black"
-                                                )}
-                                            >
-                                                <i class={classes!("fas", "fa-download")}></i>
-                                                { t::LIGHTBOX_DOWNLOAD }
-                                            </a>
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "rounded-full",
+                                                        "bg-black/70",
+                                                        "px-3",
+                                                        "py-1.5",
+                                                        "text-sm",
+                                                        "font-semibold",
+                                                        "text-white",
+                                                        "hover:bg-black"
+                                                    )}
+                                                    aria-label={t::LIGHTBOX_ZOOM_OUT_ARIA}
+                                                    onclick={zoom_out_click.clone()}
+                                                >
+                                                    { "-" }
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "rounded-full",
+                                                        "bg-black/70",
+                                                        "px-3",
+                                                        "py-1.5",
+                                                        "text-sm",
+                                                        "font-semibold",
+                                                        "text-white",
+                                                        "hover:bg-black"
+                                                    )}
+                                                    aria-label={t::LIGHTBOX_ZOOM_RESET_ARIA}
+                                                    onclick={zoom_reset_click.clone()}
+                                                >
+                                                    { format!("{:.0}%", *preview_zoom * 100.0) }
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "rounded-full",
+                                                        "bg-black/70",
+                                                        "px-3",
+                                                        "py-1.5",
+                                                        "text-sm",
+                                                        "font-semibold",
+                                                        "text-white",
+                                                        "hover:bg-black"
+                                                    )}
+                                                    aria-label={t::LIGHTBOX_ZOOM_IN_ARIA}
+                                                    onclick={zoom_in_click.clone()}
+                                                >
+                                                    { "+" }
+                                                </button>
+                                                <a
+                                                    href={src.clone()}
+                                                    download=""
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    class={classes!(
+                                                        "inline-flex",
+                                                        "items-center",
+                                                        "gap-2",
+                                                        "rounded-full",
+                                                        "bg-black/70",
+                                                        "px-3",
+                                                        "py-1.5",
+                                                        "text-sm",
+                                                        "text-white",
+                                                        "hover:bg-black"
+                                                    )}
+                                                >
+                                                    <i class={classes!("fas", "fa-download")}></i>
+                                                    { t::LIGHTBOX_DOWNLOAD }
+                                                </a>
+                                            </>
                                         }
                                     } else {
                                         Html::default()
@@ -2047,6 +2340,7 @@ pub fn search_page() -> Html {
                                     "rounded-[var(--radius)]",
                                     "bg-black/35",
                                     "p-2",
+                                    "overflow-auto",
                                     "shadow-[var(--shadow-lg)]"
                                 )}
                                 onclick={stop_lightbox_bubble.clone()}
@@ -2065,13 +2359,14 @@ pub fn search_page() -> Html {
                                                         "h-auto",
                                                         "w-auto",
                                                         "object-contain",
-                                                        "cursor-zoom-out"
+                                                        "transition-transform",
+                                                        "duration-150"
                                                     )}
+                                                    style={format!("transform: scale({}); transform-origin: center center;", *preview_zoom)}
                                                     loading="eager"
                                                     decoding="async"
                                                     onerror={mark_preview_failed.clone()}
                                                     onload={mark_preview_loaded.clone()}
-                                                    onclick={close_lightbox_click.clone()}
                                                 />
                                                 {
                                                     if *preview_image_failed {

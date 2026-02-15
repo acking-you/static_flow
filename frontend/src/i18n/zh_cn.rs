@@ -169,6 +169,9 @@ pub mod search {
     pub const IMAGE_SCROLL_LOADING: &str = "滚动中，正在加载更多图片...";
     pub const IMAGE_SCROLL_HINT: &str = "继续向下滚动加载更多";
     pub const LIGHTBOX_CLOSE_ARIA: &str = "关闭图片预览";
+    pub const LIGHTBOX_ZOOM_IN_ARIA: &str = "放大图片";
+    pub const LIGHTBOX_ZOOM_OUT_ARIA: &str = "缩小图片";
+    pub const LIGHTBOX_ZOOM_RESET_ARIA: &str = "重置图片缩放";
     pub const LIGHTBOX_DOWNLOAD: &str = "下载";
     pub const LIGHTBOX_IMAGE_ALT: &str = "预览图片";
     pub const LIGHTBOX_PREVIEW_FAILED: &str = "图片加载失败，可尝试在新标签打开：{}";
@@ -268,6 +271,9 @@ pub mod article_detail_page {
 
     pub const BACK_TOOLTIP: &str = "返回";
     pub const CLOSE_IMAGE_ARIA: &str = "关闭图片";
+    pub const LIGHTBOX_ZOOM_IN_ARIA: &str = "放大图片";
+    pub const LIGHTBOX_ZOOM_OUT_ARIA: &str = "缩小图片";
+    pub const LIGHTBOX_ZOOM_RESET_ARIA: &str = "重置图片缩放";
     pub const DEFAULT_IMAGE_ALT: &str = "文章图片";
     pub const IMAGE_PREVIEW_FAILED: &str = "图片加载失败，可尝试在新标签打开：{}";
 }

@@ -217,9 +217,15 @@
       }
 
       // Initialize markdown rendering features
-      window.initMarkdownRendering = function() {
+      window.initMarkdownRendering = function(root) {
+        const articleContent =
+          root && root.nodeType === Node.ELEMENT_NODE
+            ? root
+            : document.querySelector('.article-content');
+        if (!articleContent) return;
+
         // Convert mermaid code blocks to mermaid divs
-        document.querySelectorAll('pre code.language-mermaid').forEach((block) => {
+        articleContent.querySelectorAll('pre code.language-mermaid').forEach((block) => {
           const pre = block.parentElement;
           const mermaidDiv = document.createElement('div');
           mermaidDiv.className = 'mermaid';
@@ -228,30 +234,31 @@
         });
 
         // Syntax highlighting for code blocks (skip mermaid)
-        document.querySelectorAll('pre code:not(.language-mermaid)').forEach((block) => {
+        articleContent.querySelectorAll('pre code:not(.language-mermaid)').forEach((block) => {
           hljs.highlightElement(block);
         });
 
         // Render Mermaid diagrams
-        if (window.mermaid) {
+        const mermaidNodes = articleContent.querySelectorAll('.mermaid');
+        if (window.mermaid && mermaidNodes.length > 0) {
           window.mermaid.run({
-            querySelector: '.mermaid',
+            nodes: mermaidNodes,
             suppressErrors: true
           }).then(() => {
             // Add copy buttons to mermaid diagrams after rendering
-            addCopyButtonsToMermaid();
+            addCopyButtonsToMermaid(articleContent);
           });
         }
 
         // Add copy buttons to code blocks
-        addCopyButtonsToCodeBlocks();
+        addCopyButtonsToCodeBlocks(articleContent);
 
         // Add collapsible functionality to long code blocks
-        makeCodeBlocksCollapsible();
+        makeCodeBlocksCollapsible(articleContent);
 
         // Math formula rendering with KaTeX
         if (window.renderMathInElement) {
-          renderMathInElement(document.body, {
+          renderMathInElement(articleContent, {
             delimiters: [
               {left: '$$', right: '$$', display: true},
               {left: '$', right: '$', display: false},
@@ -263,8 +270,11 @@
           });
         }
 
+        // Improve markdown wide-content UX on small screens and dense layouts
+        enhanceMarkdownWideBlocks(articleContent);
+
         // Add loading animation to images
-        document.querySelectorAll('.article-content img').forEach((img) => {
+        articleContent.querySelectorAll('img').forEach((img) => {
           if (img.complete && img.naturalHeight !== 0) {
             // Image already loaded
             img.classList.add('loaded');
@@ -280,14 +290,11 @@
           }
         });
 
-        const articleContent = document.querySelector('.article-content');
-        if (articleContent) {
-          assignHeadingIds(articleContent);
-          bindArticleAnchorLinks(articleContent);
-        }
+        assignHeadingIds(articleContent);
+        bindArticleAnchorLinks(articleContent);
 
         // Generate table of contents
-        generateTOC();
+        generateTOC(articleContent);
 
         if (window.location.hash) {
           const target = findHashTarget(window.location.hash);
@@ -300,8 +307,8 @@
       };
 
       // Add copy buttons to code blocks
-      function addCopyButtonsToCodeBlocks() {
-        document.querySelectorAll('pre:not(.code-wrapper)').forEach((pre) => {
+      function addCopyButtonsToCodeBlocks(root) {
+        (root || document).querySelectorAll('pre:not(.code-wrapper)').forEach((pre) => {
           // Skip if already wrapped
           if (pre.parentElement.classList.contains('code-wrapper')) {
             return;
@@ -344,11 +351,62 @@
         });
       }
 
+      function wrapMarkdownNodeOnce(target, wrapperClassName) {
+        if (!target || !target.parentNode) return null;
+        const classNames = String(wrapperClassName)
+          .split(/\s+/)
+          .map((name) => name.trim())
+          .filter(Boolean);
+
+        if (
+          target.parentElement &&
+          classNames.length > 0 &&
+          classNames.every((name) => target.parentElement.classList.contains(name))
+        ) {
+          return target.parentElement;
+        }
+
+        const wrapper = document.createElement('div');
+        wrapper.className = wrapperClassName;
+        target.parentNode.insertBefore(wrapper, target);
+        wrapper.appendChild(target);
+        return wrapper;
+      }
+
+      function enhanceMarkdownWideBlocks(articleContent) {
+        if (!articleContent) return;
+
+        // Tables: horizontal rail like code blocks
+        articleContent.querySelectorAll('table').forEach((table) => {
+          wrapMarkdownNodeOnce(table, 'md-scroll-wrap md-table-wrap');
+        });
+
+        // Math blocks: keep full formula readable with horizontal scroll
+        articleContent.querySelectorAll('.sf-math-block').forEach((mathBlock) => {
+          wrapMarkdownNodeOnce(mathBlock, 'md-scroll-wrap md-math-wrap');
+        });
+
+        // Images: wide images can pan horizontally instead of shrinking aggressively
+        articleContent.querySelectorAll('img').forEach((img) => {
+          const parent = img.parentElement;
+          const imageHost =
+            parent && parent.tagName === 'A' && parent.childElementCount === 1
+              ? parent
+              : img;
+          wrapMarkdownNodeOnce(imageHost, 'md-scroll-wrap md-media-wrap');
+        });
+
+        // Blockquotes: provide overflow protection for long unbroken content
+        articleContent.querySelectorAll('blockquote').forEach((blockquote) => {
+          wrapMarkdownNodeOnce(blockquote, 'md-scroll-wrap md-quote-wrap');
+        });
+      }
+
       // Make long code blocks collapsible
-      function makeCodeBlocksCollapsible() {
+      function makeCodeBlocksCollapsible(root) {
         const MIN_LINES_TO_COLLAPSE = 15; // 最少行数才启用折叠
 
-        document.querySelectorAll('.article-content .code-wrapper').forEach((wrapper) => {
+        (root || document).querySelectorAll('.code-wrapper').forEach((wrapper) => {
           // Skip if already processed
           if (wrapper.classList.contains('code-block-wrapper')) {
             return;
@@ -402,7 +460,7 @@
           setTimeout(() => {
             const stillOnArticle = document.querySelector('.article-content');
             if (!stillOnArticle) {
-              window.cleanupTOC?.();
+              window.cleanupMarkdownRendering?.();
             }
           }, 40);
         };
@@ -411,8 +469,8 @@
       });
 
       // Add copy buttons to mermaid diagrams
-      function addCopyButtonsToMermaid() {
-        document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+      function addCopyButtonsToMermaid(root) {
+        (root || document).querySelectorAll('.mermaid').forEach((mermaidDiv) => {
           // Skip if already has a wrapper with button
           if (mermaidDiv.parentElement && mermaidDiv.parentElement.classList.contains('mermaid-wrapper')) {
             return;
@@ -573,69 +631,250 @@
           return;
         }
 
-        console.log('Opening fullscreen for mermaid:', svg);
+        // Remove stale fullscreen instance first to avoid duplicated listeners/state
+        if (typeof window.__sfCloseMermaidFullscreen === 'function') {
+          try {
+            window.__sfCloseMermaidFullscreen(true);
+          } catch (_) {}
+        }
 
-        // Create overlay
         const overlay = document.createElement('div');
         overlay.className = 'mermaid-fullscreen-overlay';
 
-        // Create content container
         const content = document.createElement('div');
         content.className = 'mermaid-fullscreen-content';
 
-        // Create a new div and clone SVG directly
-        const clonedMermaid = document.createElement('div');
-        clonedMermaid.className = 'mermaid mermaid-fullscreen';
+        const toolbar = document.createElement('div');
+        toolbar.className = 'mermaid-fullscreen-toolbar';
 
-        // Clone SVG with all its children
-        const clonedSvg = svg.cloneNode(true);
-        clonedMermaid.appendChild(clonedSvg);
+        const zoomOutBtn = document.createElement('button');
+        zoomOutBtn.className = 'mermaid-fullscreen-tool-btn';
+        zoomOutBtn.innerHTML = '<i class="fas fa-search-minus"></i>';
+        zoomOutBtn.title = '缩小';
+        zoomOutBtn.setAttribute('type', 'button');
+        zoomOutBtn.setAttribute('aria-label', '缩小图表');
 
-        content.appendChild(clonedMermaid);
+        const zoomInBtn = document.createElement('button');
+        zoomInBtn.className = 'mermaid-fullscreen-tool-btn';
+        zoomInBtn.innerHTML = '<i class="fas fa-search-plus"></i>';
+        zoomInBtn.title = '放大';
+        zoomInBtn.setAttribute('type', 'button');
+        zoomInBtn.setAttribute('aria-label', '放大图表');
 
-        console.log('Cloned mermaid:', clonedMermaid);
-        console.log('Cloned SVG:', clonedSvg);
+        const resetZoomBtn = document.createElement('button');
+        resetZoomBtn.className = 'mermaid-fullscreen-tool-btn';
+        resetZoomBtn.innerHTML = '<i class="fas fa-rotate-left"></i>';
+        resetZoomBtn.title = '重置缩放';
+        resetZoomBtn.setAttribute('type', 'button');
+        resetZoomBtn.setAttribute('aria-label', '重置缩放');
 
-        // Create close button
+        const zoomValue = document.createElement('span');
+        zoomValue.className = 'mermaid-fullscreen-zoom-value';
+        zoomValue.textContent = '100%';
+        zoomValue.setAttribute('aria-live', 'polite');
+
         const closeBtn = document.createElement('button');
-        closeBtn.className = 'mermaid-fullscreen-close';
+        closeBtn.className = 'mermaid-fullscreen-tool-btn close-btn';
         closeBtn.innerHTML = '<i class="fas fa-times"></i>';
         closeBtn.title = '关闭';
         closeBtn.setAttribute('type', 'button');
+        closeBtn.setAttribute('aria-label', '关闭全屏图表');
 
-        // Close on button click
-        closeBtn.addEventListener('click', () => {
-          overlay.classList.remove('open');
-          setTimeout(() => {
-            document.body.removeChild(overlay);
-            document.body.style.overflow = '';
-          }, 300);
-        });
+        toolbar.appendChild(zoomOutBtn);
+        toolbar.appendChild(zoomInBtn);
+        toolbar.appendChild(resetZoomBtn);
+        toolbar.appendChild(zoomValue);
+        toolbar.appendChild(closeBtn);
 
-        // Close on overlay click (but not on content click)
-        overlay.addEventListener('click', (e) => {
-          if (e.target === overlay) {
-            closeBtn.click();
-          }
-        });
+        const viewport = document.createElement('div');
+        viewport.className = 'mermaid-fullscreen-viewport';
 
-        // Close on ESC key
-        const handleEsc = (e) => {
-          if (e.key === 'Escape') {
-            closeBtn.click();
-            document.removeEventListener('keydown', handleEsc);
-          }
-        };
-        document.addEventListener('keydown', handleEsc);
+        const canvas = document.createElement('div');
+        canvas.className = 'mermaid-fullscreen-canvas';
 
+        const clonedMermaid = document.createElement('div');
+        clonedMermaid.className = 'mermaid mermaid-fullscreen';
+        const clonedSvg = svg.cloneNode(true);
+        clonedMermaid.appendChild(clonedSvg);
+
+        canvas.appendChild(clonedMermaid);
+        viewport.appendChild(canvas);
+
+        content.appendChild(toolbar);
+        content.appendChild(viewport);
         overlay.appendChild(content);
-        overlay.appendChild(closeBtn);
         document.body.appendChild(overlay);
 
-        // Prevent body scroll
+        const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
 
-        // Trigger open animation
+        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+        const parseSvgLength = (value) => {
+          const parsed = Number.parseFloat(String(value || ''));
+          return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
+        };
+
+        const getSvgNaturalSize = (svgElement) => {
+          const viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
+          if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+            return { width: viewBox.width, height: viewBox.height };
+          }
+
+          const widthAttr = parseSvgLength(svgElement.getAttribute('width'));
+          const heightAttr = parseSvgLength(svgElement.getAttribute('height'));
+          if (!Number.isNaN(widthAttr) && !Number.isNaN(heightAttr)) {
+            return { width: widthAttr, height: heightAttr };
+          }
+
+          try {
+            const box = svgElement.getBBox();
+            if (box && box.width > 0 && box.height > 0) {
+              return { width: box.width, height: box.height };
+            }
+          } catch (_) {}
+
+          const rect = svgElement.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            return { width: rect.width, height: rect.height };
+          }
+
+          return { width: 800, height: 600 };
+        };
+
+        const ZOOM_STEP = 1.2;
+        let fitScale = 1;
+        let currentScale = 1;
+        let minScale = 0.2;
+        let maxScale = 6;
+        let naturalSize = getSvgNaturalSize(clonedSvg);
+
+        const updateScaleLabel = () => {
+          zoomValue.textContent = `${Math.round(currentScale * 100)}%`;
+        };
+
+        const applyScale = (nextScale) => {
+          currentScale = clamp(nextScale, minScale, maxScale);
+          canvas.style.setProperty('--mermaid-zoom', currentScale.toFixed(4));
+          updateScaleLabel();
+        };
+
+        const recalcScaleBounds = () => {
+          naturalSize = getSvgNaturalSize(clonedSvg);
+          const viewportRect = viewport.getBoundingClientRect();
+          const availableWidth = Math.max(180, viewportRect.width - 16);
+          const availableHeight = Math.max(160, viewportRect.height - 16);
+          const baseWidth = Math.max(1, naturalSize.width);
+          const baseHeight = Math.max(1, naturalSize.height);
+
+          fitScale = Math.min(availableWidth / baseWidth, availableHeight / baseHeight) * 0.92;
+          if (!Number.isFinite(fitScale) || fitScale <= 0) {
+            fitScale = 1;
+          }
+
+          minScale = Math.max(0.2, fitScale * 0.4);
+          maxScale = Math.max(6, fitScale * 8);
+        };
+
+        let closed = false;
+        const closeFullscreen = (immediate) => {
+          if (closed) return;
+          closed = true;
+          overlay.classList.remove('open');
+          document.removeEventListener('keydown', handleKeydown);
+          viewport.removeEventListener('wheel', handleWheel);
+          window.removeEventListener('resize', handleResize);
+          const finalize = () => {
+            if (overlay.parentNode) {
+              overlay.parentNode.removeChild(overlay);
+            }
+            document.body.style.overflow = previousOverflow;
+            if (window.__sfCloseMermaidFullscreen === closeFullscreenHandle) {
+              window.__sfCloseMermaidFullscreen = null;
+            }
+          };
+          if (immediate) {
+            finalize();
+            return;
+          }
+          setTimeout(finalize, 220);
+        };
+        const closeFullscreenHandle = (immediate) => closeFullscreen(!!immediate);
+        window.__sfCloseMermaidFullscreen = closeFullscreenHandle;
+
+        const handleKeydown = (event) => {
+          if (event.key === 'Escape') {
+            closeFullscreen(false);
+            return;
+          }
+
+          if (event.key === '+' || event.key === '=' || event.key === 'Add') {
+            event.preventDefault();
+            applyScale(currentScale * ZOOM_STEP);
+            return;
+          }
+
+          if (event.key === '-' || event.key === '_' || event.key === 'Subtract') {
+            event.preventDefault();
+            applyScale(currentScale / ZOOM_STEP);
+            return;
+          }
+
+          if (event.key === '0') {
+            event.preventDefault();
+            applyScale(fitScale);
+          }
+        };
+
+        const handleWheel = (event) => {
+          if (!(event.ctrlKey || event.metaKey)) return;
+          event.preventDefault();
+          const direction = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+          applyScale(currentScale * direction);
+        };
+
+        const handleResize = () => {
+          const ratioToFit = fitScale > 0 ? currentScale / fitScale : 1;
+          recalcScaleBounds();
+          applyScale(fitScale * ratioToFit);
+        };
+
+        zoomInBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          applyScale(currentScale * ZOOM_STEP);
+        });
+
+        zoomOutBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          applyScale(currentScale / ZOOM_STEP);
+        });
+
+        resetZoomBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          applyScale(fitScale);
+        });
+
+        closeBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          closeFullscreen(false);
+        });
+
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) {
+            closeFullscreen(false);
+          }
+        });
+
+        document.addEventListener('keydown', handleKeydown);
+        viewport.addEventListener('wheel', handleWheel, { passive: false });
+        window.addEventListener('resize', handleResize);
+
+        recalcScaleBounds();
+        applyScale(fitScale);
+
         setTimeout(() => {
           overlay.classList.add('open');
         }, 10);
@@ -643,36 +882,100 @@
 
       // Generate table of contents from article headings
       const DESKTOP_TOC_BREAKPOINT = 1280;
-      const TOC_LAYOUT_CLASSES = ['has-desktop-toc', 'has-desktop-toc-left', 'has-desktop-toc-right'];
+      const TOC_SLIDEOUT_BREAKPOINT = 2560;
+      const TOC_LAYOUT_CLASSES = [
+        'has-desktop-toc',
+        'has-desktop-toc-collapsed',
+        'has-desktop-toc-left',
+        'has-desktop-toc-right',
+        'toc-mode-fixed-right',
+        'toc-mode-slideout',
+        'toc-slideout-open'
+      ];
+
+      function isDesktopTOCViewport() {
+        return window.innerWidth > DESKTOP_TOC_BREAKPOINT;
+      }
+
+      function isSlideoutTOCViewport() {
+        return window.innerWidth >= TOC_SLIDEOUT_BREAKPOINT;
+      }
+
+      function detachTOCBindings(tocContainer) {
+        if (!tocContainer) return;
+
+        const resizeHandler = tocContainer.__tocResizeHandler;
+        if (typeof resizeHandler === 'function') {
+          window.removeEventListener('resize', resizeHandler);
+          delete tocContainer.__tocResizeHandler;
+        }
+
+        const tabClickHandler = tocContainer.__tocTabClickHandler;
+        const tabBtn = tocContainer.querySelector('.toc-slideout-tab');
+        if (typeof tabClickHandler === 'function' && tabBtn) {
+          tabBtn.removeEventListener('click', tabClickHandler);
+          delete tocContainer.__tocTabClickHandler;
+        }
+
+        const keydownHandler = tocContainer.__tocKeydownHandler;
+        if (typeof keydownHandler === 'function') {
+          document.removeEventListener('keydown', keydownHandler);
+          delete tocContainer.__tocKeydownHandler;
+        }
+
+        const scrollHandler = tocContainer.__tocScrollHandler;
+        if (typeof scrollHandler === 'function') {
+          window.removeEventListener('scroll', scrollHandler);
+          delete tocContainer.__tocScrollHandler;
+        }
+      }
 
       function clearDesktopTOCReservation() {
         TOC_LAYOUT_CLASSES.forEach((className) => document.body.classList.remove(className));
       }
 
-      function syncDesktopTOCReservation(tocContainer) {
-        clearDesktopTOCReservation();
-        if (!tocContainer || window.innerWidth <= DESKTOP_TOC_BREAKPOINT) return;
-
-        const side = tocContainer.dataset.side === 'left' ? 'left' : 'right';
-        document.body.classList.add('has-desktop-toc', `has-desktop-toc-${side}`);
+      function setSlideoutOpen(tocContainer, isOpen) {
+        if (!tocContainer || !isSlideoutTOCViewport()) return;
+        tocContainer.classList.toggle('slideout-open', !!isOpen);
+        syncDesktopTOCReservation(tocContainer);
       }
 
-      function generateTOC() {
+      function syncDesktopTOCReservation(tocContainer) {
+        clearDesktopTOCReservation();
+        if (!tocContainer || !isDesktopTOCViewport()) return;
+
+        document.body.classList.add('has-desktop-toc');
+
+        if (isSlideoutTOCViewport()) {
+          document.body.classList.add('toc-mode-slideout');
+          tocContainer.classList.add('toc-slideout');
+          if (tocContainer.classList.contains('slideout-open')) {
+            document.body.classList.add('toc-slideout-open');
+          }
+          return;
+        }
+
+        document.body.classList.add('toc-mode-fixed-right');
+        tocContainer.classList.remove('toc-slideout', 'slideout-open');
+        if (tocContainer.classList.contains('collapsed')) {
+          document.body.classList.add('has-desktop-toc-collapsed');
+        }
+      }
+
+      function generateTOC(articleRoot) {
         // Remove existing TOC (avoid duplicates on re-render)
         const existing = document.querySelector('.article-toc');
-        if (existing) {
-          const resizeHandler = existing.__tocResizeHandler;
-          if (typeof resizeHandler === 'function') {
-            window.removeEventListener('resize', resizeHandler);
-          }
-        }
+        detachTOCBindings(existing);
         if (existing && existing.parentNode) {
           existing.parentNode.removeChild(existing);
         }
         clearDesktopTOCReservation();
 
         // Check if we're on an article detail page
-        const articleContent = document.querySelector('.article-content');
+        const articleContent =
+          articleRoot && articleRoot.nodeType === Node.ELEMENT_NODE
+            ? articleRoot
+            : document.querySelector('.article-content');
         if (!articleContent) return;
 
         // Find all headings (h1-h6) and ensure stable, link-friendly IDs.
@@ -685,6 +988,13 @@
         tocContainer.dataset.side = 'right';
         tocContainer.setAttribute('role', 'complementary');
         tocContainer.setAttribute('aria-label', '目录');
+
+        const slideoutTabBtn = document.createElement('button');
+        slideoutTabBtn.className = 'toc-slideout-tab';
+        slideoutTabBtn.setAttribute('type', 'button');
+        slideoutTabBtn.setAttribute('aria-label', '展开目录面板');
+        slideoutTabBtn.innerHTML = '<i class="fas fa-list-ul"></i><span>目录</span>';
+        tocContainer.appendChild(slideoutTabBtn);
 
         // Create TOC header with close button for mobile
         const tocHeader = document.createElement('div');
@@ -706,6 +1016,8 @@
         // Create TOC list
         const tocList = document.createElement('ul');
         tocList.className = 'article-toc-list';
+        const tocLinkById = new Map();
+        const tocActiveLock = { id: null, until: 0 };
 
         headings.forEach((heading) => {
           const level = parseInt(heading.tagName.substring(1)); // h1 → 1, h2 → 2, etc.
@@ -719,6 +1031,7 @@
           a.href = `#${id}`;
           a.textContent = text;
           a.className = 'toc-link';
+          tocLinkById.set(id, a);
 
           // Smooth scroll on click
           a.addEventListener('click', (e) => {
@@ -728,8 +1041,11 @@
               scrollToHeading(target, 'smooth');
               history.replaceState(null, '', `#${encodeURIComponent(id)}`);
               // Update active state
-              document.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+              tocContainer.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
               a.classList.add('active');
+              // Lock active style briefly to avoid first scroll frame snapping back.
+              tocActiveLock.id = id;
+              tocActiveLock.until = performance.now() + 480;
               // Close mobile TOC drawer
               tocContainer.classList.remove('mobile-open');
             }
@@ -743,17 +1059,20 @@
         tocContainer.appendChild(tocList);
 
         // Insert TOC into document (floating, so body is fine)
-        const article = document.querySelector('.article-detail');
+        const article = articleContent.closest('.article-detail') || document.querySelector('.article-detail');
         const mountPoint = (article && article.parentNode) ? article.parentNode : document.body;
         if (mountPoint) {
           mountPoint.insertBefore(tocContainer, article || mountPoint.firstChild);
         }
 
-        // Enable floating drag & snap (desktop only)
-        setupFloatingTOC(tocContainer);
         syncDesktopTOCReservation(tocContainer);
 
-        const onResize = () => syncDesktopTOCReservation(tocContainer);
+        const onResize = () => {
+          if (!isSlideoutTOCViewport()) {
+            tocContainer.classList.remove('slideout-open');
+          }
+          syncDesktopTOCReservation(tocContainer);
+        };
         tocContainer.__tocResizeHandler = onResize;
         window.addEventListener('resize', onResize);
 
@@ -772,6 +1091,7 @@
           collapseBtn.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (isSlideoutTOCViewport()) return;
             const collapsed = tocContainer.classList.toggle('collapsed');
             syncCollapseState(collapsed);
             syncDesktopTOCReservation(tocContainer);
@@ -783,32 +1103,71 @@
         const closeBtn = tocContainer.querySelector('.toc-close-btn');
         if (closeBtn) {
           closeBtn.addEventListener('click', () => {
+            if (isSlideoutTOCViewport()) {
+              setSlideoutOpen(tocContainer, false);
+              return;
+            }
             tocContainer.classList.remove('mobile-open');
           });
         }
+
+        const onTabClick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!isSlideoutTOCViewport()) return;
+          setSlideoutOpen(tocContainer, !tocContainer.classList.contains('slideout-open'));
+        };
+        slideoutTabBtn.addEventListener('click', onTabClick);
+        tocContainer.__tocTabClickHandler = onTabClick;
+
+        const onTocKeydown = (event) => {
+          if (event.key !== 'Escape') return;
+          if (!isSlideoutTOCViewport()) return;
+          setSlideoutOpen(tocContainer, false);
+        };
+        document.addEventListener('keydown', onTocKeydown);
+        tocContainer.__tocKeydownHandler = onTocKeydown;
 
         // Mobile TOC toggle button is now managed by Yew TocButton component
         // This prevents the bug where the button persisted after leaving article pages
 
         // Highlight current section on scroll
         let ticking = false;
-        window.addEventListener('scroll', () => {
-          if (!ticking) {
+        const onScroll = () => {
+              if (!ticking) {
             window.requestAnimationFrame(() => {
-              updateActiveTOC(headings);
+              updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer);
               ticking = false;
             });
             ticking = true;
           }
-        });
+        };
+        window.addEventListener('scroll', onScroll, { passive: true });
+        tocContainer.__tocScrollHandler = onScroll;
 
         // Initial highlight
-        updateActiveTOC(headings);
+        updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer);
       }
 
       // Update active TOC item based on scroll position
-      function updateActiveTOC(headings) {
-        const scrollY = window.scrollY + 100; // Offset for header
+      function updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer) {
+        if (!Array.isArray(headings) || headings.length === 0) return;
+        const scope = tocContainer || document;
+
+        if (tocActiveLock && tocActiveLock.id && performance.now() < tocActiveLock.until) {
+          const lockedLink = tocLinkById?.get(tocActiveLock.id);
+          if (lockedLink) {
+            scope.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+            lockedLink.classList.add('active');
+            return;
+          }
+        } else if (tocActiveLock && tocActiveLock.id) {
+          tocActiveLock.id = null;
+          tocActiveLock.until = 0;
+        }
+
+        // Keep highlight judgment consistent with scrollToHeading offset.
+        const scrollY = window.scrollY + getHeadingScrollOffset();
 
         let currentHeading = null;
         headings.forEach((heading) => {
@@ -818,133 +1177,14 @@
           }
         });
 
-        document.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+        scope.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
 
         if (currentHeading) {
-          const activeLink = document.querySelector(`.toc-link[href="#${currentHeading.id}"]`);
+          const activeLink = tocLinkById?.get(currentHeading.id);
           if (activeLink) {
             activeLink.classList.add('active');
           }
         }
-      }
-
-      // Floating TOC drag with long-press handle and side snapping
-      function setupFloatingTOC(tocContainer) {
-        const header = tocContainer.querySelector('.article-toc-header');
-        if (!header) return;
-
-        const isMobileView = () => window.innerWidth <= 1280;
-        const LONG_PRESS_DURATION = 280;
-        const SIDE_GAP = 24;
-        const BOTTOM_SAFE_GAP = 112;
-        let longPressTimer = null;
-        let dragging = false;
-        let offsetX = 0;
-        let offsetY = 0;
-
-        const clearTimer = () => {
-          if (longPressTimer) {
-            clearTimeout(longPressTimer);
-            longPressTimer = null;
-          }
-        };
-
-        const snapToClosestSide = () => {
-          const rect = tocContainer.getBoundingClientRect();
-          const distanceLeft = rect.left;
-          const distanceRight = window.innerWidth - rect.right;
-          const maxTop = Math.max(SIDE_GAP, window.innerHeight - rect.height - BOTTOM_SAFE_GAP);
-          const top = Math.min(maxTop, Math.max(SIDE_GAP, rect.top));
-
-          tocContainer.style.top = `${top}px`;
-
-          if (distanceLeft <= distanceRight) {
-            tocContainer.dataset.side = 'left';
-            tocContainer.style.left = `${SIDE_GAP}px`;
-            tocContainer.style.right = 'auto';
-          } else {
-            tocContainer.dataset.side = 'right';
-            tocContainer.style.right = `${SIDE_GAP}px`;
-            tocContainer.style.left = 'auto';
-          }
-
-          syncDesktopTOCReservation(tocContainer);
-          tocContainer.classList.remove('dragging');
-          dragging = false;
-        };
-
-        const startDragAfterLongPress = (startX, startY) => {
-          const rect = tocContainer.getBoundingClientRect();
-          offsetX = startX - rect.left;
-          offsetY = startY - rect.top;
-          dragging = true;
-          tocContainer.classList.add('dragging');
-        };
-
-        const handleMove = (clientX, clientY) => {
-          if (!dragging) return;
-          const rect = tocContainer.getBoundingClientRect();
-          const maxLeft = window.innerWidth - rect.width - SIDE_GAP;
-          const maxTop = Math.max(SIDE_GAP, window.innerHeight - rect.height - BOTTOM_SAFE_GAP);
-
-          const nextLeft = Math.min(maxLeft, Math.max(SIDE_GAP, clientX - offsetX));
-          const nextTop = Math.min(maxTop, Math.max(SIDE_GAP, clientY - offsetY));
-
-          tocContainer.style.left = `${nextLeft}px`;
-          tocContainer.style.right = 'auto';
-          tocContainer.style.top = `${nextTop}px`;
-        };
-
-        const stopDragging = () => {
-          clearTimer();
-          if (dragging) {
-            snapToClosestSide();
-          }
-          dragging = false;
-        };
-
-        const attachPointerHandlers = (getPointFromEvent, events) => {
-          const onStart = (event) => {
-            if (isMobileView()) return;
-            if (event.target.closest('.toc-close-btn, .toc-collapse-btn')) return;
-            const point = getPointFromEvent(event);
-            if (!point) return;
-
-            clearTimer();
-            longPressTimer = setTimeout(() => {
-              startDragAfterLongPress(point.x, point.y);
-            }, LONG_PRESS_DURATION);
-
-            const moveHandler = (moveEvent) => {
-              const movePoint = getPointFromEvent(moveEvent);
-              if (!movePoint) return;
-              if (dragging) {
-                moveEvent.preventDefault?.();
-              }
-              handleMove(movePoint.x, movePoint.y);
-            };
-
-            const endHandler = () => {
-              stopDragging();
-              window.removeEventListener(events.move, moveHandler);
-              events.end.forEach((endEvent) => window.removeEventListener(endEvent, endHandler));
-            };
-
-            window.addEventListener(events.move, moveHandler, { passive: false });
-            events.end.forEach((endEvent) => window.addEventListener(endEvent, endHandler));
-          };
-
-          header.addEventListener(events.start, onStart, { passive: true });
-        };
-
-        const getMousePoint = (event) => ({ x: event.clientX, y: event.clientY });
-        const getTouchPoint = (event) => {
-          const touch = event.touches?.[0] || event.changedTouches?.[0];
-          return touch ? { x: touch.clientX, y: touch.clientY } : null;
-        };
-
-        attachPointerHandlers(getMousePoint, { start: 'mousedown', move: 'mousemove', end: ['mouseup', 'mouseleave'] });
-        attachPointerHandlers(getTouchPoint, { start: 'touchstart', move: 'touchmove', end: ['touchend', 'touchcancel'] });
       }
 
       // Back to top button is now managed by Yew ScrollToTopButton component
@@ -974,16 +1214,28 @@
       // Cleanup helper: remove existing TOC
       window.cleanupTOC = function() {
         const toc = document.querySelector('.article-toc');
-        if (toc) {
-          const resizeHandler = toc.__tocResizeHandler;
-          if (typeof resizeHandler === 'function') {
-            window.removeEventListener('resize', resizeHandler);
-          }
-        }
+        detachTOCBindings(toc);
         if (toc && toc.parentNode) {
           toc.parentNode.removeChild(toc);
         }
         clearDesktopTOCReservation();
+      };
+
+      window.cleanupMarkdownRendering = function() {
+        window.cleanupTOC?.();
+        if (typeof window.__sfCloseMermaidFullscreen === 'function') {
+          try {
+            window.__sfCloseMermaidFullscreen(true);
+          } catch (_) {
+            window.__sfCloseMermaidFullscreen = null;
+          }
+        } else {
+          const overlay = document.querySelector('.mermaid-fullscreen-overlay');
+          if (overlay && overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+          }
+          document.body.style.overflow = '';
+        }
       };
     </script>
   </body>

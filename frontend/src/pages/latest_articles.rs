@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
+use gloo_timers::callback::Timeout;
 use static_flow_shared::ArticleListItem;
 use wasm_bindgen::JsCast;
-use web_sys::window;
+use web_sys::{window, Event};
 use yew::prelude::*;
 use yew_router::prelude::use_location;
 
@@ -47,69 +50,91 @@ pub fn latest_articles_page() -> Html {
     }
 
     let save_scroll_position = {
+        let location = route_location.clone();
+        let current_page_num = current_page_num;
         Callback::from(move |_| {
-            if let Some(win) = window() {
-                if let Some(storage) = win.session_storage().ok().flatten() {
-                    let _ = storage.set_item("home_articles_page", &current_page_num.to_string());
-                    let scroll_top = win.scroll_y().unwrap_or(0.0);
-                    let _ =
-                        storage.set_item("home_articles_scroll", &(scroll_top as i32).to_string());
-                }
+            if crate::navigation_context::is_return_armed() {
+                return;
             }
+            let mut state = BTreeMap::new();
+            state.insert("page".to_string(), current_page_num.to_string());
+            if let Some(loc) = location.as_ref() {
+                state.insert("location".to_string(), loc.path().to_string());
+            }
+            crate::navigation_context::save_context_for_current_page(state);
         })
     };
 
     {
+        let location = route_location.clone();
+        let current_page_num = current_page_num;
+        use_effect_with((location, current_page_num), move |_| {
+            let mut on_scroll_opt: Option<wasm_bindgen::closure::Closure<dyn FnMut(Event)>> = None;
+
+            if !crate::navigation_context::is_return_armed() {
+                let persist = move || {
+                    let mut state = BTreeMap::new();
+                    state.insert("page".to_string(), current_page_num.to_string());
+                    crate::navigation_context::save_context_for_current_page(state);
+                };
+
+                persist();
+
+                let on_scroll = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: Event| {
+                    if crate::navigation_context::is_return_armed() {
+                        return;
+                    }
+                    let mut state = BTreeMap::new();
+                    state.insert("page".to_string(), current_page_num.to_string());
+                    crate::navigation_context::save_context_for_current_page(state);
+                })
+                    as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "scroll",
+                        on_scroll.as_ref().unchecked_ref(),
+                    );
+                }
+
+                on_scroll_opt = Some(on_scroll);
+            }
+
+            move || {
+                if let Some(on_scroll) = on_scroll_opt {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "scroll",
+                            on_scroll.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    {
         let go_to_page_cb = go_to_page.clone();
         let location_dep = route_location.clone();
-        use_effect_with(location_dep, move |_| {
-            if let Some(storage) = window().and_then(|w| w.session_storage().ok().flatten()) {
-                let has_saved_data = storage
-                    .get_item("home_articles_page")
-                    .ok()
-                    .flatten()
-                    .is_some()
-                    || storage
-                        .get_item("home_articles_scroll")
-                        .ok()
-                        .flatten()
-                        .is_some();
-
-                if has_saved_data {
-                    if let Some(saved_page) = storage.get_item("home_articles_page").ok().flatten()
+        let article_len = articles.len();
+        use_effect_with((location_dep, article_len), move |_| {
+            if article_len > 0 {
+                if let Some(context) =
+                    crate::navigation_context::pop_context_if_armed_for_current_page()
+                {
+                    if let Some(page_num) =
+                        context.page_state.get("page").and_then(|raw| raw.parse::<usize>().ok())
                     {
-                        if let Ok(page_num) = saved_page.parse::<usize>() {
-                            go_to_page_cb.emit(page_num);
+                        go_to_page_cb.emit(page_num);
+                    }
+
+                    let scroll_y = context.scroll_y.max(0.0);
+                    Timeout::new(140, move || {
+                        if let Some(win) = window() {
+                            win.scroll_to_with_x_and_y(0.0, scroll_y);
                         }
-                    }
-
-                    let scroll_pos = storage
-                        .get_item("home_articles_scroll")
-                        .ok()
-                        .flatten()
-                        .and_then(|v| v.parse::<i32>().ok())
-                        .unwrap_or(0);
-
-                    if let Some(win) = window() {
-                        let callback = wasm_bindgen::closure::Closure::once(move || {
-                            if scroll_pos > 0 {
-                                if let Some(win) = window() {
-                                    win.scroll_to_with_x_and_y(0.0, scroll_pos as f64);
-                                }
-                            }
-                            if let Some(storage) =
-                                window().and_then(|w| w.session_storage().ok().flatten())
-                            {
-                                let _ = storage.remove_item("home_articles_scroll");
-                                let _ = storage.remove_item("home_articles_page");
-                            }
-                        });
-                        let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
-                            callback.as_ref().unchecked_ref(),
-                            100,
-                        );
-                        callback.forget();
-                    }
+                    })
+                    .forget();
                 }
             }
             || ()

@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
+use gloo_timers::callback::Timeout;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::ArticleListItem;
+use wasm_bindgen::JsCast;
+use web_sys::{window, Event};
 use yew::prelude::*;
 use yew_router::prelude::{use_location, Link};
 
@@ -46,6 +49,7 @@ impl PostsQuery {
 pub fn posts_page() -> Html {
     let location = use_location();
     let query = location
+        .as_ref()
         .and_then(|loc| loc.query::<PostsQuery>().ok())
         .unwrap_or_default()
         .normalized();
@@ -111,6 +115,113 @@ pub fn posts_page() -> Html {
             });
         })
     };
+
+    let expanded_years_serialized = {
+        let mut years = (*expanded_years)
+            .iter()
+            .filter_map(|(year, expanded)| if *expanded { Some(*year) } else { None })
+            .collect::<Vec<_>>();
+        years.sort_unstable();
+        years
+            .into_iter()
+            .map(|year| year.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+
+    {
+        let location_dep = location.clone();
+        let tag = query.tag.clone();
+        let category = query.category.clone();
+        let expanded_years_serialized = expanded_years_serialized.clone();
+        let total_posts = total_posts;
+        use_effect_with(
+            (
+                location_dep.clone(),
+                tag.clone(),
+                category.clone(),
+                expanded_years_serialized.clone(),
+                total_posts,
+            ),
+            move |_| {
+                let persist = move || {
+                    if crate::navigation_context::is_return_armed() {
+                        return;
+                    }
+                    let mut state = std::collections::BTreeMap::new();
+                    if let Some(value) = tag.as_ref() {
+                        state.insert("tag".to_string(), value.clone());
+                    }
+                    if let Some(value) = category.as_ref() {
+                        state.insert("category".to_string(), value.clone());
+                    }
+                    if !expanded_years_serialized.is_empty() {
+                        state.insert(
+                            "expanded_years".to_string(),
+                            expanded_years_serialized.clone(),
+                        );
+                    }
+                    crate::navigation_context::save_context_for_current_page(state);
+                };
+
+                persist();
+
+                let on_scroll = wasm_bindgen::closure::Closure::wrap(Box::new(move |_: Event| {
+                    persist();
+                })
+                    as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "scroll",
+                        on_scroll.as_ref().unchecked_ref(),
+                    );
+                }
+
+                move || {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "scroll",
+                            on_scroll.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            },
+        );
+    }
+
+    {
+        let location_dep = location.clone();
+        let expanded_years = expanded_years.clone();
+        let total_posts = total_posts;
+        use_effect_with((location_dep, total_posts), move |_| {
+            if total_posts > 0 {
+                if let Some(context) =
+                    crate::navigation_context::pop_context_if_armed_for_current_page()
+                {
+                    if let Some(raw) = context.page_state.get("expanded_years") {
+                        let mut restored = HashMap::<i32, bool>::new();
+                        for value in raw.split(',') {
+                            if let Ok(year) = value.parse::<i32>() {
+                                restored.insert(year, true);
+                            }
+                        }
+                        if !restored.is_empty() {
+                            expanded_years.set(restored);
+                        }
+                    }
+                    let scroll_y = context.scroll_y.max(0.0);
+                    Timeout::new(150, move || {
+                        if let Some(win) = window() {
+                            win.scroll_to_with_x_and_y(0.0, scroll_y);
+                        }
+                    })
+                    .forget();
+                }
+            }
+            || ()
+        });
+    }
 
     html! {
         <main class={classes!(
