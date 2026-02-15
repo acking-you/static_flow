@@ -202,8 +202,61 @@ pub fn header() -> Html {
     let image_search_href = crate::config::route_path("/search?mode=image");
 
     let mobile_search_input = on_search_input.clone();
-    let mobile_search_keypress = on_search_keypress.clone();
-    let mobile_do_search = do_search.clone();
+    let mobile_search_keypress = {
+        let search_query = search_query.clone();
+        let route = route.clone();
+        let location = location.clone();
+        let mobile_menu_open = mobile_menu_open.clone();
+        Callback::from(move |e: KeyboardEvent| {
+            if e.key() == "Enter" {
+                let query = (*search_query).trim();
+                if !query.is_empty() {
+                    let encoded_query = urlencoding::encode(query);
+                    let search_url =
+                        build_search_url(route.clone(), location.clone(), &encoded_query);
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(history) = window.history() {
+                            let _ = history.push_state_with_url(
+                                &wasm_bindgen::JsValue::NULL,
+                                "",
+                                Some(&search_url),
+                            );
+                            if let Ok(event) = web_sys::Event::new("popstate") {
+                                let _ = window.dispatch_event(&event);
+                            }
+                        }
+                    }
+                    mobile_menu_open.set(false);
+                }
+            }
+        })
+    };
+    let mobile_do_search = {
+        let search_query = search_query.clone();
+        let route = route.clone();
+        let location = location.clone();
+        let mobile_menu_open = mobile_menu_open.clone();
+        Callback::from(move |_: MouseEvent| {
+            let query = (*search_query).trim();
+            if !query.is_empty() {
+                let encoded_query = urlencoding::encode(query);
+                let search_url = build_search_url(route.clone(), location.clone(), &encoded_query);
+                if let Some(window) = web_sys::window() {
+                    if let Ok(history) = window.history() {
+                        let _ = history.push_state_with_url(
+                            &wasm_bindgen::JsValue::NULL,
+                            "",
+                            Some(&search_url),
+                        );
+                        if let Ok(event) = web_sys::Event::new("popstate") {
+                            let _ = window.dispatch_event(&event);
+                        }
+                    }
+                }
+                mobile_menu_open.set(false);
+            }
+        })
+    };
     let mobile_clear_search = clear_search.clone();
 
     html! {

@@ -30,7 +30,7 @@ pub struct SearchPageProps {
 const DEFAULT_TEXT_SEARCH_LIMIT: usize = 50;
 const DEFAULT_IMAGE_SEARCH_LIMIT: usize = 24;
 const SEARCH_PAGE_SIZE: usize = 15;
-const IMAGE_GRID_CHUNK_SIZE: usize = 24;
+const IMAGE_GRID_CHUNK_SIZE: usize = 8;
 const LIGHTBOX_MIN_ZOOM: f64 = 0.5;
 const LIGHTBOX_MAX_ZOOM: f64 = 3.0;
 const LIGHTBOX_ZOOM_STEP: f64 = 0.25;
@@ -276,11 +276,8 @@ pub fn search_page() -> Html {
                                             },
                                             Err(e) => {
                                                 web_sys::console::error_1(
-                                                    &format!(
-                                                        "Image search restore failed: {}",
-                                                        e
-                                                    )
-                                                    .into(),
+                                                    &format!("Image search restore failed: {}", e)
+                                                        .into(),
                                                 );
                                                 image_loading.set(false);
                                             },
