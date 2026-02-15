@@ -808,6 +808,7 @@
         const isMobileView = () => window.innerWidth <= 1280;
         const LONG_PRESS_DURATION = 280;
         const SIDE_GAP = 24;
+        const BOTTOM_SAFE_GAP = 112;
         let longPressTimer = null;
         let dragging = false;
         let offsetX = 0;
@@ -824,7 +825,8 @@
           const rect = tocContainer.getBoundingClientRect();
           const distanceLeft = rect.left;
           const distanceRight = window.innerWidth - rect.right;
-          const top = Math.min(window.innerHeight - rect.height - SIDE_GAP, Math.max(SIDE_GAP, rect.top));
+          const maxTop = Math.max(SIDE_GAP, window.innerHeight - rect.height - BOTTOM_SAFE_GAP);
+          const top = Math.min(maxTop, Math.max(SIDE_GAP, rect.top));
 
           tocContainer.style.top = `${top}px`;
 
@@ -854,7 +856,7 @@
           if (!dragging) return;
           const rect = tocContainer.getBoundingClientRect();
           const maxLeft = window.innerWidth - rect.width - SIDE_GAP;
-          const maxTop = window.innerHeight - rect.height - SIDE_GAP;
+          const maxTop = Math.max(SIDE_GAP, window.innerHeight - rect.height - BOTTOM_SAFE_GAP);
 
           const nextLeft = Math.min(maxLeft, Math.max(SIDE_GAP, clientX - offsetX));
           const nextTop = Math.min(maxTop, Math.max(SIDE_GAP, clientY - offsetY));

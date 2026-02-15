@@ -2564,14 +2564,14 @@ button[aria-current="page"]:hover {
   right: clamp(1rem, 3vw, 2rem);
   left: auto;
   width: min(320px, 28vw);
-  max-height: calc(100vh - var(--header-height-desktop) - 4rem);
+  max-height: min(70vh, calc(100vh - var(--header-height-desktop) - 8.5rem));
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-8), 0 0 14px rgba(var(--primary-rgb), 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.12);
   padding: 1rem;
-  z-index: 60;
+  z-index: 45;
   backdrop-filter: blur(50px) saturate(var(--acrylic-saturate));
   -webkit-backdrop-filter: blur(50px) saturate(var(--acrylic-saturate));
   transition: box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
@@ -2692,6 +2692,7 @@ button[aria-current="page"]:hover {
   list-style: none;
   margin: 0;
   padding: 0;
+  padding-bottom: 0.35rem;
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1 1 auto;
