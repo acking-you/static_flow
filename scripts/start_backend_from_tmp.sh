@@ -88,6 +88,8 @@ print_check_urls() {
   local host="$1"
   local port="$2"
   local base="http://${host}:${port}"
+  local trend_day
+  trend_day="$(date +%F 2>/dev/null || echo "2026-02-16")"
 
   local article_id=""
   local image_id=""
@@ -101,7 +103,7 @@ print_check_urls() {
 
   echo
   log "Backend is ready."
-  log "This backend is read-only API (all routes are GET)."
+  log "Public API routes are under /api; local admin runtime config is under /admin."
   echo
   log "Manual verification URLs (ALL backend routes):"
 
@@ -117,12 +119,25 @@ print_check_urls() {
     echo "- ${base}/api/articles/${article_id}"
 
     echo
-    echo "[3) GET /api/articles/:id/related]"
+    echo "[3) POST /api/articles/:id/view]"
+    echo "- curl -X POST \"${base}/api/articles/${article_id}/view\""
+
+    echo
+    echo "[4) GET /api/articles/:id/view-trend]"
+    echo "- ${base}/api/articles/${article_id}/view-trend"
+    echo "- ${base}/api/articles/${article_id}/view-trend?granularity=day"
+    echo "- ${base}/api/articles/${article_id}/view-trend?granularity=hour&day=${trend_day}"
+
+    echo
+    echo "[5) GET /api/articles/:id/related]"
     echo "- ${base}/api/articles/${article_id}/related"
   else
     echo
-    echo "[2) GET /api/articles/:id]"
+    echo "[2) GET /api/articles/:id / POST /api/articles/:id/view / GET /api/articles/:id/view-trend]"
     echo "- ${base}/api/articles/<article_id>"
+    echo "- curl -X POST \"${base}/api/articles/<article_id>/view\""
+    echo "- ${base}/api/articles/<article_id>/view-trend?granularity=day"
+    echo "- ${base}/api/articles/<article_id>/view-trend?granularity=hour&day=${trend_day}"
 
     echo
     echo "[3) GET /api/articles/:id/related]"
@@ -130,30 +145,34 @@ print_check_urls() {
   fi
 
   echo
-  echo "[4) GET /api/tags]"
+  echo "[6) GET /api/tags]"
   echo "- ${base}/api/tags"
 
   echo
-  echo "[5) GET /api/categories]"
+  echo "[7) GET /api/categories]"
   echo "- ${base}/api/categories"
 
   echo
-  echo "[6) GET /api/search?q=]"
+  echo "[8) GET /api/stats]"
+  echo "- ${base}/api/stats"
+
+  echo
+  echo "[9) GET /api/search?q=]"
   echo "- ${base}/api/search?q=Mermaid"
   echo "- ${base}/api/search?q=%E5%9B%BE%E8%A1%A8"
 
   echo
-  echo "[7) GET /api/semantic-search?q=]"
+  echo "[10) GET /api/semantic-search?q=]"
   echo "- ${base}/api/semantic-search?q=%E5%89%8D%E7%AB%AF%20%E6%B8%B2%E6%9F%93"
   echo "- ${base}/api/semantic-search?q=%E5%89%8D%E7%AB%AF%20%E6%B8%B2%E6%9F%93&enhanced_highlight=true"
 
   echo
-  echo "[8) GET /api/images]"
+  echo "[11) GET /api/images]"
   echo "- ${base}/api/images"
 
   if [[ -n "$image_id" ]]; then
     echo
-    echo "[9) GET /api/images/:id-or-filename]"
+    echo "[12) GET /api/images/:id-or-filename]"
     echo "- ${base}/api/images/${image_id}"
     echo "- ${base}/api/images/${image_id}?thumb=true"
     if [[ -n "$image_name" ]]; then
@@ -162,21 +181,34 @@ print_check_urls() {
     fi
 
     echo
-    echo "[10) GET /api/image-search?id=]"
+    echo "[13) GET /api/image-search?id=]"
     echo "- ${base}/api/image-search?id=${image_id}"
   else
     echo
-    echo "[9) GET /api/images/:id-or-filename]"
+    echo "[12) GET /api/images/:id-or-filename]"
     echo "- ${base}/api/images/<image_id_or_filename>"
     echo "- ${base}/api/images/<image_id_or_filename>?thumb=true"
 
     echo
-    echo "[10) GET /api/image-search?id=]"
+    echo "[13) GET /api/image-search?id=]"
     echo "- ${base}/api/image-search?id=<image_id>"
   fi
 
   echo
+  echo "[14) GET /api/image-search-text?q=]"
+  echo "- ${base}/api/image-search-text?q=system%20architecture"
+
+  echo
+  echo "[15) GET /admin/view-analytics-config (local admin)]"
+  echo "- ${base}/admin/view-analytics-config"
+
+  echo
+  echo "[16) POST /admin/view-analytics-config (local admin)]"
+  echo "- curl -X POST \"${base}/admin/view-analytics-config\" -H \"Content-Type: application/json\" -d '{\"dedupe_window_seconds\":60,\"trend_default_days\":30,\"trend_max_days\":180}'"
+
+  echo
   log "Tip: image endpoint returns binary; open URL directly in browser or use curl --output."
+  log "Tip: /admin routes are intended for local/ops usage and should not be publicly exposed."
   log "Press Ctrl+C to stop backend."
 }
 

@@ -265,11 +265,23 @@ pub mod article_detail_page {
 
     pub const WORD_COUNT_TEMPLATE: &str = "{} 字";
     pub const READ_TIME_TEMPLATE: &str = "约 {} 分钟";
+    pub const VIEW_COUNT_TEMPLATE: &str = "{} 次浏览";
+    pub const VIEW_COUNT_LOADING: &str = "浏览量统计中...";
 
     pub const NOT_FOUND_TITLE: &str = "文章未找到";
     pub const NOT_FOUND_DESC: &str = "抱歉，没有找到对应的文章，请返回列表重试。";
 
     pub const BACK_TOOLTIP: &str = "返回";
+    pub const TREND_TOOLTIP: &str = "查看浏览趋势";
+    pub const TREND_TITLE: &str = "浏览趋势";
+    pub const TREND_SUBTITLE: &str = "按天或按小时查看浏览变化";
+    pub const TREND_TAB_DAY: &str = "按天";
+    pub const TREND_TAB_HOUR: &str = "按小时";
+    pub const TREND_SELECT_DAY: &str = "日期";
+    pub const TREND_LOADING: &str = "趋势加载中...";
+    pub const TREND_EMPTY: &str = "暂无趋势数据";
+    pub const TREND_TOTAL_TEMPLATE: &str = "总浏览：{}";
+    pub const TREND_CLOSE_ARIA: &str = "关闭趋势面板";
     pub const CLOSE_IMAGE_ARIA: &str = "关闭图片";
     pub const LIGHTBOX_ZOOM_IN_ARIA: &str = "放大图片";
     pub const LIGHTBOX_ZOOM_OUT_ARIA: &str = "缩小图片";

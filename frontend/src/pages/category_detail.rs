@@ -92,10 +92,8 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                 as Box<dyn FnMut(_)>);
 
             if let Some(win) = window() {
-                let _ = win.add_event_listener_with_callback(
-                    "scroll",
-                    on_scroll.as_ref().unchecked_ref(),
-                );
+                let _ = win
+                    .add_event_listener_with_callback("scroll", on_scroll.as_ref().unchecked_ref());
             }
 
             move || {

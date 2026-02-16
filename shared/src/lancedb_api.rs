@@ -1,13 +1,17 @@
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::Instant,
 };
 
 use anyhow::{Context, Result};
 use arrow_array::{
+    builder::{StringBuilder, TimestampMillisecondBuilder},
     Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, ListArray, RecordBatch,
-    StringArray,
+    RecordBatchIterator, StringArray,
 };
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use chrono::{Duration as ChronoDuration, FixedOffset, NaiveDate, Utc};
 use futures::TryStreamExt;
 use lancedb::{
     connect,
@@ -105,6 +109,33 @@ pub struct StatsResponse {
     pub total_categories: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ArticleViewPoint {
+    pub key: String,
+    pub views: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ArticleViewTrackResponse {
+    pub article_id: String,
+    pub counted: bool,
+    pub total_views: usize,
+    pub timezone: String,
+    pub today_views: u32,
+    pub daily_points: Vec<ArticleViewPoint>,
+    pub server_time_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ArticleViewTrendResponse {
+    pub article_id: String,
+    pub timezone: String,
+    pub granularity: String,
+    pub day: Option<String>,
+    pub total_views: usize,
+    pub points: Vec<ArticleViewPoint>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageBlob {
     pub bytes: Vec<u8>,
@@ -117,6 +148,7 @@ pub struct StaticFlowDataStore {
     articles_table: String,
     images_table: String,
     taxonomies_table: String,
+    article_views_table: String,
 }
 
 impl StaticFlowDataStore {
@@ -131,6 +163,7 @@ impl StaticFlowDataStore {
             articles_table: "articles".to_string(),
             images_table: "images".to_string(),
             taxonomies_table: "taxonomies".to_string(),
+            article_views_table: "article_views".to_string(),
         })
     }
 
@@ -155,6 +188,162 @@ impl StaticFlowDataStore {
             Ok(table) => Ok(Some(table)),
             Err(_) => Ok(None),
         }
+    }
+
+    async fn article_views_table(&self) -> Result<Table> {
+        match self
+            .db
+            .open_table(&self.article_views_table)
+            .execute()
+            .await
+        {
+            Ok(table) => Ok(table),
+            Err(_) => {
+                let schema = article_view_schema();
+                let batch = RecordBatch::new_empty(schema.clone());
+                let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
+                self.db
+                    .create_table(&self.article_views_table, Box::new(batches))
+                    .execute()
+                    .await
+                    .context("failed to create article_views table")?;
+                self.db
+                    .open_table(&self.article_views_table)
+                    .execute()
+                    .await
+                    .context("failed to open article_views table")
+            },
+        }
+    }
+
+    pub async fn track_article_view(
+        &self,
+        article_id: &str,
+        client_fingerprint: &str,
+        daily_window_days: usize,
+        dedupe_window_seconds: u64,
+        max_daily_window_days: usize,
+    ) -> Result<ArticleViewTrackResponse> {
+        let table = self.article_views_table().await?;
+        let now = Utc::now();
+        let now_ms = now.timestamp_millis();
+        let now_local = now.with_timezone(&shanghai_tz());
+        let day_bucket = now_local.format("%Y-%m-%d").to_string();
+        let hour_bucket = now_local.format("%Y-%m-%d %H").to_string();
+        let dedupe_window_ms = (dedupe_window_seconds.max(1) as i64) * 1_000;
+        let dedupe_bucket = now_ms / dedupe_window_ms;
+        let record_id = format!("{article_id}:{client_fingerprint}:{dedupe_bucket}");
+        let escaped_id = escape_literal(&record_id);
+        let escaped_article_id = escape_literal(article_id);
+        let escaped_day = escape_literal(&day_bucket);
+        let counted = table
+            .count_rows(Some(format!("id = '{escaped_id}'")))
+            .await
+            .context("failed to check view dedupe key")?
+            == 0;
+
+        let record = ArticleViewRecord {
+            id: record_id,
+            article_id: article_id.to_string(),
+            viewed_at: now_ms,
+            day_bucket: day_bucket.clone(),
+            hour_bucket: hour_bucket.clone(),
+            client_fingerprint: client_fingerprint.to_string(),
+            created_at: now_ms,
+            updated_at: now_ms,
+        };
+        upsert_article_view_record(&table, &record).await?;
+
+        let total_views = table
+            .count_rows(Some(format!("article_id = '{escaped_article_id}'")))
+            .await
+            .context("failed to count total article views")? as usize;
+        let today_views = table
+            .count_rows(Some(format!(
+                "article_id = '{escaped_article_id}' AND day_bucket = '{escaped_day}'"
+            )))
+            .await
+            .context("failed to count today's views")? as u32;
+        let day_counts = fetch_article_view_day_counts(&table, article_id).await?;
+        let daily_points = build_recent_day_points(
+            &day_counts,
+            &day_bucket,
+            normalize_daily_window(daily_window_days, max_daily_window_days),
+        )?;
+
+        Ok(ArticleViewTrackResponse {
+            article_id: article_id.to_string(),
+            counted,
+            total_views,
+            timezone: SHANGHAI_TIMEZONE.to_string(),
+            today_views,
+            daily_points,
+            server_time_ms: now_ms,
+        })
+    }
+
+    pub async fn fetch_article_view_trend_day(
+        &self,
+        article_id: &str,
+        days: usize,
+        max_days: usize,
+    ) -> Result<ArticleViewTrendResponse> {
+        let table = self.article_views_table().await?;
+        let now_local = Utc::now().with_timezone(&shanghai_tz());
+        let today_bucket = now_local.format("%Y-%m-%d").to_string();
+        let day_counts = fetch_article_view_day_counts(&table, article_id).await?;
+        let points = build_recent_day_points(
+            &day_counts,
+            &today_bucket,
+            normalize_daily_window(days, max_days),
+        )?;
+        let total_views = table
+            .count_rows(Some(format!("article_id = '{}'", escape_literal(article_id))))
+            .await
+            .context("failed to count total article views")? as usize;
+
+        Ok(ArticleViewTrendResponse {
+            article_id: article_id.to_string(),
+            timezone: SHANGHAI_TIMEZONE.to_string(),
+            granularity: "day".to_string(),
+            day: None,
+            total_views,
+            points,
+        })
+    }
+
+    pub async fn fetch_article_view_trend_hour(
+        &self,
+        article_id: &str,
+        day: &str,
+    ) -> Result<ArticleViewTrendResponse> {
+        NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .with_context(|| format!("invalid day format: {day}; expected YYYY-MM-DD"))?;
+
+        let table = self.article_views_table().await?;
+        let hour_counts = fetch_article_view_hour_counts_for_day(&table, article_id, day).await?;
+        let points = (0..24)
+            .map(|hour| {
+                let key = format!("{hour:02}");
+                ArticleViewPoint {
+                    views: *hour_counts.get(&key).unwrap_or(&0),
+                    key,
+                }
+            })
+            .collect::<Vec<_>>();
+        let total_views = table
+            .count_rows(Some(format!("article_id = '{}'", escape_literal(article_id))))
+            .await
+            .context("failed to count total article views")? as usize;
+
+        Ok(ArticleViewTrendResponse {
+            article_id: article_id.to_string(),
+            timezone: SHANGHAI_TIMEZONE.to_string(),
+            granularity: "hour".to_string(),
+            day: Some(day.to_string()),
+            total_views,
+            points,
+        })
     }
 
     pub async fn list_articles(
@@ -425,94 +614,21 @@ impl StaticFlowDataStore {
     ) -> Result<Vec<SearchResult>> {
         let table = self.articles_table().await?;
         let total_started = Instant::now();
-
-        let mut search_language = detect_language(keyword);
-        let mut query_embedding = embed_text_with_language(keyword, search_language);
-        let primary_column = vector_column_for_language(search_language);
-        let primary_index = inspect_index_for_column(&table, primary_column, false).await;
-        let primary_path = if primary_index.is_some() { "vector_index" } else { "vector_scan" };
-        let primary_reason = index_reason(primary_column, primary_index.as_ref());
-
-        log_query_path(
-            "semantic_search.primary",
-            primary_path,
-            "vector_index",
-            &format!(
-                "{primary_reason}; result_limit={}; max_distance={}; \
-                 enhanced_highlight={enhanced_highlight}",
-                limit
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
-                max_distance
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "none".to_string())
-            ),
-        );
-
         let effective_vector_limit = if hybrid { hybrid_vector_limit.or(limit) } else { limit };
-
-        let primary_started = Instant::now();
-        let mut rows = run_semantic_vector_search(
+        let vector_selection = run_semantic_vector_search_with_fallback(
             &table,
-            primary_column,
-            query_embedding.as_slice(),
+            keyword,
             effective_vector_limit,
             max_distance,
+            enhanced_highlight,
         )
         .await?;
-        log_query_result(
-            "semantic_search.primary",
-            primary_path,
-            rows.len(),
-            primary_started.elapsed().as_millis(),
-        );
 
-        let mut selected_column = primary_column;
-        let mut selected_path = primary_path;
-
-        if rows.is_empty() {
-            let fallback_language = alternate_embedding_language(search_language);
-            let fallback_column = vector_column_for_language(fallback_language);
-            let fallback_index = inspect_index_for_column(&table, fallback_column, false).await;
-            let fallback_path =
-                if fallback_index.is_some() { "vector_index" } else { "vector_scan" };
-            let fallback_reason = format!(
-                "primary_rows=0; {}",
-                index_reason(fallback_column, fallback_index.as_ref())
-            );
-
-            log_query_path(
-                "semantic_search.fallback",
-                fallback_path,
-                "vector_index",
-                &fallback_reason,
-            );
-
-            let fallback_embedding = embed_text_with_language(keyword, fallback_language);
-            let fallback_started = Instant::now();
-            let fallback_rows = run_semantic_vector_search(
-                &table,
-                fallback_column,
-                fallback_embedding.as_slice(),
-                effective_vector_limit,
-                max_distance,
-            )
-            .await?;
-            log_query_result(
-                "semantic_search.fallback",
-                fallback_path,
-                fallback_rows.len(),
-                fallback_started.elapsed().as_millis(),
-            );
-
-            if !fallback_rows.is_empty() {
-                search_language = fallback_language;
-                query_embedding = fallback_embedding;
-                rows = fallback_rows;
-                selected_column = fallback_column;
-                selected_path = fallback_path;
-            }
-        }
+        let search_language = vector_selection.search_language;
+        let query_embedding = vector_selection.query_embedding;
+        let mut rows = vector_selection.rows;
+        let mut selected_column = vector_selection.selected_column;
+        let mut selected_path = vector_selection.selected_path;
 
         if hybrid {
             let lexical_limit = hybrid_fts_limit.or(limit);
@@ -1264,6 +1380,136 @@ fn alternate_embedding_language(language: TextEmbeddingLanguage) -> TextEmbeddin
     }
 }
 
+#[derive(Debug)]
+struct SemanticVectorSelection {
+    rows: Vec<SearchArticleRow>,
+    search_language: TextEmbeddingLanguage,
+    query_embedding: Vec<f32>,
+    selected_column: &'static str,
+    selected_path: &'static str,
+}
+
+fn choose_primary_search_language(keyword: &str) -> TextEmbeddingLanguage {
+    if is_pure_english_query(keyword) {
+        TextEmbeddingLanguage::English
+    } else {
+        detect_language(keyword)
+    }
+}
+
+fn is_pure_english_query(keyword: &str) -> bool {
+    let mut has_ascii_alpha = false;
+    for ch in keyword.chars() {
+        if ch.is_ascii_alphabetic() {
+            has_ascii_alpha = true;
+            continue;
+        }
+        if ch.is_ascii_digit() || ch.is_ascii_whitespace() || ch.is_ascii_punctuation() {
+            continue;
+        }
+        return false;
+    }
+    has_ascii_alpha
+}
+
+async fn run_semantic_vector_search_with_fallback(
+    table: &Table,
+    keyword: &str,
+    limit: Option<usize>,
+    max_distance: Option<f32>,
+    enhanced_highlight: bool,
+) -> Result<SemanticVectorSelection> {
+    let mut search_language = choose_primary_search_language(keyword);
+    let mut query_embedding = embed_text_with_language(keyword, search_language);
+    let primary_column = vector_column_for_language(search_language);
+    let primary_index = inspect_index_for_column(table, primary_column, false).await;
+    let primary_path = if primary_index.is_some() { "vector_index" } else { "vector_scan" };
+    let primary_reason = index_reason(primary_column, primary_index.as_ref());
+
+    log_query_path(
+        "semantic_search.primary",
+        primary_path,
+        "vector_index",
+        &format!(
+            "{primary_reason}; language={:?}; result_limit={}; max_distance={}; \
+             enhanced_highlight={enhanced_highlight}",
+            search_language,
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            max_distance
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+    );
+
+    let primary_started = Instant::now();
+    let mut rows = run_semantic_vector_search(
+        table,
+        primary_column,
+        query_embedding.as_slice(),
+        limit,
+        max_distance,
+    )
+    .await?;
+    log_query_result(
+        "semantic_search.primary",
+        primary_path,
+        rows.len(),
+        primary_started.elapsed().as_millis(),
+    );
+
+    let mut selected_column = primary_column;
+    let mut selected_path = primary_path;
+
+    if rows.is_empty() {
+        let fallback_language = alternate_embedding_language(search_language);
+        let fallback_column = vector_column_for_language(fallback_language);
+        let fallback_index = inspect_index_for_column(table, fallback_column, false).await;
+        let fallback_path = if fallback_index.is_some() { "vector_index" } else { "vector_scan" };
+        let fallback_reason = format!(
+            "primary_rows=0; primary_language={:?}; fallback_language={:?}; {}",
+            search_language,
+            fallback_language,
+            index_reason(fallback_column, fallback_index.as_ref())
+        );
+        log_query_path("semantic_search.fallback", fallback_path, "vector_index", &fallback_reason);
+
+        let fallback_embedding = embed_text_with_language(keyword, fallback_language);
+        let fallback_started = Instant::now();
+        let fallback_rows = run_semantic_vector_search(
+            table,
+            fallback_column,
+            fallback_embedding.as_slice(),
+            limit,
+            max_distance,
+        )
+        .await?;
+        log_query_result(
+            "semantic_search.fallback",
+            fallback_path,
+            fallback_rows.len(),
+            fallback_started.elapsed().as_millis(),
+        );
+
+        if !fallback_rows.is_empty() {
+            search_language = fallback_language;
+            query_embedding = fallback_embedding;
+            rows = fallback_rows;
+            selected_column = fallback_column;
+            selected_path = fallback_path;
+        }
+    }
+
+    Ok(SemanticVectorSelection {
+        rows,
+        search_language,
+        query_embedding,
+        selected_column,
+        selected_path,
+    })
+}
+
 async fn run_semantic_vector_search(
     table: &Table,
     vector_column: &str,
@@ -1604,6 +1850,172 @@ fn batches_to_images(batches: &[RecordBatch]) -> Result<Vec<ImageInfo>> {
         }
     }
     Ok(images)
+}
+
+#[derive(Debug, Clone)]
+struct ArticleViewRecord {
+    id: String,
+    article_id: String,
+    viewed_at: i64,
+    day_bucket: String,
+    hour_bucket: String,
+    client_fingerprint: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+const SHANGHAI_TIMEZONE: &str = "Asia/Shanghai";
+
+fn shanghai_tz() -> FixedOffset {
+    FixedOffset::east_opt(8 * 3600).expect("UTC+8 offset should be valid")
+}
+
+fn normalize_daily_window(days: usize, max_days: usize) -> usize {
+    let upper = max_days.max(1);
+    days.clamp(1, upper)
+}
+
+fn article_view_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("article_id", DataType::Utf8, false),
+        Field::new("viewed_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("day_bucket", DataType::Utf8, false),
+        Field::new("hour_bucket", DataType::Utf8, false),
+        Field::new("client_fingerprint", DataType::Utf8, false),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+    ]))
+}
+
+fn build_article_view_batch(record: &ArticleViewRecord) -> Result<RecordBatch> {
+    let mut id_builder = StringBuilder::new();
+    let mut article_id_builder = StringBuilder::new();
+    let mut viewed_at_builder = TimestampMillisecondBuilder::new();
+    let mut day_bucket_builder = StringBuilder::new();
+    let mut hour_bucket_builder = StringBuilder::new();
+    let mut client_fingerprint_builder = StringBuilder::new();
+    let mut created_at_builder = TimestampMillisecondBuilder::new();
+    let mut updated_at_builder = TimestampMillisecondBuilder::new();
+
+    id_builder.append_value(&record.id);
+    article_id_builder.append_value(&record.article_id);
+    viewed_at_builder.append_value(record.viewed_at);
+    day_bucket_builder.append_value(&record.day_bucket);
+    hour_bucket_builder.append_value(&record.hour_bucket);
+    client_fingerprint_builder.append_value(&record.client_fingerprint);
+    created_at_builder.append_value(record.created_at);
+    updated_at_builder.append_value(record.updated_at);
+
+    let schema = article_view_schema();
+    let arrays: Vec<ArrayRef> = vec![
+        Arc::new(id_builder.finish()),
+        Arc::new(article_id_builder.finish()),
+        Arc::new(viewed_at_builder.finish()),
+        Arc::new(day_bucket_builder.finish()),
+        Arc::new(hour_bucket_builder.finish()),
+        Arc::new(client_fingerprint_builder.finish()),
+        Arc::new(created_at_builder.finish()),
+        Arc::new(updated_at_builder.finish()),
+    ];
+
+    Ok(RecordBatch::try_new(schema, arrays)?)
+}
+
+async fn upsert_article_view_record(table: &Table, record: &ArticleViewRecord) -> Result<()> {
+    let batch = build_article_view_batch(record)?;
+    let schema = batch.schema();
+    let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+
+    let mut merge = table.merge_insert(&["id"]);
+    merge.when_matched_update_all(None);
+    merge.when_not_matched_insert_all();
+    merge.execute(Box::new(batches)).await?;
+    Ok(())
+}
+
+async fn fetch_article_view_day_counts(
+    table: &Table,
+    article_id: &str,
+) -> Result<HashMap<String, u32>> {
+    let filter = format!("article_id = '{}'", escape_literal(article_id));
+    let batches = table
+        .query()
+        .only_if(filter)
+        .select(Select::columns(&["day_bucket"]))
+        .execute()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for batch in batches {
+        let day_array = string_array(&batch, "day_bucket")?;
+        for idx in 0..batch.num_rows() {
+            if day_array.is_null(idx) {
+                continue;
+            }
+            let day = day_array.value(idx).to_string();
+            *counts.entry(day).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
+}
+
+async fn fetch_article_view_hour_counts_for_day(
+    table: &Table,
+    article_id: &str,
+    day: &str,
+) -> Result<HashMap<String, u32>> {
+    let filter = format!(
+        "article_id = '{}' AND day_bucket = '{}'",
+        escape_literal(article_id),
+        escape_literal(day)
+    );
+    let batches = table
+        .query()
+        .only_if(filter)
+        .select(Select::columns(&["hour_bucket"]))
+        .execute()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for batch in batches {
+        let hour_array = string_array(&batch, "hour_bucket")?;
+        for idx in 0..batch.num_rows() {
+            if hour_array.is_null(idx) {
+                continue;
+            }
+            let bucket = hour_array.value(idx);
+            let hour = bucket.rsplit(' ').next().unwrap_or("").trim();
+            if hour.len() != 2 || !hour.chars().all(|ch| ch.is_ascii_digit()) {
+                continue;
+            }
+            *counts.entry(hour.to_string()).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
+}
+
+fn build_recent_day_points(
+    day_counts: &HashMap<String, u32>,
+    end_day: &str,
+    days: usize,
+) -> Result<Vec<ArticleViewPoint>> {
+    let end_date = NaiveDate::parse_from_str(end_day, "%Y-%m-%d")
+        .with_context(|| format!("invalid day bucket format: {end_day}"))?;
+    let mut points = Vec::with_capacity(days);
+    for offset in (0..days).rev() {
+        let day = end_date - ChronoDuration::days(offset as i64);
+        let key = day.format("%Y-%m-%d").to_string();
+        points.push(ArticleViewPoint {
+            key: key.clone(),
+            views: *day_counts.get(&key).unwrap_or(&0),
+        });
+    }
+    Ok(points)
 }
 
 fn extract_vector(batches: &[RecordBatch], column: &str) -> Option<Vec<f32>> {
@@ -2184,9 +2596,10 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        alternate_embedding_language, cosine_similarity, extract_highlight,
-        extract_semantic_highlight, find_case_insensitive_match_range, semantic_query_tokens,
-        split_text_by_sentence_or_size, vector_column_for_language, TextEmbeddingLanguage,
+        alternate_embedding_language, choose_primary_search_language, cosine_similarity,
+        extract_highlight, extract_semantic_highlight, find_case_insensitive_match_range,
+        is_pure_english_query, semantic_query_tokens, split_text_by_sentence_or_size,
+        vector_column_for_language, TextEmbeddingLanguage,
     };
 
     #[test]
@@ -2279,5 +2692,23 @@ mod tests {
     fn vector_column_mapping_is_stable() {
         assert_eq!(vector_column_for_language(TextEmbeddingLanguage::English), "vector_en");
         assert_eq!(vector_column_for_language(TextEmbeddingLanguage::Chinese), "vector_zh");
+    }
+
+    #[test]
+    fn pure_english_query_detection_is_strict() {
+        assert!(is_pure_english_query("Rust async runtime 101"));
+        assert!(is_pure_english_query("vector-en fallback? yes!"));
+        assert!(!is_pure_english_query("Rust 异步"));
+        assert!(!is_pure_english_query("仅中文"));
+        assert!(!is_pure_english_query("12345"));
+    }
+
+    #[test]
+    fn primary_search_language_prefers_vector_en_for_pure_english() {
+        assert_eq!(
+            choose_primary_search_language("How to optimize wasm bundle size"),
+            TextEmbeddingLanguage::English
+        );
+        assert_eq!(choose_primary_search_language("Rust 异步编程"), TextEmbeddingLanguage::Chinese);
     }
 }

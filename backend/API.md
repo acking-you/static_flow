@@ -57,6 +57,151 @@ curl "http://localhost:3000/api/articles?tag=rust&category=Web"
 curl http://localhost:3000/api/articles/post-001
 ```
 
+### 2.1) 记录文章浏览（自动计数）
+
+`POST /api/articles/:id/view`
+
+用途：
+- 前端进入文章详情页时调用，用于浏览计数。
+- 后端默认 **60 秒去重**：同一文章 + 同一客户端指纹（IP + User-Agent 哈希）在同一窗口只记 1 次。
+- 去重窗口支持运行时配置（见下文 Admin 接口）。
+- 统计分桶按 **Asia/Shanghai (UTC+8)** 生成 `day/hour` 维度。
+- 响应中的 `counted` 表示本次是否计入新增浏览（`false` 代表命中去重窗口）。
+
+示例：
+
+```bash
+curl -X POST "http://localhost:3000/api/articles/post-001/view"
+```
+
+响应示例：
+
+```json
+{
+  "article_id": "post-001",
+  "counted": true,
+  "total_views": 128,
+  "timezone": "Asia/Shanghai",
+  "today_views": 12,
+  "daily_points": [
+    { "key": "2026-02-14", "views": 5 },
+    { "key": "2026-02-15", "views": 7 }
+  ],
+  "server_time_ms": 1760112233445
+}
+```
+
+返回字段说明：
+- `counted`：本次请求是否新增了一条浏览事件
+- `total_views`：当前文章累计浏览次数（去重后）
+- `today_views`：按 `Asia/Shanghai` 当天累计浏览次数
+- `daily_points`：最近一段时间（默认 30 天，上限由 `trend_max_days` 配置）的按天趋势点
+- `server_time_ms`：后端记录这次请求时的 Unix 毫秒时间戳
+
+### 2.2) 获取文章浏览趋势
+
+`GET /api/articles/:id/view-trend`
+
+查询参数：
+- `granularity`（可选）`day` 或 `hour`，默认 `day`
+- `days`（可选）仅 `day` 模式有效，默认值来自运行时配置 `trend_default_days`
+- `days` 上限来自运行时配置 `trend_max_days`（默认 `180`）
+- `day`（可选）仅 `hour` 模式必填，格式 `YYYY-MM-DD`
+
+示例：
+
+```bash
+curl "http://localhost:3000/api/articles/post-001/view-trend"
+curl "http://localhost:3000/api/articles/post-001/view-trend?granularity=day&days=14"
+curl "http://localhost:3000/api/articles/post-001/view-trend?granularity=hour&day=2026-02-15"
+```
+
+说明：
+- `day` 模式返回日趋势点（key 为 `YYYY-MM-DD`）。
+- `hour` 模式返回 24 小时趋势点（key 为 `00..23`）。
+- 趋势返回中的 `total_views` 始终是文章全量累计值，不受 `days/day` 参数影响。
+
+`day` 模式响应示例：
+
+```json
+{
+  "article_id": "post-001",
+  "timezone": "Asia/Shanghai",
+  "granularity": "day",
+  "day": null,
+  "total_views": 128,
+  "points": [
+    { "key": "2026-02-14", "views": 5 },
+    { "key": "2026-02-15", "views": 7 }
+  ]
+}
+```
+
+`hour` 模式响应示例：
+
+```json
+{
+  "article_id": "post-001",
+  "timezone": "Asia/Shanghai",
+  "granularity": "hour",
+  "day": "2026-02-15",
+  "total_views": 128,
+  "points": [
+    { "key": "00", "views": 0 },
+    { "key": "01", "views": 1 },
+    { "key": "02", "views": 0 }
+  ]
+}
+```
+
+### 2.3) Admin：浏览统计运行时配置（本地）
+
+> 该接口不在 `/api` 路径下，建议仅通过本地/内网访问，不对公网开放。
+
+`GET /admin/view-analytics-config`
+
+示例：
+
+```bash
+curl "http://127.0.0.1:3000/admin/view-analytics-config"
+```
+
+响应示例：
+
+```json
+{
+  "dedupe_window_seconds": 60,
+  "trend_default_days": 30,
+  "trend_max_days": 180
+}
+```
+
+`POST /admin/view-analytics-config`
+
+请求体（字段均可选，部分更新）：
+
+```json
+{
+  "dedupe_window_seconds": 60,
+  "trend_default_days": 30,
+  "trend_max_days": 180
+}
+```
+
+参数约束：
+- `dedupe_window_seconds`: `1..3600`
+- `trend_default_days`: `1..365`
+- `trend_max_days`: `1..365`
+- 且 `trend_default_days <= trend_max_days`
+
+示例：
+
+```bash
+curl -X POST "http://127.0.0.1:3000/admin/view-analytics-config" \
+  -H "Content-Type: application/json" \
+  -d '{"dedupe_window_seconds":120,"trend_default_days":14,"trend_max_days":180}'
+```
+
 ### 3) 获取相关文章（向量）
 
 `GET /api/articles/:id/related`
@@ -100,8 +245,10 @@ curl "http://localhost:3000/api/search?q=rust&limit=50"
 - `max_distance`（可选）：向量距离上界，作用于返回结果中的 `_distance` 字段；越小越严格，不传则不过滤距离
 
 实现说明：
-- 默认按 query 语言选择向量列（英文→`vector_en`，中文→`vector_zh`）
-- 若主向量列无结果，会自动回退到另一语言向量列再检索一次（例如 `vector_en` 为空时，英文 query 会回退 `vector_zh`）
+- 纯英文 query 会优先使用 `vector_en` 检索
+- 非纯英文 query 按语言检测选择主向量列（中文通常走 `vector_zh`）
+- 若主向量列无结果，会自动回退到另一语言向量列再检索一次（例如英文 query 在 `vector_en` 0 召回时回退 `vector_zh`）
+- 当启用 `hybrid=true` 时，混合检索中的向量召回复用同一套“主列 + 0 召回回退”逻辑，再与词法检索融合
 - `highlight` 为“语义片段”：从正文中分块候选，按语义相似度（余弦）+ 词面重叠加权，选最佳片段
 - 若最佳片段存在词面命中，会做 `<mark>` 标注；否则返回最相关语义片段（而非随机摘要）
 - 语义检索会记录 `semantic_search.highlight` 阶段耗时；当 `enhanced_highlight=false` 时走 `fast_excerpt`，当 `true` 时走 `semantic_snippet_rerank`
@@ -227,6 +374,7 @@ curl "http://localhost:3000/api/image-search-text?q=clickhouse execution pipelin
 
 - `articles` 表：文章元数据、正文、文本向量
 - `images` 表：图片二进制、缩略图、视觉向量
+- `article_views` 表：文章浏览事件（含去重键、按天/小时分桶字段；默认 60s 去重窗口，可运行时配置）
 
 图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。`thumb=true` 时优先 `thumbnail`，为空则回退 `data`。
 
@@ -287,7 +435,7 @@ ALLOWED_ORIGINS=https://acking-you.github.io \
 ./target/release/sf-cli db --db-path ./data/lancedb cleanup-orphans --table images
 ```
 
-批量处理三张核心表：
+批量处理全部清理目标表（`articles`、`images`、`taxonomies`、`article_views`；若 `article_views` 尚未创建会自动跳过）：
 
 ```bash
 ./target/release/sf-cli db --db-path ./data/lancedb cleanup-orphans

@@ -10,6 +10,8 @@ tracing = "0.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+chrono = { workspace = true }
 fastembed = "5"
 futures = "0.3"
 lancedb = { workspace = true }

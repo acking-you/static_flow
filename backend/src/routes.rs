@@ -1,7 +1,7 @@
 use axum::{
     http::{HeaderValue, Method},
     middleware,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -47,6 +47,8 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
+        .route("/api/articles/:id/view", post(handlers::track_article_view))
+        .route("/api/articles/:id/view-trend", get(handlers::get_article_view_trend))
         .route("/api/articles/:id/related", get(handlers::related_articles))
         .route("/api/tags", get(handlers::list_tags))
         .route("/api/categories", get(handlers::list_categories))
@@ -57,6 +59,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/images", get(handlers::list_images))
         .route("/api/image-search", get(handlers::search_images))
         .route("/api/image-search-text", get(handlers::search_images_by_text))
+        .route(
+            "/admin/view-analytics-config",
+            get(handlers::get_view_analytics_config).post(handlers::update_view_analytics_config),
+        )
         .with_state(state)
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(cors)

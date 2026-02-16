@@ -58,14 +58,27 @@ frontend/
 
 **Done**
 - Responsive shell with sticky/fixed header, mobile navigation, and dark-mode toggle
-- Article listing cards, detail page typography, and tag/category listing views
-- Basic routing + placeholder data models for articles/categories/tags
+- API-driven article list/detail, tags, categories, search, image search, and related-article rendering
+- Article detail toolbar actions (language switch, quick brief, copy raw markdown, trend panel)
+- Article image lightbox with zoom in/out/reset controls
+- Article view analytics integration:
+  - enter article detail => call `POST /api/articles/:id/view` (backend 10s dedupe)
+  - show total views near article header
+  - open trend panel from left action button and render day/hour line chart
+  - support hour mode with specific day selection (`YYYY-MM-DD`)
 
 **Next up**
-- Hook real data sources into `models.rs`/`gloo-net` requests (currently stubbed)
-- Flesh out loading & skeleton states for article pages once the API is wired
-- Add integration/visual regression tests or snapshots once the routes stabilize
-- Polish search interactions (keyboard shortcuts, history) and wire to backend
+- Add component/integration tests for trend panel state transitions (`day`/`hour`, day selector, error states)
+- Improve chart accessibility (keyboard focus, richer aria labels, screen-reader value summaries)
+- Add visual-regression coverage for article detail overlays (brief modal, image lightbox, trend dialog)
+
+## Article View Analytics Flow
+
+1. Route enters article detail page (`/posts/:id`).
+2. Frontend fetches article content, then calls `POST /api/articles/:id/view`.
+3. Response returns `total_views`, `today_views`, and `daily_points` (timezone: `Asia/Shanghai`).
+4. Header view badge uses `total_views`; trend button opens overlay chart.
+5. Overlay can request `GET /api/articles/:id/view-trend?granularity=day&days=30` or `granularity=hour&day=YYYY-MM-DD`.
 
 ## UI Copy & Localization
 

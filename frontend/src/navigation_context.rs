@@ -57,13 +57,7 @@ fn parse_page_state(encoded: &str) -> BTreeMap<String, String> {
 fn encode_page_state(state: &BTreeMap<String, String>) -> String {
     state
         .iter()
-        .map(|(key, value)| {
-            format!(
-                "{}={}",
-                urlencoding::encode(key),
-                urlencoding::encode(value)
-            )
-        })
+        .map(|(key, value)| format!("{}={}", urlencoding::encode(key), urlencoding::encode(value)))
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -78,9 +72,7 @@ pub fn current_page_url() -> Option<String> {
 }
 
 pub fn current_scroll_y() -> f64 {
-    window()
-        .and_then(|win| win.scroll_y().ok())
-        .unwrap_or(0.0)
+    window().and_then(|win| win.scroll_y().ok()).unwrap_or(0.0)
 }
 
 pub fn is_return_armed() -> bool {

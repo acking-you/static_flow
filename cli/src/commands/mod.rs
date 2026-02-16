@@ -187,6 +187,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             },
+            DbCommands::BackfillArticleVectors {
+                limit,
+                dry_run,
+            } => db_manage::backfill_article_vectors(&db_path, limit, dry_run).await,
             DbCommands::DeleteRows {
                 table,
                 where_clause,

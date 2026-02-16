@@ -36,6 +36,33 @@ pub struct SiteStats {
     pub total_categories: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ArticleViewPoint {
+    pub key: String,
+    pub views: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ArticleViewTrackResponse {
+    pub article_id: String,
+    pub counted: bool,
+    pub total_views: usize,
+    pub timezone: String,
+    pub today_views: u32,
+    pub daily_points: Vec<ArticleViewPoint>,
+    pub server_time_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ArticleViewTrendResponse {
+    pub article_id: String,
+    pub timezone: String,
+    pub granularity: String,
+    pub day: Option<String>,
+    pub total_views: usize,
+    pub points: Vec<ArticleViewPoint>,
+}
+
 #[cfg(not(feature = "mock"))]
 #[derive(Debug, Deserialize)]
 struct ArticleListResponse {
@@ -152,6 +179,121 @@ pub async fn fetch_article_detail(id: &str) -> Result<Option<Article>, String> {
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
         Ok(Some(article))
+    }
+}
+
+/// Track one article detail view with backend-side dedupe.
+pub async fn track_article_view(id: &str) -> Result<ArticleViewTrackResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(ArticleViewTrackResponse {
+            article_id: id.to_string(),
+            counted: true,
+            total_views: 128,
+            timezone: "Asia/Shanghai".to_string(),
+            today_views: 12,
+            daily_points: (0..30)
+                .map(|offset| ArticleViewPoint {
+                    key: format!("2026-02-{:02}", offset + 1),
+                    views: ((offset * 7 + 11) % 42) as u32,
+                })
+                .collect(),
+            server_time_ms: 0,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/articles/{}/view", API_BASE, urlencoding::encode(id));
+        let response = Request::post(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch article view trend points.
+pub async fn fetch_article_view_trend(
+    id: &str,
+    granularity: &str,
+    days: Option<usize>,
+    day: Option<&str>,
+) -> Result<ArticleViewTrendResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        if granularity.eq_ignore_ascii_case("hour") {
+            return Ok(ArticleViewTrendResponse {
+                article_id: id.to_string(),
+                timezone: "Asia/Shanghai".to_string(),
+                granularity: "hour".to_string(),
+                day: Some(day.unwrap_or("2026-02-15").to_string()),
+                total_views: 128,
+                points: (0..24)
+                    .map(|hour| ArticleViewPoint {
+                        key: format!("{hour:02}"),
+                        views: ((hour * 3 + 5) % 18) as u32,
+                    })
+                    .collect(),
+            });
+        }
+
+        let window = days.unwrap_or(30).max(1);
+        return Ok(ArticleViewTrendResponse {
+            article_id: id.to_string(),
+            timezone: "Asia/Shanghai".to_string(),
+            granularity: "day".to_string(),
+            day: None,
+            total_views: 128,
+            points: (0..window)
+                .map(|offset| ArticleViewPoint {
+                    key: format!("2026-02-{:02}", offset + 1),
+                    views: ((offset * 5 + 9) % 40) as u32,
+                })
+                .collect(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!(
+            "{}/articles/{}/view-trend?granularity={}",
+            API_BASE,
+            urlencoding::encode(id),
+            urlencoding::encode(granularity),
+        );
+        if let Some(days) = days {
+            url.push_str(&format!("&days={days}"));
+        }
+        if let Some(day) = day {
+            url.push_str(&format!("&day={}", urlencoding::encode(day)));
+        }
+
+        let response = Request::get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 

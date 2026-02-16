@@ -122,8 +122,10 @@ pub fn latest_articles_page() -> Html {
                 if let Some(context) =
                     crate::navigation_context::pop_context_if_armed_for_current_page()
                 {
-                    if let Some(page_num) =
-                        context.page_state.get("page").and_then(|raw| raw.parse::<usize>().ok())
+                    if let Some(page_num) = context
+                        .page_state
+                        .get("page")
+                        .and_then(|raw| raw.parse::<usize>().ok())
                     {
                         go_to_page_cb.emit(page_num);
                     }

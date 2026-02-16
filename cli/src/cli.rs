@@ -344,6 +344,19 @@ pub enum DbCommands {
         #[arg(long)]
         summary_en_file: Option<PathBuf>,
     },
+    /// Backfill missing article vectors from `content`/`content_en`.
+    ///
+    /// Mapping:
+    /// - `content` -> `vector_zh` (Chinese model)
+    /// - `content_en` -> `vector_en` (English model)
+    BackfillArticleVectors {
+        /// Optional upper bound of rows to update in this run.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Print candidates only, do not write changes.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Delete rows by SQL filter.
     DeleteRows {
         /// Table name.
@@ -393,8 +406,9 @@ pub enum DbCommands {
     /// This command intentionally avoids full-table rewrite (`--all`) and is
     /// safer for large binary-heavy tables (for example `images`).
     CleanupOrphans {
-        /// Optional target table (`articles`, `images`, `taxonomies`).
-        /// If omitted, runs on all managed tables.
+        /// Optional target table (`articles`, `images`, `taxonomies`, or
+        /// `article_views`).
+        /// If omitted, runs on all cleanup target tables.
         #[arg(long)]
         table: Option<String>,
     },

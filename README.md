@@ -37,7 +37,7 @@ This project keeps runtime content data in a separate dataset repository:
 - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
 - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
 - Local data root: `/mnt/e/static-flow-data/lancedb`
-- Format: LanceDB table directories (`articles.lance/`, `images.lance/`, `taxonomies.lance/`)
+- Format: LanceDB table directories (`articles.lance/`, `images.lance/`, `taxonomies.lance/`, `article_views.lance/`)
 
 Recommended workflow:
 
@@ -154,6 +154,7 @@ cd cli
 # - articles.vector_en / articles.vector_zh (vector)
 # - images.vector (vector)
 # - taxonomies table stores category/tag metadata (no vector index)
+# - article_views is a backend runtime analytics table (no CLI index management required)
 ../target/release/sf-cli ensure-indexes --db-path ../data/lancedb
 
 # By default, write-article / write-images / sync-notes auto-run index-only optimize
@@ -224,13 +225,15 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
 # One-command orphan cleanup (prune-only, no full rewrite)
 ../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans --table images
-# Run orphan cleanup across all managed tables
+# Run orphan cleanup across all cleanup target tables (includes article_views; skips if missing)
 ../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans
 
-# Managed tables
+# Managed tables (sf-cli)
 # - articles: article body/metadata + vectors
 # - images: binary image data + vectors
 # - taxonomies: category/tag metadata (`kind`, `key`, `name`, `description`)
+# Runtime table (backend)
+# - article_views: backend analytics table (view events, day/hour buckets; lazily created on first /api/articles/:id/view call)
 
 # Backend-like API debug commands
 ../target/release/sf-cli api --db-path ../data/lancedb list-articles --category "Tech"
@@ -251,6 +254,8 @@ cd cli
 |----------|-------------|
 | `GET /api/articles` | Article list (supports tag/category filter) |
 | `GET /api/articles/:id` | Article detail |
+| `POST /api/articles/:id/view` | Track article view (default 60s dedupe per article+client) |
+| `GET /api/articles/:id/view-trend` | Article view trend (day/hour buckets, Asia/Shanghai) |
 | `GET /api/articles/:id/related` | Related articles (vector similarity) |
 | `GET /api/search?q=` | Full-text search |
 | `GET /api/semantic-search?q=` | Semantic search (vector, with cross-language fallback and semantic snippet highlight) |
@@ -265,6 +270,8 @@ cd cli
 > Query-path observability: logs include `query/path/fastest_path/is_fastest/reason/rows/elapsed_ms` to show whether index paths are used or fallbacks are triggered.
 
 > Semantic highlight mode: `/api/semantic-search` defaults to fast highlight; append `&enhanced_highlight=true` for higher-precision snippet reranking (slower).
+
+> View analytics: `/api/articles/:id/view` is intended to be called on article-detail entry; backend uses a 60-second dedupe window by default (configurable via local admin endpoint `/admin/view-analytics-config`) and stores trend buckets in `Asia/Shanghai`.
 
 ## Key Env Vars
 

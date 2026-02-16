@@ -7809,6 +7809,7 @@ dependencies = [
  "anyhow",
  "axum",
  "serde",
+ "sha2",
  "static-flow-shared",
  "tokio",
  "tower 0.4.13",
@@ -7842,6 +7843,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
+ "arrow-schema",
+ "chrono",
  "fastembed",
  "futures",
  "lancedb",

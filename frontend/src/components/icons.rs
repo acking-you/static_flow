@@ -21,6 +21,7 @@ pub enum IconName {
     Search,
     X,
     Menu,
+    TrendingUp,
 
     // Categories
     Tag,
@@ -50,6 +51,7 @@ impl IconName {
             IconName::Search => "m21 21-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0z",
             IconName::X => "M18 6 6 18M6 6l12 12",
             IconName::Menu => "M4 12h16M4 6h16M4 18h16",
+            IconName::TrendingUp => "M3 17l6-6 4 4 8-8M14 7h7v7",
 
             IconName::Tag => "M12 2l8 8-10 10L2 12l10-10zM7 7h.01",
             IconName::Hash => "M4 9h16M4 15h16M10 3L8 21M16 3l-2 18",

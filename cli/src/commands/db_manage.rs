@@ -2,7 +2,9 @@ use std::{fs, path::Path};
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::{Array, BinaryArray, RecordBatch, StringArray, TimestampMillisecondArray};
+use arrow_array::{
+    Array, BinaryArray, FixedSizeListArray, RecordBatch, StringArray, TimestampMillisecondArray,
+};
 use arrow_schema::{DataType, TimeUnit};
 use chrono::Duration as ChronoDuration;
 use futures::TryStreamExt;
@@ -11,7 +13,9 @@ use lancedb::{
     table::{OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
-use static_flow_shared::embedding::embed_image_bytes;
+use static_flow_shared::embedding::{
+    embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage,
+};
 
 use crate::{
     cli::QueryOutputFormat,
@@ -23,7 +27,7 @@ use crate::{
     utils::rasterize_svg_for_embedding,
 };
 
-const MANAGED_TABLES: [&str; 3] = ["articles", "images", "taxonomies"];
+const CLEANUP_TARGET_TABLES: [&str; 4] = ["articles", "images", "taxonomies", "article_views"];
 
 #[derive(Debug, Clone)]
 pub struct QueryRowsOptions {
@@ -397,9 +401,19 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
 pub async fn cleanup_orphans(db_path: &Path, table: Option<&str>) -> Result<()> {
     let db = connect_db(db_path).await?;
     let targets = resolve_cleanup_targets(table)?;
+    let allow_missing = table.is_none();
 
     for target in targets {
-        let table = open_table(&db, target).await?;
+        let table = match db.open_table(target).execute().await {
+            Ok(table) => table,
+            Err(err) => {
+                if allow_missing {
+                    tracing::warn!("Skip cleanup for missing table `{}`: {}", target, err);
+                    continue;
+                }
+                return Err(anyhow::anyhow!("failed to open table `{}`: {}", target, err));
+            },
+        };
         let _ = table
             .optimize(OptimizeAction::Prune {
                 older_than: Some(ChronoDuration::zero()),
@@ -527,6 +541,237 @@ pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: b
     Ok(())
 }
 
+pub async fn backfill_article_vectors(
+    db_path: &Path,
+    limit: Option<usize>,
+    dry_run: bool,
+) -> Result<()> {
+    if limit == Some(0) {
+        tracing::info!("Skip backfill: --limit=0.");
+        return Ok(());
+    }
+
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, "articles").await?;
+
+    let filter = "(vector_zh IS NULL AND content IS NOT NULL AND content != '') OR (vector_en IS \
+                  NULL AND content_en IS NOT NULL AND content_en != '')";
+    let columns = ["id", "content", "content_en", "vector_en", "vector_zh"];
+
+    let stream = match table
+        .query()
+        .only_if(filter.to_string())
+        .select(Select::columns(&columns))
+        .execute()
+        .await
+    {
+        Ok(stream) => stream,
+        Err(err) => {
+            return Err(
+                friendly_table_error(&table, "backfill article vectors", err.to_string()).await
+            );
+        },
+    };
+
+    let batches = stream
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|err| anyhow!("failed to read candidate rows for vector backfill: {err}"))?;
+
+    if batches.is_empty() {
+        tracing::info!("No article rows matched vector-backfill candidates.");
+        return Ok(());
+    }
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut scanned = 0usize;
+    let mut candidates = 0usize;
+    let mut filled_vector_zh = 0usize;
+    let mut filled_vector_en = 0usize;
+    let mut updates_vector_en = Vec::<(String, Vec<f32>)>::new();
+    let mut updates_vector_zh = Vec::<(String, Vec<f32>)>::new();
+
+    'scan: for batch in &batches {
+        let ids = downcast_string(batch, "id")?;
+        let contents = downcast_string(batch, "content")?;
+        let contents_en = downcast_string(batch, "content_en")?;
+        let vectors_en = downcast_fixed_size_list(batch, "vector_en")?;
+        let vectors_zh = downcast_fixed_size_list(batch, "vector_zh")?;
+
+        for row in 0..batch.num_rows() {
+            scanned += 1;
+            let id = ids.value(row).to_string();
+            let content = contents.value(row);
+            let content_en = nullable_string(contents_en, row);
+            let should_fill_vector_zh = vectors_zh.is_null(row) && !content.trim().is_empty();
+            let should_fill_vector_en = vectors_en.is_null(row)
+                && content_en
+                    .as_ref()
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false);
+            if !should_fill_vector_zh && !should_fill_vector_en {
+                continue;
+            }
+
+            if let Some(max) = limit {
+                if candidates >= max {
+                    break 'scan;
+                }
+            }
+
+            if should_fill_vector_zh {
+                let vector = embed_text_with_language(content, TextEmbeddingLanguage::Chinese);
+                updates_vector_zh.push((id.clone(), vector));
+                filled_vector_zh += 1;
+            }
+            if should_fill_vector_en {
+                if let Some(content_en) = &content_en {
+                    let vector =
+                        embed_text_with_language(content_en, TextEmbeddingLanguage::English);
+                    updates_vector_en.push((id.clone(), vector));
+                    filled_vector_en += 1;
+                }
+            }
+
+            candidates += 1;
+        }
+    }
+
+    if candidates == 0 {
+        tracing::info!("No article rows need vector backfill after candidate scan.");
+        return Ok(());
+    }
+
+    if dry_run {
+        tracing::info!(
+            "Dry run: {} article rows would be backfilled (scanned={}, fill_vector_zh={}, \
+             fill_vector_en={}).",
+            candidates,
+            scanned,
+            filled_vector_zh,
+            filled_vector_en
+        );
+        return Ok(());
+    }
+
+    apply_article_vector_updates(
+        &table,
+        "vector_en",
+        static_flow_shared::embedding::TEXT_VECTOR_DIM_EN,
+        &updates_vector_en,
+        now_ms,
+    )
+    .await?;
+    apply_article_vector_updates(
+        &table,
+        "vector_zh",
+        static_flow_shared::embedding::TEXT_VECTOR_DIM_ZH,
+        &updates_vector_zh,
+        now_ms,
+    )
+    .await?;
+
+    if let Err(err) = ensure_vector_index(&table, "vector_en").await {
+        tracing::warn!("Failed to ensure vector index on articles (vector_en): {err}");
+    }
+    if let Err(err) = ensure_vector_index(&table, "vector_zh").await {
+        tracing::warn!("Failed to ensure vector index on articles (vector_zh): {err}");
+    }
+
+    tracing::info!(
+        "Article vector backfill completed: updated={}, scanned={}, filled_vector_zh={}, \
+         filled_vector_en={}",
+        candidates,
+        scanned,
+        filled_vector_zh,
+        filled_vector_en
+    );
+    Ok(())
+}
+
+async fn apply_article_vector_updates(
+    table: &Table,
+    vector_column: &str,
+    vector_dim: usize,
+    updates: &[(String, Vec<f32>)],
+    updated_at_ms: i64,
+) -> Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    for chunk in updates.chunks(32) {
+        let batch =
+            build_article_vector_update_batch(vector_column, vector_dim, chunk, updated_at_ms)?;
+        let schema = batch.schema();
+        let batches = arrow_array::RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        let mut merge = table.merge_insert(&["id"]);
+        merge.when_matched_update_all(None);
+        merge.execute(Box::new(batches)).await?;
+    }
+
+    Ok(())
+}
+
+fn build_article_vector_update_batch(
+    vector_column: &str,
+    vector_dim: usize,
+    updates: &[(String, Vec<f32>)],
+    updated_at_ms: i64,
+) -> Result<RecordBatch> {
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("id", DataType::Utf8, false),
+        arrow_schema::Field::new(
+            vector_column,
+            DataType::FixedSizeList(
+                std::sync::Arc::new(arrow_schema::Field::new("item", DataType::Float32, true)),
+                vector_dim as i32,
+            ),
+            true,
+        ),
+        arrow_schema::Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
+    ]));
+
+    let mut id_builder = arrow_array::builder::StringBuilder::new();
+    let mut updated_at_builder = arrow_array::builder::TimestampMillisecondBuilder::new();
+    let mut flat_vector_values = Vec::<f32>::with_capacity(updates.len() * vector_dim);
+
+    for (id, vector) in updates {
+        if vector.len() != vector_dim {
+            bail!(
+                "vector length mismatch for `{}`: expected {}, got {}",
+                id,
+                vector_dim,
+                vector.len()
+            );
+        }
+        id_builder.append_value(id);
+        flat_vector_values.extend_from_slice(vector);
+        updated_at_builder.append_value(updated_at_ms);
+    }
+
+    let value_array = std::sync::Arc::new(arrow_array::Float32Array::from(flat_vector_values))
+        as arrow_array::ArrayRef;
+    let vector_array = arrow_array::FixedSizeListArray::new(
+        std::sync::Arc::new(arrow_schema::Field::new("item", DataType::Float32, true)),
+        vector_dim as i32,
+        value_array,
+        None,
+    );
+
+    let arrays: Vec<arrow_array::ArrayRef> = vec![
+        std::sync::Arc::new(id_builder.finish()),
+        std::sync::Arc::new(vector_array),
+        std::sync::Arc::new(updated_at_builder.finish()),
+    ];
+
+    Ok(RecordBatch::try_new(schema, arrays)?)
+}
+
 pub async fn upsert_article_json(db_path: &Path, json: &str) -> Result<()> {
     let mut record: ArticleRecord = serde_json::from_str(json).context("invalid article JSON")?;
     let now = chrono::Utc::now().timestamp_millis();
@@ -582,17 +827,20 @@ async fn ensure_image_indexes(db: &Connection) -> Result<()> {
 fn resolve_cleanup_targets(table: Option<&str>) -> Result<Vec<&'static str>> {
     match table {
         Some(name) => {
-            if MANAGED_TABLES.contains(&name) {
-                Ok(vec![MANAGED_TABLES
+            if CLEANUP_TARGET_TABLES.contains(&name) {
+                Ok(vec![CLEANUP_TARGET_TABLES
                     .iter()
                     .find(|&&candidate| candidate == name)
                     .copied()
                     .expect("managed table existence already checked")])
             } else {
-                bail!("unsupported table `{name}`, expected one of: {}", MANAGED_TABLES.join(", "))
+                bail!(
+                    "unsupported table `{name}`, expected one of: {}",
+                    CLEANUP_TARGET_TABLES.join(", ")
+                )
             }
         },
-        None => Ok(MANAGED_TABLES.to_vec()),
+        None => Ok(CLEANUP_TARGET_TABLES.to_vec()),
     }
 }
 
@@ -867,6 +1115,29 @@ fn downcast_string<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a Strin
         .as_any()
         .downcast_ref::<StringArray>()
         .ok_or_else(|| anyhow!("column `{column}` is not StringArray"))
+}
+
+fn downcast_fixed_size_list<'a>(
+    batch: &'a RecordBatch,
+    column: &str,
+) -> Result<&'a FixedSizeListArray> {
+    let index = batch
+        .schema()
+        .index_of(column)
+        .with_context(|| format!("missing column `{column}`"))?;
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| anyhow!("column `{column}` is not FixedSizeListArray"))
+}
+
+fn nullable_string(array: &StringArray, row: usize) -> Option<String> {
+    if array.is_null(row) {
+        None
+    } else {
+        Some(array.value(row).to_string())
+    }
 }
 
 fn downcast_binary<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a BinaryArray> {

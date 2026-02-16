@@ -1,12 +1,12 @@
-use static_flow_shared::{Article, ArticleListItem};
 use gloo_timers::{callback::Timeout, future::TimeoutFuture};
+use static_flow_shared::{Article, ArticleListItem};
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{window, HtmlImageElement, KeyboardEvent};
+use web_sys::{window, HtmlImageElement, HtmlSelectElement, KeyboardEvent};
 use yew::{prelude::*, virtual_dom::AttrValue};
 use yew_router::prelude::{use_navigator, use_route, Link};
 
 use crate::{
-    api::fetch_related_articles,
+    api::{fetch_article_view_trend, fetch_related_articles, track_article_view, ArticleViewPoint},
     components::{
         article_card::ArticleCard,
         icons::IconName,
@@ -15,6 +15,7 @@ use crate::{
         scroll_to_top_button::ScrollToTopButton,
         toc_button::TocButton,
         tooltip::{TooltipIconButton, TooltipPosition},
+        view_trend_chart::ViewTrendChart,
     },
     i18n::{current::article_detail_page as t, fill_one},
     router::Route,
@@ -34,6 +35,12 @@ type ImageClickListener =
 enum ArticleContentLanguage {
     Zh,
     En,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrendGranularity {
+    Day,
+    Hour,
 }
 
 const LIGHTBOX_MIN_ZOOM: f64 = 0.5;
@@ -59,6 +66,14 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let loading = use_state(|| true);
     let related_articles = use_state(Vec::<ArticleListItem>::new);
     let related_loading = use_state(|| false);
+    let view_total = use_state(|| None::<usize>);
+    let view_today = use_state(|| None::<u32>);
+    let trend_points = use_state(Vec::<ArticleViewPoint>::new);
+    let trend_day_options = use_state(Vec::<String>::new);
+    let trend_selected_day = use_state(|| None::<String>);
+    let trend_loading = use_state(|| false);
+    let trend_error = use_state(|| None::<String>);
+    let trend_granularity = use_state(|| TrendGranularity::Day);
 
     // Back to where user came from (non-article route) with robust fallback.
     let handle_back = {
@@ -82,7 +97,9 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             if let Some(nav) = navigator.as_ref() {
                 nav.push(&Route::Posts);
             } else if let Some(win) = window() {
-                let _ = win.location().set_href(&crate::config::route_path("/posts"));
+                let _ = win
+                    .location()
+                    .set_href(&crate::config::route_path("/posts"));
             }
         })
     };
@@ -91,16 +108,61 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         let article = article.clone();
         let article_id = article_id.clone();
         let loading = loading.clone();
+        let view_total = view_total.clone();
+        let view_today = view_today.clone();
+        let trend_points = trend_points.clone();
+        let trend_day_options = trend_day_options.clone();
+        let trend_selected_day = trend_selected_day.clone();
+        let trend_error = trend_error.clone();
         use_effect_with(article_id.clone(), move |id| {
             let id = id.clone();
             let article = article.clone();
             let loading = loading.clone();
+            let view_total = view_total.clone();
+            let view_today = view_today.clone();
+            let trend_points = trend_points.clone();
+            let trend_day_options = trend_day_options.clone();
+            let trend_selected_day = trend_selected_day.clone();
+            let trend_error = trend_error.clone();
             loading.set(true);
+            view_total.set(None);
+            view_today.set(None);
+            trend_points.set(vec![]);
+            trend_day_options.set(vec![]);
+            trend_selected_day.set(None);
+            trend_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_article_detail(&id).await {
                     Ok(data) => {
+                        let has_article = data.is_some();
                         article.set(data);
                         loading.set(false);
+                        if has_article {
+                            match track_article_view(&id).await {
+                                Ok(metrics) => {
+                                    let daily_points = metrics.daily_points.clone();
+                                    let mut days = daily_points
+                                        .iter()
+                                        .map(|item| item.key.clone())
+                                        .collect::<Vec<_>>();
+                                    days.sort();
+                                    days.dedup();
+                                    let selected_day = days.last().cloned();
+
+                                    view_total.set(Some(metrics.total_views));
+                                    view_today.set(Some(metrics.today_views));
+                                    trend_points.set(daily_points);
+                                    trend_day_options.set(days);
+                                    trend_selected_day.set(selected_day);
+                                },
+                                Err(e) => {
+                                    web_sys::console::warn_1(
+                                        &format!("Failed to track article view: {}", e).into(),
+                                    );
+                                    trend_error.set(Some(e));
+                                },
+                            }
+                        }
                     },
                     Err(e) => {
                         web_sys::console::error_1(
@@ -147,6 +209,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let content_language = use_state(|| ArticleContentLanguage::Zh);
     let is_lightbox_open = use_state(|| false);
     let is_brief_open = use_state(|| false);
+    let is_trend_open = use_state(|| false);
     let markdown_copied = use_state(|| false);
     let preview_image_url = use_state_eq(|| None::<String>);
     let preview_image_failed = use_state(|| false);
@@ -187,8 +250,12 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     {
         let is_brief_open = is_brief_open.clone();
+        let is_trend_open = is_trend_open.clone();
+        let trend_granularity = trend_granularity.clone();
         use_effect_with(article_id.clone(), move |_| {
             is_brief_open.set(false);
+            is_trend_open.set(false);
+            trend_granularity.set(TrendGranularity::Day);
             || ()
         });
     }
@@ -216,6 +283,35 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         Callback::from(move |_| is_brief_open.set(false))
     };
 
+    let open_trend_click = {
+        let is_trend_open = is_trend_open.clone();
+        Callback::from(move |_| is_trend_open.set(true))
+    };
+
+    let close_trend_click = {
+        let is_trend_open = is_trend_open.clone();
+        Callback::from(move |_| is_trend_open.set(false))
+    };
+
+    let switch_trend_to_day = {
+        let trend_granularity = trend_granularity.clone();
+        Callback::from(move |_| trend_granularity.set(TrendGranularity::Day))
+    };
+
+    let switch_trend_to_hour = {
+        let trend_granularity = trend_granularity.clone();
+        Callback::from(move |_| trend_granularity.set(TrendGranularity::Hour))
+    };
+
+    let on_trend_day_change = {
+        let trend_selected_day = trend_selected_day.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                trend_selected_day.set(Some(target.value()));
+            }
+        })
+    };
+
     let close_lightbox_click = {
         let is_lightbox_open = is_lightbox_open.clone();
         let preview_image_url = preview_image_url.clone();
@@ -228,6 +324,89 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             preview_zoom.set(1.0);
         })
     };
+
+    {
+        let article_id = article_id.clone();
+        let is_trend_open = is_trend_open.clone();
+        let trend_granularity = trend_granularity.clone();
+        let trend_selected_day = trend_selected_day.clone();
+        let trend_points = trend_points.clone();
+        let trend_loading = trend_loading.clone();
+        let trend_error = trend_error.clone();
+        let view_total = view_total.clone();
+        let trend_day_options = trend_day_options.clone();
+        use_effect_with(
+            (article_id.clone(), *is_trend_open, *trend_granularity, (*trend_selected_day).clone()),
+            move |(id, is_open, granularity, selected_day)| {
+                if *is_open {
+                    let article_id = id.clone();
+                    let trend_points = trend_points.clone();
+                    let trend_loading = trend_loading.clone();
+                    let trend_error = trend_error.clone();
+                    let view_total = view_total.clone();
+                    let trend_selected_day = trend_selected_day.clone();
+                    let trend_day_options = trend_day_options.clone();
+                    let selected_day = selected_day.clone();
+                    let granularity = *granularity;
+
+                    trend_loading.set(true);
+                    trend_error.set(None);
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let response = match granularity {
+                            TrendGranularity::Day => {
+                                fetch_article_view_trend(&article_id, "day", None, None).await
+                            },
+                            TrendGranularity::Hour => {
+                                let day = selected_day.unwrap_or_default();
+                                if day.trim().is_empty() {
+                                    trend_loading.set(false);
+                                    trend_error.set(Some("missing trend day".to_string()));
+                                    return;
+                                }
+                                fetch_article_view_trend(
+                                    &article_id,
+                                    "hour",
+                                    None,
+                                    Some(day.as_str()),
+                                )
+                                .await
+                            },
+                        };
+
+                        match response {
+                            Ok(data) => {
+                                trend_points.set(data.points.clone());
+                                view_total.set(Some(data.total_views));
+                                trend_loading.set(false);
+
+                                if data.granularity == "day" {
+                                    let mut days = data
+                                        .points
+                                        .iter()
+                                        .map(|item| item.key.clone())
+                                        .collect::<Vec<_>>();
+                                    days.sort();
+                                    days.dedup();
+                                    let selected = days.last().cloned();
+                                    trend_day_options.set(days);
+                                    if selected.is_some() {
+                                        trend_selected_day.set(selected);
+                                    }
+                                }
+                            },
+                            Err(error) => {
+                                trend_loading.set(false);
+                                trend_error.set(Some(error));
+                            },
+                        }
+                    });
+                }
+
+                || ()
+            },
+        );
+    }
 
     {
         let is_lightbox_open = is_lightbox_open.clone();
@@ -324,8 +503,46 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         });
     }
 
+    {
+        let is_trend_open = is_trend_open.clone();
+        use_effect_with(*is_trend_open, move |is_open| {
+            let keydown_listener_opt = if *is_open {
+                let handle = is_trend_open.clone();
+                let listener =
+                    wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
+                        if event.key() == "Escape" {
+                            handle.set(false);
+                        }
+                    })
+                        as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "keydown",
+                        listener.as_ref().unchecked_ref(),
+                    );
+                }
+                Some(listener)
+            } else {
+                None
+            };
+
+            move || {
+                if let Some(listener) = keydown_listener_opt {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "keydown",
+                            listener.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     let stop_lightbox_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
     let stop_brief_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
+    let stop_trend_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
     let mark_preview_failed = {
         let preview_image_failed = preview_image_failed.clone();
         Callback::from(move |_: Event| preview_image_failed.set(true))
@@ -473,7 +690,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         </div>
     };
 
-    let is_overlay_open = *is_lightbox_open || *is_brief_open;
+    let is_overlay_open = *is_lightbox_open || *is_brief_open || *is_trend_open;
 
     let body = if *loading {
         loading_view
@@ -586,7 +803,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             t::OPEN_BRIEF_BUTTON_ZH
         };
         let can_export_markdown = !active_content.trim().is_empty();
-        let show_article_actions = show_language_toggle || has_detailed_summary || can_export_markdown;
+        let show_article_actions =
+            show_language_toggle || has_detailed_summary || can_export_markdown;
         let show_side_actions_rail = show_article_actions && !is_overlay_open;
         let export_button_label = if *markdown_copied {
             if *content_language == ArticleContentLanguage::En {
@@ -599,11 +817,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         } else {
             "导出 Markdown"
         };
-        let export_button_icon = if *markdown_copied {
-            classes!("fas", "fa-check")
-        } else {
-            classes!("far", "fa-copy")
-        };
+        let export_button_icon =
+            if *markdown_copied { classes!("fas", "fa-check") } else { classes!("far", "fa-copy") };
         let export_button_class = if *markdown_copied {
             classes!(
                 "article-action-btn",
@@ -663,19 +878,22 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             js_sys::Reflect::get(&navigator, &JsValue::from_str("clipboard"))
                         {
                             if !clipboard.is_undefined() && !clipboard.is_null() {
-                                if let Ok(write_text) =
-                                    js_sys::Reflect::get(&clipboard, &JsValue::from_str("writeText"))
-                                {
-                                    if let Some(write_fn) = write_text.dyn_ref::<js_sys::Function>() {
-                                        if let Ok(promise_value) =
-                                            write_fn.call1(&clipboard, &JsValue::from_str(&markdown_source))
+                                if let Ok(write_text) = js_sys::Reflect::get(
+                                    &clipboard,
+                                    &JsValue::from_str("writeText"),
+                                ) {
+                                    if let Some(write_fn) = write_text.dyn_ref::<js_sys::Function>()
+                                    {
+                                        if let Ok(promise_value) = write_fn
+                                            .call1(&clipboard, &JsValue::from_str(&markdown_source))
                                         {
                                             if let Ok(promise) =
                                                 promise_value.dyn_into::<js_sys::Promise>()
                                             {
-                                                copied = wasm_bindgen_futures::JsFuture::from(promise)
-                                                    .await
-                                                    .is_ok();
+                                                copied =
+                                                    wasm_bindgen_futures::JsFuture::from(promise)
+                                                        .await
+                                                        .is_ok();
                                             }
                                         }
                                     }
@@ -689,9 +907,9 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         TimeoutFuture::new(1800).await;
                         markdown_copied.set(false);
                     } else {
-                        web_sys::console::warn_1(
-                            &JsValue::from_str("Failed to copy markdown to clipboard."),
-                        );
+                        web_sys::console::warn_1(&JsValue::from_str(
+                            "Failed to copy markdown to clipboard.",
+                        ));
                     }
                 });
             })
@@ -716,20 +934,9 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 )
             };
             let cta_row_class = if side_rail {
-                classes!(
-                    "article-actions-cta-row",
-                    "flex",
-                    "flex-col",
-                    "gap-2"
-                )
+                classes!("article-actions-cta-row", "flex", "flex-col", "gap-2")
             } else {
-                classes!(
-                    "article-actions-cta-row",
-                    "flex",
-                    "flex-wrap",
-                    "items-center",
-                    "gap-2"
-                )
+                classes!("article-actions-cta-row", "flex", "flex-wrap", "items-center", "gap-2")
             };
 
             html! {
@@ -1040,6 +1247,20 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     <i class={classes!("far", "fa-clock")} aria-hidden="true"></i>
                                     { fill_one(t::READ_TIME_TEMPLATE, article.read_time) }
                                 </span>
+                                <span class={classes!(
+                                    "inline-flex",
+                                    "items-center",
+                                    "gap-[0.35rem]"
+                                )}>
+                                    <i class={classes!("far", "fa-eye")} aria-hidden="true"></i>
+                                    {
+                                        if let Some(total) = *view_total {
+                                            fill_one(t::VIEW_COUNT_TEMPLATE, total)
+                                        } else {
+                                            t::VIEW_COUNT_LOADING.to_string()
+                                        }
+                                    }
+                                </span>
                             </div>
                         </header>
 
@@ -1307,15 +1528,37 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     "top-[calc(var(--header-height-desktop)+2rem)]",
                     "z-50",
                     "max-sm:left-6",
-                    "max-sm:top-[calc(var(--header-height-mobile)+1.5rem)]"
+                    "max-sm:top-[calc(var(--header-height-mobile)+1.5rem)]",
+                    "flex",
+                    "flex-col",
+                    "gap-3"
                 )}>
-                    <TooltipIconButton
-                        icon={IconName::ArrowLeft}
-                        tooltip={t::BACK_TOOLTIP}
-                        position={TooltipPosition::Right}
-                        onclick={handle_back}
-                        size={20}
-                    />
+                    <div>
+                        <TooltipIconButton
+                            icon={IconName::ArrowLeft}
+                            tooltip={t::BACK_TOOLTIP}
+                            position={TooltipPosition::Right}
+                            onclick={handle_back}
+                            size={20}
+                        />
+                    </div>
+                    {
+                        if article_data.is_some() {
+                            html! {
+                                <div>
+                                    <TooltipIconButton
+                                        icon={IconName::TrendingUp}
+                                        tooltip={t::TREND_TOOLTIP}
+                                        position={TooltipPosition::Right}
+                                        onclick={open_trend_click.clone()}
+                                        size={20}
+                                    />
+                                </div>
+                            }
+                        } else {
+                            html! {}
+                        }
+                    }
                 </div>
             }
 
@@ -1497,6 +1740,213 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     }
                                 }
                             </div>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }
+            }
+            {
+                if *is_trend_open {
+                    html! {
+                        <div
+                            class={classes!(
+                                "fixed",
+                                "inset-0",
+                                "z-[96]",
+                                "flex",
+                                "items-center",
+                                "justify-center",
+                                "bg-black/55",
+                                "p-4",
+                                "backdrop-blur-sm"
+                            )}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label={t::TREND_TITLE}
+                            onclick={close_trend_click.clone()}
+                        >
+                            <section
+                                class={classes!(
+                                    "w-full",
+                                    "max-w-[920px]",
+                                    "max-h-[88vh]",
+                                    "overflow-auto",
+                                    "rounded-[var(--radius)]",
+                                    "border",
+                                    "border-[var(--border)]",
+                                    "bg-[var(--surface)]",
+                                    "px-5",
+                                    "py-5",
+                                    "shadow-[var(--shadow-lg)]",
+                                    "sm:px-4",
+                                    "sm:py-4"
+                                )}
+                                onclick={stop_trend_bubble.clone()}
+                            >
+                                <div class={classes!(
+                                    "mb-4",
+                                    "flex",
+                                    "items-start",
+                                    "justify-between",
+                                    "gap-3"
+                                )}>
+                                    <div class={classes!("flex", "flex-col", "gap-1")}>
+                                        <h2 class={classes!("m-0", "text-[1.1rem]", "font-semibold")}>{ t::TREND_TITLE }</h2>
+                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ t::TREND_SUBTITLE }</p>
+                                        <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
+                                            {
+                                                if let Some(total) = *view_total {
+                                                    fill_one(t::TREND_TOTAL_TEMPLATE, total)
+                                                } else {
+                                                    t::VIEW_COUNT_LOADING.to_string()
+                                                }
+                                            }
+                                            {
+                                                if let Some(today) = *view_today {
+                                                    format!(" · 今日 {}", today)
+                                                } else {
+                                                    String::new()
+                                                }
+                                            }
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "rounded-full",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "px-3",
+                                            "py-1",
+                                            "text-xs",
+                                            "font-semibold",
+                                            "tracking-[0.08em]",
+                                            "text-[var(--muted)]",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:text-[var(--primary)]"
+                                        )}
+                                        aria-label={t::TREND_CLOSE_ARIA}
+                                        onclick={close_trend_click.clone()}
+                                    >
+                                        { t::CLOSE_BRIEF_BUTTON }
+                                    </button>
+                                </div>
+
+                                <div class={classes!("mb-4", "flex", "items-center", "gap-2", "flex-wrap")}>
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "rounded-full",
+                                            "border",
+                                            "px-3",
+                                            "py-1.5",
+                                            "text-xs",
+                                            "font-semibold",
+                                            "tracking-[0.08em]",
+                                            if *trend_granularity == TrendGranularity::Day {
+                                                classes!("border-[var(--primary)]", "bg-[var(--primary)]", "text-white")
+                                            } else {
+                                                classes!("border-[var(--border)]", "text-[var(--muted)]", "hover:border-[var(--primary)]", "hover:text-[var(--primary)]")
+                                            }
+                                        )}
+                                        onclick={switch_trend_to_day}
+                                    >
+                                        { t::TREND_TAB_DAY }
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "rounded-full",
+                                            "border",
+                                            "px-3",
+                                            "py-1.5",
+                                            "text-xs",
+                                            "font-semibold",
+                                            "tracking-[0.08em]",
+                                            if *trend_granularity == TrendGranularity::Hour {
+                                                classes!("border-[var(--primary)]", "bg-[var(--primary)]", "text-white")
+                                            } else {
+                                                classes!("border-[var(--border)]", "text-[var(--muted)]", "hover:border-[var(--primary)]", "hover:text-[var(--primary)]")
+                                            }
+                                        )}
+                                        onclick={switch_trend_to_hour}
+                                    >
+                                        { t::TREND_TAB_HOUR }
+                                    </button>
+                                </div>
+
+                                if *trend_granularity == TrendGranularity::Hour {
+                                    <div class={classes!("mb-4", "flex", "items-center", "gap-2")}>
+                                        <label class={classes!("text-sm", "text-[var(--muted)]")}>{ t::TREND_SELECT_DAY }</label>
+                                        <select
+                                            class={classes!(
+                                                "rounded-lg",
+                                                "border",
+                                                "border-[var(--border)]",
+                                                "bg-[var(--surface)]",
+                                                "px-3",
+                                                "py-1.5",
+                                                "text-sm",
+                                                "text-[var(--text)]",
+                                                "outline-none",
+                                                "focus:border-[var(--primary)]"
+                                            )}
+                                            onchange={on_trend_day_change}
+                                            value={(*trend_selected_day).clone().unwrap_or_default()}
+                                        >
+                                            { for (*trend_day_options).iter().map(|day| {
+                                                html! { <option value={day.clone()}>{ day.clone() }</option> }
+                                            }) }
+                                        </select>
+                                    </div>
+                                }
+
+                                {
+                                    if *trend_loading {
+                                        html! {
+                                            <div class={classes!(
+                                                "rounded-xl",
+                                                "border",
+                                                "border-[var(--border)]",
+                                                "bg-[var(--surface)]",
+                                                "px-4",
+                                                "py-8",
+                                                "text-center",
+                                                "text-sm",
+                                                "text-[var(--muted)]"
+                                            )}>
+                                                <i class={classes!("fas", "fa-spinner", "fa-spin", "mr-2")}></i>
+                                                { t::TREND_LOADING }
+                                            </div>
+                                        }
+                                    } else if let Some(error) = (*trend_error).clone() {
+                                        html! {
+                                            <div class={classes!(
+                                                "rounded-xl",
+                                                "border",
+                                                "border-red-400/50",
+                                                "bg-red-500/10",
+                                                "px-4",
+                                                "py-3",
+                                                "text-sm",
+                                                "text-red-700",
+                                                "dark:text-red-200"
+                                            )}>
+                                                { error }
+                                            </div>
+                                        }
+                                    } else {
+                                        html! {
+                                            <ViewTrendChart
+                                                points={(*trend_points).clone()}
+                                                empty_text={t::TREND_EMPTY.to_string()}
+                                            />
+                                        }
+                                    }
+                                }
+                            </section>
                         </div>
                     }
                 } else {

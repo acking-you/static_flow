@@ -14,3 +14,4 @@ pub mod stats_card;
 pub mod theme_toggle;
 pub mod toc_button;
 pub mod tooltip;
+pub mod view_trend_chart;

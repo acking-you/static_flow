@@ -35,7 +35,7 @@ static-flow/
 - HF 数据集仓库：`LB7666/my_lancedb_data`
 - 远端地址：`git@hf.co:datasets/LB7666/my_lancedb_data`
 - 本地数据目录：`/mnt/e/static-flow-data/lancedb`
-- 存储格式：LanceDB 表目录（`articles.lance/`、`images.lance/`、`taxonomies.lance/`）
+- 存储格式：LanceDB 表目录（`articles.lance/`、`images.lance/`、`taxonomies.lance/`、`article_views.lance/`）
 
 推荐流程：
 
@@ -152,6 +152,7 @@ cd cli
 # - articles.vector_en / articles.vector_zh（向量索引）
 # - images.vector（向量索引）
 # - taxonomies 表用于分类/标签元数据（无向量索引）
+# - article_views 为 backend 运行时统计表（CLI 无需管理其索引）
 ../target/release/sf-cli ensure-indexes --db-path ../data/lancedb
 
 # write-article / write-images / sync-notes 默认会自动执行 index-only optimize
@@ -221,13 +222,15 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
 # 一键立即清理孤儿文件（仅 prune，不做全量重写）
 ../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans --table images
-# 对三张核心表统一清理孤儿文件
+# 对全部清理目标表统一清理孤儿文件（含 article_views；若不存在会自动跳过）
 ../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans
 
-# 核心表结构
+# 核心表结构（sf-cli 管理）
 # - articles：文章内容/元数据 + 向量
 # - images：图片二进制 + 向量
 # - taxonomies：分类/标签元数据（`kind`、`key`、`name`、`description`）
+# 运行时统计表（backend 管理）
+# - article_views：浏览事件与日/小时分桶（首次调用 `/api/articles/:id/view` 自动创建）
 
 # 与 backend 同款 API 调试命令
 ../target/release/sf-cli api --db-path ../data/lancedb list-articles --category "Tech"
@@ -248,6 +251,8 @@ cd cli
 |------|------|
 | `GET /api/articles` | 文章列表（支持 tag/category 过滤） |
 | `GET /api/articles/:id` | 文章详情 |
+| `POST /api/articles/:id/view` | 记录文章浏览（默认同一文章+客户端 60 秒去重） |
+| `GET /api/articles/:id/view-trend` | 文章浏览趋势（按天/按小时，按 Asia/Shanghai 分桶） |
 | `GET /api/articles/:id/related` | 相关文章（向量相似） |
 | `GET /api/search?q=` | 全文搜索 |
 | `GET /api/semantic-search?q=` | 语义搜索（向量，含跨语言回退与语义片段高亮） |
@@ -262,6 +267,8 @@ cd cli
 > 查询路径可观测：日志会输出 `query/path/fastest_path/is_fastest/reason/rows/elapsed_ms`，可直接判断是否命中索引或发生回退。
 
 > 语义高亮模式：`/api/semantic-search` 默认走快速高亮；追加 `&enhanced_highlight=true` 可启用高精度片段重排（更慢）。
+
+> 浏览统计：建议在文章详情页加载时调用 `/api/articles/:id/view`；后端默认按“文章 + 客户端指纹”做 60 秒去重（可通过本地 admin 接口 `/admin/view-analytics-config` 调整），并按 `Asia/Shanghai` 维护日/小时趋势分桶。
 
 > 检索说明：若你更新了代码但仍看到“英文语义检索无结果”，请重新编译二进制（`cargo build --release -p sf-cli -p static-flow-backend`），旧二进制不会包含向量列回退逻辑。
 

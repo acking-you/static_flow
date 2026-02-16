@@ -1,7 +1,8 @@
 # StaticFlow CLI 使用手册（LanceDB）
 
 > 本文档面向 `sf-cli` 二进制使用方式，覆盖：
-> - 三张核心表（`articles` / `images` / `taxonomies`）
+> - `sf-cli` 管理的三张核心表（`articles` / `images` / `taxonomies`）
+> - backend 运行时统计表（`article_views`）
 > - 全量 CRUD（增删改查）命令
 > - 每个字段的语义与来源
 > - 索引、检索、调试方式
@@ -33,6 +34,9 @@ make bin-cli
 - `images`
 - `taxonomies`
 
+说明：
+- `article_views` 不由 `sf-cli init` 创建；会在 backend 首次处理 `/api/articles/:id/view` 时自动创建。
+
 ### 1.3 一键全量测试（推荐）
 
 ```bash
@@ -57,12 +61,13 @@ CLI_BIN=./bin/sf-cli WORKDIR=./tmp/cli-e2e ./scripts/test_cli_e2e.sh
 
 ## 2. 数据模型总览（无硬编码词典）
 
-当前推荐模型是三表：
+当前数据模型是四表（其中 `sf-cli` 直接管理前三张）：
 - `articles`：文章主体、元数据、文本向量
 - `images`：图片二进制、缩略图、图像向量
 - `taxonomies`：分类/标签元数据（含 `description`）
+- `article_views`：浏览事件与趋势分桶（按天/小时，`Asia/Shanghai`）
 
-### 2.1 表关系图（ER）
+### 2.1 数据库表关系图（ER）
 
 ```mermaid
 erDiagram
@@ -103,10 +108,25 @@ erDiagram
       timestamp updated_at
     }
 
+    ARTICLE_VIEWS {
+      string id PK
+      string article_id
+      timestamp viewed_at
+      string day_bucket
+      string hour_bucket
+      string client_fingerprint
+      timestamp created_at
+      timestamp updated_at
+    }
+
     ARTICLES }o--|| TAXONOMIES : "category -> kind=category,key=normalize(category)"
     ARTICLES }o--o{ TAXONOMIES : "tags[] -> kind=tag,key=normalize(tag)"
     ARTICLES }o--o{ IMAGES : "featured_image=images/<image_id> (soft ref)"
+    ARTICLES ||--o{ ARTICLE_VIEWS : "id -> article_id (view events)"
 ```
+
+ER 备注：
+- `article_views` 是持久化统计表；`id` 的去重分桶粒度来自运行时配置 `dedupe_window_seconds`（默认 60 秒），该配置由本地 admin 接口 `/admin/view-analytics-config` 维护，不是单独的数据表。
 
 ### 2.2 写入链路图
 
@@ -123,6 +143,8 @@ flowchart LR
 
     D[db upsert-article] --> AR
     E[db upsert-image] --> IM
+
+    F["backend /api/articles/:id/view"] --> AV[(article_views)]
 ```
 
 ---
@@ -179,6 +201,23 @@ flowchart LR
 | `description` | `Utf8?` | 否 | 说明文案；未提供时会兜底为 `name` |
 | `created_at` | `Timestamp(ms)` | 是 | 创建时间戳 |
 | `updated_at` | `Timestamp(ms)` | 是 | 更新时间戳 |
+
+## 3.4 `article_views` 字段（backend 运行时）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `id` | `Utf8` | 是 | 去重键：`article_id:client_fingerprint:dedupe_bucket(dedupe_window_seconds)` |
+| `article_id` | `Utf8` | 是 | 对应 `articles.id` |
+| `viewed_at` | `Timestamp(ms)` | 是 | 浏览时间戳 |
+| `day_bucket` | `Utf8` | 是 | 日期分桶（`YYYY-MM-DD`，`Asia/Shanghai`） |
+| `hour_bucket` | `Utf8` | 是 | 小时分桶（`YYYY-MM-DD HH`，`Asia/Shanghai`） |
+| `client_fingerprint` | `Utf8` | 是 | 客户端指纹（IP + UA 哈希） |
+| `created_at` | `Timestamp(ms)` | 是 | 创建时间戳 |
+| `updated_at` | `Timestamp(ms)` | 是 | 更新时间戳 |
+
+说明：
+- 该表由 backend 自动写入与维护，`sf-cli` 当前不提供专门的写入命令。
+- 去重窗口命中时会更新同一行并返回 `counted=false`，不会增加累计浏览数（默认窗口 60 秒，可通过本地 admin 接口调整）。
 
 ---
 
@@ -328,6 +367,30 @@ CLI 有 3 组命令：
 - `sync-notes`：批量 upsert
 - `db upsert-article` / `db upsert-image`：手动 JSON upsert
 
+### 7.3 回填历史缺失向量（新增）
+
+当历史数据存在以下情况时可使用：
+- `content` 有值但 `vector_zh` 为空
+- `content_en` 有值但 `vector_en` 为空
+
+回填命令（先 dry-run）：
+
+```bash
+./bin/sf-cli db --db-path ./data/lancedb backfill-article-vectors --dry-run
+```
+
+正式执行（可选限流）：
+
+```bash
+./bin/sf-cli db --db-path ./data/lancedb backfill-article-vectors
+./bin/sf-cli db --db-path ./data/lancedb backfill-article-vectors --limit 200
+```
+
+补充说明：
+- 该命令只补空字段，不覆盖已有向量。
+- 映射规则：`content -> vector_zh`，`content_en -> vector_en`。
+- 执行后会自动尝试确保 `vector_en` / `vector_zh` 索引。
+
 ---
 
 ## 8. D（Delete）
@@ -385,7 +448,7 @@ CLI 有 3 组命令：
 ./bin/sf-cli db --db-path ./data/lancedb cleanup-orphans --table images
 ```
 
-或对三张核心表统一执行：
+或对全部清理目标表统一执行（含 `article_views`，若该表不存在会自动跳过）：
 
 ```bash
 ./bin/sf-cli db --db-path ./data/lancedb cleanup-orphans
@@ -394,7 +457,11 @@ CLI 有 3 组命令：
 ### 9.2 搜索路径
 
 - 关键词检索：`api search`（优先 FTS，失败回退扫描）
-- 语义检索：`api semantic-search`（主语言向量列无结果时自动回退另一列，如英文 query 回退到 `vector_zh`；highlight 通过语义分块打分选择最相关片段）
+- 语义检索：`api semantic-search`
+  - 纯英文 query：优先 `vector_en`，若 0 召回自动回退 `vector_zh`
+  - 非纯英文 query：按语言检测选择主向量列（中文通常走 `vector_zh`），0 召回时回退另一列
+  - `hybrid=true` 时，向量检索复用同一套“主列 + 0 召回回退”逻辑，再与词法检索做融合
+  - `highlight` 通过语义分块打分选择最相关片段
 - 相关文章：`api related-articles`
 - 以图搜图：`api search-images`
 
