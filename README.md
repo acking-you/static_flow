@@ -38,6 +38,7 @@ This project keeps runtime content data in a separate dataset repository:
 - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
 - Local data root: `/mnt/e/static-flow-data/lancedb`
 - Format: LanceDB table directories (`articles.lance/`, `images.lance/`, `taxonomies.lance/`, `article_views.lance/`)
+- Comment workflow uses a separate DB root (`COMMENTS_LANCEDB_URI`) with `comment_tasks.lance/`, `comment_published.lance/`, `comment_audit_logs.lance/`
 
 Recommended workflow:
 
@@ -257,6 +258,9 @@ cd cli
 | `POST /api/articles/:id/view` | Track article view (default 60s dedupe per article+client) |
 | `GET /api/articles/:id/view-trend` | Article view trend (day/hour buckets, Asia/Shanghai) |
 | `GET /api/articles/:id/related` | Related articles (vector similarity) |
+| `POST /api/comments/submit` | Submit a comment task (selection/footer entry, rate-limited) |
+| `GET /api/comments/list` | List public comments for one article (user comments first, `ai_reply_markdown` may be null) |
+| `GET /api/comments/stats` | Get public comment count for one article |
 | `GET /api/search?q=` | Full-text search |
 | `GET /api/semantic-search?q=` | Semantic search (vector, with cross-language fallback and semantic snippet highlight) |
 | `GET /api/images` | Image catalog |
@@ -273,14 +277,21 @@ cd cli
 
 > View analytics: `/api/articles/:id/view` is intended to be called on article-detail entry; backend uses a 60-second dedupe window by default (configurable via local admin endpoint `/admin/view-analytics-config`) and stores trend buckets in `Asia/Shanghai`.
 
+> Comment moderation: public users only hit `/api/comments/*`; moderation and runtime controls are under local `/admin/*` endpoints (do not expose publicly).
+> Local admin endpoints include grouped task view (`/admin/comments/tasks/grouped`), approve-only + approve-and-run split, published comment patch/delete, and audit logs (`/admin/comments/audit-logs`).
+
 ## Key Env Vars
 
 Backend (`backend/.env`):
 - `LANCEDB_URI` (default `../data/lancedb`)
+- `COMMENTS_LANCEDB_URI` (default `../data/lancedb-comments`)
 - `PORT` (default `3000`)
 - `BIND_ADDR` (dev: `0.0.0.0`, production: `127.0.0.1`)
 - `RUST_ENV` (`development` or `production`)
 - `ALLOWED_ORIGINS` (optional comma-separated CORS list in production)
+- `ADMIN_LOCAL_ONLY` (default `true`, guard `/admin/*` to local/private sources)
+- `ADMIN_TOKEN` (optional, checked from request header `x-admin-token`)
+- `COMMENT_RATE_LIMIT_SECONDS` / `COMMENT_LIST_DEFAULT_LIMIT` / `COMMENT_CLEANUP_RETENTION_DAYS`
 
 Frontend build-time:
 - `STATICFLOW_API_BASE` (direct pb-mapper endpoint, e.g. `https://<cloud-host>:8888/api`)

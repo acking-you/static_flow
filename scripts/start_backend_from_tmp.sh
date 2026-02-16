@@ -4,7 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DB_PATH="${DB_PATH:-$ROOT_DIR/tmp/cli-e2e-run/lancedb}"
+# DB path resolution (highest priority to lowest):
+# 1) explicit DB_PATH / COMMENTS_DB_PATH
+# 2) pre-exported backend env LANCEDB_URI / COMMENTS_LANCEDB_URI
+# 3) DB_ROOT + fixed subdirs (lancedb, lancedb-comments)
+# 4) built-in tmp default
+DB_ROOT="${DB_ROOT:-$ROOT_DIR/tmp/cli-e2e-run}"
+DB_PATH="${DB_PATH:-${LANCEDB_URI:-$DB_ROOT/lancedb}}"
+COMMENTS_DB_PATH="${COMMENTS_DB_PATH:-${COMMENTS_LANCEDB_URI:-$DB_ROOT/lancedb-comments}}"
 HOST="${HOST:-127.0.0.1}"
 PORT_BASE="${PORT_BASE:-39080}"
 PORT_SCAN_LIMIT="${PORT_SCAN_LIMIT:-120}"
@@ -207,17 +214,57 @@ print_check_urls() {
   echo "- curl -X POST \"${base}/admin/view-analytics-config\" -H \"Content-Type: application/json\" -d '{\"dedupe_window_seconds\":60,\"trend_default_days\":30,\"trend_max_days\":180}'"
 
   echo
+  echo "[17) GET /api/comments/list + /api/comments/stats]"
+  if [[ -n "$article_id" ]]; then
+    echo "- ${base}/api/comments/list?article_id=${article_id}"
+    echo "- ${base}/api/comments/stats?article_id=${article_id}"
+  else
+    echo "- ${base}/api/comments/list?article_id=<article_id>"
+    echo "- ${base}/api/comments/stats?article_id=<article_id>"
+  fi
+
+  echo
+  echo "[18) POST /api/comments/submit]"
+  if [[ -n "$article_id" ]]; then
+    echo "- curl -X POST \"${base}/api/comments/submit\" -H \"Content-Type: application/json\" -d '{\"article_id\":\"${article_id}\",\"entry_type\":\"footer\",\"comment_text\":\"示例评论\"}'"
+  else
+    echo "- curl -X POST \"${base}/api/comments/submit\" -H \"Content-Type: application/json\" -d '{\"article_id\":\"<article_id>\",\"entry_type\":\"footer\",\"comment_text\":\"示例评论\"}'"
+  fi
+
+  echo
+  echo "[19) GET/POST /admin/comment-config (local admin)]"
+  echo "- ${base}/admin/comment-config"
+  echo "- curl -X POST \"${base}/admin/comment-config\" -H \"Content-Type: application/json\" -d '{\"submit_rate_limit_seconds\":60,\"list_default_limit\":20,\"cleanup_retention_days\":-1}'"
+
+  echo
+  echo "[20) Comment moderation admin routes (local admin)]"
+  echo "- ${base}/admin/comments/tasks"
+  echo "- ${base}/admin/comments/tasks/grouped"
+  echo "- curl -X POST \"${base}/admin/comments/tasks/<task_id>/approve\" -H \"Content-Type: application/json\" -d '{\"operator\":\"ops\"}'"
+  echo "- curl -X POST \"${base}/admin/comments/tasks/<task_id>/approve-and-run\" -H \"Content-Type: application/json\" -d '{\"operator\":\"ops\"}'"
+  echo "- curl -X POST \"${base}/admin/comments/tasks/<task_id>/reject\" -H \"Content-Type: application/json\" -d '{\"operator\":\"ops\"}'"
+  echo "- curl -X DELETE \"${base}/admin/comments/tasks/<task_id>\" -H \"Content-Type: application/json\" -d '{\"operator\":\"ops\"}'"
+  echo "- ${base}/admin/comments/tasks/<task_id>/ai-output"
+  echo "- ${base}/admin/comments/ai-runs?task_id=<task_id>"
+  echo "- ${base}/admin/comments/published"
+  echo "- ${base}/admin/comments/audit-logs"
+  echo "- curl -X POST \"${base}/admin/comments/cleanup\" -H \"Content-Type: application/json\" -d '{\"status\":\"failed\",\"retention_days\":30}'"
+
+  echo
   log "Tip: image endpoint returns binary; open URL directly in browser or use curl --output."
   log "Tip: /admin routes are intended for local/ops usage and should not be publicly exposed."
   log "Press Ctrl+C to stop backend."
 }
 
-[[ -d "$DB_PATH" ]] || fail "DB path not found: $DB_PATH. Run ./scripts/test_cli_e2e.sh first."
+[[ -d "$DB_PATH" ]] || fail "DB path not found: $DB_PATH. Run ./scripts/test_cli_e2e.sh first, or set DB_ROOT/DB_PATH to an existing content DB."
+mkdir -p "$COMMENTS_DB_PATH"
 
 PORT_CHOSEN="$(choose_port)"
 BACKEND_BIN_PATH="$(resolve_backend_bin)"
 
-log "Using DB_PATH=$DB_PATH"
+log "Using DB_ROOT=$DB_ROOT"
+log "Using CONTENT_DB_PATH=$DB_PATH"
+log "Using COMMENTS_DB_PATH=$COMMENTS_DB_PATH"
 log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
 log "Using HOST=$HOST PORT=$PORT_CHOSEN"
 
@@ -225,6 +272,7 @@ RUST_ENV="development" \
 BIND_ADDR="$HOST" \
 PORT="$PORT_CHOSEN" \
 LANCEDB_URI="$DB_PATH" \
+COMMENTS_LANCEDB_URI="$COMMENTS_DB_PATH" \
 "$BACKEND_BIN_PATH" &
 BACKEND_PID=$!
 

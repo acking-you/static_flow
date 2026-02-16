@@ -3,6 +3,7 @@
 > 本文档面向 `sf-cli` 二进制使用方式，覆盖：
 > - `sf-cli` 管理的三张核心表（`articles` / `images` / `taxonomies`）
 > - backend 运行时统计表（`article_views`）
+> - backend 评论体系表（`comment_tasks` / `comment_published` / `comment_audit_logs`，位于评论专用 DB）
 > - 全量 CRUD（增删改查）命令
 > - 每个字段的语义与来源
 > - 索引、检索、调试方式
@@ -61,11 +62,23 @@ CLI_BIN=./bin/sf-cli WORKDIR=./tmp/cli-e2e ./scripts/test_cli_e2e.sh
 
 ## 2. 数据模型总览（无硬编码词典）
 
-当前数据模型是四表（其中 `sf-cli` 直接管理前三张）：
+当前数据模型分两组：
+
+主内容库（`LANCEDB_URI`）：
 - `articles`：文章主体、元数据、文本向量
 - `images`：图片二进制、缩略图、图像向量
 - `taxonomies`：分类/标签元数据（含 `description`）
 - `article_views`：浏览事件与趋势分桶（按天/小时，`Asia/Shanghai`）
+
+评论库（`COMMENTS_LANCEDB_URI`）：
+- `comment_tasks`：评论任务队列（待审核、处理中、失败等状态）
+- `comment_published`：审核通过且 AI 回复完成的公开评论
+- `comment_audit_logs`：评论审核动作审计日志
+- `comment_ai_runs`：每次 AI 执行批次元数据（状态、退出码、最终回复）
+- `comment_ai_run_chunks`：AI 输出分片（stdout/stderr），支持后台拼接完整输出
+
+说明：
+- 评论库由 backend 自动创建和维护；`sf-cli init` 只初始化主内容库表。
 
 ### 2.1 数据库表关系图（ER）
 
@@ -119,14 +132,84 @@ erDiagram
       timestamp updated_at
     }
 
+    COMMENT_TASKS {
+      string task_id PK
+      string article_id
+      string entry_type
+      string status
+      string comment_text
+      string selected_text
+      string anchor_block_id
+      string client_ip
+      string ip_region
+      string fingerprint
+      int attempt_count
+      timestamp created_at
+      timestamp updated_at
+    }
+
+    COMMENT_PUBLISHED {
+      string comment_id PK
+      string task_id
+      string article_id
+      string author_name
+      string author_avatar_seed
+      string comment_text
+      string ai_reply_markdown
+      string ip_region
+      timestamp published_at
+    }
+
+    COMMENT_AUDIT_LOGS {
+      string log_id PK
+      string task_id
+      string action
+      string operator
+      string before_json
+      string after_json
+      timestamp created_at
+    }
+
+    COMMENT_AI_RUNS {
+      string run_id PK
+      string task_id
+      string status
+      string runner_program
+      string runner_args_json
+      string skill_path
+      int exit_code
+      string final_reply_markdown
+      string failure_reason
+      timestamp started_at
+      timestamp completed_at
+    }
+
+    COMMENT_AI_RUN_CHUNKS {
+      string chunk_id PK
+      string run_id
+      string task_id
+      string stream
+      int batch_index
+      string content
+      timestamp created_at
+    }
+
     ARTICLES }o--|| TAXONOMIES : "category -> kind=category,key=normalize(category)"
     ARTICLES }o--o{ TAXONOMIES : "tags[] -> kind=tag,key=normalize(tag)"
     ARTICLES }o--o{ IMAGES : "featured_image=images/<image_id> (soft ref)"
     ARTICLES ||--o{ ARTICLE_VIEWS : "id -> article_id (view events)"
+    ARTICLES ||--o{ COMMENT_TASKS : "id -> article_id (comment tasks)"
+    ARTICLES ||--o{ COMMENT_PUBLISHED : "id -> article_id (published comments)"
+    COMMENT_TASKS ||--o| COMMENT_PUBLISHED : "task_id -> task_id"
+    COMMENT_TASKS ||--o{ COMMENT_AUDIT_LOGS : "task_id -> task_id"
+    COMMENT_TASKS ||--o{ COMMENT_AI_RUNS : "task_id -> task_id"
+    COMMENT_AI_RUNS ||--o{ COMMENT_AI_RUN_CHUNKS : "run_id -> run_id"
 ```
 
 ER 备注：
 - `article_views` 是持久化统计表；`id` 的去重分桶粒度来自运行时配置 `dedupe_window_seconds`（默认 60 秒），该配置由本地 admin 接口 `/admin/view-analytics-config` 维护，不是单独的数据表。
+- 评论相关五张表默认位于 `COMMENTS_LANCEDB_URI`（与主内容库分离）。
+- `comment_tasks.status` 典型流转：`pending -> approved -> running -> done`；也支持 `pending/failed -> running` 直接派发；失败可到 `failed`；拒绝会标记 `rejected` 且保留 task。
 
 ### 2.2 写入链路图
 
@@ -145,6 +228,15 @@ flowchart LR
     E[db upsert-image] --> IM
 
     F["backend /api/articles/:id/view"] --> AV[(article_views)]
+
+    G["backend /api/comments/submit"] --> CT[(comment_tasks)]
+    H["backend /admin/comments/tasks/:id/approve-and-run"] --> CW[comment worker]
+    H --> CAR[(comment_ai_runs)]
+    CW --> CP[(comment_published)]
+    CW --> CAC[(comment_ai_run_chunks)]
+    H --> AL[(comment_audit_logs)]
+    I["backend /admin/comments/tasks/:id/ai-output"] --> CAR
+    I --> CAC
 ```
 
 ---
@@ -218,6 +310,85 @@ flowchart LR
 说明：
 - 该表由 backend 自动写入与维护，`sf-cli` 当前不提供专门的写入命令。
 - 去重窗口命中时会更新同一行并返回 `counted=false`，不会增加累计浏览数（默认窗口 60 秒，可通过本地 admin 接口调整）。
+
+## 3.5 `comment_tasks` 字段（评论库，backend 运行时）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `task_id` | `Utf8` | 是 | 评论任务主键 |
+| `article_id` | `Utf8` | 是 | 对应 `articles.id` |
+| `entry_type` | `Utf8` | 是 | `selection` 或 `footer` |
+| `status` | `Utf8` | 是 | `pending/approved/running/done/failed/rejected` |
+| `comment_text` | `Utf8` | 是 | 用户评论正文 |
+| `selected_text` | `Utf8?` | 否 | 用户选中的正文片段 |
+| `anchor_block_id` | `Utf8?` | 否 | 前端正文块锚点 ID（`data-sf-block-id`） |
+| `anchor_context_before` | `Utf8?` | 否 | 选区前文摘要 |
+| `anchor_context_after` | `Utf8?` | 否 | 选区后文摘要 |
+| `client_ip` | `Utf8` | 是 | 客户端 IP（优先取 `x-forwarded-for`） |
+| `ip_region` | `Utf8` | 是 | GeoIP 归属地 |
+| `fingerprint` | `Utf8` | 是 | 去重指纹（IP + UA 等哈希） |
+| `ua` / `language` / `platform` / `timezone` / `viewport` / `referrer` | `Utf8?` | 否 | 浏览器侧元信息 |
+| `admin_note` | `Utf8?` | 否 | 审核备注 |
+| `failure_reason` | `Utf8?` | 否 | worker 失败原因 |
+| `attempt_count` | `Int32` | 是 | worker 尝试次数 |
+| `created_at` / `updated_at` | `Timestamp(ms)` | 是 | 时间戳 |
+| `approved_at` / `completed_at` | `Timestamp(ms)?` | 否 | 审核通过/完成时间 |
+
+## 3.6 `comment_published` 字段（评论库，公开展示）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `comment_id` | `Utf8` | 是 | 已发布评论主键 |
+| `task_id` | `Utf8` | 是 | 来源任务 ID |
+| `article_id` | `Utf8` | 是 | 对应文章 ID |
+| `author_name` | `Utf8` | 是 | 匿名作者名（如 `Reader-a1b2c3`） |
+| `author_avatar_seed` | `Utf8` | 是 | 前端头像种子 |
+| `author_hash` | `Utf8` | 是 | 匿名化作者哈希 |
+| `comment_text` | `Utf8` | 是 | 用户评论正文 |
+| `selected_text` / `anchor_block_id` / `anchor_context_before` / `anchor_context_after` | `Utf8?` | 否 | 选区评论定位上下文 |
+| `ai_reply_markdown` | `Utf8` | 是 | AI 回复（Markdown） |
+| `ip_region` | `Utf8` | 是 | IP 归属地 |
+| `published_at` | `Timestamp(ms)` | 是 | 发布时间 |
+
+## 3.7 `comment_audit_logs` 字段（评论库，审核审计）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `log_id` | `Utf8` | 是 | 审计日志主键 |
+| `task_id` | `Utf8` | 是 | 对应任务 ID |
+| `action` | `Utf8` | 是 | 动作（`created/patched/approved/approved_and_run/retried/rejected/task_deleted/published_patched/published_deleted` 等） |
+| `operator` | `Utf8` | 是 | 操作人（如 `admin-ui` / `system`） |
+| `before_json` | `Utf8?` | 否 | 变更前快照 |
+| `after_json` | `Utf8?` | 否 | 变更后快照 |
+| `created_at` | `Timestamp(ms)` | 是 | 记录时间 |
+
+## 3.8 `comment_ai_runs` 字段（评论库，AI 执行批次）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `run_id` | `Utf8` | 是 | AI 执行批次主键 |
+| `task_id` | `Utf8` | 是 | 对应评论任务 ID |
+| `status` | `Utf8` | 是 | `running/success/failed` |
+| `runner_program` | `Utf8` | 是 | 执行程序（如 `bash`） |
+| `runner_args_json` | `Utf8` | 是 | runner 参数 JSON |
+| `skill_path` | `Utf8` | 是 | 实际使用的 Skill 路径 |
+| `exit_code` | `Int32?` | 否 | runner 退出码 |
+| `final_reply_markdown` | `Utf8?` | 否 | 成功解析出的最终回复 |
+| `failure_reason` | `Utf8?` | 否 | 执行/解析失败原因 |
+| `started_at` / `updated_at` | `Timestamp(ms)` | 是 | 时间戳 |
+| `completed_at` | `Timestamp(ms)?` | 否 | 批次结束时间 |
+
+## 3.9 `comment_ai_run_chunks` 字段（评论库，AI 输出分片）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `chunk_id` | `Utf8` | 是 | 输出分片主键 |
+| `run_id` | `Utf8` | 是 | 所属 AI 执行批次 |
+| `task_id` | `Utf8` | 是 | 关联评论任务 ID |
+| `stream` | `Utf8` | 是 | `stdout` / `stderr` |
+| `batch_index` | `Int32` | 是 | 分片序号 |
+| `content` | `Utf8` | 是 | 该分片的原始文本 |
+| `created_at` | `Timestamp(ms)` | 是 | 入库时间 |
 
 ---
 

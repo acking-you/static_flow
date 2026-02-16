@@ -11,13 +11,15 @@ yew-router = { workspace = true }
 gloo-net = { workspace = true }
 gloo-timers = "0.3"
 serde = { workspace = true }
+serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = "0.4"
 web-sys = { workspace = true, features = [
   "Window", "Storage", "Document", "Element", "KeyboardEvent",
   "HtmlImageElement", "NodeList", "ScrollToOptions", "ScrollBehavior",
   "HtmlElement", "HtmlSelectElement", "CssStyleDeclaration", "TouchEvent", "TouchList", "Touch", "History",
-  "DomTokenList", "DomRect"
+  "DomTokenList", "DomRect", "Navigator", "HtmlTextAreaElement", "Selection", "Range", "Node", "HtmlButtonElement",
+  "Event", "MessageEvent", "EventSource"
 ] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }

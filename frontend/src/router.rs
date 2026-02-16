@@ -75,6 +75,20 @@ pub enum Route {
     #[at("/static_flow/search")]
     Search,
 
+    #[cfg(not(feature = "mock"))]
+    #[at("/admin")]
+    Admin,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin")]
+    Admin,
+
+    #[cfg(not(feature = "mock"))]
+    #[at("/admin/comments/runs/:task_id")]
+    AdminCommentRuns { task_id: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/comments/runs/:task_id")]
+    AdminCommentRuns { task_id: String },
+
     #[not_found]
     #[cfg(not(feature = "mock"))]
     #[at("/404")]
@@ -108,6 +122,12 @@ fn switch(route: Route) -> Html {
             html! { <pages::category_detail::CategoryDetailPage category={category} /> }
         },
         Route::Search => html! { <pages::search::SearchPage /> },
+        Route::Admin => html! { <pages::admin::AdminPage /> },
+        Route::AdminCommentRuns {
+            task_id,
+        } => {
+            html! { <pages::admin_ai_stream::AdminCommentRunsPage task_id={task_id} /> }
+        },
         Route::NotFound => html! { <pages::not_found::NotFoundPage /> },
     }
 }

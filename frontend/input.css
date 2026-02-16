@@ -2449,6 +2449,273 @@ a:hover {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.comment-compose-textarea {
+  width: 100%;
+  min-height: 124px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.8rem 0.95rem;
+  line-height: 1.65;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.comment-compose-textarea:focus {
+  border-color: color-mix(in srgb, var(--primary) 68%, var(--border));
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.14);
+}
+
+.comment-thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.comment-thread-item {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 96%, rgba(var(--primary-rgb), 0.03));
+  padding: 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.78rem;
+}
+
+.comment-thread-head {
+  display: flex;
+  align-items: center;
+  gap: 0.68rem;
+}
+
+.comment-avatar {
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.comment-head-meta {
+  min-width: 0;
+}
+
+.comment-author-name {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.93rem;
+  font-weight: 700;
+}
+
+.comment-meta-line {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.comment-quote-card {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, rgba(var(--primary-rgb), 0.16));
+  background: color-mix(in srgb, var(--surface-alt) 82%, rgba(var(--primary-rgb), 0.08));
+  border-radius: 11px;
+  padding: 0.68rem 0.78rem;
+}
+
+.comment-quote-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.comment-quote-text {
+  margin: 0.3rem 0 0;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.62;
+  white-space: pre-wrap;
+}
+
+.comment-jump-btn {
+  margin-top: 0.52rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.73rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.28rem 0.68rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.comment-jump-btn:hover {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 52%, var(--border));
+}
+
+.comment-user-card,
+.comment-ai-card {
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 11px;
+  background: var(--surface);
+  padding: 0.72rem 0.82rem;
+}
+
+.comment-section-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.comment-user-text {
+  margin: 0.38rem 0 0;
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.66;
+  white-space: pre-wrap;
+}
+
+.comment-ai-markdown {
+  margin-top: 0.42rem;
+  font-size: 0.94rem;
+}
+
+.selection-comment-fab {
+  position: fixed;
+  z-index: 60;
+  border: 1px solid color-mix(in srgb, var(--primary) 58%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 85%, rgba(var(--primary-rgb), 0.17));
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.5rem 0.84rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  box-shadow: var(--shadow-4);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.selection-comment-fab:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-8);
+}
+
+.selection-comment-modal {
+  width: min(680px, 94vw);
+  max-height: min(90vh, 760px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.selection-comment-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.selection-comment-modal-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.02rem;
+  font-weight: 700;
+}
+
+.selection-comment-modal-subtitle {
+  margin: 0.28rem 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.selection-comment-close {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.34rem 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.selection-comment-close:hover {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 46%, var(--border));
+}
+
+.selection-comment-quote {
+  border: 1px solid color-mix(in srgb, var(--border) 85%, rgba(var(--primary-rgb), 0.16));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-alt) 85%, rgba(var(--primary-rgb), 0.09));
+  padding: 0.78rem 0.82rem;
+}
+
+.selection-comment-quote-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.selection-comment-quote-text {
+  margin: 0.34rem 0 0;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.selection-comment-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.sf-comment-anchor-flash {
+  animation: sfCommentAnchorFlash 1.45s ease-out;
+}
+
+@keyframes sfCommentAnchorFlash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--primary-rgb), 0.45);
+    outline: 2px solid rgba(var(--primary-rgb), 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 18px rgba(var(--primary-rgb), 0);
+    outline: 2px solid rgba(var(--primary-rgb), 0);
+  }
+}
+
 
 .timeline {
   --timeline-offset: 1.2rem;

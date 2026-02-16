@@ -316,6 +316,13 @@ pub fn home_page() -> Html {
                                         <i class="fas fa-archive mr-2"></i>
                                         { t::BTN_ARCHIVE }
                                     </Link<Route>>
+                                    <Link<Route>
+                                        to={Route::Admin}
+                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                    >
+                                        <i class="fas fa-sliders mr-2"></i>
+                                        { "Admin Console" }
+                                    </Link<Route>>
                                 </div>
 
                                 // Social links as terminal output

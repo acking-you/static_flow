@@ -1,3 +1,5 @@
+mod comment_worker;
+mod geoip;
 mod handlers;
 mod request_context;
 mod routes;
@@ -25,12 +27,15 @@ async fn main() -> Result<()> {
     // Load environment variables
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let db_uri = env::var("LANCEDB_URI").unwrap_or_else(|_| "../data/lancedb".to_string());
+    let comments_db_uri =
+        env::var("COMMENTS_LANCEDB_URI").unwrap_or_else(|_| "../data/lancedb-comments".to_string());
 
     tracing::info!("Starting StaticFlow backend server");
     tracing::info!("LanceDB URI: {}", db_uri);
+    tracing::info!("Comments LanceDB URI: {}", comments_db_uri);
 
     // Initialize application state
-    let app_state = state::AppState::new(&db_uri).await?;
+    let app_state = state::AppState::new(&db_uri, &comments_db_uri).await?;
 
     // Build router
     let app = routes::create_router(app_state);

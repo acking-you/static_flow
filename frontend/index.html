@@ -145,6 +145,43 @@
         return headings;
       }
 
+      function assignArticleBlockIds(articleContent) {
+        if (!articleContent) return;
+
+        const blockSelector = [
+          'h1',
+          'h2',
+          'h3',
+          'h4',
+          'h5',
+          'h6',
+          'p',
+          'li',
+          'blockquote',
+          'pre',
+          'table',
+          'img',
+          '.sf-math-block',
+          'hr'
+        ].join(',');
+        const seen = new Map();
+
+        articleContent.querySelectorAll(blockSelector).forEach((block, index) => {
+          const tag = (block.tagName || 'node').toLowerCase();
+          const raw =
+            (block.textContent || '').trim() ||
+            block.getAttribute('alt') ||
+            block.getAttribute('src') ||
+            `${tag}-${index + 1}`;
+          const slug = slugifyHeadingText(raw).slice(0, 42) || `${tag}-${index + 1}`;
+          const base = `blk-${tag}-${slug}`;
+          const count = (seen.get(base) || 0) + 1;
+          seen.set(base, count);
+          const blockId = count === 1 ? base : `${base}-${count}`;
+          block.setAttribute('data-sf-block-id', blockId);
+        });
+      }
+
       function findHashTarget(rawHash) {
         const hash = (rawHash || '').replace(/^#/, '');
         if (!hash) return null;
@@ -216,20 +253,67 @@
         });
       }
 
-      // Initialize markdown rendering features
-      window.initMarkdownRendering = function(root) {
-        const articleContent =
-          root && root.nodeType === Node.ELEMENT_NODE
-            ? root
-            : document.querySelector('.article-content');
+      function runMarkdownRenderPipeline(articleContent) {
         if (!articleContent) return;
+
+        function escapeMermaidLabel(label) {
+          return String(label || '')
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"')
+            .trim();
+        }
+
+        // Mermaid 10.x is strict for some tokens in unquoted labels
+        // (e.g. `malloc(size)` in `A[malloc(size)]`).
+        // Normalize common node labels into quoted forms:
+        //   A[text]   -> A["text"]
+        //   A{text}   -> A{"text"}
+        function normalizeMermaidDefinition(source) {
+          let text = String(source || '').replace(/\r\n?/g, '\n').trim();
+          if (!text) return text;
+
+          // Strip accidental fence remnants if they leaked into code content.
+          text = text
+            .replace(/^```mermaid\s*/i, '')
+            .replace(/```$/g, '')
+            .trim();
+
+          text = text.replace(/(\b[A-Za-z][\w-]*)\s*\[([^\]\n"]+)\]/g, (match, id, label) => {
+            const normalized = escapeMermaidLabel(label);
+            return normalized ? `${id}["${normalized}"]` : match;
+          });
+
+          text = text.replace(/(\b[A-Za-z][\w-]*)\s*\{([^}\n"]+)\}/g, (match, id, label) => {
+            const normalized = escapeMermaidLabel(label);
+            return normalized ? `${id}{"${normalized}"}` : match;
+          });
+
+          return text;
+        }
+
+        function replaceMermaidWithCodeBlock(node, source) {
+          if (!node || !node.parentNode) return;
+          const pre = document.createElement('pre');
+          const code = document.createElement('code');
+          code.className = 'language-mermaid';
+          code.textContent = String(source || '').trim();
+          pre.appendChild(code);
+          node.parentNode.replaceChild(pre, node);
+        }
+
+        function finalizeCodeEnhancements() {
+          // Add copy buttons to code blocks
+          addCopyButtonsToCodeBlocks(articleContent);
+          // Add collapsible functionality to long code blocks
+          makeCodeBlocksCollapsible(articleContent);
+        }
 
         // Convert mermaid code blocks to mermaid divs
         articleContent.querySelectorAll('pre code.language-mermaid').forEach((block) => {
           const pre = block.parentElement;
           const mermaidDiv = document.createElement('div');
           mermaidDiv.className = 'mermaid';
-          mermaidDiv.textContent = block.textContent;
+          mermaidDiv.textContent = normalizeMermaidDefinition(block.textContent || '');
           pre.replaceWith(mermaidDiv);
         });
 
@@ -239,22 +323,78 @@
         });
 
         // Render Mermaid diagrams
-        const mermaidNodes = articleContent.querySelectorAll('.mermaid');
+        articleContent.querySelectorAll('.mermaid').forEach((node) => {
+          // Existing rendered diagrams should not be parsed again.
+          if (node.querySelector('svg')) {
+            node.dataset.sfMermaidRendered = 'true';
+          }
+        });
+        const mermaidNodes = Array.from(articleContent.querySelectorAll('.mermaid')).filter((node) => {
+          if (node.dataset.sfMermaidRendered === 'true') return false;
+          if (node.querySelector('svg')) {
+            node.dataset.sfMermaidRendered = 'true';
+            return false;
+          }
+          const normalized = normalizeMermaidDefinition(node.textContent || '');
+          node.textContent = normalized;
+          node.dataset.sfMermaidSource = normalized;
+          return true;
+        });
         if (window.mermaid && mermaidNodes.length > 0) {
-          window.mermaid.run({
-            nodes: mermaidNodes,
-            suppressErrors: true
-          }).then(() => {
-            // Add copy buttons to mermaid diagrams after rendering
-            addCopyButtonsToMermaid(articleContent);
-          });
+          Promise.resolve()
+            .then(async () => {
+              const validNodes = [];
+              for (const node of mermaidNodes) {
+                const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+                node.dataset.sfMermaidSource = source;
+                node.textContent = source;
+
+                if (typeof window.mermaid.parse === 'function') {
+                  try {
+                    await window.mermaid.parse(source);
+                    validNodes.push(node);
+                  } catch (_) {
+                    node.dataset.sfMermaidRendered = 'true';
+                    replaceMermaidWithCodeBlock(node, source);
+                  }
+                } else {
+                  validNodes.push(node);
+                }
+              }
+              return validNodes;
+            })
+            .then((validNodes) => {
+              if (!validNodes || validNodes.length === 0) return;
+              return window.mermaid.run({
+                nodes: validNodes,
+                suppressErrors: true
+              }).then(() => {
+                validNodes.forEach((node) => {
+                  node.dataset.sfMermaidRendered = 'true';
+                  const renderedText = String(node.textContent || '').toLowerCase();
+                  if (renderedText.includes('syntax error in text')) {
+                    const source = node.dataset.sfMermaidSource || '';
+                    replaceMermaidWithCodeBlock(node, source);
+                  }
+                });
+              });
+            })
+            .catch(() => {
+              mermaidNodes.forEach((node) => {
+                const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+                node.dataset.sfMermaidRendered = 'true';
+                replaceMermaidWithCodeBlock(node, source);
+              });
+            })
+            .finally(() => {
+              // Add copy buttons to mermaid diagrams after rendering
+              addCopyButtonsToMermaid(articleContent);
+              finalizeCodeEnhancements();
+            });
+        } else {
+          addCopyButtonsToMermaid(articleContent);
+          finalizeCodeEnhancements();
         }
-
-        // Add copy buttons to code blocks
-        addCopyButtonsToCodeBlocks(articleContent);
-
-        // Add collapsible functionality to long code blocks
-        makeCodeBlocksCollapsible(articleContent);
 
         // Math formula rendering with KaTeX
         if (window.renderMathInElement) {
@@ -273,6 +413,9 @@
         // Improve markdown wide-content UX on small screens and dense layouts
         enhanceMarkdownWideBlocks(articleContent);
 
+        // Assign stable anchor ids for paragraph-level comments and quote jumps.
+        assignArticleBlockIds(articleContent);
+
         // Add loading animation to images
         articleContent.querySelectorAll('img').forEach((img) => {
           if (img.complete && img.naturalHeight !== 0) {
@@ -289,6 +432,17 @@
             });
           }
         });
+      }
+
+      // Initialize markdown rendering features for article body (includes TOC + block anchors)
+      window.initMarkdownRendering = function(root) {
+        const articleContent =
+          root && root.nodeType === Node.ELEMENT_NODE
+            ? root
+            : document.querySelector('.article-content');
+        if (!articleContent) return;
+
+        runMarkdownRenderPipeline(articleContent);
 
         assignHeadingIds(articleContent);
         bindArticleAnchorLinks(articleContent);
@@ -304,6 +458,17 @@
         }
 
         // Back to top button is now managed by Yew ScrollToTopButton component
+      };
+
+      // Initialize markdown rendering features for dynamic markdown fragments.
+      // Used by comment AI replies. This must NOT mutate TOC or article block anchors.
+      window.initMarkdownFragmentRendering = function(root) {
+        const fragmentRoot =
+          root && root.nodeType === Node.ELEMENT_NODE
+            ? root
+            : document.querySelector('.comment-ai-markdown');
+        if (!fragmentRoot) return;
+        runMarkdownRenderPipeline(fragmentRoot);
       };
 
       // Add copy buttons to code blocks

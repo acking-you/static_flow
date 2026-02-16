@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 pub mod embedding;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod comments_store;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lancedb_api;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

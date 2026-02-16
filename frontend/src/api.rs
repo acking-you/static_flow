@@ -4,6 +4,8 @@ use gloo_net::http::Request;
 use js_sys::Date;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
+#[cfg(not(feature = "mock"))]
+use wasm_bindgen::JsValue;
 
 #[cfg(feature = "mock")]
 use crate::models;
@@ -717,5 +719,983 @@ pub async fn search_images_by_text(
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
         Ok(json_response.images)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CommentClientMeta {
+    pub ua: Option<String>,
+    pub language: Option<String>,
+    pub platform: Option<String>,
+    pub viewport: Option<String>,
+    pub timezone: Option<String>,
+    pub referrer: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitCommentRequest {
+    pub article_id: String,
+    pub entry_type: String,
+    pub comment_text: String,
+    pub selected_text: Option<String>,
+    pub anchor_block_id: Option<String>,
+    pub anchor_context_before: Option<String>,
+    pub anchor_context_after: Option<String>,
+    pub reply_to_comment_id: Option<String>,
+    pub client_meta: Option<CommentClientMeta>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitCommentResponse {
+    pub task_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ArticleComment {
+    pub comment_id: String,
+    pub article_id: String,
+    pub task_id: String,
+    pub author_name: String,
+    pub author_avatar_seed: String,
+    pub comment_text: String,
+    pub selected_text: Option<String>,
+    pub anchor_block_id: Option<String>,
+    pub anchor_context_before: Option<String>,
+    pub anchor_context_after: Option<String>,
+    pub reply_to_comment_id: Option<String>,
+    pub reply_to_comment_text: Option<String>,
+    pub reply_to_ai_reply_markdown: Option<String>,
+    pub ai_reply_markdown: Option<String>,
+    pub ip_region: String,
+    pub published_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CommentListResponse {
+    pub comments: Vec<ArticleComment>,
+    pub total: usize,
+    pub article_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CommentStatsResponse {
+    pub article_id: String,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CommentRuntimeConfig {
+    pub submit_rate_limit_seconds: u64,
+    pub list_default_limit: usize,
+    pub cleanup_retention_days: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ViewAnalyticsConfig {
+    pub dedupe_window_seconds: u64,
+    pub trend_default_days: usize,
+    pub trend_max_days: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentTask {
+    pub task_id: String,
+    pub article_id: String,
+    pub entry_type: String,
+    pub status: String,
+    pub comment_text: String,
+    pub selected_text: Option<String>,
+    pub anchor_block_id: Option<String>,
+    pub anchor_context_before: Option<String>,
+    pub anchor_context_after: Option<String>,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub fingerprint: String,
+    pub ua: Option<String>,
+    pub language: Option<String>,
+    pub platform: Option<String>,
+    pub timezone: Option<String>,
+    pub viewport: Option<String>,
+    pub referrer: Option<String>,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub attempt_count: i32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub approved_at: Option<i64>,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentTaskGroup {
+    pub article_id: String,
+    pub total: usize,
+    pub status_counts: std::collections::HashMap<String, usize>,
+    pub tasks: Vec<AdminCommentTask>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentTaskGroupedResponse {
+    pub groups: Vec<AdminCommentTaskGroup>,
+    pub total_tasks: usize,
+    pub total_articles: usize,
+    pub status_counts: std::collections::HashMap<String, usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentPublishedResponse {
+    pub comments: Vec<ArticleComment>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCleanupResponse {
+    pub deleted_tasks: usize,
+    pub before_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminPatchCommentTaskRequest {
+    pub comment_text: Option<String>,
+    pub selected_text: Option<String>,
+    pub anchor_block_id: Option<String>,
+    pub anchor_context_before: Option<String>,
+    pub anchor_context_after: Option<String>,
+    pub admin_note: Option<String>,
+    pub operator: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminPatchPublishedCommentRequest {
+    pub ai_reply_markdown: Option<String>,
+    pub comment_text: Option<String>,
+    pub operator: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminTaskActionRequest {
+    pub operator: Option<String>,
+    pub admin_note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCleanupRequest {
+    pub status: Option<String>,
+    pub retention_days: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentAuditLog {
+    pub log_id: String,
+    pub task_id: String,
+    pub action: String,
+    pub operator: String,
+    pub before_json: Option<String>,
+    pub after_json: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentAuditResponse {
+    pub logs: Vec<AdminCommentAuditLog>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentAiRun {
+    pub run_id: String,
+    pub task_id: String,
+    pub status: String,
+    pub runner_program: String,
+    pub runner_args_json: String,
+    pub skill_path: String,
+    pub exit_code: Option<i32>,
+    pub final_reply_markdown: Option<String>,
+    pub failure_reason: Option<String>,
+    pub started_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentAiRunChunk {
+    pub chunk_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub stream: String,
+    pub batch_index: i32,
+    pub content: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentTaskAiOutputResponse {
+    pub task_id: String,
+    pub selected_run_id: Option<String>,
+    pub runs: Vec<AdminCommentAiRun>,
+    pub chunks: Vec<AdminCommentAiRunChunk>,
+    pub merged_stdout: String,
+    pub merged_stderr: String,
+    pub merged_output: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminCommentAiStreamEvent {
+    pub event_type: String,
+    pub task_id: String,
+    pub run_id: String,
+    pub run_status: Option<String>,
+    pub chunk: Option<AdminCommentAiRunChunk>,
+}
+
+#[cfg(not(feature = "mock"))]
+fn admin_base() -> String {
+    API_BASE
+        .strip_suffix("/api")
+        .map(str::to_string)
+        .unwrap_or_else(|| API_BASE.to_string())
+}
+
+pub fn build_admin_comment_ai_stream_url(
+    task_id: &str,
+    run_id: Option<&str>,
+    from_batch_index: Option<i32>,
+) -> String {
+    #[cfg(feature = "mock")]
+    {
+        let mut url = format!("/mock/admin/comments/tasks/{}/ai-output/stream", task_id);
+        let mut params = Vec::new();
+        if let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("run_id={}", urlencoding::encode(run_id)));
+        }
+        if let Some(from_batch_index) = from_batch_index {
+            params.push(format!("from_batch_index={from_batch_index}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        return url;
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!(
+            "{}/admin/comments/tasks/{}/ai-output/stream",
+            admin_base(),
+            urlencoding::encode(task_id)
+        );
+        let mut params = Vec::new();
+        if let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("run_id={}", urlencoding::encode(run_id)));
+        }
+        if let Some(from_batch_index) = from_batch_index {
+            params.push(format!("from_batch_index={from_batch_index}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        url
+    }
+}
+
+pub fn build_comment_client_meta() -> CommentClientMeta {
+    #[cfg(feature = "mock")]
+    {
+        CommentClientMeta {
+            ua: Some("mock-agent".to_string()),
+            language: Some("zh-CN".to_string()),
+            platform: Some("mock".to_string()),
+            viewport: Some("1280x720".to_string()),
+            timezone: Some("Asia/Shanghai".to_string()),
+            referrer: None,
+        }
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let window = web_sys::window();
+        let navigator = window.as_ref().map(|win| win.navigator());
+        let ua = navigator.as_ref().and_then(|nav| nav.user_agent().ok());
+        let language = navigator.as_ref().and_then(|nav| nav.language());
+        let platform = navigator.as_ref().and_then(|nav| nav.platform().ok());
+        let viewport = window.as_ref().and_then(|win| {
+            let width = win.inner_width().ok()?.as_f64()?;
+            let height = win.inner_height().ok()?.as_f64()?;
+            Some(format!("{:.0}x{:.0}", width, height))
+        });
+        let timezone = {
+            let options = js_sys::Object::new();
+            let formatter = js_sys::Intl::DateTimeFormat::new(&js_sys::Array::new(), &options);
+            js_sys::Reflect::get(&formatter.resolved_options(), &JsValue::from_str("timeZone"))
+                .ok()
+                .and_then(|value| value.as_string())
+        };
+        let referrer = window
+            .as_ref()
+            .and_then(|win| win.document())
+            .map(|doc| doc.referrer())
+            .filter(|value| !value.trim().is_empty());
+
+        CommentClientMeta {
+            ua,
+            language,
+            platform,
+            viewport,
+            timezone,
+            referrer,
+        }
+    }
+}
+
+pub async fn submit_article_comment(
+    mut request: SubmitCommentRequest,
+) -> Result<SubmitCommentResponse, String> {
+    if request.comment_text.trim().is_empty() {
+        return Err("comment text is empty".to_string());
+    }
+    if request.client_meta.is_none() {
+        request.client_meta = Some(build_comment_client_meta());
+    }
+
+    #[cfg(feature = "mock")]
+    {
+        return Ok(SubmitCommentResponse {
+            task_id: format!("mock-task-{}", Date::now() as u64),
+            status: "pending".to_string(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/comments/submit", API_BASE);
+        let response = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_article_comments(
+    article_id: &str,
+    limit: Option<usize>,
+) -> Result<CommentListResponse, String> {
+    if article_id.trim().is_empty() {
+        return Err("article_id is empty".to_string());
+    }
+
+    #[cfg(feature = "mock")]
+    {
+        return Ok(CommentListResponse {
+            comments: vec![],
+            total: 0,
+            article_id: article_id.to_string(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url =
+            format!("{}/comments/list?article_id={}", API_BASE, urlencoding::encode(article_id),);
+        if let Some(limit) = limit {
+            url.push_str(&format!("&limit={limit}"));
+        }
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_article_comment_stats(article_id: &str) -> Result<CommentStatsResponse, String> {
+    if article_id.trim().is_empty() {
+        return Err("article_id is empty".to_string());
+    }
+
+    #[cfg(feature = "mock")]
+    {
+        return Ok(CommentStatsResponse {
+            article_id: article_id.to_string(),
+            total: 0,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/comments/stats?article_id={}", API_BASE, urlencoding::encode(article_id),);
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_view_analytics_config() -> Result<ViewAnalyticsConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(ViewAnalyticsConfig {
+            dedupe_window_seconds: 60,
+            trend_default_days: 30,
+            trend_max_days: 180,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/view-analytics-config", admin_base());
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn update_admin_view_analytics_config(
+    config: &ViewAnalyticsConfig,
+) -> Result<ViewAnalyticsConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(config.clone());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/view-analytics-config", admin_base());
+        let response = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .json(config)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_comment_runtime_config() -> Result<CommentRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(CommentRuntimeConfig {
+            submit_rate_limit_seconds: 60,
+            list_default_limit: 20,
+            cleanup_retention_days: -1,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/comment-config", admin_base());
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn update_admin_comment_runtime_config(
+    config: &CommentRuntimeConfig,
+) -> Result<CommentRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(config.clone());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/comment-config", admin_base());
+        let response = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .json(config)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_comment_tasks_grouped(
+    status: Option<&str>,
+    limit: Option<usize>,
+) -> Result<AdminCommentTaskGroupedResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminCommentTaskGroupedResponse {
+            groups: vec![],
+            total_tasks: 0,
+            total_articles: 0,
+            status_counts: std::collections::HashMap::new(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/comments/tasks/grouped", admin_base());
+        let mut params = Vec::new();
+        if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("status={}", urlencoding::encode(status)));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_comment_task(task_id: &str) -> Result<AdminCommentTask, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("not found".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/comments/tasks/{}", admin_base(), urlencoding::encode(task_id),);
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_comment_task_ai_output(
+    task_id: &str,
+    run_id: Option<&str>,
+    limit: Option<usize>,
+) -> Result<AdminCommentTaskAiOutputResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminCommentTaskAiOutputResponse {
+            task_id: task_id.to_string(),
+            selected_run_id: None,
+            runs: vec![],
+            chunks: vec![],
+            merged_stdout: String::new(),
+            merged_stderr: String::new(),
+            merged_output: String::new(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!(
+            "{}/admin/comments/tasks/{}/ai-output",
+            admin_base(),
+            urlencoding::encode(task_id),
+        );
+        let mut params = Vec::new();
+        if let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("run_id={}", urlencoding::encode(run_id)));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_comment_task(
+    task_id: &str,
+    request: &AdminPatchCommentTaskRequest,
+) -> Result<AdminCommentTask, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("not implemented in mock".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/comments/tasks/{}", admin_base(), urlencoding::encode(task_id),);
+        let response = Request::patch(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_approve_comment_task(
+    task_id: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<AdminCommentTask, String> {
+    admin_post_task_action(task_id, "approve", request).await
+}
+
+pub async fn admin_reject_comment_task(
+    task_id: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<AdminCommentTask, String> {
+    admin_post_task_action(task_id, "reject", request).await
+}
+
+pub async fn admin_retry_comment_task(
+    task_id: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<AdminCommentTask, String> {
+    admin_post_task_action(task_id, "retry", request).await
+}
+
+pub async fn admin_approve_and_run_comment_task(
+    task_id: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<AdminCommentTask, String> {
+    admin_post_task_action(task_id, "approve-and-run", request).await
+}
+
+pub async fn admin_delete_comment_task(
+    task_id: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(serde_json::json!({ "task_id": task_id, "deleted": true }));
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/comments/tasks/{}", admin_base(), urlencoding::encode(task_id),);
+        let response = Request::delete(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_published_comments(
+    article_id: Option<&str>,
+    task_id: Option<&str>,
+    limit: Option<usize>,
+) -> Result<AdminCommentPublishedResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminCommentPublishedResponse {
+            comments: vec![],
+            total: 0,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/comments/published", admin_base());
+        let mut params = Vec::new();
+        if let Some(article_id) = article_id.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("article_id={}", urlencoding::encode(article_id)));
+        }
+        if let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("task_id={}", urlencoding::encode(task_id)));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_published_comment(
+    comment_id: &str,
+    request: &AdminPatchPublishedCommentRequest,
+) -> Result<ArticleComment, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("not implemented in mock".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/comments/published/{}",
+            admin_base(),
+            urlencoding::encode(comment_id),
+        );
+        let response = Request::patch(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_published_comment(
+    comment_id: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(serde_json::json!({ "comment_id": comment_id, "deleted": true }));
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/comments/published/{}",
+            admin_base(),
+            urlencoding::encode(comment_id),
+        );
+        let response = Request::delete(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_comment_audit_logs(
+    task_id: Option<&str>,
+    action: Option<&str>,
+    limit: Option<usize>,
+) -> Result<AdminCommentAuditResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminCommentAuditResponse {
+            logs: vec![],
+            total: 0,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/comments/audit-logs", admin_base());
+        let mut params = Vec::new();
+        if let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("task_id={}", urlencoding::encode(task_id)));
+        }
+        if let Some(action) = action.map(str::trim).filter(|value| !value.is_empty()) {
+            params.push(format!("action={}", urlencoding::encode(action)));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_cleanup_comments(
+    request: &AdminCleanupRequest,
+) -> Result<AdminCleanupResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminCleanupResponse {
+            deleted_tasks: 0,
+            before_ms: None,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/comments/cleanup", admin_base());
+        let response = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+async fn admin_post_task_action(
+    task_id: &str,
+    action: &str,
+    request: &AdminTaskActionRequest,
+) -> Result<AdminCommentTask, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err(format!("mock action not implemented: {}", action));
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/comments/tasks/{}/{}",
+            admin_base(),
+            urlencoding::encode(task_id),
+            action
+        );
+        let response = Request::post(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }

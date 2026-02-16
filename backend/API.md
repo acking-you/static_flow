@@ -5,8 +5,11 @@
 - Base URL（本地开发）: `http://localhost:3000/api`
 - Base URL（生产示例，直连 pb-mapper）: `https://<cloud-host>:8888/api`
 - Base URL（生产示例，可选云端 Nginx）: `https://api.yourdomain.com/api`
+- Admin URL（本地/内网）: `http://localhost:3000/admin`
 - 协议: HTTP/1.1
 - 数据格式: JSON（图片接口返回二进制）
+- 主内容库: `LANCEDB_URI`（文章/图片/分类/浏览统计）
+- 评论审核库: `COMMENTS_LANCEDB_URI`（评论任务/审核日志/已发布评论）
 - 请求追踪: backend 会透传/生成 `x-request-id` 与 `x-trace-id`，并在 backend/shared 请求内日志输出同一组 ID
 - 查询路径日志: shared 层会输出 `Query path selected` / `Query completed`，字段包含：
   - `query`（逻辑查询名）
@@ -28,6 +31,19 @@
 RUST_ENV=production
 ALLOWED_ORIGINS=https://acking-you.github.io,https://your-frontend-domain.com
 ```
+
+## Admin 访问控制
+
+`/admin/*` 接口为本地运维接口，不应直接暴露到公网。默认策略：
+
+- `ADMIN_LOCAL_ONLY=true`（默认）时，仅允许本机/内网来源访问
+- 若设置 `ADMIN_TOKEN`，可通过请求头 `x-admin-token` 放行（优先于 local-only）
+
+常见部署建议：
+
+- backend 仅监听 `127.0.0.1`
+- Caddy/Nginx 仅对公网暴露 `/api/*`
+- `/admin/*` 仅在本机前端页面或 SSH 隧道下访问
 
 ---
 
@@ -157,6 +173,7 @@ curl "http://localhost:3000/api/articles/post-001/view-trend?granularity=hour&da
 ### 2.3) Admin：浏览统计运行时配置（本地）
 
 > 该接口不在 `/api` 路径下，建议仅通过本地/内网访问，不对公网开放。
+> 若启用 `ADMIN_TOKEN`，请在请求头携带 `x-admin-token: <token>`。
 
 `GET /admin/view-analytics-config`
 
@@ -202,7 +219,162 @@ curl -X POST "http://127.0.0.1:3000/admin/view-analytics-config" \
   -d '{"dedupe_window_seconds":120,"trend_default_days":14,"trend_max_days":180}'
 ```
 
-### 3) 获取相关文章（向量）
+### 3) 文章评论（公开 `/api`）
+
+#### 3.1 提交评论任务
+
+`POST /api/comments/submit`
+
+说明：
+
+- 支持两种入口：`selection`（正文选中）/ `footer`（文末评论框）
+- 默认频率限制：同一用户指纹每 `60` 秒最多提交 `1` 条（可通过 admin 接口调整）
+- 提交后进入审核队列，响应仅返回任务状态，不代表已公开展示
+
+请求体示例（选区评论）：
+
+```json
+{
+  "article_id": "post-001",
+  "entry_type": "selection",
+  "comment_text": "这里的锁粒度是不是还可以再细一点？",
+  "selected_text": "epoll_wait 会在这里阻塞直到事件到达",
+  "anchor_block_id": "blk-p-epoll-wait-hui-zai-zhe-li-zu-sai-zhi-dao-shi-jian-dao-da",
+  "anchor_context_before": "在 Linux 事件循环中，",
+  "anchor_context_after": "然后回到用户态继续处理。",
+  "client_meta": {
+    "ua": "Mozilla/5.0 ...",
+    "language": "zh-CN",
+    "platform": "Linux x86_64",
+    "viewport": "1920x1080",
+    "timezone": "Asia/Shanghai",
+    "referrer": "https://acking-you.github.io/posts/post-001"
+  }
+}
+```
+
+响应示例：
+
+```json
+{
+  "task_id": "cmt-19a4f6a22d4",
+  "status": "pending"
+}
+```
+
+#### 3.2 获取评论列表（公开）
+
+`GET /api/comments/list?article_id=<id>[&limit=80]`
+
+说明：
+
+- 返回该文章的公开评论线程（默认排除 `rejected`）
+- 用户评论会先展示；AI 回复异步补齐
+- 当某条评论暂无 AI 回复时，`ai_reply_markdown` 为 `null`
+- 默认 `limit` 由 runtime config 控制（默认 `20`）
+
+响应示例：
+
+```json
+{
+  "comments": [
+    {
+      "comment_id": "cmt-cmt-19a4f6a22d4-1760112233445",
+      "article_id": "post-001",
+      "task_id": "cmt-19a4f6a22d4",
+      "author_name": "Reader-a1b2c3",
+      "author_avatar_seed": "a1b2c3d4e5",
+      "comment_text": "这里能否补充一下锁竞争场景？",
+      "selected_text": "epoll_wait 会在这里阻塞",
+      "anchor_block_id": "blk-p-epoll-wait-hui-zai-zhe-li-zu-sai",
+      "anchor_context_before": "在 Linux 事件循环中，",
+      "anchor_context_after": "然后回到用户态继续处理。",
+      "ai_reply_markdown": null,
+      "ip_region": "CN/Guangdong/Guangzhou",
+      "published_at": 1760112233445
+    }
+  ],
+  "total": 12,
+  "article_id": "post-001"
+}
+```
+
+#### 3.3 获取评论计数
+
+`GET /api/comments/stats?article_id=<id>`
+
+响应示例：
+
+```json
+{
+  "article_id": "post-001",
+  "total": 12
+}
+```
+
+#### 3.4 Admin：评论运行时配置（本地）
+
+`GET /admin/comment-config`
+
+`POST /admin/comment-config`
+
+请求体（字段可选，部分更新）：
+
+```json
+{
+  "submit_rate_limit_seconds": 60,
+  "list_default_limit": 20,
+  "cleanup_retention_days": -1
+}
+```
+
+参数约束：
+
+- `submit_rate_limit_seconds`: `1..3600`
+- `list_default_limit`: `1..200`
+- `cleanup_retention_days`: `-1` 或 `1..3650`
+
+#### 3.5 Admin：评论审核与任务管理（本地）
+
+核心接口：
+
+- `GET /admin/comments/tasks?status=<pending|approved|running|done|failed|rejected>&limit=50`
+- `GET /admin/comments/tasks/grouped?status=<...>&limit=200`（按 `article_id` 聚合）
+- `GET /admin/comments/tasks/:task_id`
+- `PATCH /admin/comments/tasks/:task_id`（修订评论文本、锚点上下文、admin_note）
+- `DELETE /admin/comments/tasks/:task_id`（手动删除 task，`running` 状态禁止）
+- `POST /admin/comments/tasks/:task_id/approve`（仅审批，不触发 AI worker）
+- `POST /admin/comments/tasks/:task_id/approve-and-run`（审批并触发 Codex/AI worker）
+- `POST /admin/comments/tasks/:task_id/retry`（失败后重试）
+- `POST /admin/comments/tasks/:task_id/reject`（拒绝并保留任务）
+- `GET /admin/comments/tasks/:task_id/ai-output?run_id=<run>&limit=1200`（按任务查看 AI 执行批次与拼接输出）
+- `GET /admin/comments/ai-runs?task_id=<task>&status=<running|success|failed>&limit=120`（查询 AI 执行批次元数据）
+- `GET /admin/comments/published?article_id=<id>&task_id=<task>&limit=50`
+- `PATCH /admin/comments/published/:comment_id`（修订公开评论文本或 AI 回复）
+- `DELETE /admin/comments/published/:comment_id`
+- `GET /admin/comments/audit-logs?task_id=<task>&action=<action>&limit=120`
+- `POST /admin/comments/cleanup`（按状态/保留天数清理历史任务）
+
+任务状态流转：
+
+`pending -> approved -> running -> done`
+
+`pending -> rejected`
+
+`approved -> running | rejected`
+
+`running -> done | failed`
+
+`failed -> approved | running | rejected`
+
+`pending -> running`（`approve-and-run` 直接抢占执行）
+
+终态约束：
+
+- `done` / `rejected` 不允许再次 `approve/retry/reject`
+- `done` 可执行字段更新或显式删除操作（admin）
+
+### 4) 获取相关文章（向量）
 
 `GET /api/articles/:id/related`
 
@@ -212,12 +384,12 @@ curl -X POST "http://127.0.0.1:3000/admin/view-analytics-config" \
 curl http://localhost:3000/api/articles/post-001/related
 ```
 
-### 4) 标签与分类
+### 5) 标签与分类
 
 - `GET /api/tags`
 - `GET /api/categories`
 
-### 5) 关键词搜索
+### 6) 关键词搜索
 
 `GET /api/search?q=关键词`
 
@@ -235,7 +407,7 @@ curl "http://localhost:3000/api/search?q=rust"
 curl "http://localhost:3000/api/search?q=rust&limit=50"
 ```
 
-### 6) 语义搜索
+### 7) 语义搜索
 
 `GET /api/semantic-search?q=关键词[&enhanced_highlight=true]`
 
@@ -289,7 +461,7 @@ curl "http://localhost:3000/api/semantic-search?q=web&limit=50&max_distance=0.8"
 
 输出中的 `distance=...` 就是该索引使用的距离度量类型。
 
-### 7) 图片列表
+### 8) 图片列表
 
 `GET /api/images`
 
@@ -299,7 +471,7 @@ curl "http://localhost:3000/api/semantic-search?q=web&limit=50&max_distance=0.8"
 curl http://localhost:3000/api/images
 ```
 
-### 8) 图片读取（从 LanceDB）
+### 9) 图片读取（从 LanceDB）
 
 `GET /api/images/:id-or-filename`
 
@@ -319,7 +491,7 @@ curl "http://localhost:3000/api/images/wallhaven-5yyyw9.png?thumb=true" --output
 - 缩略图尺寸由 CLI 参数 `--thumbnail-size` 控制，默认 `256`。
 - 当前 `Content-Type` 按 `filename` 后缀推断，因此某些情况下（如原图 jpg 且返回 thumbnail）响应头与字节实际编码可能不一致。
 
-### 9) 以图搜图
+### 10) 以图搜图
 
 `GET /api/image-search?id=<image_id>`
 
@@ -335,7 +507,7 @@ curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31
 curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31f67187f65fcd4f95f5f6c68ca68cfb7b&limit=24&max_distance=0.8"
 ```
 
-### 10) 文搜图（Text-to-Image）
+### 11) 文搜图（Text-to-Image）
 
 `GET /api/image-search-text?q=关键词`
 
@@ -375,6 +547,11 @@ curl "http://localhost:3000/api/image-search-text?q=clickhouse execution pipelin
 - `articles` 表：文章元数据、正文、文本向量
 - `images` 表：图片二进制、缩略图、视觉向量
 - `article_views` 表：文章浏览事件（含去重键、按天/小时分桶字段；默认 60s 去重窗口，可运行时配置）
+- `comment_tasks` 表（`COMMENTS_LANCEDB_URI`）：评论任务队列、审核状态、客户端信息
+- `comment_published` 表（`COMMENTS_LANCEDB_URI`）：审核通过且 AI 回复完成的公开评论
+- `comment_audit_logs` 表（`COMMENTS_LANCEDB_URI`）：审核动作审计日志（patch/approve/retry/reject）
+- `comment_ai_runs` 表（`COMMENTS_LANCEDB_URI`）：每次 Codex/AI 执行批次元数据（状态、退出码、最终回复）
+- `comment_ai_run_chunks` 表（`COMMENTS_LANCEDB_URI`）：AI 运行输出分片（stdout/stderr 批次），用于后台拼接和排障
 
 图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。`thumb=true` 时优先 `thumbnail`，为空则回退 `data`。
 
@@ -390,13 +567,17 @@ SVG 写入说明：
 make bin-all
 
 # 开发环境
-LANCEDB_URI=../data/lancedb PORT=3000 ./target/release/static-flow-backend
+LANCEDB_URI=../data/lancedb \
+COMMENTS_LANCEDB_URI=../data/lancedb-comments \
+PORT=3000 \
+./target/release/static-flow-backend
 
 # 生产环境示例
 RUST_ENV=production \
 BIND_ADDR=127.0.0.1 \
 PORT=9999 \
 LANCEDB_URI=/opt/staticflow/data/lancedb \
+COMMENTS_LANCEDB_URI=/opt/staticflow/data/lancedb-comments \
 ALLOWED_ORIGINS=https://acking-you.github.io \
 ./target/release/static-flow-backend
 ```

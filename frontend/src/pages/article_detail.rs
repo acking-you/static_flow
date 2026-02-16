@@ -1,12 +1,18 @@
 use gloo_timers::{callback::Timeout, future::TimeoutFuture};
 use static_flow_shared::{Article, ArticleListItem};
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{window, HtmlImageElement, HtmlSelectElement, KeyboardEvent};
+use web_sys::{
+    window, Element, HtmlImageElement, HtmlSelectElement, HtmlTextAreaElement, KeyboardEvent, Node,
+};
 use yew::{prelude::*, virtual_dom::AttrValue};
 use yew_router::prelude::{use_navigator, use_route, Link};
 
 use crate::{
-    api::{fetch_article_view_trend, fetch_related_articles, track_article_view, ArticleViewPoint},
+    api::{
+        fetch_article_comment_stats, fetch_article_comments, fetch_article_view_trend,
+        fetch_related_articles, submit_article_comment, track_article_view, ArticleComment,
+        ArticleViewPoint, SubmitCommentRequest,
+    },
     components::{
         article_card::ArticleCard,
         icons::IconName,
@@ -46,6 +52,234 @@ enum TrendGranularity {
 const LIGHTBOX_MIN_ZOOM: f64 = 0.5;
 const LIGHTBOX_MAX_ZOOM: f64 = 3.0;
 const LIGHTBOX_ZOOM_STEP: f64 = 0.25;
+const COMMENT_SECTION_ID: &str = "article-comments-section";
+
+#[derive(Clone, PartialEq)]
+struct SelectionCommentDraft {
+    selected_text: String,
+    anchor_block_id: Option<String>,
+    anchor_context_before: Option<String>,
+    anchor_context_after: Option<String>,
+}
+
+#[derive(Clone, PartialEq)]
+struct CommentReplyDraft {
+    comment_id: String,
+    author_name: String,
+    comment_text: String,
+    ai_reply_markdown: Option<String>,
+}
+
+fn normalize_excerpt(value: &str, max_chars: usize) -> Option<String> {
+    let compact = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if compact.is_empty() {
+        return None;
+    }
+    Some(compact.chars().take(max_chars).collect::<String>())
+}
+
+fn extract_anchor_context(
+    block_text: Option<String>,
+    selected_text: &str,
+) -> (Option<String>, Option<String>) {
+    let Some(block_text) = block_text else {
+        return (None, None);
+    };
+    let selected = selected_text.trim();
+    if selected.is_empty() {
+        return (None, None);
+    }
+
+    if let Some(found_at) = block_text.find(selected) {
+        let before = block_text[..found_at]
+            .chars()
+            .rev()
+            .take(120)
+            .collect::<String>();
+        let before = before.chars().rev().collect::<String>();
+        let after_start = found_at.saturating_add(selected.len());
+        let after = block_text[after_start..]
+            .chars()
+            .take(120)
+            .collect::<String>();
+        return (normalize_excerpt(&before, 120), normalize_excerpt(&after, 120));
+    }
+
+    (None, None)
+}
+
+fn node_in_article(node: &Node, article_root: &Element) -> bool {
+    let mut cursor = if node.node_type() == Node::ELEMENT_NODE {
+        node.clone().dyn_into::<Element>().ok()
+    } else {
+        node.parent_element()
+    };
+
+    while let Some(el) = cursor {
+        if el.is_same_node(Some(article_root)) {
+            return true;
+        }
+        cursor = el.parent_element();
+    }
+    false
+}
+
+fn find_anchor_block(
+    common_node: &Node,
+    article_root: &Element,
+) -> (Option<String>, Option<String>) {
+    let mut cursor = if common_node.node_type() == Node::ELEMENT_NODE {
+        common_node.clone().dyn_into::<Element>().ok()
+    } else {
+        common_node.parent_element()
+    };
+
+    while let Some(el) = cursor {
+        if let Some(block_id) = el
+            .get_attribute("data-sf-block-id")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return (Some(block_id), el.text_content());
+        }
+        if el.is_same_node(Some(article_root)) {
+            break;
+        }
+        cursor = el.parent_element();
+    }
+
+    (None, None)
+}
+
+fn capture_selection_draft() -> Option<(SelectionCommentDraft, (f64, f64))> {
+    let win = window()?;
+    let selection = win.get_selection().ok().flatten()?;
+    let selected_text: String = selection.to_string().into();
+    let selected_text = selected_text.trim().to_string();
+    if selected_text.chars().count() < 2 {
+        return None;
+    }
+
+    let range = selection.get_range_at(0).ok()?;
+    if range.collapsed() {
+        return None;
+    }
+
+    let document = win.document()?;
+    let article_root = document.query_selector(".article-content").ok().flatten()?;
+    let common_node = range.common_ancestor_container().ok()?;
+    if !node_in_article(&common_node, &article_root) {
+        return None;
+    }
+
+    let (anchor_block_id, block_text) = find_anchor_block(&common_node, &article_root);
+    let (before, after) = extract_anchor_context(block_text, &selected_text);
+
+    let rect = range.get_bounding_client_rect();
+    let viewport_w = win
+        .inner_width()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1280.0);
+    let viewport_h = win
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(720.0);
+
+    let mut left = rect.x() + (rect.width() / 2.0) - 68.0;
+    let mut top = rect.y() - 48.0;
+    if !left.is_finite() || !top.is_finite() {
+        left = 24.0;
+        top = 24.0;
+    }
+
+    let max_left = (viewport_w - 136.0).max(12.0);
+    let max_top = (viewport_h - 54.0).max(12.0);
+    left = left.clamp(12.0, max_left);
+    top = top.clamp(12.0, max_top);
+
+    Some((
+        SelectionCommentDraft {
+            selected_text,
+            anchor_block_id,
+            anchor_context_before: before,
+            anchor_context_after: after,
+        },
+        (left, top),
+    ))
+}
+
+fn scroll_to_element_id(id: &str) {
+    if let Some(target) = window()
+        .and_then(|win| win.document())
+        .and_then(|doc| doc.get_element_by_id(id))
+    {
+        target.scroll_into_view();
+    }
+}
+
+fn scroll_to_anchor_block(block_id: &str) {
+    let target = window().and_then(|win| win.document()).and_then(|doc| {
+        let selector =
+            format!(".article-content [data-sf-block-id=\"{}\"]", block_id.replace('"', "\\\""));
+        doc.query_selector(&selector).ok().flatten()
+    });
+
+    let Some(target) = target else {
+        return;
+    };
+
+    target.scroll_into_view();
+    let _ = target.class_list().add_1("sf-comment-anchor-flash");
+    let target_clone = target.clone();
+    Timeout::new(1600, move || {
+        let _ = target_clone
+            .class_list()
+            .remove_1("sf-comment-anchor-flash");
+    })
+    .forget();
+}
+
+fn scroll_to_comment_card(comment_id: &str) {
+    let target = window().and_then(|win| win.document()).and_then(|doc| {
+        doc.get_element_by_id(&format!("comment-item-{}", comment_id))
+    });
+
+    let Some(target) = target else {
+        return;
+    };
+    target.scroll_into_view();
+    let _ = target.class_list().add_1("sf-comment-anchor-flash");
+    let target_clone = target.clone();
+    Timeout::new(1600, move || {
+        let _ = target_clone
+            .class_list()
+            .remove_1("sf-comment-anchor-flash");
+    })
+    .forget();
+}
+
+fn avatar_hue(seed: &str) -> u32 {
+    let mut hash: u32 = 0;
+    for byte in seed.bytes() {
+        hash = hash.wrapping_mul(16777619) ^ (byte as u32);
+    }
+    hash % 360
+}
+
+fn format_published_time(ts_ms: i64) -> String {
+    let value = js_sys::Date::new(&JsValue::from_f64(ts_ms as f64))
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_else(|| ts_ms.to_string());
+    value.replace('T', " ").trim_end_matches('Z').to_string()
+}
 
 #[function_component(ArticleDetailPage)]
 pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
@@ -74,6 +308,21 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let trend_loading = use_state(|| false);
     let trend_error = use_state(|| None::<String>);
     let trend_granularity = use_state(|| TrendGranularity::Day);
+    let comments = use_state(Vec::<ArticleComment>::new);
+    let comments_total = use_state(|| 0usize);
+    let comments_loading = use_state(|| false);
+    let comments_error = use_state(|| None::<String>);
+    let comments_refresh_key = use_state(|| 0u64);
+    let footer_comment_input = use_state(String::new);
+    let footer_reply_target = use_state(|| None::<CommentReplyDraft>);
+    let footer_submit_loading = use_state(|| false);
+    let footer_submit_feedback = use_state(|| None::<(bool, String)>);
+    let selection_draft = use_state(|| None::<SelectionCommentDraft>);
+    let selection_button_pos = use_state(|| None::<(f64, f64)>);
+    let selection_modal_open = use_state(|| false);
+    let selection_comment_input = use_state(String::new);
+    let selection_submit_loading = use_state(|| false);
+    let selection_submit_feedback = use_state(|| None::<(bool, String)>);
 
     // Back to where user came from (non-article route) with robust fallback.
     let handle_back = {
@@ -205,6 +454,55 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         });
     }
 
+    {
+        let article_id = article_id.clone();
+        let comments = comments.clone();
+        let comments_total = comments_total.clone();
+        let comments_loading = comments_loading.clone();
+        let comments_error = comments_error.clone();
+        let comments_refresh_key = comments_refresh_key.clone();
+        let footer_reply_target = footer_reply_target.clone();
+        use_effect_with((article_id.clone(), *comments_refresh_key), move |(id, _refresh)| {
+            let id = id.clone();
+            let comments = comments.clone();
+            let comments_total = comments_total.clone();
+            let comments_loading = comments_loading.clone();
+            let comments_error = comments_error.clone();
+            let footer_reply_target = footer_reply_target.clone();
+            comments_loading.set(true);
+            comments_error.set(None);
+            if *_refresh == 0 {
+                footer_reply_target.set(None);
+            }
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let list_result = fetch_article_comments(&id, Some(80)).await;
+                let stats_result = fetch_article_comment_stats(&id).await;
+
+                match (list_result, stats_result) {
+                    (Ok(list), Ok(stats)) => {
+                        comments.set(list.comments);
+                        comments_total.set(stats.total);
+                        comments_error.set(None);
+                    },
+                    (Ok(list), Err(err)) => {
+                        let list_len = list.comments.len();
+                        comments.set(list.comments);
+                        comments_total.set(list_len);
+                        comments_error.set(Some(format!("Failed to load comment stats: {}", err)));
+                    },
+                    (Err(err), _) => {
+                        comments.set(vec![]);
+                        comments_total.set(0);
+                        comments_error.set(Some(format!("Failed to load comments: {}", err)));
+                    },
+                }
+                comments_loading.set(false);
+            });
+            || ()
+        });
+    }
+
     let article_data = (*article).clone();
     let content_language = use_state(|| ArticleContentLanguage::Zh);
     let is_lightbox_open = use_state(|| false);
@@ -252,10 +550,24 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         let is_brief_open = is_brief_open.clone();
         let is_trend_open = is_trend_open.clone();
         let trend_granularity = trend_granularity.clone();
+        let footer_comment_input = footer_comment_input.clone();
+        let footer_submit_feedback = footer_submit_feedback.clone();
+        let selection_draft = selection_draft.clone();
+        let selection_button_pos = selection_button_pos.clone();
+        let selection_modal_open = selection_modal_open.clone();
+        let selection_comment_input = selection_comment_input.clone();
+        let selection_submit_feedback = selection_submit_feedback.clone();
         use_effect_with(article_id.clone(), move |_| {
             is_brief_open.set(false);
             is_trend_open.set(false);
             trend_granularity.set(TrendGranularity::Day);
+            footer_comment_input.set(String::new());
+            footer_submit_feedback.set(None);
+            selection_draft.set(None);
+            selection_button_pos.set(None);
+            selection_modal_open.set(false);
+            selection_comment_input.set(String::new());
+            selection_submit_feedback.set(None);
             || ()
         });
     }
@@ -322,6 +634,198 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             preview_image_url.set(None);
             preview_image_failed.set(false);
             preview_zoom.set(1.0);
+        })
+    };
+
+    let on_article_mouseup = {
+        let selection_draft = selection_draft.clone();
+        let selection_button_pos = selection_button_pos.clone();
+        let selection_submit_feedback = selection_submit_feedback.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some((draft, pos)) = capture_selection_draft() {
+                selection_draft.set(Some(draft));
+                selection_button_pos.set(Some(pos));
+                selection_submit_feedback.set(None);
+            } else {
+                selection_draft.set(None);
+                selection_button_pos.set(None);
+            }
+        })
+    };
+
+    let open_selection_modal_click = {
+        let selection_modal_open = selection_modal_open.clone();
+        let selection_submit_feedback = selection_submit_feedback.clone();
+        Callback::from(move |event: MouseEvent| {
+            event.stop_propagation();
+            selection_submit_feedback.set(None);
+            selection_modal_open.set(true);
+        })
+    };
+
+    let close_selection_modal_click = {
+        let selection_modal_open = selection_modal_open.clone();
+        Callback::from(move |_| {
+            selection_modal_open.set(false);
+        })
+    };
+
+    let on_selection_comment_input = {
+        let selection_comment_input = selection_comment_input.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                selection_comment_input.set(target.value());
+            }
+        })
+    };
+
+    let on_footer_comment_input = {
+        let footer_comment_input = footer_comment_input.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                footer_comment_input.set(target.value());
+            }
+        })
+    };
+
+    let clear_footer_reply_target = {
+        let footer_reply_target = footer_reply_target.clone();
+        Callback::from(move |_| {
+            footer_reply_target.set(None);
+        })
+    };
+
+    let submit_selection_comment_click = {
+        let article_id = article_id.clone();
+        let selection_draft = selection_draft.clone();
+        let selection_comment_input = selection_comment_input.clone();
+        let selection_submit_loading = selection_submit_loading.clone();
+        let selection_submit_feedback = selection_submit_feedback.clone();
+        let selection_modal_open = selection_modal_open.clone();
+        let selection_button_pos = selection_button_pos.clone();
+        let comments_refresh_key = comments_refresh_key.clone();
+        Callback::from(move |_| {
+            let Some(draft) = (*selection_draft).clone() else {
+                selection_submit_feedback
+                    .set(Some((false, "请先选中文章中的一段内容。".to_string())));
+                return;
+            };
+
+            let comment_text = selection_comment_input.trim().to_string();
+            if comment_text.is_empty() {
+                selection_submit_feedback
+                    .set(Some((false, "请输入你对选中内容的疑问或评价。".to_string())));
+                return;
+            }
+
+            let request = SubmitCommentRequest {
+                article_id: article_id.clone(),
+                entry_type: "selection".to_string(),
+                comment_text,
+                selected_text: Some(draft.selected_text.clone()),
+                anchor_block_id: draft.anchor_block_id.clone(),
+                anchor_context_before: draft.anchor_context_before.clone(),
+                anchor_context_after: draft.anchor_context_after.clone(),
+                reply_to_comment_id: None,
+                client_meta: None,
+            };
+
+            let selection_comment_input = selection_comment_input.clone();
+            let selection_submit_loading = selection_submit_loading.clone();
+            let selection_submit_feedback = selection_submit_feedback.clone();
+            let selection_modal_open = selection_modal_open.clone();
+            let selection_draft = selection_draft.clone();
+            let selection_button_pos = selection_button_pos.clone();
+            let comments_refresh_key = comments_refresh_key.clone();
+
+            selection_submit_loading.set(true);
+            selection_submit_feedback.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match submit_article_comment(request).await {
+                    Ok(resp) => {
+                        selection_submit_feedback.set(Some((
+                            true,
+                            format!("评论已提交，等待审核（任务 {}）。", resp.task_id),
+                        )));
+                        selection_comment_input.set(String::new());
+                        selection_modal_open.set(false);
+                        selection_draft.set(None);
+                        selection_button_pos.set(None);
+                        comments_refresh_key.set((*comments_refresh_key).saturating_add(1));
+                    },
+                    Err(err) => {
+                        selection_submit_feedback.set(Some((false, format!("提交失败：{}", err))));
+                    },
+                }
+                selection_submit_loading.set(false);
+            });
+        })
+    };
+
+    let submit_footer_comment_click = {
+        let article_id = article_id.clone();
+        let footer_comment_input = footer_comment_input.clone();
+        let footer_reply_target = footer_reply_target.clone();
+        let footer_submit_loading = footer_submit_loading.clone();
+        let footer_submit_feedback = footer_submit_feedback.clone();
+        let comments_refresh_key = comments_refresh_key.clone();
+        Callback::from(move |_| {
+            let comment_text = footer_comment_input.trim().to_string();
+            if comment_text.is_empty() {
+                footer_submit_feedback.set(Some((false, "请输入评论内容。".to_string())));
+                return;
+            }
+
+            let request = SubmitCommentRequest {
+                article_id: article_id.clone(),
+                entry_type: "footer".to_string(),
+                comment_text,
+                selected_text: None,
+                anchor_block_id: None,
+                anchor_context_before: None,
+                anchor_context_after: None,
+                reply_to_comment_id: footer_reply_target
+                    .as_ref()
+                    .as_ref()
+                    .map(|target| target.comment_id.clone()),
+                client_meta: None,
+            };
+
+            let footer_comment_input = footer_comment_input.clone();
+            let footer_reply_target = footer_reply_target.clone();
+            let footer_submit_loading = footer_submit_loading.clone();
+            let footer_submit_feedback = footer_submit_feedback.clone();
+            let comments_refresh_key = comments_refresh_key.clone();
+            footer_submit_loading.set(true);
+            footer_submit_feedback.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match submit_article_comment(request).await {
+                    Ok(resp) => {
+                        footer_submit_feedback.set(Some((
+                            true,
+                            format!("评论已提交，等待审核（任务 {}）。", resp.task_id),
+                        )));
+                        footer_comment_input.set(String::new());
+                        footer_reply_target.set(None);
+                        comments_refresh_key.set((*comments_refresh_key).saturating_add(1));
+                    },
+                    Err(err) => {
+                        footer_submit_feedback.set(Some((false, format!("提交失败：{}", err))));
+                    },
+                }
+                footer_submit_loading.set(false);
+            });
+        })
+    };
+
+    let jump_to_comments_click = Callback::from(move |_| {
+        scroll_to_element_id(COMMENT_SECTION_ID);
+    });
+
+    let refresh_comments_click = {
+        let comments_refresh_key = comments_refresh_key.clone();
+        Callback::from(move |_| {
+            comments_refresh_key.set((*comments_refresh_key).saturating_add(1));
         })
     };
 
@@ -540,9 +1044,47 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         });
     }
 
+    {
+        let selection_modal_open = selection_modal_open.clone();
+        use_effect_with(*selection_modal_open, move |is_open| {
+            let keydown_listener_opt = if *is_open {
+                let handle = selection_modal_open.clone();
+                let listener =
+                    wasm_bindgen::closure::Closure::wrap(Box::new(move |event: KeyboardEvent| {
+                        if event.key() == "Escape" {
+                            handle.set(false);
+                        }
+                    })
+                        as Box<dyn FnMut(_)>);
+
+                if let Some(win) = window() {
+                    let _ = win.add_event_listener_with_callback(
+                        "keydown",
+                        listener.as_ref().unchecked_ref(),
+                    );
+                }
+                Some(listener)
+            } else {
+                None
+            };
+
+            move || {
+                if let Some(listener) = keydown_listener_opt {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "keydown",
+                            listener.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     let stop_lightbox_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
     let stop_brief_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
     let stop_trend_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
+    let stop_selection_modal_bubble = Callback::from(|event: MouseEvent| event.stop_propagation());
     let mark_preview_failed = {
         let preview_image_failed = preview_image_failed.clone();
         Callback::from(move |_: Event| preview_image_failed.set(true))
@@ -579,6 +1121,22 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     } else {
         String::new()
     };
+    let comments_render_key = (*comments)
+        .iter()
+        .map(|comment| {
+            format!(
+                "{}:{}:{}",
+                comment.comment_id,
+                comment.published_at,
+                comment
+                    .ai_reply_markdown
+                    .as_ref()
+                    .map(|value| value.len())
+                    .unwrap_or(0)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|");
 
     {
         let markdown_copied = markdown_copied.clone();
@@ -630,6 +1188,61 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             }
         }
     });
+
+    // Re-run markdown enhancements for dynamic comment markdown fragments.
+    // We intentionally avoid TOC regeneration here.
+    {
+        let article_id = article_id.clone();
+        let comments_render_key = comments_render_key.clone();
+        use_effect_with(
+            (article_id.clone(), comments_render_key.clone()),
+            move |(id, comments_key)| {
+                let timeout = if !id.trim().is_empty() && !comments_key.is_empty() {
+                    Some(Timeout::new(120, move || {
+                        if let Some(win) = window() {
+                            let Some(document) = win.document() else {
+                                return;
+                            };
+                            let init_fn = js_sys::Reflect::get(
+                                &win,
+                                &JsValue::from_str("initMarkdownFragmentRendering"),
+                            )
+                            .ok()
+                            .and_then(|value| value.dyn_into::<js_sys::Function>().ok())
+                            .or_else(|| {
+                                js_sys::Reflect::get(
+                                    &win,
+                                    &JsValue::from_str("initMarkdownRendering"),
+                                )
+                                .ok()
+                                .and_then(|value| value.dyn_into::<js_sys::Function>().ok())
+                            });
+                            let Some(func) = init_fn else {
+                                return;
+                            };
+
+                            if let Ok(node_list) = document.query_selector_all(".comment-ai-markdown")
+                            {
+                                for idx in 0..node_list.length() {
+                                    if let Some(node) = node_list.item(idx) {
+                                        if let Ok(element) = node.dyn_into::<Element>() {
+                                            let _ = func.call1(&win, element.as_ref());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                };
+
+                move || {
+                    drop(timeout);
+                }
+            },
+        );
+    }
 
     {
         let open_image_preview = open_image_preview.clone();
@@ -690,7 +1303,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         </div>
     };
 
-    let is_overlay_open = *is_lightbox_open || *is_brief_open || *is_trend_open;
+    let is_overlay_open =
+        *is_lightbox_open || *is_brief_open || *is_trend_open || *selection_modal_open;
 
     let body = if *loading {
         loading_view
@@ -1264,7 +1878,11 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                             </div>
                         </header>
 
-                        <section class={classes!("article-content")} aria-label={t::ARTICLE_BODY_ARIA}>
+                        <section
+                            class={classes!("article-content")}
+                            aria-label={t::ARTICLE_BODY_ARIA}
+                            onmouseup={on_article_mouseup.clone()}
+                        >
                             { content }
                         </section>
 
@@ -1356,6 +1974,379 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                         html! { <ArticleCard key={article.id.clone()} article={article.clone()} /> }
                                     }) }
                                 </div>
+                            }
+                        </section>
+
+                        <section
+                            id={COMMENT_SECTION_ID}
+                            class={classes!(
+                                "mt-10",
+                                "pt-6",
+                                "border-t",
+                                "border-[var(--border)]",
+                                "flex",
+                                "flex-col",
+                                "gap-4"
+                            )}
+                        >
+                            <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                                <div>
+                                    <h2 class={classes!(
+                                        "m-0",
+                                        "text-[1.1rem]",
+                                        "text-[var(--muted)]",
+                                        "tracking-[0.15em]",
+                                        "uppercase"
+                                    )}>{ "评论区" }</h2>
+                                    <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                                        { format!("当前评论 {} 条", *comments_total) }
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    class={classes!(
+                                        "article-action-btn",
+                                        "inline-flex",
+                                        "items-center",
+                                        "justify-center",
+                                        "gap-2",
+                                        "rounded-full",
+                                        "border",
+                                        "border-[var(--border)]",
+                                        "bg-[var(--surface)]",
+                                        "px-3",
+                                        "py-2",
+                                        "text-xs",
+                                        "font-semibold",
+                                        "uppercase",
+                                        "tracking-[0.08em]",
+                                        "text-[var(--muted)]",
+                                        "transition-[var(--transition-base)]",
+                                        "hover:border-[var(--primary)]",
+                                        "hover:text-[var(--primary)]"
+                                    )}
+                                    onclick={refresh_comments_click}
+                                >
+                                    <i class={classes!("fas", "fa-rotate-right")} aria-hidden="true"></i>
+                                    { "刷新评论" }
+                                </button>
+                            </div>
+
+                            {
+                                if let Some((is_success, message)) = (*selection_submit_feedback).clone() {
+                                    let status_class = if is_success {
+                                        classes!(
+                                            "rounded-[var(--radius)]",
+                                            "border",
+                                            "border-emerald-500/35",
+                                            "bg-emerald-500/10",
+                                            "px-3",
+                                            "py-2",
+                                            "text-sm",
+                                            "text-emerald-700",
+                                            "dark:text-emerald-200"
+                                        )
+                                    } else {
+                                        classes!(
+                                            "rounded-[var(--radius)]",
+                                            "border",
+                                            "border-red-400/45",
+                                            "bg-red-500/10",
+                                            "px-3",
+                                            "py-2",
+                                            "text-sm",
+                                            "text-red-700",
+                                            "dark:text-red-200"
+                                        )
+                                    };
+                                    html! {
+                                        <p class={status_class}>{ message }</p>
+                                    }
+                                } else {
+                                    html! {}
+                                }
+                            }
+
+                            <div class={classes!(
+                                "rounded-[var(--radius)]",
+                                "border",
+                                "border-[var(--border)]",
+                                "bg-[var(--surface-alt)]",
+                                "p-4",
+                                "flex",
+                                "flex-col",
+                                "gap-3"
+                            )}>
+                                <label class={classes!(
+                                    "text-sm",
+                                    "font-semibold",
+                                    "text-[var(--text)]"
+                                )}>
+                                    { "发表评论（文末入口）" }
+                                </label>
+                                if let Some(reply_target) = (*footer_reply_target).clone() {
+                                    <div class={classes!(
+                                        "rounded-[var(--radius)]",
+                                        "border",
+                                        "border-[var(--border)]",
+                                        "bg-[var(--surface)]",
+                                        "px-3",
+                                        "py-2",
+                                        "text-sm",
+                                        "flex",
+                                        "flex-col",
+                                        "gap-2"
+                                    )}>
+                                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                                            <p class={classes!("m-0", "text-xs", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                                                { format!("正在引用：{}", reply_target.author_name) }
+                                            </p>
+                                            <button
+                                                type="button"
+                                                class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")}
+                                                onclick={clear_footer_reply_target.clone()}
+                                            >
+                                                { "取消引用" }
+                                            </button>
+                                        </div>
+                                        <p class={classes!("m-0", "text-sm", "text-[var(--text)]")}>{ reply_target.comment_text.clone() }</p>
+                                        if let Some(ai_reply) = reply_target.ai_reply_markdown {
+                                            <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
+                                                { format!("引用 AI 回复：{}", ai_reply.chars().take(140).collect::<String>()) }
+                                            </p>
+                                        }
+                                    </div>
+                                }
+                                <textarea
+                                    class={classes!(
+                                        "comment-compose-textarea"
+                                    )}
+                                    placeholder={"写下你对本文的疑问、勘误或补充建议..."}
+                                    value={(*footer_comment_input).clone()}
+                                    oninput={on_footer_comment_input}
+                                />
+                                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                    {
+                                        if let Some((is_success, message)) = (*footer_submit_feedback).clone() {
+                                            let status_class = if is_success {
+                                                classes!("text-sm", "text-emerald-700", "dark:text-emerald-200")
+                                            } else {
+                                                classes!("text-sm", "text-red-700", "dark:text-red-200")
+                                            };
+                                            html! { <span class={status_class}>{ message }</span> }
+                                        } else {
+                                            html! { <span class={classes!("text-sm", "text-[var(--muted)]")}>{ "每个用户每分钟最多提交 1 条评论。" }</span> }
+                                        }
+                                    }
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "btn-fluent-primary",
+                                            "px-4",
+                                            "py-2"
+                                        )}
+                                        onclick={submit_footer_comment_click}
+                                        disabled={*footer_submit_loading}
+                                    >
+                                        {
+                                            if *footer_submit_loading {
+                                                "提交中..."
+                                            } else {
+                                                "提交评论"
+                                            }
+                                        }
+                                    </button>
+                                </div>
+                            </div>
+
+                            {
+                                if *comments_loading {
+                                    html! {
+                                        <div class={classes!(
+                                            "rounded-[var(--radius)]",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "px-4",
+                                            "py-6",
+                                            "text-sm",
+                                            "text-[var(--muted)]",
+                                            "inline-flex",
+                                            "items-center",
+                                            "gap-2"
+                                        )}>
+                                            <LoadingSpinner size={SpinnerSize::Small} />
+                                            <span>{ "评论加载中..." }</span>
+                                        </div>
+                                    }
+                                } else if let Some(error) = (*comments_error).clone() {
+                                    html! {
+                                        <p class={classes!(
+                                            "m-0",
+                                            "rounded-[var(--radius)]",
+                                            "border",
+                                            "border-red-400/45",
+                                            "bg-red-500/10",
+                                            "px-3",
+                                            "py-2",
+                                            "text-sm",
+                                            "text-red-700",
+                                            "dark:text-red-200"
+                                        )}>
+                                            { error }
+                                        </p>
+                                    }
+                                } else if comments.is_empty() {
+                                    html! {
+                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>
+                                            { "暂无评论，欢迎成为第一个留言的人。" }
+                                        </p>
+                                    }
+                                } else {
+                                    html! {
+                                        <div class={classes!("comment-thread-list")}>
+                                            { for comments.iter().map(|comment| {
+                                                let anchor_block_id = comment.anchor_block_id.clone();
+                                                let selected_text = comment.selected_text.clone();
+                                                let reply_to_comment_id = comment.reply_to_comment_id.clone();
+                                                let reply_to_comment_text = comment.reply_to_comment_text.clone();
+                                                let reply_to_ai_reply_markdown = comment.reply_to_ai_reply_markdown.clone();
+                                                let jump_quote_click = {
+                                                    let anchor_block_id = anchor_block_id.clone();
+                                                    Callback::from(move |_| {
+                                                        if let Some(block_id) = anchor_block_id.clone() {
+                                                            scroll_to_anchor_block(&block_id);
+                                                        }
+                                                    })
+                                                };
+                                                let jump_reply_comment_click = {
+                                                    let reply_to_comment_id = reply_to_comment_id.clone();
+                                                    Callback::from(move |_| {
+                                                        if let Some(comment_id) = reply_to_comment_id.clone() {
+                                                            scroll_to_comment_card(&comment_id);
+                                                        }
+                                                    })
+                                                };
+                                                let quote_reply_click = {
+                                                    let footer_reply_target = footer_reply_target.clone();
+                                                    let comment_id = comment.comment_id.clone();
+                                                    let author_name = comment.author_name.clone();
+                                                    let comment_text = comment.comment_text.clone();
+                                                    let ai_reply_markdown = comment.ai_reply_markdown.clone();
+                                                    Callback::from(move |_| {
+                                                        footer_reply_target.set(Some(CommentReplyDraft {
+                                                            comment_id: comment_id.clone(),
+                                                            author_name: author_name.clone(),
+                                                            comment_text: comment_text.clone(),
+                                                            ai_reply_markdown: ai_reply_markdown.clone(),
+                                                        }));
+                                                        scroll_to_element_id(COMMENT_SECTION_ID);
+                                                    })
+                                                };
+                                                let avatar_initial = comment
+                                                    .author_name
+                                                    .chars()
+                                                    .find(|ch| !ch.is_whitespace())
+                                                    .unwrap_or('R')
+                                                    .to_string()
+                                                    .to_uppercase();
+                                                let avatar_style = format!(
+                                                    "background: hsl({} 66% 42% / 0.95);",
+                                                    avatar_hue(&comment.author_avatar_seed)
+                                                );
+                                                let ai_reply_html = comment
+                                                    .ai_reply_markdown
+                                                    .clone()
+                                                    .filter(|value| !value.trim().is_empty())
+                                                    .map(|value| {
+                                                        Html::from_html_unchecked(AttrValue::from(
+                                                            markdown_to_html(&value)
+                                                        ))
+                                                    });
+
+                                                html! {
+                                                    <article id={format!("comment-item-{}", comment.comment_id)} class={classes!("comment-thread-item")}>
+                                                        <header class={classes!("comment-thread-head")}>
+                                                            <div class={classes!("comment-avatar")} style={avatar_style}>
+                                                                { avatar_initial }
+                                                            </div>
+                                                            <div class={classes!("comment-head-meta")}>
+                                                                <p class={classes!("comment-author-name")}>{ comment.author_name.clone() }</p>
+                                                                <p class={classes!("comment-meta-line")}>
+                                                                    { format!("{} · {}", comment.ip_region.clone(), format_published_time(comment.published_at)) }
+                                                                </p>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                class={classes!("comment-jump-btn")}
+                                                                onclick={quote_reply_click}
+                                                            >
+                                                                { "引用并回复" }
+                                                            </button>
+                                                        </header>
+
+                                                        if let Some(quote_text) = selected_text {
+                                                            <div class={classes!("comment-quote-card")}>
+                                                                <p class={classes!("comment-quote-label")}>{ "选中段落" }</p>
+                                                                <p class={classes!("comment-quote-text")}>{ quote_text }</p>
+                                                                {
+                                                                    if anchor_block_id.is_some() {
+                                                                        html! {
+                                                                            <button
+                                                                                type="button"
+                                                                                class={classes!("comment-jump-btn")}
+                                                                                onclick={jump_quote_click}
+                                                                            >
+                                                                                { "定位到正文" }
+                                                                            </button>
+                                                                        }
+                                                                    } else {
+                                                                        html! {}
+                                                                    }
+                                                                }
+                                                            </div>
+                                                        }
+
+                                                        if let Some(reply_text) = reply_to_comment_text {
+                                                            <div class={classes!("comment-quote-card")}>
+                                                                <p class={classes!("comment-quote-label")}>{ "引用评论" }</p>
+                                                                <p class={classes!("comment-quote-text")}>{ reply_text }</p>
+                                                                if let Some(ai_reply) = reply_to_ai_reply_markdown {
+                                                                    <p class={classes!("comment-meta-line")}>
+                                                                        { format!("被引用 AI 回复：{}", ai_reply.chars().take(140).collect::<String>()) }
+                                                                    </p>
+                                                                }
+                                                                if reply_to_comment_id.is_some() {
+                                                                    <button
+                                                                        type="button"
+                                                                        class={classes!("comment-jump-btn")}
+                                                                        onclick={jump_reply_comment_click}
+                                                                    >
+                                                                        { "定位到被引用评论" }
+                                                                    </button>
+                                                                }
+                                                            </div>
+                                                        }
+
+                                                        <section class={classes!("comment-user-card")}>
+                                                            <p class={classes!("comment-section-label")}>{ "用户评论" }</p>
+                                                            <p class={classes!("comment-user-text")}>{ comment.comment_text.clone() }</p>
+                                                        </section>
+
+                                                        if let Some(ai_reply_html) = ai_reply_html {
+                                                            <section class={classes!("comment-ai-card")}>
+                                                                <p class={classes!("comment-section-label")}>{ "AI 回复" }</p>
+                                                                <div class={classes!("article-content", "comment-ai-markdown")}>
+                                                                    { ai_reply_html }
+                                                                </div>
+                                                            </section>
+                                                        }
+                                                    </article>
+                                                }
+                                            }) }
+                                        </div>
+                                    }
+                                }
                             }
                         </section>
                         {
@@ -1545,15 +2536,26 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                     {
                         if article_data.is_some() {
                             html! {
-                                <div>
-                                    <TooltipIconButton
-                                        icon={IconName::TrendingUp}
-                                        tooltip={t::TREND_TOOLTIP}
-                                        position={TooltipPosition::Right}
-                                        onclick={open_trend_click.clone()}
-                                        size={20}
-                                    />
-                                </div>
+                                <>
+                                    <div>
+                                        <TooltipIconButton
+                                            icon={IconName::TrendingUp}
+                                            tooltip={t::TREND_TOOLTIP}
+                                            position={TooltipPosition::Right}
+                                            onclick={open_trend_click.clone()}
+                                            size={20}
+                                        />
+                                    </div>
+                                    <div>
+                                        <TooltipIconButton
+                                            icon={IconName::List}
+                                            tooltip={"定位到评论区".to_string()}
+                                            position={TooltipPosition::Right}
+                                            onclick={jump_to_comments_click.clone()}
+                                            size={20}
+                                        />
+                                    </div>
+                                </>
                             }
                         } else {
                             html! {}
@@ -1565,6 +2567,143 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             <div class={classes!("container")}>
                 { body }
             </div>
+            {
+                if !is_overlay_open {
+                    if let (Some((left, top)), Some(_)) = ((*selection_button_pos).clone(), (*selection_draft).clone()) {
+                        html! {
+                            <button
+                                type="button"
+                                class={classes!("selection-comment-fab")}
+                                style={format!("left: {left:.1}px; top: {top:.1}px;")}
+                                onclick={open_selection_modal_click.clone()}
+                            >
+                                <i class={classes!("fas", "fa-comment-dots")} aria-hidden="true"></i>
+                                { "评论所选" }
+                            </button>
+                        }
+                    } else {
+                        html! {}
+                    }
+                } else {
+                    html! {}
+                }
+            }
+            {
+                if *selection_modal_open {
+                    let draft_snapshot = (*selection_draft).clone();
+                    let selected_excerpt = draft_snapshot
+                        .as_ref()
+                        .map(|draft| draft.selected_text.chars().take(240).collect::<String>())
+                        .unwrap_or_default();
+                    let has_ellipsis = draft_snapshot
+                        .as_ref()
+                        .map(|draft| draft.selected_text.chars().count() > 240)
+                        .unwrap_or(false);
+
+                    html! {
+                        <div
+                            class={classes!(
+                                "fixed",
+                                "inset-0",
+                                "z-[97]",
+                                "flex",
+                                "items-center",
+                                "justify-center",
+                                "bg-black/55",
+                                "p-4",
+                                "backdrop-blur-sm"
+                            )}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label={"评论所选内容"}
+                            onclick={close_selection_modal_click.clone()}
+                        >
+                            <section
+                                class={classes!("selection-comment-modal")}
+                                onclick={stop_selection_modal_bubble.clone()}
+                            >
+                                <header class={classes!("selection-comment-modal-header")}>
+                                    <div>
+                                        <h3 class={classes!("selection-comment-modal-title")}>{ "评论所选内容" }</h3>
+                                        <p class={classes!("selection-comment-modal-subtitle")}>
+                                            { "你可以基于选中的段落提交疑问、勘误或补充观点。" }
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class={classes!("selection-comment-close")}
+                                        aria-label={"关闭评论弹窗"}
+                                        onclick={close_selection_modal_click.clone()}
+                                    >
+                                        { "关闭" }
+                                    </button>
+                                </header>
+
+                                <div class={classes!("selection-comment-quote")}>
+                                    <p class={classes!("selection-comment-quote-label")}>{ "选中内容" }</p>
+                                    <p class={classes!("selection-comment-quote-text")}>
+                                        {
+                                            if has_ellipsis {
+                                                format!("{selected_excerpt}...")
+                                            } else {
+                                                selected_excerpt
+                                            }
+                                        }
+                                    </p>
+                                </div>
+
+                                <textarea
+                                    class={classes!("comment-compose-textarea")}
+                                    placeholder={"请输入你的疑问或评论..."}
+                                    value={(*selection_comment_input).clone()}
+                                    oninput={on_selection_comment_input}
+                                />
+
+                                {
+                                    if let Some((is_success, message)) = (*selection_submit_feedback).clone() {
+                                        let feedback_class = if is_success {
+                                            classes!("text-sm", "text-emerald-700", "dark:text-emerald-200")
+                                        } else {
+                                            classes!("text-sm", "text-red-700", "dark:text-red-200")
+                                        };
+                                        html! {
+                                            <p class={feedback_class}>{ message }</p>
+                                        }
+                                    } else {
+                                        html! {}
+                                    }
+                                }
+
+                                <div class={classes!("selection-comment-modal-actions")}>
+                                    <button
+                                        type="button"
+                                        class={classes!("btn-fluent-secondary", "px-4", "py-2")}
+                                        onclick={close_selection_modal_click}
+                                    >
+                                        { "取消" }
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class={classes!("btn-fluent-primary", "px-4", "py-2")}
+                                        onclick={submit_selection_comment_click}
+                                        disabled={*selection_submit_loading}
+                                    >
+                                        {
+                                            if *selection_submit_loading {
+                                                "提交中..."
+                                            } else {
+                                                "提交评论"
+                                            }
+                                        }
+                                    </button>
+                                </div>
+                            </section>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }
+            }
             {
                 if *is_lightbox_open {
                     html! {
