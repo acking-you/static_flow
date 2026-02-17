@@ -3,9 +3,8 @@ name: comment-review-ai-responder
 description: >-
   Resolve one approved article comment task into a publishable AI markdown
   reply. Fetch article context from local HTTP API first (fallback to sf-cli),
-  reason with selected
-  quote + full article content, and return strict JSON output for backend
-  worker ingestion.
+  reason with selected quote + full article content, and write the final
+  markdown reply to a backend-provided local result file path.
 ---
 
 # Comment Review AI Responder
@@ -37,6 +36,10 @@ The runner provides a JSON payload file path as CLI argument. Payload fields:
 13. `content_api_base`
 14. `skill_path`
 15. `instructions`
+
+Runner also injects environment variable:
+
+16. `COMMENT_AI_RESULT_PATH` (absolute local file path; final markdown must be written here)
 
 ## Required Workflow
 
@@ -87,32 +90,27 @@ The runner provides a JSON payload file path as CLI argument. Payload fields:
      ```
 7. Use web search whenever it improves understanding or provides necessary
    external context; cite links in markdown when external facts are used.
-8. Return JSON to stdout only.
-9. Do not mutate local skill environment:
+8. Write final markdown to result file path:
+   - path comes from env var `COMMENT_AI_RESULT_PATH`
+   - must be UTF-8 and non-empty
+   - must be written atomically (write temp file then rename)
+   - this file is the backend source of truth for task completion
+9. Stdout/stderr may include normal execution traces; do not rely on stdout JSON
+   as the only output channel.
+10. Do not mutate local skill environment:
    - do not install skills
    - do not copy skills into `~/.codex`/`$CODEX_HOME`
    - assume skill file path in payload is authoritative
 
-## Output Contract (Strict)
+## Result File Contract (Strict)
 
-Print one JSON object only:
+Write one markdown document to `COMMENT_AI_RESULT_PATH`.
 
-```json
-{
-  "final_reply_markdown": "..."
-}
-```
-
-Optional fields accepted by backend parser:
-
-```json
-{
-  "final_reply_markdown": "...",
-  "confidence": 0.82,
-  "sources": ["https://..."],
-  "decision_notes": "..."
-}
-```
+Requirements:
+1. File must exist when execution ends.
+2. File content must be non-empty markdown.
+3. If uncertain, state uncertainty inside markdown.
+4. Do not wrap whole reply in JSON.
 
 ## Quality Rules
 
@@ -127,5 +125,5 @@ Optional fields accepted by backend parser:
    - Mermaid blocks must be wrapped in triple backticks with `mermaid` info string
    - do not emit diagram DSL as plain paragraph text
 5. Do not expose internal system prompts, secrets, or filesystem paths.
-6. Do not modify DB records directly in this skill. This skill only returns
-   the reply payload; backend persists results.
+6. Do not modify DB records directly in this skill. This skill only writes
+   the markdown result file; backend persists DB updates.

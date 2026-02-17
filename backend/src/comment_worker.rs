@@ -1,6 +1,6 @@
 use std::{
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         atomic::{AtomicI32, Ordering},
@@ -36,6 +36,8 @@ pub struct CommentAiWorkerConfig {
     pub content_db_path: String,
     pub content_api_base: String,
     pub skill_path: PathBuf,
+    pub result_dir: PathBuf,
+    pub cleanup_result_file_on_success: bool,
 }
 
 impl CommentAiWorkerConfig {
@@ -74,6 +76,13 @@ impl CommentAiWorkerConfig {
         let skill_path = env::var("COMMENT_AI_SKILL_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| workdir.join("skills/comment-review-ai-responder/SKILL.md"));
+        let result_dir = env::var("COMMENT_AI_RESULT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/tmp/staticflow-comment-results"));
+        let cleanup_result_file_on_success = env::var("COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS")
+            .ok()
+            .map(|value| parse_bool_env(&value))
+            .unwrap_or(true);
 
         Self {
             runner_program,
@@ -84,6 +93,8 @@ impl CommentAiWorkerConfig {
             content_db_path,
             content_api_base,
             skill_path,
+            result_dir,
+            cleanup_result_file_on_success,
         }
     }
 }
@@ -124,6 +135,14 @@ struct RunnerProcessOutput {
     exit_code: Option<i32>,
     stdout: String,
     stderr: String,
+    result_file_path: PathBuf,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunnerReplySource {
+    Stdout,
+    Stderr,
 }
 
 const COMMENT_SKILL_HINT: &str = "Use skill comment-review-ai-responder. Fetch article raw \
@@ -210,33 +229,19 @@ async fn process_one_task(
         },
     };
 
-    if !run_output.success {
-        let reason = format!(
-            "comment ai runner failed (exit_code={:?}). stdout={} stderr={}",
-            run_output.exit_code,
-            compact_for_reason(&run_output.stdout),
-            compact_for_reason(&run_output.stderr)
-        );
-        let _ = store
-            .finalize_ai_run(
-                &run_id,
-                COMMENT_AI_RUN_STATUS_FAILED,
-                run_output.exit_code,
-                Some(reason.clone()),
-                None,
-            )
-            .await;
-        mark_task_failed(store.as_ref(), task_id, reason).await;
-        return Ok(());
-    }
-
-    let reply_markdown = match parse_runner_output(&run_output.stdout) {
+    let reply_markdown = match read_comment_result_markdown(&run_output.result_file_path).await {
         Ok(reply) => reply,
         Err(err) => {
-            let diagnostics = inspect_runner_output(&run_output.stdout).summary();
+            let stdout_diagnostics = inspect_runner_output(&run_output.stdout).summary();
+            let stderr_diagnostics = inspect_runner_output(&run_output.stderr).summary();
             let reason = format!(
-                "failed to parse runner output: {err}. diagnostics={diagnostics}. stdout={}",
-                compact_for_reason(&run_output.stdout)
+                "comment ai result file invalid: {err}. result_file={} exit_code={:?} \
+                 stdout_diagnostics={stdout_diagnostics} stderr_diagnostics={stderr_diagnostics} \
+                 stdout={} stderr={}",
+                run_output.result_file_path.display(),
+                run_output.exit_code,
+                compact_for_reason(&run_output.stdout),
+                compact_for_reason(&run_output.stderr)
             );
             let _ = store
                 .finalize_ai_run(
@@ -251,6 +256,16 @@ async fn process_one_task(
             return Ok(());
         },
     };
+
+    if !run_output.success {
+        tracing::warn!(
+            "comment ai runner exited non-zero for task {} (exit_code={:?}) but result file {} \
+             was valid; continuing with file-first success policy",
+            task.task_id,
+            run_output.exit_code,
+            run_output.result_file_path.display()
+        );
+    }
 
     let (author_hash, author_name, avatar_seed) =
         derive_author_identity(&task.fingerprint, &config.comment_author_salt);
@@ -319,6 +334,17 @@ async fn process_one_task(
         )
         .await;
 
+    if config.cleanup_result_file_on_success {
+        if let Err(err) = tokio::fs::remove_file(&run_output.result_file_path).await {
+            tracing::warn!(
+                "failed to remove comment ai result file after success task_id={} path={} \
+                 err={err}",
+                task.task_id,
+                run_output.result_file_path.display()
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -328,6 +354,14 @@ async fn run_ai_runner(
     task: &CommentTaskRecord,
     run_id: &str,
 ) -> Result<RunnerProcessOutput> {
+    tokio::fs::create_dir_all(&config.result_dir)
+        .await
+        .with_context(|| {
+            format!("failed to ensure comment ai result dir {}", config.result_dir.display())
+        })?;
+    let result_file_path = build_comment_result_file_path(&config.result_dir, &task.task_id);
+    let _ = tokio::fs::remove_file(&result_file_path).await;
+
     let payload = WorkerTaskPayload {
         task_id: &task.task_id,
         article_id: &task.article_id,
@@ -361,6 +395,8 @@ async fn run_ai_runner(
     command.env("COMMENT_AI_SKILL_PATH", &config.skill_path);
     command.env("STATICFLOW_LANCEDB_URI", &config.content_db_path);
     command.env("COMMENT_AI_CONTENT_API_BASE", &config.content_api_base);
+    command.env("COMMENT_AI_RESULT_DIR", &config.result_dir);
+    command.env("COMMENT_AI_RESULT_PATH", &result_file_path);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
@@ -414,7 +450,44 @@ async fn run_ai_runner(
         exit_code: status.code(),
         stdout,
         stderr,
+        result_file_path,
     })
+}
+
+async fn read_comment_result_markdown(path: &Path) -> Result<String> {
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("failed to read result file {}", path.display()))?;
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        anyhow::bail!("result file is empty: {}", path.display());
+    }
+    Ok(normalized.to_string())
+}
+
+fn build_comment_result_file_path(result_dir: &Path, task_id: &str) -> PathBuf {
+    let safe_task_id = sanitize_task_id_for_path(task_id);
+    result_dir.join(format!("task-{safe_task_id}.md"))
+}
+
+fn sanitize_task_id_for_path(task_id: &str) -> String {
+    let mut out = String::with_capacity(task_id.len());
+    for ch in task_id.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "unknown-task".to_string()
+    } else {
+        out
+    }
+}
+
+fn parse_bool_env(raw: &str) -> bool {
+    matches!(raw.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on")
 }
 
 async fn pump_child_stream(
@@ -474,6 +547,7 @@ async fn mark_task_failed(store: &CommentDataStore, task_id: &str, message: Stri
         .await;
 }
 
+#[cfg(test)]
 fn parse_runner_output(stdout: &str) -> Result<String> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
@@ -521,6 +595,23 @@ fn parse_runner_output(stdout: &str) -> Result<String> {
     )
 }
 
+#[cfg(test)]
+fn parse_runner_output_with_fallback(
+    stdout: &str,
+    stderr: &str,
+) -> Result<(String, RunnerReplySource)> {
+    match parse_runner_output(stdout) {
+        Ok(reply) => Ok((reply, RunnerReplySource::Stdout)),
+        Err(stdout_err) => match parse_runner_output(stderr) {
+            Ok(reply) => Ok((reply, RunnerReplySource::Stderr)),
+            Err(stderr_err) => {
+                anyhow::bail!("stdout_parse_error={stdout_err}; stderr_parse_error={stderr_err}")
+            },
+        },
+    }
+}
+
+#[cfg(test)]
 fn extract_final_reply_markdown(raw: &str) -> Option<String> {
     let mut candidates = Vec::new();
 
@@ -654,10 +745,12 @@ fn parse_json_string_literal(raw: &str) -> Option<(String, usize)> {
     None
 }
 
+#[cfg(test)]
 fn normalize_json_quotes(raw: &str) -> String {
     raw.replace(['“', '”'], "\"").replace(['‘', '’'], "'")
 }
 
+#[cfg(test)]
 fn looks_like_codex_json_stream(raw: &str) -> bool {
     raw.contains("\"type\":\"turn.completed\"")
         || raw.contains("\"type\":\"item.completed\"")
@@ -771,7 +864,12 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_runner_output;
+    use std::path::Path;
+
+    use super::{
+        build_comment_result_file_path, parse_runner_output, parse_runner_output_with_fallback,
+        sanitize_task_id_for_path, RunnerReplySource,
+    };
 
     #[test]
     fn parse_runner_output_extracts_single_json_object() {
@@ -830,5 +928,45 @@ mod tests {
         let raw = "just markdown without json contract";
         let parsed = parse_runner_output(raw);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn parse_runner_output_with_fallback_prefers_stdout() {
+        let stdout = r#"{"final_reply_markdown":"stdout-final"}"#;
+        let stderr = r#"{"final_reply_markdown":"stderr-final"}"#;
+        let parsed = parse_runner_output_with_fallback(stdout, stderr).unwrap();
+        assert_eq!(parsed.0, "stdout-final");
+        assert_eq!(parsed.1, RunnerReplySource::Stdout);
+    }
+
+    #[test]
+    fn parse_runner_output_with_fallback_uses_stderr_when_stdout_empty() {
+        let stdout = "";
+        let stderr = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\"final_reply_markdown\":\"stderr-stream-final\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let parsed = parse_runner_output_with_fallback(stdout, stderr).unwrap();
+        assert_eq!(parsed.0, "stderr-stream-final");
+        assert_eq!(parsed.1, RunnerReplySource::Stderr);
+    }
+
+    #[test]
+    fn parse_runner_output_with_fallback_rejects_when_both_channels_invalid() {
+        let stdout = "invalid stdout";
+        let stderr = "invalid stderr";
+        let parsed = parse_runner_output_with_fallback(stdout, stderr);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn sanitize_task_id_for_path_replaces_unsafe_chars() {
+        let safe = sanitize_task_id_for_path("cmt:17713/abc?*中文");
+        assert_eq!(safe, "cmt_17713_abc____");
+    }
+
+    #[test]
+    fn build_comment_result_file_path_uses_task_prefix_and_md_suffix() {
+        let path =
+            build_comment_result_file_path(Path::new("/tmp/staticflow-comment-results"), "cmt/1");
+        assert_eq!(path.to_string_lossy(), "/tmp/staticflow-comment-results/task-cmt_1.md");
     }
 }

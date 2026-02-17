@@ -32,13 +32,18 @@ static-flow/
 
 `static-flow` website: <https://acking-you.github.io/>
 
-This project keeps runtime content data in a separate dataset repository:
+This project keeps runtime data in **two** separate Hugging Face dataset repos:
 
-- HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
-- Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
-- Local data root: `/mnt/e/static-flow-data/lancedb`
-- Format: LanceDB table directories (`articles.lance/`, `images.lance/`, `taxonomies.lance/`, `article_views.lance/`)
-- Comment workflow uses a separate DB root (`COMMENTS_LANCEDB_URI`) with `comment_tasks.lance/`, `comment_published.lance/`, `comment_audit_logs.lance/`
+- Content DB (articles/images/taxonomies/views)
+  - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
+  - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
+  - Local path: `/mnt/e/static-flow-data/lancedb`
+  - Format: `articles.lance/`, `images.lance/`, `taxonomies.lance/`, `article_views.lance/`
+- Comments DB (comment moderation + AI run traces)
+  - HF dataset repo: <https://huggingface.co/datasets/LB7666/static-flow-comments>
+  - Remote: `git@hf.co:datasets/LB7666/static-flow-comments`
+  - Local path: `/mnt/e/static-flow-data/lancedb-comments`
+  - Format: `comment_tasks.lance/`, `comment_published.lance/`, `comment_audit_logs.lance/`, `comment_ai_runs.lance/`, `comment_ai_run_chunks.lance/`
 
 Recommended workflow:
 
@@ -58,7 +63,7 @@ ssh-keyscan -H hf.co >> ~/.ssh/known_hosts
 chmod 600 ~/.ssh/known_hosts
 ssh -T git@hf.co
 
-# 2) Bind local data directory to HF dataset remote
+# 2) Bind local CONTENT DB to HF dataset remote
 cd /mnt/e/static-flow-data/lancedb
 git init -b main
 git remote remove origin 2>/dev/null || true
@@ -66,17 +71,35 @@ git remote add origin git@hf.co:datasets/LB7666/my_lancedb_data
 git fetch origin main
 git checkout -B main origin/main
 
-# 3) Install and enable Git Xet
+# 3) Bind local COMMENTS DB to HF dataset remote
+cd /mnt/e/static-flow-data/lancedb-comments
+git init -b main
+git remote remove origin 2>/dev/null || true
+git remote add origin git@hf.co:datasets/LB7666/static-flow-comments
+git fetch origin main
+git checkout -B main origin/main
+
+# 4) Install and enable Git Xet
 bash <(curl -fsSL https://raw.githubusercontent.com/huggingface/xet-core/main/git_xet/install.sh)
 export PATH="$HOME/.local/bin:$PATH"
 git xet install
-git xet track "*.lance"
-git xet track "*.txn"
-git xet track "*.manifest"
 
-# 4) Daily sync
+# 5) Configure tracking rules in BOTH repos
+cd /mnt/e/static-flow-data/lancedb
+git xet track "*.lance" "*.txn" "*.manifest" "*.idx"
+cd /mnt/e/static-flow-data/lancedb-comments
+git xet track "*.lance" "*.txn" "*.manifest" "*.idx"
+
+# 6) Daily sync (content DB)
+cd /mnt/e/static-flow-data/lancedb
 git add -A
-git commit -m "data: sync $(date '+%F %T')" || echo "no changes"
+git commit -m "data(content): sync $(date '+%F %T')" || echo "no content changes"
+git push origin main
+
+# 7) Daily sync (comments DB)
+cd /mnt/e/static-flow-data/lancedb-comments
+git add -A
+git commit -m "data(comments): sync $(date '+%F %T')" || echo "no comments changes"
 git push origin main
 ```
 
@@ -282,6 +305,7 @@ cd cli
 > Local admin endpoints include grouped task view (`/admin/comments/tasks/grouped`), approve-only + approve-and-run split, published comment patch/delete, and audit logs (`/admin/comments/audit-logs`).
 > GeoIP status and diagnostics are available via local admin endpoint `/admin/geoip/status`.
 > `ip_region` prefers province/state-level detail (`country/region[/city]`); if only country-level info is available, backend returns `Unknown`.
+> AI worker completion is file-first: Codex must write final markdown to a task-specific file under `COMMENT_AI_RESULT_DIR`; stdout/stderr are kept for trace/audit chunks.
 
 ## Key Env Vars
 
@@ -299,6 +323,8 @@ Backend (`backend/.env`):
 - `COMMENT_AI_CODEX_SANDBOX` (default `danger-full-access`)
 - `COMMENT_AI_CODEX_JSON_STREAM` (default `1`, streams Codex events into run chunks)
 - `COMMENT_AI_CODEX_BYPASS` (default `0`, set `1` to use `--dangerously-bypass-approvals-and-sandbox`)
+- `COMMENT_AI_RESULT_DIR` (default `/tmp/staticflow-comment-results`, stores per-task markdown result files)
+- `COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS` (default `1`, delete result file after successful publish)
 - `ENABLE_GEOIP_AUTO_DOWNLOAD` (default `true`, auto-download mmdb when missing)
 - `GEOIP_DB_PATH` / `GEOIP_DB_URL` (optional local DB path/source)
 - `ENABLE_GEOIP_FALLBACK_API` / `GEOIP_FALLBACK_API_URL` (fallback API when local db lacks region detail)

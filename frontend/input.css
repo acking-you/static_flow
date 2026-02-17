@@ -3129,7 +3129,7 @@ button[aria-current="page"]:hover {
   border-radius: 8px;
   overflow: auto;
   /* Keep long diagrams readable: scroll container instead of shrinking SVG. */
-  max-height: min(72vh, 920px);
+  max-height: min(92vh, 1600px);
   /* 容器宽度适应父元素 */
   width: 100%;
 }
@@ -3195,6 +3195,7 @@ button[aria-current="page"]:hover {
 @media (max-width: 768px) {
   .mermaid {
     padding: 1rem;
+    max-height: min(88vh, 1200px);
   }
 
   .mermaid.mermaid-pending {
