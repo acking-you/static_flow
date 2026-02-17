@@ -2,8 +2,10 @@ use std::{
     env,
     path::PathBuf,
     process::Stdio,
-    sync::Arc,
-    sync::atomic::{AtomicI32, Ordering},
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 

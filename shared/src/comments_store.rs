@@ -1482,10 +1482,7 @@ async fn query_published_comments(
                 anchor_context_after: nullable_string_value(anchor_context_after, idx),
                 reply_to_comment_id: nullable_string_value(reply_to_comment_id, idx),
                 reply_to_comment_text: nullable_string_value(reply_to_comment_text, idx),
-                reply_to_ai_reply_markdown: nullable_string_value(
-                    reply_to_ai_reply_markdown,
-                    idx,
-                ),
+                reply_to_ai_reply_markdown: nullable_string_value(reply_to_ai_reply_markdown, idx),
                 ai_reply_markdown: ai_reply_markdown.value(idx).to_string(),
                 ip_region: ip_region.value(idx).to_string(),
                 published_at: published_at.value(idx),

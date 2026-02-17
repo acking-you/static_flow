@@ -279,6 +279,8 @@ cd cli
 
 > Comment moderation: public users only hit `/api/comments/*`; moderation and runtime controls are under local `/admin/*` endpoints (do not expose publicly).
 > Local admin endpoints include grouped task view (`/admin/comments/tasks/grouped`), approve-only + approve-and-run split, published comment patch/delete, and audit logs (`/admin/comments/audit-logs`).
+> GeoIP status and diagnostics are available via local admin endpoint `/admin/geoip/status`.
+> `ip_region` prefers province/state-level detail (`country/region[/city]`); if only country-level info is available, backend returns `Unknown`.
 
 ## Key Env Vars
 
@@ -292,6 +294,11 @@ Backend (`backend/.env`):
 - `ADMIN_LOCAL_ONLY` (default `true`, guard `/admin/*` to local/private sources)
 - `ADMIN_TOKEN` (optional, checked from request header `x-admin-token`)
 - `COMMENT_RATE_LIMIT_SECONDS` / `COMMENT_LIST_DEFAULT_LIMIT` / `COMMENT_CLEANUP_RETENTION_DAYS`
+- `ENABLE_GEOIP_AUTO_DOWNLOAD` (default `true`, auto-download mmdb when missing)
+- `GEOIP_DB_PATH` / `GEOIP_DB_URL` (optional local DB path/source)
+- `ENABLE_GEOIP_FALLBACK_API` / `GEOIP_FALLBACK_API_URL` (fallback API when local db lacks region detail)
+- `GEOIP_REQUIRE_REGION_DETAIL` (default `true`, reject country-only labels)
+- `GEOIP_PROXY_URL` (optional proxy, e.g. `http://127.0.0.1:7890`)
 
 Frontend build-time:
 - `STATICFLOW_API_BASE` (direct pb-mapper endpoint, e.g. `https://<cloud-host>:8888/api`)

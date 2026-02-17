@@ -219,6 +219,39 @@ curl -X POST "http://127.0.0.1:3000/admin/view-analytics-config" \
   -d '{"dedupe_window_seconds":120,"trend_default_days":14,"trend_max_days":180}'
 ```
 
+### 2.4) Admin：GeoIP 状态诊断（本地）
+
+`GET /admin/geoip/status`
+
+用途：
+- 查看 GeoLite2 本地库是否存在、大小、更新时间。
+- 查看 GeoIP 运行配置（自动下载、fallback API、代理、是否要求地区级精度）。
+- 用于排查评论 `ip_region` 一直为 `Unknown` 的原因。
+
+示例：
+
+```bash
+curl "http://127.0.0.1:3000/admin/geoip/status"
+```
+
+响应示例：
+
+```json
+{
+  "db_path": "/home/ts_user/.static-flow/geoip/GeoLite2-City.mmdb",
+  "db_url": "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz",
+  "db_exists": true,
+  "db_size_bytes": 73595952,
+  "db_modified_at_ms": 1760651122334,
+  "auto_download": true,
+  "fallback_api_enabled": true,
+  "fallback_api_url": "https://ipwho.is/{ip}",
+  "require_region_detail": true,
+  "proxy_url": "http://127.0.0.1:7890",
+  "reader_ready": true
+}
+```
+
 ### 3) 文章评论（公开 `/api`）
 
 #### 3.1 提交评论任务
@@ -230,6 +263,8 @@ curl -X POST "http://127.0.0.1:3000/admin/view-analytics-config" \
 - 支持两种入口：`selection`（正文选中）/ `footer`（文末评论框）
 - 默认频率限制：同一用户指纹每 `60` 秒最多提交 `1` 条（可通过 admin 接口调整）
 - 提交后进入审核队列，响应仅返回任务状态，不代表已公开展示
+- 客户端 IP 提取优先级：`x-forwarded-for` -> `x-real-ip` -> `cf-connecting-ip` -> `x-client-ip` -> `forwarded`
+- `ip_region` 目标格式为 `country/region[/city]`；若只能识别到国家级则返回 `Unknown`
 
 请求体示例（选区评论）：
 

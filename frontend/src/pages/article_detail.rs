@@ -247,9 +247,9 @@ fn scroll_to_anchor_block(block_id: &str) {
 }
 
 fn scroll_to_comment_card(comment_id: &str) {
-    let target = window().and_then(|win| win.document()).and_then(|doc| {
-        doc.get_element_by_id(&format!("comment-item-{}", comment_id))
-    });
+    let target = window()
+        .and_then(|win| win.document())
+        .and_then(|doc| doc.get_element_by_id(&format!("comment-item-{}", comment_id)));
 
     let Some(target) = target else {
         return;
@@ -271,6 +271,97 @@ fn avatar_hue(seed: &str) -> u32 {
         hash = hash.wrapping_mul(16777619) ^ (byte as u32);
     }
     hash % 360
+}
+
+fn comment_avatar_initials(author_name: &str, avatar_seed: &str) -> String {
+    let trimmed = author_name.trim();
+    if let Some(suffix) = trimmed
+        .strip_prefix("Reader-")
+        .or_else(|| trimmed.strip_prefix("reader-"))
+    {
+        let value = suffix
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .take(2)
+            .collect::<String>();
+        if !value.is_empty() {
+            return value.to_ascii_uppercase();
+        }
+    }
+
+    let parts = trimmed
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    if let (Some(first), Some(last)) = (parts.first(), parts.last()) {
+        if parts.len() >= 2 {
+            let mut value = String::new();
+            if let Some(ch) = first.chars().find(|ch| ch.is_alphanumeric()) {
+                value.push(ch);
+            }
+            if let Some(ch) = last.chars().find(|ch| ch.is_alphanumeric()) {
+                value.push(ch);
+            }
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return value.to_uppercase();
+            }
+        }
+    }
+
+    let single = trimmed
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .take(2)
+        .collect::<String>();
+    if !single.is_empty() {
+        return single.to_uppercase();
+    }
+
+    let fallback = avatar_seed
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(2)
+        .collect::<String>();
+    if !fallback.is_empty() {
+        return fallback.to_ascii_uppercase();
+    }
+
+    "RD".to_string()
+}
+
+fn comment_avatar_style(seed: &str) -> String {
+    let base = avatar_hue(seed);
+    let accent = (base + 38) % 360;
+    let ring = (base + 184) % 360;
+    format!(
+        "background: linear-gradient(136deg, hsl({base} 72% 38%), hsl({accent} 72% 52%)); \
+         box-shadow: inset 0 0 0 1px rgba(255,255,255,0.24), 0 0 0 1px hsl({ring} 46% 56% / \
+         0.28), 0 8px 16px rgba(10, 16, 30, 0.16);"
+    )
+}
+
+fn display_comment_region(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("unknown")
+        || trimmed.eq_ignore_ascii_case("lan")
+    {
+        return "-".to_string();
+    }
+
+    let segments = trimmed
+        .split('/')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() < 2 {
+        return "-".to_string();
+    }
+
+    segments.join("/")
 }
 
 fn format_published_time(ts_ms: i64) -> String {
@@ -1221,7 +1312,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                 return;
                             };
 
-                            if let Ok(node_list) = document.query_selector_all(".comment-ai-markdown")
+                            if let Ok(node_list) =
+                                document.query_selector_all(".comment-ai-markdown")
                             {
                                 for idx in 0..node_list.length() {
                                     if let Some(node) = node_list.item(idx) {
@@ -2243,17 +2335,14 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                                         scroll_to_element_id(COMMENT_SECTION_ID);
                                                     })
                                                 };
-                                                let avatar_initial = comment
-                                                    .author_name
-                                                    .chars()
-                                                    .find(|ch| !ch.is_whitespace())
-                                                    .unwrap_or('R')
-                                                    .to_string()
-                                                    .to_uppercase();
-                                                let avatar_style = format!(
-                                                    "background: hsl({} 66% 42% / 0.95);",
-                                                    avatar_hue(&comment.author_avatar_seed)
-                                                );
+                                                let avatar_initial =
+                                                    comment_avatar_initials(
+                                                        &comment.author_name,
+                                                        &comment.author_avatar_seed,
+                                                    );
+                                                let avatar_style =
+                                                    comment_avatar_style(&comment.author_avatar_seed);
+                                                let region_label = display_comment_region(&comment.ip_region);
                                                 let ai_reply_html = comment
                                                     .ai_reply_markdown
                                                     .clone()
@@ -2273,7 +2362,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                                             <div class={classes!("comment-head-meta")}>
                                                                 <p class={classes!("comment-author-name")}>{ comment.author_name.clone() }</p>
                                                                 <p class={classes!("comment-meta-line")}>
-                                                                    { format!("{} · {}", comment.ip_region.clone(), format_published_time(comment.published_at)) }
+                                                                    { format!("{} · {}", region_label, format_published_time(comment.published_at)) }
                                                                 </p>
                                                             </div>
                                                             <button

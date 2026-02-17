@@ -70,6 +70,7 @@ pub fn create_router(state: AppState) -> Router {
             "/admin/comment-config",
             get(handlers::get_comment_runtime_config).post(handlers::update_comment_runtime_config),
         )
+        .route("/admin/geoip/status", get(handlers::get_geoip_status))
         .route("/admin/comments/tasks", get(handlers::admin_list_comment_tasks))
         .route("/admin/comments/tasks/grouped", get(handlers::admin_list_comment_tasks_grouped))
         .route(

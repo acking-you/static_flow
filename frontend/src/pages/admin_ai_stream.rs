@@ -37,11 +37,7 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
     let stream_status = use_state(|| "idle".to_string());
     let stream_error = use_state(|| None::<String>);
     let stream_ref = use_mut_ref(|| {
-        None::<(
-            EventSource,
-            Closure<dyn FnMut(MessageEvent)>,
-            Closure<dyn FnMut(Event)>,
-        )>
+        None::<(EventSource, Closure<dyn FnMut(MessageEvent)>, Closure<dyn FnMut(Event)>)>
     });
 
     let task_id = props.task_id.clone();
@@ -73,7 +69,9 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                         stream_status.set(
                             data.runs
                                 .iter()
-                                .find(|item| Some(item.run_id.as_str()) == data.selected_run_id.as_deref())
+                                .find(|item| {
+                                    Some(item.run_id.as_str()) == data.selected_run_id.as_deref()
+                                })
                                 .map(|item| item.status.clone())
                                 .unwrap_or_else(|| "idle".to_string()),
                         );
@@ -110,7 +108,8 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
             let stream_error = stream_error.clone();
             let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_admin_comment_task_ai_output(&task_id, Some(&run_id), Some(2000)).await {
+                match fetch_admin_comment_task_ai_output(&task_id, Some(&run_id), Some(2000)).await
+                {
                     Ok(data) => {
                         selected_run_id.set(Some(run_id.clone()));
                         stream_chunks.set(data.chunks.clone());
@@ -154,37 +153,48 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                         let stream_chunks_setter = stream_chunks.clone();
                         let stream_status_setter = stream_status.clone();
                         let stream_error_setter = stream_error.clone();
-                        let onmessage = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
-                            let Some(payload_text) = event.data().as_string() else {
-                                return;
-                            };
-                            let parsed = serde_json::from_str::<AdminCommentAiStreamEvent>(&payload_text);
-                            let Ok(payload) = parsed else {
-                                return;
-                            };
-                            match payload.event_type.as_str() {
-                                "chunk" => {
-                                    if let Some(chunk) = payload.chunk {
-                                        let mut next = (*stream_chunks_setter).clone();
-                                        if !next.iter().any(|item| item.chunk_id == chunk.chunk_id) {
-                                            next.push(chunk);
-                                            next.sort_by(|left, right| left.batch_index.cmp(&right.batch_index));
-                                            stream_chunks_setter.set(next);
+                        let onmessage =
+                            Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+                                let Some(payload_text) = event.data().as_string() else {
+                                    return;
+                                };
+                                let parsed = serde_json::from_str::<AdminCommentAiStreamEvent>(
+                                    &payload_text,
+                                );
+                                let Ok(payload) = parsed else {
+                                    return;
+                                };
+                                match payload.event_type.as_str() {
+                                    "chunk" => {
+                                        if let Some(chunk) = payload.chunk {
+                                            let mut next = (*stream_chunks_setter).clone();
+                                            if !next
+                                                .iter()
+                                                .any(|item| item.chunk_id == chunk.chunk_id)
+                                            {
+                                                next.push(chunk);
+                                                next.sort_by(|left, right| {
+                                                    left.batch_index.cmp(&right.batch_index)
+                                                });
+                                                stream_chunks_setter.set(next);
+                                            }
                                         }
-                                    }
-                                },
-                                "done" => {
-                                    stream_status_setter.set(
-                                        payload.run_status.unwrap_or_else(|| "done".to_string()),
-                                    );
-                                },
-                                "error" => {
-                                    stream_status_setter.set("error".to_string());
-                                    stream_error_setter.set(Some("Stream returned error event".to_string()));
-                                },
-                                _ => {},
-                            }
-                        });
+                                    },
+                                    "done" => {
+                                        stream_status_setter.set(
+                                            payload
+                                                .run_status
+                                                .unwrap_or_else(|| "done".to_string()),
+                                        );
+                                    },
+                                    "error" => {
+                                        stream_status_setter.set("error".to_string());
+                                        stream_error_setter
+                                            .set(Some("Stream returned error event".to_string()));
+                                    },
+                                    _ => {},
+                                }
+                            });
                         source.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
 
                         let stream_status_setter = stream_status.clone();

@@ -1695,13 +1695,13 @@ a:hover {
 
 .container {
   width: 100%;
-  max-width: 72rem;
+  max-width: 69rem;
   margin-inline: auto;
   padding-inline: clamp(1rem, 4vw, 2.5rem)
 }
 
 :root {
-  --article-layout-width: 1020px;
+  --article-layout-width: 1080px;
   --article-main-current-width: var(--article-layout-width);
   --article-center-gap-global: 0.5rem;
   --article-left-gutter-width: calc(50vw - (var(--article-main-current-width) / 2));
@@ -1710,8 +1710,8 @@ a:hover {
   --article-side-rail-gap: clamp(0.8rem, 1.4vw, 1.1rem);
   --article-side-rail-top: calc(var(--header-height-desktop) + 1rem);
   --toc-side-gap: clamp(0.75rem, 2vw, 1.25rem);
-  --toc-panel-width: min(375px, 30vw);
-  --toc-collapsed-width: min(275px, 24vw);
+  --toc-panel-width: min(350px, 28vw);
+  --toc-collapsed-width: min(250px, 21vw);
   --toc-slideout-tab-width: 2.75rem;
   --toc-slideout-tab-height: 8.5rem;
   --toc-slideout-transition: transform 0.24s ease;
@@ -1747,13 +1747,13 @@ a:hover {
 
 .article-detail {
   --article-max-width-base: var(--article-layout-width);
-  --article-body-line-height: 1.72;
-  --article-flow-space: 0.92em;
-  --article-heading-margin-top: 1.3em;
-  --article-heading-margin-bottom: 0.45em;
-  --article-list-margin: 0.8em;
-  --article-list-item-gap: 0.22em;
-  --article-block-padding-y: 0.82rem;
+  --article-body-line-height: 1.64;
+  --article-flow-space: 0.8em;
+  --article-heading-margin-top: 1.16em;
+  --article-heading-margin-bottom: 0.38em;
+  --article-list-margin: 0.68em;
+  --article-list-item-gap: 0.16em;
+  --article-block-padding-y: 0.7rem;
   --article-block-padding-x: 1rem;
   --article-center-safe-gap: var(--article-center-gap-global);
   width: min(100%, var(--article-max-width-base));
@@ -1769,7 +1769,7 @@ a:hover {
   body.has-desktop-toc {
     --article-main-current-width: min(
       var(--article-layout-width),
-      calc(100vw - (2 * (var(--article-toc-reserve-width, 0px) + var(--article-center-gap-global))))
+      calc(100vw - var(--article-toc-reserve-width, 0px) - (2 * var(--article-center-gap-global)))
     );
   }
 
@@ -2491,17 +2491,19 @@ a:hover {
 }
 
 .comment-avatar {
-  width: 2.15rem;
-  height: 2.15rem;
+  width: 2.2rem;
+  height: 2.2rem;
   border-radius: 999px;
   color: #fff;
-  font-size: 0.88rem;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18), 0 7px 14px rgba(8, 14, 28, 0.12);
 }
 
 .comment-head-meta {

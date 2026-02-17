@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_stream::stream;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -14,7 +15,6 @@ use axum::{
         Json, Response,
     },
 };
-use async_stream::stream;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use static_flow_shared::{
@@ -569,6 +569,14 @@ pub async fn update_comment_runtime_config(
     }
 
     Ok(Json(next.into()))
+}
+
+pub async fn get_geoip_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<crate::geoip::GeoIpStatus>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    Ok(Json(state.geoip.status().await))
 }
 
 pub async fn submit_comment(
@@ -1506,8 +1514,10 @@ pub async fn admin_stream_comment_task_ai_output(
     headers: HeaderMap,
     Path(task_id): Path<String>,
     Query(query): Query<AdminCommentAiOutputStreamQuery>,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)>
-{
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (StatusCode, Json<ErrorResponse>),
+> {
     ensure_admin_access(&state, &headers)?;
 
     let task_exists = state
@@ -1637,10 +1647,11 @@ pub async fn admin_stream_comment_task_ai_output(
         }
     };
 
-    Ok(
-        Sse::new(stream)
-            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive")),
-    )
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
 }
 
 pub async fn admin_cleanup_comments(
@@ -1961,16 +1972,36 @@ fn build_client_fingerprint(headers: &HeaderMap) -> String {
 }
 
 fn extract_client_ip(headers: &HeaderMap) -> String {
-    // Prefer X-Forwarded-For chain first (proxy chain source-of-truth), then
-    // fall back to X-Real-IP.
+    // Prefer proxy chain source headers, then vendor/common real-ip headers.
     parse_first_ip_from_header(headers.get("x-forwarded-for"))
         .or_else(|| parse_first_ip_from_header(headers.get("x-real-ip")))
+        .or_else(|| parse_first_ip_from_header(headers.get("cf-connecting-ip")))
+        .or_else(|| parse_first_ip_from_header(headers.get("x-client-ip")))
+        .or_else(|| parse_ip_from_forwarded_header(headers.get("forwarded")))
         .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn parse_first_ip_from_header(value: Option<&axum::http::HeaderValue>) -> Option<String> {
     let raw = value?.to_str().ok()?;
     raw.split(',').find_map(normalize_ip_token)
+}
+
+fn parse_ip_from_forwarded_header(value: Option<&axum::http::HeaderValue>) -> Option<String> {
+    let raw = value?.to_str().ok()?;
+    raw.split(',').find_map(|entry| {
+        entry.split(';').find_map(|segment| {
+            let token = segment.trim();
+            if token
+                .get(..4)
+                .map(|prefix| prefix.eq_ignore_ascii_case("for="))
+                .unwrap_or(false)
+            {
+                normalize_ip_token(token)
+            } else {
+                None
+            }
+        })
+    })
 }
 
 fn normalize_ip_token(token: &str) -> Option<String> {
@@ -1980,8 +2011,12 @@ fn normalize_ip_token(token: &str) -> Option<String> {
     }
 
     // Handle RFC7239 style token fragment: for=1.2.3.4
-    if let Some(stripped) = value.strip_prefix("for=") {
-        value = stripped.trim().trim_matches('"');
+    if value
+        .get(..4)
+        .map(|prefix| prefix.eq_ignore_ascii_case("for="))
+        .unwrap_or(false)
+    {
+        value = value[4..].trim().trim_matches('"');
     }
 
     // [IPv6]:port
@@ -2178,7 +2213,9 @@ async fn resolve_reply_context(
         return Ok(ReplyContext {
             reply_to_comment_id: Some(comment.comment_id),
             reply_to_comment_text: Some(comment.comment_text),
-            reply_to_ai_reply_markdown: normalize_optional_markdown(Some(comment.ai_reply_markdown)),
+            reply_to_ai_reply_markdown: normalize_optional_markdown(Some(
+                comment.ai_reply_markdown,
+            )),
         });
     }
 
@@ -2503,6 +2540,14 @@ mod tests {
     }
 
     #[test]
+    fn extract_client_ip_supports_cf_connecting_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", HeaderValue::from_static("203.0.113.11"));
+
+        assert_eq!(extract_client_ip(&headers), "203.0.113.11");
+    }
+
+    #[test]
     fn extract_client_ip_normalizes_ip_with_port() {
         let mut headers = HeaderMap::new();
         headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.1:4567"));
@@ -2514,6 +2559,22 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", HeaderValue::from_static("for=198.51.100.77"));
         assert_eq!(extract_client_ip(&headers), "198.51.100.77");
+    }
+
+    #[test]
+    fn extract_client_ip_supports_forwarded_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "forwarded",
+            HeaderValue::from_static("for=198.51.100.88;proto=https;by=203.0.113.1"),
+        );
+        assert_eq!(extract_client_ip(&headers), "198.51.100.88");
+
+        headers.insert(
+            "forwarded",
+            HeaderValue::from_static("for=\"[2001:db8::7]:1234\";proto=https"),
+        );
+        assert_eq!(extract_client_ip(&headers), "2001:db8::7");
     }
 
     #[test]

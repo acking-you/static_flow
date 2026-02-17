@@ -251,6 +251,10 @@ print_check_urls() {
   echo "- curl -X POST \"${base}/admin/comments/cleanup\" -H \"Content-Type: application/json\" -d '{\"status\":\"failed\",\"retention_days\":30}'"
 
   echo
+  echo "[21) GET /admin/geoip/status (local admin)]"
+  echo "- ${base}/admin/geoip/status"
+
+  echo
   log "Tip: image endpoint returns binary; open URL directly in browser or use curl --output."
   log "Tip: /admin routes are intended for local/ops usage and should not be publicly exposed."
   log "Press Ctrl+C to stop backend."
@@ -267,6 +271,7 @@ log "Using CONTENT_DB_PATH=$DB_PATH"
 log "Using COMMENTS_DB_PATH=$COMMENTS_DB_PATH"
 log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
 log "Using HOST=$HOST PORT=$PORT_CHOSEN"
+log "GeoIP env passthrough: GEOIP_DB_PATH=${GEOIP_DB_PATH:-<default>} ENABLE_GEOIP_AUTO_DOWNLOAD=${ENABLE_GEOIP_AUTO_DOWNLOAD:-<default>} ENABLE_GEOIP_FALLBACK_API=${ENABLE_GEOIP_FALLBACK_API:-<default>} GEOIP_PROXY_URL=${GEOIP_PROXY_URL:-<none>}"
 
 RUST_ENV="development" \
 BIND_ADDR="$HOST" \
