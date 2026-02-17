@@ -1945,7 +1945,7 @@ a:hover {
 }
 
 :root {
-  --article-layout-width: 1040px;
+  --article-layout-width: 940px;
   --article-main-current-width: var(--article-layout-width);
   --article-center-gap-global: 1rem;
   --article-left-gutter-width: calc(50vw - (var(--article-main-current-width) / 2));
@@ -1954,8 +1954,8 @@ a:hover {
   --article-side-rail-gap: clamp(0.9rem, 1.2vw, 1.15rem);
   --article-side-rail-top: calc(var(--header-height-desktop) + 1rem);
   --toc-side-gap: clamp(0.9rem, 1.2vw, 1.25rem);
-  --toc-panel-width: min(318px, 21.6vw);
-  --toc-collapsed-width: min(220px, 15.6vw);
+  --toc-panel-width: min(296px, 20.4vw);
+  --toc-collapsed-width: min(206px, 14.8vw);
   --toc-slideout-tab-width: 2.75rem;
   --toc-slideout-tab-height: 8.5rem;
   --toc-slideout-transition: transform 0.24s ease;
