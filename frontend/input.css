@@ -1699,7 +1699,7 @@ a:hover {
 }
 
 :root {
-  --article-layout-width: 1120px;
+  --article-layout-width: 1080px;
   --article-main-current-width: var(--article-layout-width);
   --article-center-gap-global: 1rem;
   --article-left-gutter-width: calc(50vw - (var(--article-main-current-width) / 2));
@@ -1708,8 +1708,8 @@ a:hover {
   --article-side-rail-gap: clamp(0.9rem, 1.2vw, 1.15rem);
   --article-side-rail-top: calc(var(--header-height-desktop) + 1rem);
   --toc-side-gap: clamp(0.9rem, 1.2vw, 1.25rem);
-  --toc-panel-width: min(372px, 24.8vw);
-  --toc-collapsed-width: min(260px, 18.8vw);
+  --toc-panel-width: min(336px, 22.8vw);
+  --toc-collapsed-width: min(236px, 16.8vw);
   --toc-slideout-tab-width: 2.75rem;
   --toc-slideout-tab-height: 8.5rem;
   --toc-slideout-transition: transform 0.24s ease;
@@ -3206,6 +3206,7 @@ button[aria-current="page"]:hover {
 /* 目录容器 - 桌面端右侧固定 */
 .article-toc {
   position: fixed;
+  box-sizing: border-box;
   top: calc(var(--header-height-desktop) + 1rem);
   right: var(--toc-side-gap);
   left: auto;
