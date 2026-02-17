@@ -52,6 +52,8 @@ pub fn home_page() -> Html {
         ),
     ];
 
+    let staticflow_search_href = crate::config::route_path("/search?q=staticflow");
+
     let social_button_class = classes!(
         "btn-fluent-icon",
         "border",
@@ -323,6 +325,16 @@ pub fn home_page() -> Html {
                                         <i class="fas fa-sliders mr-2"></i>
                                         { "Admin Console" }
                                     </Link<Route>>
+                                    <a
+                                        href={staticflow_search_href}
+                                        class={classes!(
+                                            "btn-fluent-search-hero",
+                                            "no-underline"
+                                        )}
+                                    >
+                                        <i class="fas fa-search mr-2"></i>
+                                        { t::BTN_SEARCH_STATICFLOW }
+                                    </a>
                                 </div>
 
                                 // Social links as terminal output

@@ -76,11 +76,13 @@ pub mod home {
     pub const CMD_SHOW_README: &str = "cat ./README.md";
     pub const INTRO: &str = "可视化博客 + Skill \
                              工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
-                             统一存储文章与图片，支持全文语义以及混合检索。";
+                             统一存储文章与图片，支持全文语义与混合检索，并具备基于 AI + \
+                             Skill 的评论区自动回复能力。";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
     pub const BTN_VIEW_ARTICLES: &str = "查看文章";
     pub const BTN_ARCHIVE: &str = "文章归档";
+    pub const BTN_SEARCH_STATICFLOW: &str = "Search StaticFlow";
 
     pub const CMD_SHOW_SOCIAL: &str = "cat ./social_links.json";
     pub const CMD_SHOW_WRAPPED: &str = "./scripts/github-wrapped.sh --list-years";
