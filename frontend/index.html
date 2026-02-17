@@ -253,8 +253,8 @@
         });
       }
 
-      function runMarkdownRenderPipeline(articleContent) {
-        if (!articleContent) return;
+        function runMarkdownRenderPipeline(articleContent) {
+          if (!articleContent) return;
 
         function escapeMermaidLabel(label) {
           return String(label || '')
@@ -263,20 +263,39 @@
             .trim();
         }
 
+        function shouldNormalizeFlowchartLabels(source) {
+          const lines = String(source || '').split('\n');
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            // Skip Mermaid directives/comments when detecting diagram type.
+            if (line.startsWith('%%{') && line.endsWith('}%%')) continue;
+            if (line.startsWith('%%')) continue;
+            return /^(graph|flowchart)\b/i.test(line);
+          }
+          return false;
+        }
+
         // Mermaid 10.x is strict for some tokens in unquoted labels
         // (e.g. `malloc(size)` in `A[malloc(size)]`).
         // Normalize common node labels into quoted forms:
         //   A[text]   -> A["text"]
         //   A{text}   -> A{"text"}
-        function normalizeMermaidDefinition(source) {
-          let text = String(source || '').replace(/\r\n?/g, '\n').trim();
-          if (!text) return text;
+          function normalizeMermaidDefinition(source) {
+            let text = String(source || '').replace(/\r\n?/g, '\n').trim();
+            if (!text) return text;
 
           // Strip accidental fence remnants if they leaked into code content.
           text = text
             .replace(/^```mermaid\s*/i, '')
             .replace(/```$/g, '')
             .trim();
+
+          // Only normalize flowchart/graph diagrams.
+          // Other Mermaid dialects (e.g. stateDiagram) use different token rules.
+          if (!shouldNormalizeFlowchartLabels(text)) {
+            return text;
+          }
 
           text = text.replace(/(\b[A-Za-z][\w-]*)\s*\[([^\]\n"]+)\]/g, (match, id, label) => {
             const normalized = escapeMermaidLabel(label);
@@ -288,14 +307,42 @@
             return normalized ? `${id}{"${normalized}"}` : match;
           });
 
-          return text;
-        }
+            return text;
+          }
 
-        function replaceMermaidWithCodeBlock(node, source) {
-          if (!node || !node.parentNode) return;
-          const pre = document.createElement('pre');
-          const code = document.createElement('code');
-          code.className = 'language-mermaid';
+          function markMermaidPending(node) {
+            if (!node) return;
+            node.classList.add('mermaid-pending');
+            node.setAttribute('aria-busy', 'true');
+            if (node._sfMermaidPendingTimer) {
+              clearTimeout(node._sfMermaidPendingTimer);
+            }
+            // Failsafe: if Mermaid rendering is stuck, fallback to code block so users never see a permanent blank state.
+            node._sfMermaidPendingTimer = setTimeout(() => {
+              if (!node.isConnected || !node.classList.contains('mermaid-pending')) return;
+              const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+              node.dataset.sfMermaidRendered = 'true';
+              clearMermaidPending(node);
+              replaceMermaidWithCodeBlock(node, source);
+            }, 6000);
+          }
+
+          function clearMermaidPending(node) {
+            if (!node) return;
+            node.classList.remove('mermaid-pending');
+            node.removeAttribute('aria-busy');
+            if (node._sfMermaidPendingTimer) {
+              clearTimeout(node._sfMermaidPendingTimer);
+              node._sfMermaidPendingTimer = null;
+            }
+          }
+
+          function replaceMermaidWithCodeBlock(node, source) {
+            if (!node || !node.parentNode) return;
+            clearMermaidPending(node);
+            const pre = document.createElement('pre');
+            const code = document.createElement('code');
+            code.className = 'language-mermaid';
           code.textContent = String(source || '').trim();
           pre.appendChild(code);
           node.parentNode.replaceChild(pre, node);
@@ -308,14 +355,18 @@
           makeCodeBlocksCollapsible(articleContent);
         }
 
-        // Convert mermaid code blocks to mermaid divs
-        articleContent.querySelectorAll('pre code.language-mermaid').forEach((block) => {
-          const pre = block.parentElement;
-          const mermaidDiv = document.createElement('div');
-          mermaidDiv.className = 'mermaid';
-          mermaidDiv.textContent = normalizeMermaidDefinition(block.textContent || '');
-          pre.replaceWith(mermaidDiv);
-        });
+          // Convert mermaid code blocks to mermaid divs
+          articleContent.querySelectorAll('pre code.language-mermaid').forEach((block) => {
+            const pre = block.parentElement;
+            const mermaidDiv = document.createElement('div');
+            const source = normalizeMermaidDefinition(block.textContent || '');
+            mermaidDiv.className = 'mermaid mermaid-pending';
+            mermaidDiv.dataset.sfMermaidSource = source;
+            mermaidDiv.dataset.sfMermaidRendered = 'false';
+            mermaidDiv.setAttribute('aria-busy', 'true');
+            mermaidDiv.textContent = source;
+            pre.replaceWith(mermaidDiv);
+          });
 
         // Syntax highlighting for code blocks (skip mermaid)
         articleContent.querySelectorAll('pre code:not(.language-mermaid)').forEach((block) => {
@@ -327,17 +378,20 @@
           // Existing rendered diagrams should not be parsed again.
           if (node.querySelector('svg')) {
             node.dataset.sfMermaidRendered = 'true';
+            clearMermaidPending(node);
           }
         });
         const mermaidNodes = Array.from(articleContent.querySelectorAll('.mermaid')).filter((node) => {
           if (node.dataset.sfMermaidRendered === 'true') return false;
           if (node.querySelector('svg')) {
             node.dataset.sfMermaidRendered = 'true';
+            clearMermaidPending(node);
             return false;
           }
           const normalized = normalizeMermaidDefinition(node.textContent || '');
           node.textContent = normalized;
           node.dataset.sfMermaidSource = normalized;
+          markMermaidPending(node);
           return true;
         });
         if (window.mermaid && mermaidNodes.length > 0) {
@@ -348,6 +402,7 @@
                 const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
                 node.dataset.sfMermaidSource = source;
                 node.textContent = source;
+                markMermaidPending(node);
 
                 if (typeof window.mermaid.parse === 'function') {
                   try {
@@ -355,6 +410,7 @@
                     validNodes.push(node);
                   } catch (_) {
                     node.dataset.sfMermaidRendered = 'true';
+                    clearMermaidPending(node);
                     replaceMermaidWithCodeBlock(node, source);
                   }
                 } else {
@@ -370,12 +426,16 @@
                 suppressErrors: true
               }).then(() => {
                 validNodes.forEach((node) => {
-                  node.dataset.sfMermaidRendered = 'true';
                   const renderedText = String(node.textContent || '').toLowerCase();
                   if (renderedText.includes('syntax error in text')) {
                     const source = node.dataset.sfMermaidSource || '';
+                    clearMermaidPending(node);
+                    node.dataset.sfMermaidRendered = 'true';
                     replaceMermaidWithCodeBlock(node, source);
+                    return;
                   }
+                  node.dataset.sfMermaidRendered = 'true';
+                  clearMermaidPending(node);
                 });
               });
             })
@@ -383,6 +443,7 @@
               mermaidNodes.forEach((node) => {
                 const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
                 node.dataset.sfMermaidRendered = 'true';
+                clearMermaidPending(node);
                 replaceMermaidWithCodeBlock(node, source);
               });
             })
@@ -392,6 +453,14 @@
               finalizeCodeEnhancements();
             });
         } else {
+          if (mermaidNodes.length > 0) {
+            mermaidNodes.forEach((node) => {
+              const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+              node.dataset.sfMermaidRendered = 'true';
+              clearMermaidPending(node);
+              replaceMermaidWithCodeBlock(node, source);
+            });
+          }
           addCopyButtonsToMermaid(articleContent);
           finalizeCodeEnhancements();
         }
@@ -635,6 +704,41 @@
 
       // Add copy buttons to mermaid diagrams
       function addCopyButtonsToMermaid(root) {
+        const copyTextToClipboard = async (text) => {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(text);
+            return;
+          }
+
+          // Fallback for environments where Clipboard API is unavailable.
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', 'readonly');
+          textarea.style.position = 'fixed';
+          textarea.style.top = '-9999px';
+          textarea.style.left = '-9999px';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const copied = document.execCommand('copy');
+          document.body.removeChild(textarea);
+          if (!copied) {
+            throw new Error('execCommand copy failed');
+          }
+        };
+
+        const getMermaidSourceText = (mermaidDiv) => {
+          const datasetSource = (mermaidDiv.dataset.sfMermaidSource || '').trim();
+          if (datasetSource) {
+            return datasetSource;
+          }
+
+          if (!mermaidDiv.querySelector('svg')) {
+            return String(mermaidDiv.textContent || '').trim();
+          }
+
+          return '';
+        };
+
         (root || document).querySelectorAll('.mermaid').forEach((mermaidDiv) => {
           // Skip if already has a wrapper with button
           if (mermaidDiv.parentElement && mermaidDiv.parentElement.classList.contains('mermaid-wrapper')) {
@@ -646,6 +750,52 @@
           wrapper.className = 'mermaid-wrapper';
           mermaidDiv.parentNode.insertBefore(wrapper, mermaidDiv);
           wrapper.appendChild(mermaidDiv);
+
+          // Create source-copy button
+          const copySourceBtn = document.createElement('button');
+          copySourceBtn.className = 'copy-button mermaid-source-button';
+          copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+          copySourceBtn.title = '复制 Mermaid 原文';
+          copySourceBtn.setAttribute('type', 'button');
+          copySourceBtn.setAttribute('aria-label', '复制 Mermaid 原文');
+
+          copySourceBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const sourceText = getMermaidSourceText(mermaidDiv);
+            if (!sourceText) {
+              copySourceBtn.innerHTML = '<i class="fas fa-times"></i>';
+              copySourceBtn.title = '未找到 Mermaid 原文';
+              setTimeout(() => {
+                copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+                copySourceBtn.title = '复制 Mermaid 原文';
+              }, 2000);
+              return;
+            }
+
+            try {
+              await copyTextToClipboard(sourceText);
+              copySourceBtn.innerHTML = '<i class="fas fa-check"></i>';
+              copySourceBtn.classList.add('copied');
+              copySourceBtn.title = '已复制 Mermaid 原文';
+              setTimeout(() => {
+                copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+                copySourceBtn.classList.remove('copied');
+                copySourceBtn.title = '复制 Mermaid 原文';
+              }, 2000);
+            } catch (err) {
+              console.error('Failed to copy Mermaid source:', err);
+              copySourceBtn.innerHTML = '<i class="fas fa-times"></i>';
+              copySourceBtn.title = '复制失败';
+              setTimeout(() => {
+                copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+                copySourceBtn.title = '复制 Mermaid 原文';
+              }, 2000);
+            }
+          });
+
+          wrapper.appendChild(copySourceBtn);
 
           // Create download button
           const downloadBtn = document.createElement('button');
@@ -907,31 +1057,58 @@
         };
 
         const ZOOM_STEP = 1.2;
+        const FIT_SCALE_EPSILON = 0.985;
+        const PAN_ENABLED_SCALE_RATIO = 1.02;
         let fitScale = 1;
         let currentScale = 1;
         let minScale = 0.2;
         let maxScale = 6;
         let naturalSize = getSvgNaturalSize(clonedSvg);
+        let panX = 0;
+        let panY = 0;
+        let dragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dragOriginX = 0;
+        let dragOriginY = 0;
 
         const updateScaleLabel = () => {
-          zoomValue.textContent = `${Math.round(currentScale * 100)}%`;
+          const relativeScale = fitScale > 0 ? currentScale / fitScale : 1;
+          zoomValue.textContent = `${Math.round(relativeScale * 100)}%`;
+        };
+
+        const updatePanMode = () => {
+          const canPan = currentScale > fitScale * PAN_ENABLED_SCALE_RATIO;
+          viewport.classList.toggle('can-pan', canPan);
+          if (!canPan) {
+            panX = 0;
+            panY = 0;
+          }
+        };
+
+        const applyTransform = () => {
+          canvas.style.transform = `translate(${panX.toFixed(2)}px, ${panY.toFixed(2)}px) scale(${currentScale.toFixed(4)})`;
         };
 
         const applyScale = (nextScale) => {
           currentScale = clamp(nextScale, minScale, maxScale);
-          canvas.style.setProperty('--mermaid-zoom', currentScale.toFixed(4));
+          updatePanMode();
+          applyTransform();
           updateScaleLabel();
         };
 
         const recalcScaleBounds = () => {
           naturalSize = getSvgNaturalSize(clonedSvg);
-          const viewportRect = viewport.getBoundingClientRect();
-          const availableWidth = Math.max(180, viewportRect.width - 16);
-          const availableHeight = Math.max(160, viewportRect.height - 16);
-          const baseWidth = Math.max(1, naturalSize.width);
-          const baseHeight = Math.max(1, naturalSize.height);
+          // Use layout dimensions (clientWidth/clientHeight) to avoid transform animation
+          // affecting fit calculations during open/resize transitions.
+          const availableWidth = Math.max(180, viewport.clientWidth - 6);
+          const availableHeight = Math.max(160, viewport.clientHeight - 6);
+          const measuredWidth = clonedMermaid.offsetWidth;
+          const measuredHeight = clonedMermaid.offsetHeight;
+          const baseWidth = Math.max(1, Number.isFinite(measuredWidth) && measuredWidth > 0 ? measuredWidth : naturalSize.width);
+          const baseHeight = Math.max(1, Number.isFinite(measuredHeight) && measuredHeight > 0 ? measuredHeight : naturalSize.height);
 
-          fitScale = Math.min(availableWidth / baseWidth, availableHeight / baseHeight) * 0.92;
+          fitScale = Math.min(availableWidth / baseWidth, availableHeight / baseHeight) * FIT_SCALE_EPSILON;
           if (!Number.isFinite(fitScale) || fitScale <= 0) {
             fitScale = 1;
           }
@@ -944,9 +1121,14 @@
         const closeFullscreen = (immediate) => {
           if (closed) return;
           closed = true;
+          dragging = false;
           overlay.classList.remove('open');
           document.removeEventListener('keydown', handleKeydown);
           viewport.removeEventListener('wheel', handleWheel);
+          viewport.removeEventListener('pointerdown', handlePointerDown);
+          window.removeEventListener('pointermove', handlePointerMove);
+          window.removeEventListener('pointerup', handlePointerUp);
+          window.removeEventListener('pointercancel', handlePointerUp);
           window.removeEventListener('resize', handleResize);
           const finalize = () => {
             if (overlay.parentNode) {
@@ -991,16 +1173,50 @@
         };
 
         const handleWheel = (event) => {
-          if (!(event.ctrlKey || event.metaKey)) return;
-          event.preventDefault();
-          const direction = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-          applyScale(currentScale * direction);
+          if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            const direction = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+            applyScale(currentScale * direction);
+            return;
+          }
+
+          if (currentScale > fitScale * PAN_ENABLED_SCALE_RATIO) {
+            event.preventDefault();
+            panX -= event.deltaX;
+            panY -= event.deltaY;
+            applyTransform();
+          }
         };
 
         const handleResize = () => {
           const ratioToFit = fitScale > 0 ? currentScale / fitScale : 1;
           recalcScaleBounds();
           applyScale(fitScale * ratioToFit);
+        };
+
+        const handlePointerDown = (event) => {
+          if (event.button !== 0) return;
+          if (!(currentScale > fitScale * PAN_ENABLED_SCALE_RATIO)) return;
+          dragging = true;
+          dragStartX = event.clientX;
+          dragStartY = event.clientY;
+          dragOriginX = panX;
+          dragOriginY = panY;
+          viewport.classList.add('is-dragging');
+          event.preventDefault();
+        };
+
+        const handlePointerMove = (event) => {
+          if (!dragging) return;
+          panX = dragOriginX + (event.clientX - dragStartX);
+          panY = dragOriginY + (event.clientY - dragStartY);
+          applyTransform();
+        };
+
+        const handlePointerUp = () => {
+          if (!dragging) return;
+          dragging = false;
+          viewport.classList.remove('is-dragging');
         };
 
         zoomInBtn.addEventListener('click', (event) => {
@@ -1035,6 +1251,10 @@
 
         document.addEventListener('keydown', handleKeydown);
         viewport.addEventListener('wheel', handleWheel, { passive: false });
+        viewport.addEventListener('pointerdown', handlePointerDown);
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('pointercancel', handlePointerUp);
         window.addEventListener('resize', handleResize);
 
         recalcScaleBounds();
