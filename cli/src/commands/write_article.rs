@@ -910,7 +910,8 @@ mod tests {
         }
         fs::write(&media_file, "svg").expect("write media file");
 
-        let resolved = resolve_local_asset_path(raw_path, &markdown_path, &[media_root.clone()]);
+        let resolved =
+            resolve_local_asset_path(raw_path, &markdown_path, std::slice::from_ref(&media_root));
         assert_eq!(resolved, Some(media_file));
 
         let _ = fs::remove_dir_all(base);

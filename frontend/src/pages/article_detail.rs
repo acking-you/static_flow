@@ -1508,6 +1508,11 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         } else {
             t::OPEN_BRIEF_BUTTON_ZH
         };
+        let raw_markdown_button_text = if *content_language == ArticleContentLanguage::En {
+            t::OPEN_RAW_MARKDOWN_BUTTON_EN
+        } else {
+            t::OPEN_RAW_MARKDOWN_BUTTON_ZH
+        };
         let can_export_markdown = !active_content.trim().is_empty();
         let show_article_actions =
             show_language_toggle || has_detailed_summary || can_export_markdown;
@@ -1618,6 +1623,23 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         ));
                     }
                 });
+            })
+        };
+        let open_raw_markdown_click = {
+            let navigator = navigator.clone();
+            let article_id = article.id.clone();
+            let lang = if *content_language == ArticleContentLanguage::En {
+                "en".to_string()
+            } else {
+                "zh".to_string()
+            };
+            Callback::from(move |_| {
+                if let Some(nav) = navigator.as_ref() {
+                    nav.push(&Route::ArticleRaw {
+                        id: article_id.clone(),
+                        lang: lang.clone(),
+                    });
+                }
             })
         };
         let render_article_actions = |side_rail: bool| -> Html {
@@ -1732,6 +1754,42 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     >
                                         <i class={classes!("fas", "fa-list-check")} aria-hidden="true"></i>
                                         { brief_button_text }
+                                    </button>
+                                }
+                            } else {
+                                html! {}
+                            }
+                        }
+                        {
+                            if can_export_markdown {
+                                html! {
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "article-action-btn",
+                                            "inline-flex",
+                                            "items-center",
+                                            "justify-center",
+                                            "gap-2",
+                                            "rounded-full",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "px-3",
+                                            "py-2",
+                                            "text-xs",
+                                            "font-semibold",
+                                            "uppercase",
+                                            "tracking-[0.08em]",
+                                            "text-[var(--muted)]",
+                                            "transition-[var(--transition-base)]",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:text-[var(--primary)]"
+                                        )}
+                                        onclick={open_raw_markdown_click.clone()}
+                                    >
+                                        <i class={classes!("far", "fa-file-lines")} aria-hidden="true"></i>
+                                        { raw_markdown_button_text }
                                     </button>
                                 }
                             } else {
@@ -2637,7 +2695,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     </div>
                                     <div>
                                         <TooltipIconButton
-                                            icon={IconName::List}
+                                            icon={IconName::MessageSquare}
                                             tooltip={"定位到评论区".to_string()}
                                             position={TooltipPosition::Right}
                                             onclick={jump_to_comments_click.clone()}
@@ -2653,7 +2711,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 </div>
             }
 
-            <div class={classes!("container")}>
+            <div class={classes!("container", "article-page-container")}>
                 { body }
             </div>
             {

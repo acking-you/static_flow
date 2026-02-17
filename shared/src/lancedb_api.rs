@@ -57,6 +57,9 @@ pub struct ImageInfo {
 pub struct ImageListResponse {
     pub images: Vec<ImageInfo>,
     pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -64,6 +67,9 @@ pub struct ImageSearchResponse {
     pub images: Vec<ImageInfo>,
     pub total: usize,
     pub query_id: String,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -71,6 +77,9 @@ pub struct ImageTextSearchResponse {
     pub images: Vec<ImageInfo>,
     pub total: usize,
     pub query: String,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -382,6 +391,23 @@ impl StaticFlowDataStore {
             started.elapsed().as_millis(),
         );
         Ok(article)
+    }
+
+    pub async fn get_article_raw_markdown(&self, id: &str, lang: &str) -> Result<Option<String>> {
+        let table = self.articles_table().await?;
+        let path = "id_filter_scan";
+        let reason = format!("raw markdown query; lang={lang}");
+        log_query_path("get_article_raw_markdown", path, path, &reason);
+
+        let started = Instant::now();
+        let raw = fetch_article_raw_markdown(&table, id, lang).await?;
+        log_query_result(
+            "get_article_raw_markdown",
+            path,
+            usize::from(raw.is_some()),
+            started.elapsed().as_millis(),
+        );
+        Ok(raw)
     }
 
     pub async fn list_tags(&self) -> Result<Vec<TagInfo>> {
@@ -846,21 +872,55 @@ impl StaticFlowDataStore {
     }
 
     pub async fn list_images(&self) -> Result<Vec<ImageInfo>> {
+        let (images, _, _) = self.list_images_paged(None, 0).await?;
+        Ok(images)
+    }
+
+    pub async fn list_images_paged(
+        &self,
+        limit: Option<usize>,
+        offset: usize,
+    ) -> Result<(Vec<ImageInfo>, usize, bool)> {
         let table = self.images_table().await?;
         let path = "projection_scan";
-        log_query_path("list_images", path, path, "projection scan on images table");
+        let reason = format!(
+            "projection scan on images table; result_limit={}; result_offset={offset}",
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        log_query_path("list_images", path, path, &reason);
 
         let started = Instant::now();
+        let total = table.count_rows(None).await? as usize;
+        let effective_offset = offset.min(total);
+        let max_fetchable = total.saturating_sub(effective_offset);
+        if max_fetchable == 0 {
+            log_query_result("list_images", path, 0, started.elapsed().as_millis());
+            return Ok((vec![], total, false));
+        }
+        let effective_limit = limit.unwrap_or(max_fetchable).min(max_fetchable);
+        if effective_limit == 0 {
+            log_query_result("list_images", path, 0, started.elapsed().as_millis());
+            return Ok((vec![], total, false));
+        }
+        let fetch_limit = effective_limit.saturating_add(1);
         let batches = table
             .query()
             .select(Select::columns(&["id", "filename"]))
+            .offset(effective_offset)
+            .limit(fetch_limit)
             .execute()
             .await?;
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
-        let images = batches_to_images(&batch_list)?;
+        let mut images = batches_to_images(&batch_list)?;
+        let has_more = images.len() > effective_limit;
+        if has_more {
+            images.truncate(effective_limit);
+        }
         log_query_result("list_images", path, images.len(), started.elapsed().as_millis());
-        Ok(images)
+        Ok((images, total, has_more))
     }
 
     pub async fn search_images_by_text(
@@ -869,6 +929,19 @@ impl StaticFlowDataStore {
         limit: Option<usize>,
         max_distance: Option<f32>,
     ) -> Result<Vec<ImageInfo>> {
+        let (images, _, _) = self
+            .search_images_by_text_paged(query, limit, 0, max_distance)
+            .await?;
+        Ok(images)
+    }
+
+    pub async fn search_images_by_text_paged(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+        offset: usize,
+        max_distance: Option<f32>,
+    ) -> Result<(Vec<ImageInfo>, usize, bool)> {
         let table = self.images_table().await?;
         let total_started = Instant::now();
 
@@ -877,7 +950,8 @@ impl StaticFlowDataStore {
         let index_diag = inspect_index_for_column(&table, "vector", false).await;
         let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
         let reason = format!(
-            "{}; query_model=clip_vit_b32_text; result_limit={}; max_distance={}",
+            "{}; query_model=clip_vit_b32_text; result_limit={}; result_offset={offset}; \
+             max_distance={}",
             index_reason("vector", index_diag.as_ref()),
             limit
                 .map(|value| value.to_string())
@@ -892,13 +966,20 @@ impl StaticFlowDataStore {
         let candidate_count = table.count_rows(Some(filter.clone())).await? as usize;
         if candidate_count == 0 {
             log_query_result("search_images_by_text", path, 0, total_started.elapsed().as_millis());
-            return Ok(vec![]);
+            return Ok((vec![], 0, false));
         }
-        let effective_limit = limit.unwrap_or(candidate_count).min(candidate_count);
+        let effective_offset = offset.min(candidate_count);
+        let max_fetchable = candidate_count.saturating_sub(effective_offset);
+        if max_fetchable == 0 {
+            log_query_result("search_images_by_text", path, 0, total_started.elapsed().as_millis());
+            return Ok((vec![], candidate_count, false));
+        }
+        let effective_limit = limit.unwrap_or(max_fetchable).min(max_fetchable);
         if effective_limit == 0 {
             log_query_result("search_images_by_text", path, 0, total_started.elapsed().as_millis());
-            return Ok(vec![]);
+            return Ok((vec![], candidate_count, false));
         }
+        let fetch_limit = effective_limit.saturating_add(1);
 
         let vector_query = table
             .query()
@@ -906,7 +987,10 @@ impl StaticFlowDataStore {
             .context("failed to build text-image search query")?;
 
         let started = Instant::now();
-        let mut vector_query = vector_query.only_if(filter).limit(effective_limit);
+        let mut vector_query = vector_query
+            .only_if(filter)
+            .offset(effective_offset)
+            .limit(fetch_limit);
         if max_distance.is_some() {
             vector_query = vector_query.distance_range(None, max_distance);
         }
@@ -916,14 +1000,18 @@ impl StaticFlowDataStore {
             .await?;
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
-        let images = batches_to_images(&batch_list)?;
+        let mut images = batches_to_images(&batch_list)?;
+        let has_more = images.len() > effective_limit;
+        if has_more {
+            images.truncate(effective_limit);
+        }
         log_query_result(
             "search_images_by_text",
             path,
             images.len(),
             started.elapsed().as_millis(),
         );
-        Ok(images)
+        Ok((images, candidate_count, has_more))
     }
 
     pub async fn search_images(
@@ -932,6 +1020,17 @@ impl StaticFlowDataStore {
         limit: Option<usize>,
         max_distance: Option<f32>,
     ) -> Result<Vec<ImageInfo>> {
+        let (images, _, _) = self.search_images_paged(id, limit, 0, max_distance).await?;
+        Ok(images)
+    }
+
+    pub async fn search_images_paged(
+        &self,
+        id: &str,
+        limit: Option<usize>,
+        offset: usize,
+        max_distance: Option<f32>,
+    ) -> Result<(Vec<ImageInfo>, usize, bool)> {
         let table = self.images_table().await?;
         let total_started = Instant::now();
 
@@ -951,14 +1050,14 @@ impl StaticFlowDataStore {
                     0,
                     total_started.elapsed().as_millis(),
                 );
-                return Ok(vec![]);
+                return Ok((vec![], 0, false));
             },
         };
 
         let index_diag = inspect_index_for_column(&table, "vector", false).await;
         let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
         let reason = format!(
-            "{}; result_limit={}; max_distance={}",
+            "{}; result_limit={}; result_offset={offset}; max_distance={}",
             index_reason("vector", index_diag.as_ref()),
             limit
                 .map(|value| value.to_string())
@@ -973,13 +1072,20 @@ impl StaticFlowDataStore {
         let candidate_count = table.count_rows(Some(filter.clone())).await? as usize;
         if candidate_count == 0 {
             log_query_result("search_images", path, 0, total_started.elapsed().as_millis());
-            return Ok(vec![]);
+            return Ok((vec![], 0, false));
         }
-        let effective_limit = limit.unwrap_or(candidate_count).min(candidate_count);
+        let effective_offset = offset.min(candidate_count);
+        let max_fetchable = candidate_count.saturating_sub(effective_offset);
+        if max_fetchable == 0 {
+            log_query_result("search_images", path, 0, total_started.elapsed().as_millis());
+            return Ok((vec![], candidate_count, false));
+        }
+        let effective_limit = limit.unwrap_or(max_fetchable).min(max_fetchable);
         if effective_limit == 0 {
             log_query_result("search_images", path, 0, total_started.elapsed().as_millis());
-            return Ok(vec![]);
+            return Ok((vec![], candidate_count, false));
         }
+        let fetch_limit = effective_limit.saturating_add(1);
 
         let vector_query = table
             .query()
@@ -987,7 +1093,10 @@ impl StaticFlowDataStore {
             .context("failed to build image search query")?;
 
         let started = Instant::now();
-        let mut vector_query = vector_query.only_if(filter).limit(effective_limit);
+        let mut vector_query = vector_query
+            .only_if(filter)
+            .offset(effective_offset)
+            .limit(fetch_limit);
         if max_distance.is_some() {
             vector_query = vector_query.distance_range(None, max_distance);
         }
@@ -997,9 +1106,13 @@ impl StaticFlowDataStore {
             .await?;
 
         let batch_list = batches.try_collect::<Vec<_>>().await?;
-        let images = batches_to_images(&batch_list)?;
+        let mut images = batches_to_images(&batch_list)?;
+        let has_more = images.len() > effective_limit;
+        if has_more {
+            images.truncate(effective_limit);
+        }
         log_query_result("search_images", path, images.len(), started.elapsed().as_millis());
-        Ok(images)
+        Ok((images, candidate_count, has_more))
     }
 
     pub async fn get_image(
@@ -1330,6 +1443,61 @@ async fn fetch_article_detail(table: &Table, id: &str) -> Result<Option<Article>
         },
     };
     batches_to_article_detail(&batch_list)
+}
+
+async fn fetch_article_raw_markdown(table: &Table, id: &str, lang: &str) -> Result<Option<String>> {
+    let column = match lang {
+        "zh" => "content",
+        "en" => "content_en",
+        _ => anyhow::bail!("unsupported article raw markdown language: {lang}"),
+    };
+    let filter = format!("id = '{}'", escape_literal(id));
+
+    let batches = match table
+        .query()
+        .only_if(filter)
+        .limit(1)
+        .select(Select::columns(&[column]))
+        .execute()
+        .await
+    {
+        Ok(stream) => stream.try_collect::<Vec<_>>().await?,
+        Err(err) => {
+            let err_text = err.to_string();
+            let missing_content_en_column = lang == "en"
+                && err_text.contains("content_en")
+                && err_text.contains("missing column");
+            if missing_content_en_column {
+                tracing::warn!(
+                    "Article table appears to be on legacy schema (missing content_en). Falling \
+                     back to None for raw en content: {err_text}"
+                );
+                return Ok(None);
+            }
+            return Err(err.into());
+        },
+    };
+
+    let Some(batch) = batches.first() else {
+        return Ok(None);
+    };
+    if batch.num_rows() == 0 {
+        return Ok(None);
+    }
+
+    if lang == "zh" {
+        let content = string_array(batch, "content")
+            .map(|array| value_string(array, 0))
+            .unwrap_or_default();
+        let content = content.trim().to_string();
+        return if content.is_empty() { Ok(None) } else { Ok(Some(content)) };
+    }
+
+    let content = optional_string_array(batch, "content_en")
+        .and_then(|array| value_string_opt(array, 0))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    Ok(content)
 }
 
 async fn fetch_article_vector(table: &Table, id: &str) -> Result<Option<(Vec<f32>, &'static str)>> {

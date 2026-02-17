@@ -184,6 +184,60 @@ pub async fn fetch_article_detail(id: &str) -> Result<Option<Article>, String> {
     }
 }
 
+/// Fetch raw markdown body for one article and language (`zh` or `en`).
+pub async fn fetch_article_raw_markdown(id: &str, lang: &str) -> Result<String, String> {
+    #[cfg(feature = "mock")]
+    {
+        let article =
+            models::get_mock_article_detail(id).ok_or_else(|| "Article not found".to_string())?;
+        let normalized_lang = lang.trim().to_ascii_lowercase();
+        let content = match normalized_lang.as_str() {
+            "zh" => article.content,
+            "en" => article
+                .content_en
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "English article markdown not found".to_string())?,
+            _ => return Err("`lang` must be `zh` or `en`".to_string()),
+        };
+        return Ok(content);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let normalized_lang = lang.trim().to_ascii_lowercase();
+        if normalized_lang != "zh" && normalized_lang != "en" {
+            return Err("`lang` must be `zh` or `en`".to_string());
+        }
+
+        let url = format!(
+            "{}/articles/{}/raw/{}?_ts={}",
+            API_BASE,
+            urlencoding::encode(id),
+            urlencoding::encode(&normalized_lang),
+            Date::now() as u64
+        );
+
+        let response = Request::get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if response.status() == 404 {
+            return Err("Raw article markdown not found".to_string());
+        }
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 /// Track one article detail view with backend-side dedupe.
 pub async fn track_article_view(id: &str) -> Result<ArticleViewTrackResponse, String> {
     #[cfg(feature = "mock")]
@@ -434,12 +488,27 @@ pub struct ImageInfo {
     pub filename: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImagePage {
+    pub images: Vec<ImageInfo>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+}
+
 #[cfg(not(feature = "mock"))]
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ImageListResponse {
     images: Vec<ImageInfo>,
     total: usize,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: usize,
+    #[serde(default)]
+    has_more: bool,
 }
 
 #[cfg(not(feature = "mock"))]
@@ -449,6 +518,12 @@ struct ImageSearchResponse {
     images: Vec<ImageInfo>,
     total: usize,
     query_id: String,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: usize,
+    #[serde(default)]
+    has_more: bool,
 }
 
 #[cfg(not(feature = "mock"))]
@@ -458,6 +533,12 @@ struct ImageTextSearchResponse {
     images: Vec<ImageInfo>,
     total: usize,
     query: String,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: usize,
+    #[serde(default)]
+    has_more: bool,
 }
 
 /// 搜索文章
@@ -608,15 +689,39 @@ pub async fn fetch_related_articles(id: &str) -> Result<Vec<ArticleListItem>, St
 }
 
 /// Fetch all images for image-to-image search.
+#[allow(dead_code)]
 pub async fn fetch_images() -> Result<Vec<ImageInfo>, String> {
+    let page = fetch_images_page(None, None).await?;
+    Ok(page.images)
+}
+
+/// Fetch one image catalog page.
+pub async fn fetch_images_page(
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<ImagePage, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        return Ok(ImagePage {
+            images: vec![],
+            total: 0,
+            offset: offset.unwrap_or(0),
+            limit: limit.unwrap_or(0),
+            has_more: false,
+        });
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/images", API_BASE);
+        let mut url = format!("{}/images", API_BASE);
+        if let Some(limit) = limit {
+            url.push_str(&format!("?limit={limit}"));
+            if let Some(offset) = offset {
+                url.push_str(&format!("&offset={offset}"));
+            }
+        } else if let Some(offset) = offset {
+            url.push_str(&format!("?offset={offset}"));
+        }
 
         let response = Request::get(&url)
             .send()
@@ -632,23 +737,53 @@ pub async fn fetch_images() -> Result<Vec<ImageInfo>, String> {
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
-        Ok(json_response.images)
+        Ok(ImagePage {
+            images: json_response.images,
+            total: json_response.total,
+            offset: json_response.offset,
+            limit: json_response.limit,
+            has_more: json_response.has_more,
+        })
     }
 }
 
 /// Search images by an existing image id.
+#[allow(dead_code)]
 pub async fn search_images_by_id(
     image_id: &str,
     limit: Option<usize>,
     max_distance: Option<f32>,
 ) -> Result<Vec<ImageInfo>, String> {
+    let page = search_images_by_id_page(image_id, limit, None, max_distance).await?;
+    Ok(page.images)
+}
+
+/// Search one page of similar images by id.
+pub async fn search_images_by_id_page(
+    image_id: &str,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    max_distance: Option<f32>,
+) -> Result<ImagePage, String> {
     if image_id.trim().is_empty() {
-        return Ok(vec![]);
+        return Ok(ImagePage {
+            images: vec![],
+            total: 0,
+            offset: offset.unwrap_or(0),
+            limit: limit.unwrap_or(0),
+            has_more: false,
+        });
     }
 
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        return Ok(ImagePage {
+            images: vec![],
+            total: 0,
+            offset: offset.unwrap_or(0),
+            limit: limit.unwrap_or(0),
+            has_more: false,
+        });
     }
 
     #[cfg(not(feature = "mock"))]
@@ -656,6 +791,9 @@ pub async fn search_images_by_id(
         let mut url = format!("{}/image-search?id={}", API_BASE, urlencoding::encode(image_id));
         if let Some(limit) = limit {
             url.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            url.push_str(&format!("&offset={offset}"));
         }
         if let Some(max_distance) = max_distance {
             url.push_str(&format!("&max_distance={max_distance}"));
@@ -675,23 +813,53 @@ pub async fn search_images_by_id(
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
-        Ok(json_response.images)
+        Ok(ImagePage {
+            images: json_response.images,
+            total: json_response.total,
+            offset: json_response.offset,
+            limit: json_response.limit,
+            has_more: json_response.has_more,
+        })
     }
 }
 
 /// Search images with text query (text-to-image).
+#[allow(dead_code)]
 pub async fn search_images_by_text(
     keyword: &str,
     limit: Option<usize>,
     max_distance: Option<f32>,
 ) -> Result<Vec<ImageInfo>, String> {
+    let page = search_images_by_text_page(keyword, limit, None, max_distance).await?;
+    Ok(page.images)
+}
+
+/// Search one page of images with text query.
+pub async fn search_images_by_text_page(
+    keyword: &str,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    max_distance: Option<f32>,
+) -> Result<ImagePage, String> {
     if keyword.trim().is_empty() {
-        return Ok(vec![]);
+        return Ok(ImagePage {
+            images: vec![],
+            total: 0,
+            offset: offset.unwrap_or(0),
+            limit: limit.unwrap_or(0),
+            has_more: false,
+        });
     }
 
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        return Ok(ImagePage {
+            images: vec![],
+            total: 0,
+            offset: offset.unwrap_or(0),
+            limit: limit.unwrap_or(0),
+            has_more: false,
+        });
     }
 
     #[cfg(not(feature = "mock"))]
@@ -699,6 +867,9 @@ pub async fn search_images_by_text(
         let mut url = format!("{}/image-search-text?q={}", API_BASE, urlencoding::encode(keyword));
         if let Some(limit) = limit {
             url.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            url.push_str(&format!("&offset={offset}"));
         }
         if let Some(max_distance) = max_distance {
             url.push_str(&format!("&max_distance={max_distance}"));
@@ -718,7 +889,13 @@ pub async fn search_images_by_text(
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
-        Ok(json_response.images)
+        Ok(ImagePage {
+            images: json_response.images,
+            total: json_response.total,
+            offset: json_response.offset,
+            limit: json_response.limit,
+            has_more: json_response.has_more,
+        })
     }
 }
 

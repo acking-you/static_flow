@@ -126,22 +126,29 @@ print_check_urls() {
     echo "- ${base}/api/articles/${article_id}"
 
     echo
-    echo "[3) POST /api/articles/:id/view]"
+    echo "[3) GET /api/articles/:id/raw/:lang]"
+    echo "- ${base}/api/articles/${article_id}/raw/zh"
+    echo "- ${base}/api/articles/${article_id}/raw/en"
+
+    echo
+    echo "[4) POST /api/articles/:id/view]"
     echo "- curl -X POST \"${base}/api/articles/${article_id}/view\""
 
     echo
-    echo "[4) GET /api/articles/:id/view-trend]"
+    echo "[5) GET /api/articles/:id/view-trend]"
     echo "- ${base}/api/articles/${article_id}/view-trend"
     echo "- ${base}/api/articles/${article_id}/view-trend?granularity=day"
     echo "- ${base}/api/articles/${article_id}/view-trend?granularity=hour&day=${trend_day}"
 
     echo
-    echo "[5) GET /api/articles/:id/related]"
+    echo "[6) GET /api/articles/:id/related]"
     echo "- ${base}/api/articles/${article_id}/related"
   else
     echo
-    echo "[2) GET /api/articles/:id / POST /api/articles/:id/view / GET /api/articles/:id/view-trend]"
+    echo "[2) GET /api/articles/:id / GET /api/articles/:id/raw/:lang / POST /api/articles/:id/view / GET /api/articles/:id/view-trend]"
     echo "- ${base}/api/articles/<article_id>"
+    echo "- ${base}/api/articles/<article_id>/raw/zh"
+    echo "- ${base}/api/articles/<article_id>/raw/en"
     echo "- curl -X POST \"${base}/api/articles/<article_id>/view\""
     echo "- ${base}/api/articles/<article_id>/view-trend?granularity=day"
     echo "- ${base}/api/articles/<article_id>/view-trend?granularity=hour&day=${trend_day}"
@@ -265,12 +272,17 @@ mkdir -p "$COMMENTS_DB_PATH"
 
 PORT_CHOSEN="$(choose_port)"
 BACKEND_BIN_PATH="$(resolve_backend_bin)"
+COMMENT_AI_CONTENT_API_BASE_EFFECTIVE="${COMMENT_AI_CONTENT_API_BASE:-http://${HOST}:${PORT_CHOSEN}/api}"
+COMMENT_AI_CODEX_SANDBOX_EFFECTIVE="${COMMENT_AI_CODEX_SANDBOX:-danger-full-access}"
+COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE="${COMMENT_AI_CODEX_JSON_STREAM:-1}"
+COMMENT_AI_CODEX_BYPASS_EFFECTIVE="${COMMENT_AI_CODEX_BYPASS:-0}"
 
 log "Using DB_ROOT=$DB_ROOT"
 log "Using CONTENT_DB_PATH=$DB_PATH"
 log "Using COMMENTS_DB_PATH=$COMMENTS_DB_PATH"
 log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
 log "Using HOST=$HOST PORT=$PORT_CHOSEN"
+log "Comment AI env: COMMENT_AI_CONTENT_API_BASE=$COMMENT_AI_CONTENT_API_BASE_EFFECTIVE COMMENT_AI_CODEX_SANDBOX=$COMMENT_AI_CODEX_SANDBOX_EFFECTIVE COMMENT_AI_CODEX_JSON_STREAM=$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE COMMENT_AI_CODEX_BYPASS=$COMMENT_AI_CODEX_BYPASS_EFFECTIVE"
 log "GeoIP env passthrough: GEOIP_DB_PATH=${GEOIP_DB_PATH:-<default>} ENABLE_GEOIP_AUTO_DOWNLOAD=${ENABLE_GEOIP_AUTO_DOWNLOAD:-<default>} ENABLE_GEOIP_FALLBACK_API=${ENABLE_GEOIP_FALLBACK_API:-<default>} GEOIP_PROXY_URL=${GEOIP_PROXY_URL:-<none>}"
 
 RUST_ENV="development" \
@@ -278,6 +290,10 @@ BIND_ADDR="$HOST" \
 PORT="$PORT_CHOSEN" \
 LANCEDB_URI="$DB_PATH" \
 COMMENTS_LANCEDB_URI="$COMMENTS_DB_PATH" \
+COMMENT_AI_CONTENT_API_BASE="$COMMENT_AI_CONTENT_API_BASE_EFFECTIVE" \
+COMMENT_AI_CODEX_SANDBOX="$COMMENT_AI_CODEX_SANDBOX_EFFECTIVE" \
+COMMENT_AI_CODEX_JSON_STREAM="$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE" \
+COMMENT_AI_CODEX_BYPASS="$COMMENT_AI_CODEX_BYPASS_EFFECTIVE" \
 "$BACKEND_BIN_PATH" &
 BACKEND_PID=$!
 

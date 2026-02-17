@@ -16,6 +16,7 @@ pub enum IconName {
     FileText,
     BookOpen,
     List,
+    MessageSquare,
 
     // Actions
     Search,
@@ -47,6 +48,9 @@ impl IconName {
                 "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"
             },
             IconName::List => "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+            IconName::MessageSquare => {
+                "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+            },
 
             IconName::Search => "m21 21-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0z",
             IconName::X => "M18 6 6 18M6 6l12 12",

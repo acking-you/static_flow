@@ -1627,13 +1627,6 @@ html {
   height: -webkit-fill-available;
 }
 
-@media (min-width: 1281px) {
-  /* Match a default desktop reading density close to browser 125% zoom */
-  html {
-    font-size: 125%;
-  }
-}
-
 body {
   margin: 0;
   padding: 0;
@@ -1700,22 +1693,27 @@ a:hover {
   padding-inline: clamp(1rem, 4vw, 2.5rem)
 }
 
+.article-page-container {
+  max-width: min(78rem, calc(var(--article-layout-width) + 4rem));
+  padding-inline: clamp(1rem, 3vw, 2.25rem);
+}
+
 :root {
-  --article-layout-width: 1080px;
+  --article-layout-width: 1120px;
   --article-main-current-width: var(--article-layout-width);
-  --article-center-gap-global: 0.5rem;
+  --article-center-gap-global: 1rem;
   --article-left-gutter-width: calc(50vw - (var(--article-main-current-width) / 2));
   --article-side-rail-width: clamp(10.75rem, 12vw, 12.25rem);
-  --article-side-rail-content-width: 13.25rem;
-  --article-side-rail-gap: clamp(0.8rem, 1.4vw, 1.1rem);
+  --article-side-rail-content-width: 12.5rem;
+  --article-side-rail-gap: clamp(0.9rem, 1.2vw, 1.15rem);
   --article-side-rail-top: calc(var(--header-height-desktop) + 1rem);
-  --toc-side-gap: clamp(0.75rem, 2vw, 1.25rem);
-  --toc-panel-width: min(350px, 28vw);
-  --toc-collapsed-width: min(250px, 21vw);
+  --toc-side-gap: clamp(0.9rem, 1.2vw, 1.25rem);
+  --toc-panel-width: min(372px, 24.8vw);
+  --toc-collapsed-width: min(260px, 18.8vw);
   --toc-slideout-tab-width: 2.75rem;
   --toc-slideout-tab-height: 8.5rem;
   --toc-slideout-transition: transform 0.24s ease;
-  --toc-content-gap: 0.45rem;
+  --toc-content-gap: 0.85rem;
 }
 
 /* Desktop article TOC reservation: keep article centered, only shrink width when needed */
@@ -1747,6 +1745,7 @@ a:hover {
 
 .article-detail {
   --article-max-width-base: var(--article-layout-width);
+  --article-body-font-size: clamp(1.03rem, 0.98rem + 0.18vw, 1.1rem);
   --article-body-line-height: 1.64;
   --article-flow-space: 0.8em;
   --article-heading-margin-top: 1.16em;
@@ -1780,6 +1779,7 @@ a:hover {
 
 @media (max-width: 768px) {
   .article-detail {
+    --article-body-font-size: 1.02rem;
     --article-body-line-height: 1.7;
     --article-flow-space: 0.84em;
   }
@@ -1934,6 +1934,7 @@ a:hover {
 
 .article-content {
   color: var(--text);
+  font-size: var(--article-body-font-size, 1rem);
   line-height: var(--article-body-line-height, 1.72);
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -1996,16 +1997,16 @@ a:hover {
   line-height: 1.3;
 }
 
-.article-content h1 { font-size: 2rem; }
-.article-content h2 { font-size: 1.7rem; }
-.article-content h3 { font-size: 1.45rem; }
-.article-content h4 { font-size: 1.25rem; }
-.article-content h5 { font-size: 1.1rem; }
-.article-content h6 { font-size: 1rem; color: var(--muted); }
+.article-content h1 { font-size: 2.06rem; }
+.article-content h2 { font-size: 1.76rem; }
+.article-content h3 { font-size: 1.5rem; }
+.article-content h4 { font-size: 1.3rem; }
+.article-content h5 { font-size: 1.14rem; }
+.article-content h6 { font-size: 1.03rem; color: var(--muted); }
 
 .article-content p {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1em;
   color: var(--text);
 }
 
@@ -3400,10 +3401,10 @@ button[aria-current="page"]:hover {
 
 .toc-link {
   display: block;
-  padding: 0.38rem 0.62rem;
-  margin: 0.18rem 0;
+  padding: 0.36rem 0.58rem;
+  margin: 0.16rem 0;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.88rem;
   text-decoration: none;
   border-radius: 6px;
   transition: all 0.2s ease;

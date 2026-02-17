@@ -255,6 +255,7 @@ cd cli
 |----------|-------------|
 | `GET /api/articles` | Article list (supports tag/category filter) |
 | `GET /api/articles/:id` | Article detail |
+| `GET /api/articles/:id/raw/:lang` | Raw markdown content by language (`lang=zh|en`) |
 | `POST /api/articles/:id/view` | Track article view (default 60s dedupe per article+client) |
 | `GET /api/articles/:id/view-trend` | Article view trend (day/hour buckets, Asia/Shanghai) |
 | `GET /api/articles/:id/related` | Related articles (vector similarity) |
@@ -294,6 +295,10 @@ Backend (`backend/.env`):
 - `ADMIN_LOCAL_ONLY` (default `true`, guard `/admin/*` to local/private sources)
 - `ADMIN_TOKEN` (optional, checked from request header `x-admin-token`)
 - `COMMENT_RATE_LIMIT_SECONDS` / `COMMENT_LIST_DEFAULT_LIMIT` / `COMMENT_CLEANUP_RETENTION_DAYS`
+- `COMMENT_AI_CONTENT_API_BASE` (optional, default `http://127.0.0.1:$PORT/api`)
+- `COMMENT_AI_CODEX_SANDBOX` (default `danger-full-access`)
+- `COMMENT_AI_CODEX_JSON_STREAM` (default `1`, streams Codex events into run chunks)
+- `COMMENT_AI_CODEX_BYPASS` (default `0`, set `1` to use `--dangerously-bypass-approvals-and-sandbox`)
 - `ENABLE_GEOIP_AUTO_DOWNLOAD` (default `true`, auto-download mmdb when missing)
 - `GEOIP_DB_PATH` / `GEOIP_DB_URL` (optional local DB path/source)
 - `ENABLE_GEOIP_FALLBACK_API` / `GEOIP_FALLBACK_API_URL` (fallback API when local db lacks region detail)

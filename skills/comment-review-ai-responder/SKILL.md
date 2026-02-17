@@ -2,7 +2,8 @@
 name: comment-review-ai-responder
 description: >-
   Resolve one approved article comment task into a publishable AI markdown
-  reply. Fetch article context from LanceDB via sf-cli, reason with selected
+  reply. Fetch article context from local HTTP API first (fallback to sf-cli),
+  reason with selected
   quote + full article content, and return strict JSON output for backend
   worker ingestion.
 ---
@@ -33,27 +34,40 @@ The runner provides a JSON payload file path as CLI argument. Payload fields:
 10. `reply_to_comment_text` (optional)
 11. `reply_to_ai_reply_markdown` (optional)
 12. `content_db_path`
-13. `skill_path`
-14. `instructions`
+13. `content_api_base`
+14. `skill_path`
+15. `instructions`
 
 ## Required Workflow
 
 1. Parse payload JSON.
-2. Fetch article detail from local LanceDB using `sf-cli`:
-   - `<cli> api --db-path <content_db_path> get-article --id <article_id>`
-3. Build response context:
+2. Fetch article content with strict priority:
+   - First try local backend HTTP API:
+     - `GET <content_api_base>/articles/<article_id>/raw/zh`
+     - or `GET <content_api_base>/articles/<article_id>/raw/en` (when English context is required)
+   - If and only if HTTP fails (network/status/empty content), fallback to `sf-cli`.
+3. `sf-cli` fallback must be content-only:
+   - Chinese content:
+     - `<cli> db --db-path <content_db_path> query-rows articles --where "id='<article_id>'" --columns content --limit 1 --format vertical`
+   - English content:
+     - `<cli> db --db-path <content_db_path> query-rows articles --where "id='<article_id>'" --columns content_en --limit 1 --format vertical`
+   - Forbidden:
+     - `<cli> api --db-path <content_db_path> get-article ...`
+     - any query that retrieves unrelated article fields
+     - runtime installation/copy/removal of skill files
+4. Build response context:
    - user comment/question (`comment_text`)
    - selected snippet (`selected_text`) when present
    - snippet neighbor text (`anchor_context_before/after`) when present
    - quoted comment thread context (`reply_to_comment_text`, `reply_to_ai_reply_markdown`) when present
    - article `content` field only as primary ground truth
    - treat other article metadata fields as non-authoritative/noise unless explicitly needed
-4. Gather enough context before writing the final answer:
+5. Gather enough context before writing the final answer:
    - if article context is insufficient, inspect more of article `content`
    - for non-article or fast-changing facts, proactively use web search
    - combine article context and web findings to avoid shallow answers
    - do not answer with shallow assumptions when more context can be fetched
-5. Generate a direct, accurate markdown reply:
+6. Generate a direct, accurate markdown reply:
    - answer the user question first
    - point out uncertainty explicitly
    - include short actionable follow-up when useful
@@ -71,9 +85,13 @@ The runner provides a JSON payload file path as CLI argument. Payload fields:
      flowchart LR
        A --> B
      ```
-6. Use web search whenever it improves understanding or provides necessary
+7. Use web search whenever it improves understanding or provides necessary
    external context; cite links in markdown when external facts are used.
-7. Return JSON to stdout only.
+8. Return JSON to stdout only.
+9. Do not mutate local skill environment:
+   - do not install skills
+   - do not copy skills into `~/.codex`/`$CODEX_HOME`
+   - assume skill file path in payload is authoritative
 
 ## Output Contract (Strict)
 

@@ -9,6 +9,10 @@ use static_flow_shared::lancedb_api::{
 
 use crate::cli::ApiCommands;
 
+/// Keep CLI output stable with backend default preview window sizes.
+const IMAGE_SEARCH_LIMIT: usize = 12;
+const IMAGE_TEXT_SEARCH_LIMIT: usize = 24;
+
 #[derive(Serialize)]
 struct ImageWriteResult {
     filename: String,
@@ -117,18 +121,26 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
             })
         },
         ApiCommands::ListImages => {
-            let images = store.list_images().await?;
+            let (images, total, has_more) = store.list_images_paged(None, 0).await?;
             print_json(&ImageListResponse {
-                total: images.len(),
+                total,
+                offset: 0,
+                limit: images.len(),
+                has_more,
                 images,
             })
         },
         ApiCommands::SearchImages {
             id,
         } => {
-            let images = store.search_images(&id, Some(12), None).await?;
+            let (images, total, has_more) = store
+                .search_images_paged(&id, Some(IMAGE_SEARCH_LIMIT), 0, None)
+                .await?;
             print_json(&ImageSearchResponse {
-                total: images.len(),
+                total,
+                offset: 0,
+                limit: IMAGE_SEARCH_LIMIT,
+                has_more,
                 images,
                 query_id: id,
             })
@@ -141,12 +153,20 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
                 ImageTextSearchResponse {
                     images: vec![],
                     total: 0,
+                    offset: 0,
+                    limit: IMAGE_TEXT_SEARCH_LIMIT,
+                    has_more: false,
                     query: q,
                 }
             } else {
-                let images = store.search_images_by_text(keyword, Some(24), None).await?;
+                let (images, total, has_more) = store
+                    .search_images_by_text_paged(keyword, Some(IMAGE_TEXT_SEARCH_LIMIT), 0, None)
+                    .await?;
                 ImageTextSearchResponse {
-                    total: images.len(),
+                    total,
+                    offset: 0,
+                    limit: IMAGE_TEXT_SEARCH_LIMIT,
+                    has_more,
                     images,
                     query: q,
                 }

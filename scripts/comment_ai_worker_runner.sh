@@ -21,6 +21,9 @@ fi
 
 skill_path="${COMMENT_AI_SKILL_PATH:-skills/comment-review-ai-responder/SKILL.md}"
 workdir="${COMMENT_AI_WORKDIR:-$(pwd)}"
+codex_sandbox="${COMMENT_AI_CODEX_SANDBOX:-danger-full-access}"
+codex_json_stream="${COMMENT_AI_CODEX_JSON_STREAM:-1}"
+codex_bypass="${COMMENT_AI_CODEX_BYPASS:-0}"
 
 tmp_schema="$(mktemp -t staticflow-comment-schema.XXXXXX.json)"
 tmp_prompt="$(mktemp -t staticflow-comment-prompt.XXXXXX.txt)"
@@ -55,17 +58,33 @@ Notes:
 - The backend parses stdout as JSON.
 - Do not output markdown fences.
 - If the answer is uncertain, say uncertainty inside final_reply_markdown.
+- Fetch article context via local HTTP API first, fallback to sf-cli only when HTTP fails.
+- When using sf-cli fallback, read content-only fields ('content' or 'content_en') instead of full row.
+- Do not install/copy/remove any skill files at runtime.
 EOF
 
-if ! RUST_LOG=off codex exec \
-  --skip-git-repo-check \
-  --sandbox workspace-write \
-  --cd "${workdir}" \
-  --ephemeral \
-  --json \
-  --output-schema "${tmp_schema}" \
-  --output-last-message "${tmp_output}" \
-  - < "${tmp_prompt}"; then
+codex_cmd=(
+  codex exec
+  --skip-git-repo-check
+  --cd "${workdir}"
+  --ephemeral
+  --output-schema "${tmp_schema}"
+  --output-last-message "${tmp_output}"
+)
+
+if [[ "${codex_bypass}" == "1" ]]; then
+  codex_cmd+=(--dangerously-bypass-approvals-and-sandbox)
+else
+  codex_cmd+=(--sandbox "${codex_sandbox}")
+fi
+
+if [[ "${codex_json_stream}" == "1" ]]; then
+  codex_cmd+=(--json)
+fi
+
+codex_cmd+=(-)
+
+if ! RUST_LOG=off "${codex_cmd[@]}" < "${tmp_prompt}" 1>&2; then
   echo "codex exec failed for payload=${payload_path}. skill=${skill_path}" >&2
   exit 1
 fi

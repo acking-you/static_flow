@@ -8,8 +8,8 @@ use yew_router::prelude::*;
 
 use crate::{
     api::{
-        fetch_images, search_images_by_id, search_images_by_text, semantic_search_articles,
-        ImageInfo, SearchResult,
+        fetch_images_page, search_images_by_id_page, search_images_by_text_page,
+        semantic_search_articles, ImageInfo, SearchResult,
     },
     components::{
         image_with_loading::ImageWithLoading, pagination::Pagination,
@@ -28,7 +28,7 @@ pub struct SearchPageProps {
 }
 
 const DEFAULT_TEXT_SEARCH_LIMIT: usize = 50;
-const DEFAULT_IMAGE_SEARCH_LIMIT: usize = 24;
+const DEFAULT_IMAGE_SEARCH_LIMIT: usize = 8;
 const SEARCH_PAGE_SIZE: usize = 15;
 const IMAGE_GRID_CHUNK_SIZE: usize = 8;
 const LIGHTBOX_MIN_ZOOM: f64 = 0.5;
@@ -86,9 +86,12 @@ pub fn search_page() -> Html {
     let selected_image_id = use_state(|| None::<String>);
     let image_text_results = use_state(Vec::<ImageInfo>::new);
     let image_text_loading = use_state(|| false);
-    let image_catalog_visible = use_state(|| IMAGE_GRID_CHUNK_SIZE);
-    let image_text_visible = use_state(|| IMAGE_GRID_CHUNK_SIZE);
-    let image_similar_visible = use_state(|| IMAGE_GRID_CHUNK_SIZE);
+    let image_catalog_visible = use_state(|| 0usize);
+    let image_text_visible = use_state(|| 0usize);
+    let image_similar_visible = use_state(|| 0usize);
+    let image_catalog_has_more = use_state(|| false);
+    let image_text_has_more = use_state(|| false);
+    let image_similar_has_more = use_state(|| false);
     let image_scroll_loading = use_state(|| false);
     let is_lightbox_open = use_state(|| false);
     let preview_image_url = use_state_eq(|| None::<String>);
@@ -198,6 +201,7 @@ pub fn search_page() -> Html {
         let selected_image_id = selected_image_id.clone();
         let image_results = image_results.clone();
         let image_loading = image_loading.clone();
+        let image_similar_has_more = image_similar_has_more.clone();
         let max_distance = max_distance;
         let results_len = results.len();
         let image_catalog_len = image_catalog.len();
@@ -262,16 +266,19 @@ pub fn search_page() -> Html {
                                     image_loading.set(true);
                                     let image_results = image_results.clone();
                                     let image_loading = image_loading.clone();
+                                    let image_similar_has_more = image_similar_has_more.clone();
                                     wasm_bindgen_futures::spawn_local(async move {
-                                        match search_images_by_id(
+                                        match search_images_by_id_page(
                                             &saved,
                                             Some(DEFAULT_IMAGE_SEARCH_LIMIT),
+                                            Some(0),
                                             max_distance,
                                         )
                                         .await
                                         {
                                             Ok(data) => {
-                                                image_results.set(data);
+                                                image_results.set(data.images);
+                                                image_similar_has_more.set(data.has_more);
                                                 image_loading.set(false);
                                             },
                                             Err(e) => {
@@ -279,6 +286,7 @@ pub fn search_page() -> Html {
                                                     &format!("Image search restore failed: {}", e)
                                                         .into(),
                                                 );
+                                                image_similar_has_more.set(false);
                                                 image_loading.set(false);
                                             },
                                         }
@@ -391,31 +399,44 @@ pub fn search_page() -> Html {
 
     {
         let image_catalog = image_catalog.clone();
+        let image_catalog_visible = image_catalog_visible.clone();
+        let image_catalog_has_more = image_catalog_has_more.clone();
         let image_loading = image_loading.clone();
         let selected_image_id = selected_image_id.clone();
         let image_results = image_results.clone();
+        let image_similar_visible = image_similar_visible.clone();
+        let image_similar_has_more = image_similar_has_more.clone();
         let mode = mode.clone();
 
         use_effect_with(mode.clone(), move |mode| {
             if mode == "image" {
                 image_loading.set(true);
                 let image_catalog = image_catalog.clone();
+                let image_catalog_visible = image_catalog_visible.clone();
+                let image_catalog_has_more = image_catalog_has_more.clone();
                 let image_loading = image_loading.clone();
                 let selected_image_id = selected_image_id.clone();
                 let image_results = image_results.clone();
+                let image_similar_visible = image_similar_visible.clone();
+                let image_similar_has_more = image_similar_has_more.clone();
 
                 wasm_bindgen_futures::spawn_local(async move {
-                    match fetch_images().await {
+                    match fetch_images_page(Some(IMAGE_GRID_CHUNK_SIZE), Some(0)).await {
                         Ok(data) => {
-                            image_catalog.set(data);
+                            image_catalog_visible.set(data.images.len());
+                            image_catalog_has_more.set(data.has_more);
+                            image_catalog.set(data.images);
                             image_loading.set(false);
                             selected_image_id.set(None);
                             image_results.set(vec![]);
+                            image_similar_visible.set(0);
+                            image_similar_has_more.set(false);
                         },
                         Err(e) => {
                             web_sys::console::error_1(
                                 &format!("Failed to fetch images: {}", e).into(),
                             );
+                            image_catalog_has_more.set(false);
                             image_loading.set(false);
                         },
                     }
@@ -430,6 +451,8 @@ pub fn search_page() -> Html {
         let mode = mode.clone();
         let keyword = keyword.clone();
         let image_text_results = image_text_results.clone();
+        let image_text_visible = image_text_visible.clone();
+        let image_text_has_more = image_text_has_more.clone();
         let image_text_loading = image_text_loading.clone();
         let max_distance = max_distance;
 
@@ -439,29 +462,37 @@ pub fn search_page() -> Html {
                 if mode != "image" || keyword.trim().is_empty() {
                     image_text_loading.set(false);
                     image_text_results.set(vec![]);
+                    image_text_visible.set(0);
+                    image_text_has_more.set(false);
                 } else {
                     image_text_loading.set(true);
                     let image_text_results = image_text_results.clone();
+                    let image_text_visible = image_text_visible.clone();
+                    let image_text_has_more = image_text_has_more.clone();
                     let image_text_loading = image_text_loading.clone();
                     let query_text = keyword.clone();
                     let query_distance = *max_distance;
 
                     wasm_bindgen_futures::spawn_local(async move {
-                        match search_images_by_text(
+                        match search_images_by_text_page(
                             &query_text,
-                            Some(DEFAULT_IMAGE_SEARCH_LIMIT),
+                            Some(IMAGE_GRID_CHUNK_SIZE),
+                            Some(0),
                             query_distance,
                         )
                         .await
                         {
                             Ok(data) => {
-                                image_text_results.set(data);
+                                image_text_visible.set(data.images.len());
+                                image_text_has_more.set(data.has_more);
+                                image_text_results.set(data.images);
                                 image_text_loading.set(false);
                             },
                             Err(e) => {
                                 web_sys::console::error_1(
                                     &format!("Text image search failed: {}", e).into(),
                                 );
+                                image_text_has_more.set(false);
                                 image_text_loading.set(false);
                             },
                         }
@@ -517,131 +548,14 @@ pub fn search_page() -> Html {
     }
 
     {
-        let image_catalog_visible = image_catalog_visible.clone();
-        let total = image_catalog.len();
-        use_effect_with(total, move |count| {
-            image_catalog_visible.set((*count).min(IMAGE_GRID_CHUNK_SIZE));
-            || ()
-        });
-    }
-
-    {
-        let image_text_visible = image_text_visible.clone();
-        let total = image_text_results.len();
-        use_effect_with(total, move |count| {
-            image_text_visible.set((*count).min(IMAGE_GRID_CHUNK_SIZE));
-            || ()
-        });
-    }
-
-    {
-        let image_similar_visible = image_similar_visible.clone();
-        let total = image_results.len();
-        use_effect_with(total, move |count| {
-            image_similar_visible.set((*count).min(IMAGE_GRID_CHUNK_SIZE));
-            || ()
-        });
-    }
-
-    {
         let mode = mode.clone();
-        let image_catalog = image_catalog.clone();
-        let image_text_results = image_text_results.clone();
-        let image_results = image_results.clone();
-        let image_catalog_visible = image_catalog_visible.clone();
-        let image_text_visible = image_text_visible.clone();
-        let image_similar_visible = image_similar_visible.clone();
         let image_scroll_loading = image_scroll_loading.clone();
-        use_effect_with(
-            (mode.clone(), image_catalog.len(), image_text_results.len(), image_results.len()),
-            move |_| {
-                let mut callback: Option<
-                    wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>,
-                > = None;
-                if mode != "image" {
-                    image_scroll_loading.set(false);
-                } else {
-                    let on_scroll = {
-                        let image_catalog = image_catalog.clone();
-                        let image_text_results = image_text_results.clone();
-                        let image_results = image_results.clone();
-                        let image_catalog_visible = image_catalog_visible.clone();
-                        let image_text_visible = image_text_visible.clone();
-                        let image_similar_visible = image_similar_visible.clone();
-                        let image_scroll_loading = image_scroll_loading.clone();
-
-                        wasm_bindgen::closure::Closure::wrap(Box::new(
-                            move |_event: web_sys::Event| {
-                                if *image_scroll_loading {
-                                    return;
-                                }
-                                if !is_near_page_bottom() {
-                                    return;
-                                }
-
-                                let more_catalog = *image_catalog_visible < image_catalog.len();
-                                let more_text = *image_text_visible < image_text_results.len();
-                                let more_similar = *image_similar_visible < image_results.len();
-                                if !(more_catalog || more_text || more_similar) {
-                                    return;
-                                }
-
-                                image_scroll_loading.set(true);
-                                let image_catalog_visible = image_catalog_visible.clone();
-                                let image_text_visible = image_text_visible.clone();
-                                let image_similar_visible = image_similar_visible.clone();
-                                let image_scroll_loading = image_scroll_loading.clone();
-                                let catalog_total = image_catalog.len();
-                                let text_total = image_text_results.len();
-                                let similar_total = image_results.len();
-
-                                gloo_timers::callback::Timeout::new(180, move || {
-                                    if *image_catalog_visible < catalog_total {
-                                        image_catalog_visible.set(
-                                            (*image_catalog_visible + IMAGE_GRID_CHUNK_SIZE)
-                                                .min(catalog_total),
-                                        );
-                                    }
-                                    if *image_text_visible < text_total {
-                                        image_text_visible.set(
-                                            (*image_text_visible + IMAGE_GRID_CHUNK_SIZE)
-                                                .min(text_total),
-                                        );
-                                    }
-                                    if *image_similar_visible < similar_total {
-                                        image_similar_visible.set(
-                                            (*image_similar_visible + IMAGE_GRID_CHUNK_SIZE)
-                                                .min(similar_total),
-                                        );
-                                    }
-                                    image_scroll_loading.set(false);
-                                })
-                                .forget();
-                            },
-                        )
-                            as Box<dyn FnMut(_)>)
-                    };
-
-                    if let Some(win) = window() {
-                        let _ = win.add_event_listener_with_callback(
-                            "scroll",
-                            on_scroll.as_ref().unchecked_ref(),
-                        );
-                    }
-                    callback = Some(on_scroll);
-                }
-                move || {
-                    if let Some(on_scroll) = callback {
-                        if let Some(win) = window() {
-                            let _ = win.remove_event_listener_with_callback(
-                                "scroll",
-                                on_scroll.as_ref().unchecked_ref(),
-                            );
-                        }
-                    }
-                }
-            },
-        );
+        use_effect_with(mode.clone(), move |mode| {
+            if mode != "image" {
+                image_scroll_loading.set(false);
+            }
+            || ()
+        });
     }
 
     let open_image_preview = {
@@ -761,6 +675,8 @@ pub fn search_page() -> Html {
 
     let on_image_select = {
         let image_results = image_results.clone();
+        let image_similar_visible = image_similar_visible.clone();
+        let image_similar_has_more = image_similar_has_more.clone();
         let image_loading = image_loading.clone();
         let selected_image_id = selected_image_id.clone();
         let max_distance = max_distance;
@@ -770,20 +686,167 @@ pub fn search_page() -> Html {
             image_loading.set(true);
 
             let image_results = image_results.clone();
+            let image_similar_visible = image_similar_visible.clone();
+            let image_similar_has_more = image_similar_has_more.clone();
             let image_loading = image_loading.clone();
 
             wasm_bindgen_futures::spawn_local(async move {
-                match search_images_by_id(&id, Some(DEFAULT_IMAGE_SEARCH_LIMIT), max_distance).await
+                match search_images_by_id_page(
+                    &id,
+                    Some(IMAGE_GRID_CHUNK_SIZE),
+                    Some(0),
+                    max_distance,
+                )
+                .await
                 {
                     Ok(data) => {
-                        image_results.set(data);
+                        image_similar_visible.set(data.images.len());
+                        image_similar_has_more.set(data.has_more);
+                        image_results.set(data.images);
                         image_loading.set(false);
                     },
                     Err(e) => {
                         web_sys::console::error_1(&format!("Image search failed: {}", e).into());
+                        image_similar_has_more.set(false);
                         image_loading.set(false);
                     },
                 }
+            });
+        })
+    };
+
+    let load_more_image_text = {
+        let keyword = keyword.clone();
+        let image_text_results = image_text_results.clone();
+        let image_text_visible = image_text_visible.clone();
+        let image_text_has_more = image_text_has_more.clone();
+        let image_scroll_loading = image_scroll_loading.clone();
+        let max_distance = max_distance;
+        Callback::from(move |event: MouseEvent| {
+            event.prevent_default();
+            if *image_scroll_loading || !*image_text_has_more || keyword.trim().is_empty() {
+                return;
+            }
+            image_scroll_loading.set(true);
+            let keyword = keyword.clone();
+            let image_text_results = image_text_results.clone();
+            let image_text_visible = image_text_visible.clone();
+            let image_text_has_more = image_text_has_more.clone();
+            let image_scroll_loading = image_scroll_loading.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let offset = image_text_results.len();
+                match search_images_by_text_page(
+                    &keyword,
+                    Some(IMAGE_GRID_CHUNK_SIZE),
+                    Some(offset),
+                    max_distance,
+                )
+                .await
+                {
+                    Ok(page) => {
+                        let mut next = (*image_text_results).clone();
+                        next.extend(page.images);
+                        let next_len = next.len();
+                        image_text_results.set(next);
+                        image_text_visible.set(next_len);
+                        image_text_has_more.set(page.has_more);
+                    },
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Text image paging failed: {}", e).into(),
+                        );
+                        image_text_has_more.set(false);
+                    },
+                }
+                image_scroll_loading.set(false);
+            });
+        })
+    };
+
+    let load_more_image_catalog = {
+        let image_catalog = image_catalog.clone();
+        let image_catalog_visible = image_catalog_visible.clone();
+        let image_catalog_has_more = image_catalog_has_more.clone();
+        let image_scroll_loading = image_scroll_loading.clone();
+        Callback::from(move |event: MouseEvent| {
+            event.prevent_default();
+            if *image_scroll_loading || !*image_catalog_has_more {
+                return;
+            }
+            image_scroll_loading.set(true);
+            let image_catalog = image_catalog.clone();
+            let image_catalog_visible = image_catalog_visible.clone();
+            let image_catalog_has_more = image_catalog_has_more.clone();
+            let image_scroll_loading = image_scroll_loading.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let offset = image_catalog.len();
+                match fetch_images_page(Some(IMAGE_GRID_CHUNK_SIZE), Some(offset)).await {
+                    Ok(page) => {
+                        let mut next = (*image_catalog).clone();
+                        next.extend(page.images);
+                        let next_len = next.len();
+                        image_catalog.set(next);
+                        image_catalog_visible.set(next_len);
+                        image_catalog_has_more.set(page.has_more);
+                    },
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Image catalog paging failed: {}", e).into(),
+                        );
+                        image_catalog_has_more.set(false);
+                    },
+                }
+                image_scroll_loading.set(false);
+            });
+        })
+    };
+
+    let load_more_similar_images = {
+        let selected_image_id = selected_image_id.clone();
+        let image_results = image_results.clone();
+        let image_similar_visible = image_similar_visible.clone();
+        let image_similar_has_more = image_similar_has_more.clone();
+        let image_scroll_loading = image_scroll_loading.clone();
+        let max_distance = max_distance;
+        Callback::from(move |event: MouseEvent| {
+            event.prevent_default();
+            if *image_scroll_loading || !*image_similar_has_more {
+                return;
+            }
+            let Some(selected_id) = (*selected_image_id).clone() else {
+                return;
+            };
+            image_scroll_loading.set(true);
+            let image_results = image_results.clone();
+            let image_similar_visible = image_similar_visible.clone();
+            let image_similar_has_more = image_similar_has_more.clone();
+            let image_scroll_loading = image_scroll_loading.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let offset = image_results.len();
+                match search_images_by_id_page(
+                    &selected_id,
+                    Some(IMAGE_GRID_CHUNK_SIZE),
+                    Some(offset),
+                    max_distance,
+                )
+                .await
+                {
+                    Ok(page) => {
+                        let mut next = (*image_results).clone();
+                        next.extend(page.images);
+                        let next_len = next.len();
+                        image_results.set(next);
+                        image_similar_visible.set(next_len);
+                        image_similar_has_more.set(page.has_more);
+                    },
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Similar image paging failed: {}", e).into(),
+                        );
+                        image_similar_has_more.set(false);
+                    },
+                }
+                image_scroll_loading.set(false);
             });
         })
     };
@@ -1838,21 +1901,36 @@ pub fn search_page() -> Html {
                                             }
                                         }) }
                                     </div>
-                                    if *image_text_visible < image_text_results.len() {
+                                    if *image_text_has_more {
                                         <div class={classes!(
                                             "flex",
                                             "items-center",
                                             "justify-center",
-                                            "gap-2",
-                                            "py-2",
-                                            "text-sm",
-                                            "text-[var(--muted)]"
+                                            "py-2"
                                         )}>
-                                            <i class={classes!(
-                                                "fas",
-                                                if *image_scroll_loading { "fa-spinner fa-spin" } else { "fa-arrow-down" }
-                                            )}></i>
-                                            { if *image_scroll_loading { t::IMAGE_SCROLL_LOADING } else { t::IMAGE_SCROLL_HINT } }
+                                            <button
+                                                type="button"
+                                                onclick={load_more_image_text.clone()}
+                                                disabled={*image_scroll_loading}
+                                                class={classes!(
+                                                    mode_button_base.clone(),
+                                                    "text-xs",
+                                                    "border-[var(--primary)]/40",
+                                                    "text-[var(--primary)]",
+                                                    "bg-[var(--primary)]/6",
+                                                    "hover:bg-[var(--primary)]/12",
+                                                    "disabled:opacity-60",
+                                                    "disabled:cursor-not-allowed"
+                                                )}
+                                            >
+                                                <i class={classes!(
+                                                    "fas",
+                                                    if *image_scroll_loading { "fa-spinner fa-spin" } else { "fa-plus" }
+                                                )}></i>
+                                                <span class="ml-2">
+                                                    { if *image_scroll_loading { t::IMAGE_SCROLL_LOADING } else { t::IMAGE_SCROLL_HINT } }
+                                                </span>
+                                            </button>
                                         </div>
                                     }
                                 }
@@ -1950,21 +2028,36 @@ pub fn search_page() -> Html {
                                         }
                                     }) }
                                 </div>
-                                if *image_catalog_visible < image_catalog.len() {
+                                if *image_catalog_has_more {
                                     <div class={classes!(
                                         "flex",
                                         "items-center",
                                         "justify-center",
-                                        "gap-2",
-                                        "py-2",
-                                        "text-sm",
-                                        "text-[var(--muted)]"
+                                        "py-2"
                                     )}>
-                                        <i class={classes!(
-                                            "fas",
-                                            if *image_scroll_loading { "fa-spinner fa-spin" } else { "fa-arrow-down" }
-                                        )}></i>
-                                        { if *image_scroll_loading { t::IMAGE_SCROLL_LOADING } else { t::IMAGE_SCROLL_HINT } }
+                                        <button
+                                            type="button"
+                                            onclick={load_more_image_catalog.clone()}
+                                            disabled={*image_scroll_loading}
+                                            class={classes!(
+                                                mode_button_base.clone(),
+                                                "text-xs",
+                                                "border-[var(--primary)]/40",
+                                                "text-[var(--primary)]",
+                                                "bg-[var(--primary)]/6",
+                                                "hover:bg-[var(--primary)]/12",
+                                                "disabled:opacity-60",
+                                                "disabled:cursor-not-allowed"
+                                            )}
+                                        >
+                                            <i class={classes!(
+                                                "fas",
+                                                if *image_scroll_loading { "fa-spinner fa-spin" } else { "fa-plus" }
+                                            )}></i>
+                                            <span class="ml-2">
+                                                { if *image_scroll_loading { t::IMAGE_SCROLL_LOADING } else { t::IMAGE_SCROLL_HINT } }
+                                            </span>
+                                        </button>
                                     </div>
                                 }
                             }
@@ -2052,21 +2145,36 @@ pub fn search_page() -> Html {
                                             }
                                         }) }
                                     </div>
-                                    if *image_similar_visible < image_results.len() {
+                                    if *image_similar_has_more {
                                         <div class={classes!(
                                             "flex",
                                             "items-center",
                                             "justify-center",
-                                            "gap-2",
-                                            "py-2",
-                                            "text-sm",
-                                            "text-[var(--muted)]"
+                                            "py-2"
                                         )}>
-                                            <i class={classes!(
-                                                "fas",
-                                                if *image_scroll_loading { "fa-spinner fa-spin" } else { "fa-arrow-down" }
-                                            )}></i>
-                                            { if *image_scroll_loading { t::IMAGE_SCROLL_LOADING } else { t::IMAGE_SCROLL_HINT } }
+                                            <button
+                                                type="button"
+                                                onclick={load_more_similar_images.clone()}
+                                                disabled={*image_scroll_loading}
+                                                class={classes!(
+                                                    mode_button_base.clone(),
+                                                    "text-xs",
+                                                    "border-[var(--primary)]/40",
+                                                    "text-[var(--primary)]",
+                                                    "bg-[var(--primary)]/6",
+                                                    "hover:bg-[var(--primary)]/12",
+                                                    "disabled:opacity-60",
+                                                    "disabled:cursor-not-allowed"
+                                                )}
+                                            >
+                                                <i class={classes!(
+                                                    "fas",
+                                                    if *image_scroll_loading { "fa-spinner fa-spin" } else { "fa-plus" }
+                                                )}></i>
+                                                <span class="ml-2">
+                                                    { if *image_scroll_loading { t::IMAGE_SCROLL_LOADING } else { t::IMAGE_SCROLL_HINT } }
+                                                </span>
+                                            </button>
                                         </div>
                                     }
                                 }
@@ -2405,26 +2513,6 @@ pub fn search_page() -> Html {
     }
 }
 
-
-fn is_near_page_bottom() -> bool {
-    let Some(win) = window() else {
-        return false;
-    };
-    let Some(document) = win.document() else {
-        return false;
-    };
-    let Some(body) = document.body() else {
-        return false;
-    };
-    let viewport_height = win
-        .inner_height()
-        .ok()
-        .and_then(|value| value.as_f64())
-        .unwrap_or(0.0);
-    let scroll_y = win.scroll_y().unwrap_or(0.0);
-    let page_height = body.scroll_height() as f64;
-    scroll_y + viewport_height >= page_height - 240.0
-}
 
 fn render_search_result(result: &SearchResult) -> Html {
     // 将 HTML 字符串转换为安全的 VNode

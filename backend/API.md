@@ -73,7 +73,27 @@ curl "http://localhost:3000/api/articles?tag=rust&category=Web"
 curl http://localhost:3000/api/articles/post-001
 ```
 
-### 2.1) 记录文章浏览（自动计数）
+### 2.1) 获取文章原始 Markdown
+
+`GET /api/articles/:id/raw/:lang`
+
+用途：
+- 返回文章原始 Markdown 文本，便于前端“原始文本视图”或调试。
+- `lang` 仅支持 `zh` / `en`（严格）。
+
+示例：
+
+```bash
+curl "http://localhost:3000/api/articles/post-001/raw/zh"
+curl "http://localhost:3000/api/articles/post-001/raw/en"
+```
+
+响应：
+- `200`：`Content-Type: text/markdown; charset=utf-8`，响应体为原始 Markdown。
+- `400`：`lang` 非 `zh|en`。
+- `404`：文章不存在，或 `lang=en` 但 `content_en` 为空/缺失。
+
+### 2.2) 记录文章浏览（自动计数）
 
 `POST /api/articles/:id/view`
 
@@ -114,7 +134,7 @@ curl -X POST "http://localhost:3000/api/articles/post-001/view"
 - `daily_points`：最近一段时间（默认 30 天，上限由 `trend_max_days` 配置）的按天趋势点
 - `server_time_ms`：后端记录这次请求时的 Unix 毫秒时间戳
 
-### 2.2) 获取文章浏览趋势
+### 2.3) 获取文章浏览趋势
 
 `GET /api/articles/:id/view-trend`
 
@@ -170,7 +190,7 @@ curl "http://localhost:3000/api/articles/post-001/view-trend?granularity=hour&da
 }
 ```
 
-### 2.3) Admin：浏览统计运行时配置（本地）
+### 2.4) Admin：浏览统计运行时配置（本地）
 
 > 该接口不在 `/api` 路径下，建议仅通过本地/内网访问，不对公网开放。
 > 若启用 `ADMIN_TOKEN`，请在请求头携带 `x-admin-token: <token>`。
@@ -219,7 +239,7 @@ curl -X POST "http://127.0.0.1:3000/admin/view-analytics-config" \
   -d '{"dedupe_window_seconds":120,"trend_default_days":14,"trend_max_days":180}'
 ```
 
-### 2.4) Admin：GeoIP 状态诊断（本地）
+### 2.5) Admin：GeoIP 状态诊断（本地）
 
 `GET /admin/geoip/status`
 

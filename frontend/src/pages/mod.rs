@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod admin_ai_stream;
 pub mod article_detail;
+pub mod article_raw;
 pub mod categories;
 pub mod category_detail;
 pub mod home;

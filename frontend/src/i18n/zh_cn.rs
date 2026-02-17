@@ -166,8 +166,8 @@ pub mod search {
     pub const IMAGE_SEARCHING: &str = "检索相似图片...";
     pub const IMAGE_NO_SIMILAR: &str = "暂无相似图片结果";
     pub const IMAGE_SELECT_HINT: &str = "点击上方图片开始搜索相似图片";
-    pub const IMAGE_SCROLL_LOADING: &str = "滚动中，正在加载更多图片...";
-    pub const IMAGE_SCROLL_HINT: &str = "继续向下滚动加载更多";
+    pub const IMAGE_SCROLL_LOADING: &str = "正在加载更多图片...";
+    pub const IMAGE_SCROLL_HINT: &str = "加载更多";
     pub const LIGHTBOX_CLOSE_ARIA: &str = "关闭图片预览";
     pub const LIGHTBOX_ZOOM_IN_ARIA: &str = "放大图片";
     pub const LIGHTBOX_ZOOM_OUT_ARIA: &str = "缩小图片";
@@ -260,6 +260,8 @@ pub mod article_detail_page {
     pub const DETAILED_SUMMARY_TITLE_EN: &str = "Quick Brief";
     pub const OPEN_BRIEF_BUTTON_ZH: &str = "查看导读";
     pub const OPEN_BRIEF_BUTTON_EN: &str = "Open Brief";
+    pub const OPEN_RAW_MARKDOWN_BUTTON_ZH: &str = "查看原始 Markdown";
+    pub const OPEN_RAW_MARKDOWN_BUTTON_EN: &str = "View Raw Markdown";
     pub const CLOSE_BRIEF_ARIA: &str = "关闭快速导读";
     pub const CLOSE_BRIEF_BUTTON: &str = "关闭";
 
@@ -288,6 +290,17 @@ pub mod article_detail_page {
     pub const LIGHTBOX_ZOOM_RESET_ARIA: &str = "重置图片缩放";
     pub const DEFAULT_IMAGE_ALT: &str = "文章图片";
     pub const IMAGE_PREVIEW_FAILED: &str = "图片加载失败，可尝试在新标签打开：{}";
+}
+
+pub mod article_raw_page {
+    pub const RAW_BADGE: &str = "Raw Markdown";
+    pub const TITLE_TEMPLATE: &str = "{} · {}";
+    pub const BACK_BUTTON: &str = "返回文章";
+    pub const COPY_BUTTON: &str = "复制";
+    pub const COPIED_BUTTON: &str = "已复制";
+    pub const LOADING: &str = "正在加载原始 Markdown...";
+    pub const ERROR_PREFIX: &str = "加载失败";
+    pub const EMPTY: &str = "原始内容为空";
 }
 
 pub mod not_found_page {

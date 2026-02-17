@@ -79,8 +79,7 @@ Body content.
         let short = utils::estimate_read_time("word");
         assert_eq!(short, 1);
 
-        let words = std::iter::repeat("word")
-            .take(201)
+        let words = std::iter::repeat_n("word", 201)
             .collect::<Vec<_>>()
             .join(" ");
         let rounded = utils::estimate_read_time(&words);

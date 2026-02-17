@@ -61,10 +61,20 @@ pub struct SearchQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ImageListQuery {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ImageSearchQuery {
     pub id: String,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
     #[serde(default)]
     pub max_distance: Option<f32>,
 }
@@ -74,6 +84,8 @@ pub struct ImageTextSearchQuery {
     pub q: String,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
     #[serde(default)]
     pub max_distance: Option<f32>,
 }
@@ -447,6 +459,40 @@ pub async fn get_article(
             }),
         )),
     }
+}
+
+pub async fn get_article_raw_markdown(
+    State(state): State<AppState>,
+    Path((id, lang)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let lang =
+        parse_raw_markdown_lang(&lang).ok_or_else(|| bad_request("`lang` must be `zh` or `en`"))?;
+    let raw = state
+        .store
+        .get_article_raw_markdown(&id, lang)
+        .await
+        .map_err(|e| internal_error("Failed to fetch raw article markdown", e))?;
+
+    let Some(raw) = raw else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: if lang == "en" {
+                    "English article markdown not found".to_string()
+                } else {
+                    "Article markdown not found".to_string()
+                },
+                code: 404,
+            }),
+        ));
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(raw))
+        .unwrap())
 }
 
 pub async fn track_article_view(
@@ -1483,10 +1529,9 @@ pub async fn admin_get_comment_task_ai_output(
         .map(str::to_string)
         .or_else(|| runs.first().map(|run| run.run_id.clone()));
 
-    let chunk_limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit)
-        .saturating_mul(30)
-        .max(300)
-        .min(5000);
+    let chunk_limit =
+        normalize_comment_list_limit(query.limit, runtime.list_default_limit).saturating_mul(30);
+    let chunk_limit = chunk_limit.clamp(300, 5000);
     let chunks = if let Some(run_id) = selected_run_id.as_deref() {
         state
             .comment_store
@@ -1838,15 +1883,20 @@ pub async fn related_articles(
 
 pub async fn list_images(
     State(state): State<AppState>,
+    Query(query): Query<ImageListQuery>,
 ) -> Result<Json<ImageListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let images = state
+    let page_request = normalize_page_request(query.limit, query.offset);
+    let (images, total, has_more) = state
         .store
-        .list_images()
+        .list_images_paged(page_request.limit, page_request.offset)
         .await
         .map_err(|e| internal_error("Failed to fetch images", e))?;
 
     Ok(Json(ImageListResponse {
-        total: images.len(),
+        total,
+        offset: page_request.offset,
+        limit: resolve_page_limit(page_request.limit, images.len()),
+        has_more,
         images,
     }))
 }
@@ -1855,18 +1905,23 @@ pub async fn search_images(
     State(state): State<AppState>,
     Query(query): Query<ImageSearchQuery>,
 ) -> Result<Json<ImageSearchResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let images = state
+    let page_request = normalize_page_request(query.limit, query.offset);
+    let (images, total, has_more) = state
         .store
-        .search_images(
+        .search_images_paged(
             &query.id,
-            normalize_limit(query.limit),
+            page_request.limit,
+            page_request.offset,
             normalize_max_distance(query.max_distance),
         )
         .await
         .map_err(|e| internal_error("Failed to search images", e))?;
 
     Ok(Json(ImageSearchResponse {
-        total: images.len(),
+        total,
+        offset: page_request.offset,
+        limit: resolve_page_limit(page_request.limit, images.len()),
+        has_more,
         images,
         query_id: query.id,
     }))
@@ -1876,27 +1931,35 @@ pub async fn search_images_by_text(
     State(state): State<AppState>,
     Query(query): Query<ImageTextSearchQuery>,
 ) -> Result<Json<ImageTextSearchResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let page_request = normalize_page_request(query.limit, query.offset);
     let keyword = query.q.trim();
     if keyword.is_empty() {
         return Ok(Json(ImageTextSearchResponse {
             total: 0,
+            offset: page_request.offset,
+            limit: resolve_page_limit(page_request.limit, 0),
+            has_more: false,
             images: vec![],
             query: query.q,
         }));
     }
 
-    let images = state
+    let (images, total, has_more) = state
         .store
-        .search_images_by_text(
+        .search_images_by_text_paged(
             keyword,
-            normalize_limit(query.limit),
+            page_request.limit,
+            page_request.offset,
             normalize_max_distance(query.max_distance),
         )
         .await
         .map_err(|e| internal_error("Failed to search images by text", e))?;
 
     Ok(Json(ImageTextSearchResponse {
-        total: images.len(),
+        total,
+        offset: page_request.offset,
+        limit: resolve_page_limit(page_request.limit, images.len()),
+        has_more,
         images,
         query: query.q,
     }))
@@ -2049,6 +2112,15 @@ fn normalize_ip_token(token: &str) -> Option<String> {
     }
 
     None
+}
+
+fn parse_raw_markdown_lang(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "zh" => Some("zh"),
+        "en" => Some("en"),
+        _ => None,
+    }
 }
 
 async fn enforce_comment_submit_rate_limit(
@@ -2340,9 +2412,7 @@ fn normalize_optional_markdown(value: Option<String>) -> Option<String> {
 }
 
 fn normalize_comment_list_limit(limit: Option<usize>, default_limit: usize) -> usize {
-    let fallback = default_limit
-        .max(1)
-        .min(MAX_CONFIGURABLE_COMMENT_LIST_LIMIT);
+    let fallback = default_limit.clamp(1, MAX_CONFIGURABLE_COMMENT_LIST_LIMIT);
     limit
         .filter(|value| *value > 0)
         .map(|value| value.min(MAX_CONFIGURABLE_COMMENT_LIST_LIMIT))
@@ -2438,6 +2508,30 @@ fn normalize_limit(limit: Option<usize>) -> Option<usize> {
     limit.filter(|value| *value > 0)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PageRequest {
+    limit: Option<usize>,
+    offset: usize,
+}
+
+/// Normalize query pagination into a single request object reused by handlers.
+fn normalize_page_request(limit: Option<usize>, offset: Option<usize>) -> PageRequest {
+    PageRequest {
+        limit: normalize_limit(limit),
+        offset: normalize_offset(offset),
+    }
+}
+
+/// Preserve explicit client `limit`, otherwise report the actual payload
+/// length.
+fn resolve_page_limit(request_limit: Option<usize>, returned_count: usize) -> usize {
+    request_limit.unwrap_or(returned_count)
+}
+
+fn normalize_offset(offset: Option<usize>) -> usize {
+    offset.unwrap_or(0)
+}
+
 fn normalize_max_distance(max_distance: Option<f32>) -> Option<f32> {
     max_distance.filter(|value| value.is_finite() && *value >= 0.0)
 }
@@ -2518,7 +2612,7 @@ mod tests {
 
     use super::{
         apply_view_analytics_config_update, extract_client_ip, is_local_host_header,
-        UpdateViewAnalyticsConfigRequest,
+        parse_raw_markdown_lang, UpdateViewAnalyticsConfigRequest,
     };
     use crate::state::ViewAnalyticsRuntimeConfig;
 
@@ -2644,5 +2738,15 @@ mod tests {
         assert_eq!(config.dedupe_window_seconds, 120);
         assert_eq!(config.trend_default_days, 30);
         assert_eq!(config.trend_max_days, 240);
+    }
+
+    #[test]
+    fn parse_raw_markdown_lang_accepts_zh_en_only() {
+        assert_eq!(parse_raw_markdown_lang("zh"), Some("zh"));
+        assert_eq!(parse_raw_markdown_lang("ZH"), Some("zh"));
+        assert_eq!(parse_raw_markdown_lang("en"), Some("en"));
+        assert_eq!(parse_raw_markdown_lang(" En "), Some("en"));
+        assert_eq!(parse_raw_markdown_lang("cn"), None);
+        assert_eq!(parse_raw_markdown_lang(""), None);
     }
 }

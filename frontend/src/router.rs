@@ -41,6 +41,13 @@ pub enum Route {
     ArticleDetail { id: String },
 
     #[cfg(not(feature = "mock"))]
+    #[at("/posts/:id/raw/:lang")]
+    ArticleRaw { id: String, lang: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/posts/:id/raw/:lang")]
+    ArticleRaw { id: String, lang: String },
+
+    #[cfg(not(feature = "mock"))]
     #[at("/tags")]
     Tags,
     #[cfg(feature = "mock")]
@@ -108,6 +115,12 @@ fn switch(route: Route) -> Html {
             id,
         } => {
             html! { <pages::article_detail::ArticleDetailPage id={id} /> }
+        },
+        Route::ArticleRaw {
+            id,
+            lang,
+        } => {
+            html! { <pages::article_raw::ArticleRawPage id={id} lang={lang} /> }
         },
         Route::Tags => html! { <pages::tags::TagsPage /> },
         Route::TagDetail {

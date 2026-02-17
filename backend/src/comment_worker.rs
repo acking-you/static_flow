@@ -34,6 +34,7 @@ pub struct CommentAiWorkerConfig {
     pub workdir: PathBuf,
     pub comment_author_salt: String,
     pub content_db_path: String,
+    pub content_api_base: String,
     pub skill_path: PathBuf,
 }
 
@@ -62,6 +63,14 @@ impl CommentAiWorkerConfig {
             .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let comment_author_salt =
             env::var("COMMENT_AUTHOR_SALT").unwrap_or_else(|_| "static-flow-comment".to_string());
+        let content_api_base = env::var("COMMENT_AI_CONTENT_API_BASE")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+                format!("http://127.0.0.1:{port}/api")
+            });
         let skill_path = env::var("COMMENT_AI_SKILL_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| workdir.join("skills/comment-review-ai-responder/SKILL.md"));
@@ -73,6 +82,7 @@ impl CommentAiWorkerConfig {
             workdir,
             comment_author_salt,
             content_db_path,
+            content_api_base,
             skill_path,
         }
     }
@@ -92,6 +102,7 @@ struct WorkerTaskPayload<'a> {
     reply_to_comment_text: Option<&'a str>,
     reply_to_ai_reply_markdown: Option<&'a str>,
     content_db_path: &'a str,
+    content_api_base: &'a str,
     skill_path: String,
     instructions: &'a str,
 }
@@ -115,8 +126,9 @@ struct RunnerProcessOutput {
     stderr: String,
 }
 
-const COMMENT_SKILL_HINT: &str =
-    "Use skill comment-review-ai-responder. Resolve article content through sf-cli by article_id.";
+const COMMENT_SKILL_HINT: &str = "Use skill comment-review-ai-responder. Fetch article raw \
+                                  markdown via local HTTP API first, and fallback to sf-cli \
+                                  content-only query when HTTP fails.";
 const RUN_CHUNK_MAX_SEGMENTS: usize = 4096;
 
 pub fn spawn_comment_worker(
@@ -221,8 +233,9 @@ async fn process_one_task(
     let reply_markdown = match parse_runner_output(&run_output.stdout) {
         Ok(reply) => reply,
         Err(err) => {
+            let diagnostics = inspect_runner_output(&run_output.stdout).summary();
             let reason = format!(
-                "failed to parse runner output: {err}. stdout={}",
+                "failed to parse runner output: {err}. diagnostics={diagnostics}. stdout={}",
                 compact_for_reason(&run_output.stdout)
             );
             let _ = store
@@ -328,6 +341,7 @@ async fn run_ai_runner(
         reply_to_comment_text: task.reply_to_comment_text.as_deref(),
         reply_to_ai_reply_markdown: task.reply_to_ai_reply_markdown.as_deref(),
         content_db_path: &config.content_db_path,
+        content_api_base: &config.content_api_base,
         skill_path: config.skill_path.display().to_string(),
         instructions: COMMENT_SKILL_HINT,
     };
@@ -346,6 +360,7 @@ async fn run_ai_runner(
     command.current_dir(&config.workdir);
     command.env("COMMENT_AI_SKILL_PATH", &config.skill_path);
     command.env("STATICFLOW_LANCEDB_URI", &config.content_db_path);
+    command.env("COMMENT_AI_CONTENT_API_BASE", &config.content_api_base);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
@@ -480,7 +495,30 @@ fn parse_runner_output(stdout: &str) -> Result<String> {
         return Ok(markdown);
     }
 
-    Ok(trimmed.to_string())
+    let normalized_unescaped = normalized_quotes
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\");
+    if normalized_unescaped != normalized_quotes {
+        if let Some(markdown) = extract_final_reply_markdown(&normalized_unescaped) {
+            return Ok(markdown);
+        }
+        if let Some(markdown) = extract_final_reply_from_text(&normalized_unescaped) {
+            return Ok(markdown);
+        }
+    }
+
+    let diagnostics = inspect_runner_output(&normalized_quotes);
+    if looks_like_codex_json_stream(&normalized_quotes) {
+        anyhow::bail!(
+            "codex stream completed but no `final_reply_markdown` payload was extracted ({})",
+            diagnostics.summary()
+        );
+    }
+
+    anyhow::bail!(
+        "runner output missing `final_reply_markdown` payload ({})",
+        diagnostics.summary()
+    )
 }
 
 fn extract_final_reply_markdown(raw: &str) -> Option<String> {
@@ -540,6 +578,26 @@ fn collect_markdown_candidates(value: &Value, output: &mut Vec<String>) {
                 collect_markdown_candidates(item, output);
             }
         },
+        Value::String(raw) => {
+            // Codex JSON streaming events may place the final payload as a JSON
+            // string inside fields like `item.text`.
+            if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+                collect_markdown_candidates(&parsed, output);
+                return;
+            }
+
+            if let Some(markdown) = extract_final_reply_from_text(raw) {
+                output.push(markdown);
+                return;
+            }
+
+            // Some streams embed escaped JSON text like:
+            // {\"final_reply_markdown\":\"...\"}
+            let unescaped = raw.replace("\\\"", "\"").replace("\\\\", "\\");
+            if let Some(markdown) = extract_final_reply_from_text(&unescaped) {
+                output.push(markdown);
+            }
+        },
         _ => {},
     }
 }
@@ -597,10 +655,86 @@ fn parse_json_string_literal(raw: &str) -> Option<(String, usize)> {
 }
 
 fn normalize_json_quotes(raw: &str) -> String {
-    raw.replace('“', "\"")
-        .replace('”', "\"")
-        .replace('‘', "'")
-        .replace('’', "'")
+    raw.replace(['“', '”'], "\"").replace(['‘', '’'], "'")
+}
+
+fn looks_like_codex_json_stream(raw: &str) -> bool {
+    raw.contains("\"type\":\"turn.completed\"")
+        || raw.contains("\"type\":\"item.completed\"")
+        || raw.contains("\"type\": \"turn.completed\"")
+        || raw.contains("\"type\": \"item.completed\"")
+}
+
+#[derive(Default)]
+struct RunnerOutputDiagnostics {
+    line_count: usize,
+    json_line_count: usize,
+    item_completed_count: usize,
+    agent_message_item_count: usize,
+    turn_completed_count: usize,
+    final_reply_markdown_count: usize,
+}
+
+impl RunnerOutputDiagnostics {
+    fn summary(&self) -> String {
+        format!(
+            "lines={}, json_lines={}, item_completed={}, agent_message_items={}, \
+             turn_completed={}, final_reply_candidates={}",
+            self.line_count,
+            self.json_line_count,
+            self.item_completed_count,
+            self.agent_message_item_count,
+            self.turn_completed_count,
+            self.final_reply_markdown_count
+        )
+    }
+}
+
+fn inspect_runner_output(raw: &str) -> RunnerOutputDiagnostics {
+    let mut diagnostics = RunnerOutputDiagnostics::default();
+
+    for line in raw.lines() {
+        diagnostics.line_count += 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        diagnostics.json_line_count += 1;
+
+        if let Some(event_type) = value.get("type").and_then(Value::as_str) {
+            if event_type == "item.completed" {
+                diagnostics.item_completed_count += 1;
+                if value
+                    .get("item")
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("agent_message")
+                {
+                    diagnostics.agent_message_item_count += 1;
+                }
+            } else if event_type == "turn.completed" {
+                diagnostics.turn_completed_count += 1;
+            }
+        }
+
+        let mut candidates = Vec::new();
+        collect_markdown_candidates(&value, &mut candidates);
+        diagnostics.final_reply_markdown_count += candidates
+            .iter()
+            .filter(|candidate| !candidate.trim().is_empty())
+            .count();
+    }
+
+    if diagnostics.line_count == 0 {
+        diagnostics.line_count = 1;
+    }
+
+    diagnostics
 }
 
 fn compact_for_reason(raw: &str) -> String {
@@ -666,5 +800,35 @@ mod tests {
         let raw = "{“final_reply_markdown”:“你好，测试”}";
         let parsed = parse_runner_output(raw).unwrap();
         assert_eq!(parsed, "你好，测试");
+    }
+
+    #[test]
+    fn parse_runner_output_extracts_from_codex_stream_item_text_json_string() {
+        let raw = r#"{"type":"item.completed","item":{"id":"item_69","type":"agent_message","text":"{\"final_reply_markdown\":\"stream-final\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let parsed = parse_runner_output(raw).unwrap();
+        assert_eq!(parsed, "stream-final");
+    }
+
+    #[test]
+    fn parse_runner_output_extracts_from_escaped_final_reply_text_without_outer_json() {
+        let raw = r#"stream-chunk text: {\"final_reply_markdown\":\"escaped-final\"}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let parsed = parse_runner_output(raw).unwrap();
+        assert_eq!(parsed, "escaped-final");
+    }
+
+    #[test]
+    fn parse_runner_output_rejects_turn_completed_without_final_payload() {
+        let raw = r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let parsed = parse_runner_output(raw);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn parse_runner_output_rejects_plain_markdown_without_json_contract() {
+        let raw = "just markdown without json contract";
+        let parsed = parse_runner_output(raw);
+        assert!(parsed.is_err());
     }
 }

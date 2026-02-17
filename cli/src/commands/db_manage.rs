@@ -560,7 +560,7 @@ pub async fn backfill_article_vectors(
 
     let stream = match table
         .query()
-        .only_if(filter.to_string())
+        .only_if(filter)
         .select(Select::columns(&columns))
         .execute()
         .await
