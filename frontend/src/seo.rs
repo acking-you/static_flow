@@ -8,7 +8,9 @@ const SITE_NAME: &str = "StaticFlow";
 const SITE_BASE_URL: &str = "https://acking-you.github.io";
 const DEFAULT_AUTHOR: &str = "ackingliu";
 const DEFAULT_OG_IMAGE: &str = "/static/android-chrome-512x512.png";
-const DEFAULT_DESCRIPTION: &str = "可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。";
+const DEFAULT_DESCRIPTION: &str = "可视化博客 + Skill \
+                                   工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
+                                   统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。";
 
 fn document() -> Option<Document> {
     window().and_then(|win| win.document())
@@ -50,7 +52,12 @@ fn remove_nodes(selector: &str) {
 }
 
 fn normalize_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -128,11 +135,8 @@ pub fn absolute_url(path_or_url: &str) -> String {
     if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
         return trimmed.to_string();
     }
-    let normalized_path = if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{}", trimmed)
-    };
+    let normalized_path =
+        if trimmed.starts_with('/') { trimmed.to_string() } else { format!("/{}", trimmed) };
     format!("{}{}", SITE_BASE_URL.trim_end_matches('/'), normalized_path)
 }
 
@@ -178,10 +182,7 @@ pub fn set_hreflang_links(links: &[(&str, String)]) {
 }
 
 pub fn set_json_ld(id: &str, payload: &Value, page_scoped: bool) {
-    let selector = format!(
-        "script[type=\"application/ld+json\"][data-sf-jsonld-id=\"{}\"]",
-        id
-    );
+    let selector = format!("script[type=\"application/ld+json\"][data-sf-jsonld-id=\"{}\"]", id);
     let Some(element) = upsert_head_element(&selector, "script") else {
         return;
     };
@@ -239,19 +240,11 @@ fn apply_common_seo(
     set_meta_property("og:url", canonical_url);
     set_meta_property(
         "og:locale",
-        if html_lang.eq_ignore_ascii_case("en") {
-            "en_US"
-        } else {
-            "zh_CN"
-        },
+        if html_lang.eq_ignore_ascii_case("en") { "en_US" } else { "zh_CN" },
     );
     set_meta_property(
         "og:locale:alternate",
-        if html_lang.eq_ignore_ascii_case("en") {
-            "zh_CN"
-        } else {
-            "en_US"
-        },
+        if html_lang.eq_ignore_ascii_case("en") { "zh_CN" } else { "en_US" },
     );
     set_meta_property("og:image", og_image_url);
 }
@@ -293,10 +286,7 @@ fn route_path_for(route: &Route) -> String {
         Route::Admin => config::route_path("/admin"),
         Route::AdminCommentRuns {
             task_id,
-        } => config::route_path(&format!(
-            "/admin/comments/runs/{}",
-            urlencoding::encode(task_id)
-        )),
+        } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
         Route::NotFound => config::route_path("/404"),
     }
 }
@@ -380,10 +370,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         } => {
             apply_common_seo(
                 &format!("标签：{} · StaticFlow", normalize_meta_text(tag, 42)),
-                &format!(
-                    "浏览标签“{}”下的相关文章。",
-                    normalize_meta_text(tag, 60)
-                ),
+                &format!("浏览标签“{}”下的相关文章。", normalize_meta_text(tag, 60)),
                 &canonical_url,
                 "website",
                 "index,follow,max-image-preview:large",
@@ -409,10 +396,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         } => {
             apply_common_seo(
                 &format!("分类：{} · StaticFlow", normalize_meta_text(category, 42)),
-                &format!(
-                    "查看分类“{}”下的文章与实践。",
-                    normalize_meta_text(category, 60)
-                ),
+                &format!("查看分类“{}”下的文章与实践。", normalize_meta_text(category, 60)),
                 &canonical_url,
                 "website",
                 "index,follow,max-image-preview:large",
@@ -451,11 +435,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
             id,
             lang,
         } => {
-            let normalized_lang = if lang.eq_ignore_ascii_case("en") {
-                "en"
-            } else {
-                "zh"
-            };
+            let normalized_lang = if lang.eq_ignore_ascii_case("en") { "en" } else { "zh" };
             apply_common_seo(
                 &format!(
                     "{} · Raw Markdown ({}) · StaticFlow",
@@ -470,16 +450,16 @@ pub fn apply_route_seo(route: Option<&Route>) {
                 &og_image,
             );
             let encoded_id = urlencoding::encode(id);
-            let zh_url = absolute_url(&config::route_path(&format!("/posts/{}/raw/zh", encoded_id)));
-            let en_url = absolute_url(&config::route_path(&format!("/posts/{}/raw/en", encoded_id)));
-            let entries = vec![
-                ("zh-CN", zh_url.clone()),
-                ("en", en_url.clone()),
-                ("x-default", zh_url),
-            ];
+            let zh_url =
+                absolute_url(&config::route_path(&format!("/posts/{}/raw/zh", encoded_id)));
+            let en_url =
+                absolute_url(&config::route_path(&format!("/posts/{}/raw/en", encoded_id)));
+            let entries =
+                vec![("zh-CN", zh_url.clone()), ("en", en_url.clone()), ("x-default", zh_url)];
             set_hreflang_links(&entries);
         },
-        Route::Admin | Route::AdminCommentRuns {
+        Route::Admin
+        | Route::AdminCommentRuns {
             ..
         } => {
             apply_common_seo(
@@ -557,11 +537,7 @@ pub fn apply_article_seo(article: &Article, article_id: &str, preferred_lang: &s
     let canonical_url = absolute_url(&article_path);
     let posts_url = absolute_url(&config::route_path("/posts"));
     let home_url = absolute_url(&config::route_path("/"));
-    let html_lang = if preferred_lang.eq_ignore_ascii_case("en") {
-        "en"
-    } else {
-        "zh-CN"
-    };
+    let html_lang = if preferred_lang.eq_ignore_ascii_case("en") { "en" } else { "zh-CN" };
     let title = format!("{} · {}", normalize_meta_text(&article.title, 78), SITE_NAME);
     let description = article_description(article, preferred_lang);
     let og_image = resolve_social_image_url(article.featured_image.as_deref());
@@ -602,14 +578,8 @@ pub fn apply_article_seo(article: &Article, article_id: &str, preferred_lang: &s
         }),
     );
     if !article.date.trim().is_empty() {
-        posting.insert(
-            "datePublished".to_string(),
-            json!(normalize_meta_text(&article.date, 32)),
-        );
-        posting.insert(
-            "dateModified".to_string(),
-            json!(normalize_meta_text(&article.date, 32)),
-        );
+        posting.insert("datePublished".to_string(), json!(normalize_meta_text(&article.date, 32)));
+        posting.insert("dateModified".to_string(), json!(normalize_meta_text(&article.date, 32)));
     }
     posting.insert("inLanguage".to_string(), json!(html_lang));
     posting.insert(
@@ -660,11 +630,7 @@ pub fn apply_article_seo(article: &Article, article_id: &str, preferred_lang: &s
 
 pub fn apply_raw_markdown_seo(article_id: &str, lang: &str, raw_page_title: &str) {
     clear_page_scoped_json_ld();
-    let normalized_lang = if lang.eq_ignore_ascii_case("en") {
-        "en"
-    } else {
-        "zh"
-    };
+    let normalized_lang = if lang.eq_ignore_ascii_case("en") { "en" } else { "zh" };
     let encoded_id = urlencoding::encode(article_id);
     let route = config::route_path(&format!("/posts/{}/raw/{}", encoded_id, normalized_lang));
     let canonical_url = absolute_url(&route);
@@ -686,10 +652,6 @@ pub fn apply_raw_markdown_seo(article_id: &str, lang: &str, raw_page_title: &str
         if normalized_lang == "en" { "en" } else { "zh-CN" },
         &default_og_image_url(),
     );
-    let entries = vec![
-        ("zh-CN", zh_url.clone()),
-        ("en", en_url.clone()),
-        ("x-default", zh_url),
-    ];
+    let entries = vec![("zh-CN", zh_url.clone()), ("en", en_url.clone()), ("x-default", zh_url)];
     set_hreflang_links(&entries);
 }

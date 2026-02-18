@@ -7,19 +7,23 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        admin_approve_and_run_comment_task, admin_approve_comment_task, admin_cleanup_comments,
-        admin_delete_comment_task, admin_reject_comment_task, admin_retry_comment_task,
-        delete_admin_published_comment, fetch_admin_comment_audit_logs,
-        fetch_admin_comment_runtime_config, fetch_admin_comment_task,
-        fetch_admin_comment_task_ai_output, fetch_admin_comment_tasks_grouped,
-        fetch_admin_published_comments, fetch_admin_view_analytics_config,
-        patch_admin_comment_task, patch_admin_published_comment,
-        update_admin_comment_runtime_config, update_admin_view_analytics_config,
-        AdminCleanupRequest, AdminCommentAuditLog, AdminCommentTask,
-        AdminCommentTaskAiOutputResponse, AdminCommentTaskGroup, AdminPatchCommentTaskRequest,
-        AdminPatchPublishedCommentRequest, AdminTaskActionRequest, ArticleComment,
-        CommentRuntimeConfig, ViewAnalyticsConfig,
+        admin_approve_and_run_comment_task, admin_approve_comment_task, admin_cleanup_api_behavior,
+        admin_cleanup_comments, admin_delete_comment_task, admin_reject_comment_task,
+        admin_retry_comment_task, delete_admin_published_comment, fetch_admin_api_behavior_config,
+        fetch_admin_api_behavior_events, fetch_admin_api_behavior_overview,
+        fetch_admin_comment_audit_logs, fetch_admin_comment_runtime_config,
+        fetch_admin_comment_task, fetch_admin_comment_task_ai_output,
+        fetch_admin_comment_tasks_grouped, fetch_admin_published_comments,
+        fetch_admin_view_analytics_config, patch_admin_comment_task, patch_admin_published_comment,
+        update_admin_api_behavior_config, update_admin_comment_runtime_config,
+        update_admin_view_analytics_config, AdminApiBehaviorCleanupRequest, AdminApiBehaviorEvent,
+        AdminApiBehaviorEventsQuery, AdminApiBehaviorOverviewResponse, AdminCleanupRequest,
+        AdminCommentAuditLog, AdminCommentTask, AdminCommentTaskAiOutputResponse,
+        AdminCommentTaskGroup, AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest,
+        AdminTaskActionRequest, ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment,
+        ArticleViewPoint, CommentRuntimeConfig, ViewAnalyticsConfig,
     },
+    components::view_trend_chart::ViewTrendChart,
     router::Route,
 };
 
@@ -28,6 +32,7 @@ enum AdminTab {
     Tasks,
     Published,
     Audit,
+    Behavior,
 }
 
 fn format_ms(ts_ms: i64) -> String {
@@ -63,11 +68,29 @@ fn status_badge_class(status: &str) -> Classes {
     }
 }
 
+fn to_view_points(buckets: &[ApiBehaviorBucket]) -> Vec<ArticleViewPoint> {
+    buckets
+        .iter()
+        .map(|item| ArticleViewPoint {
+            key: item.key.clone(),
+            views: item.count,
+        })
+        .collect()
+}
+
 #[function_component(AdminPage)]
 pub fn admin_page() -> Html {
     let load_error = use_state(|| None::<String>);
     let view_config = use_state(|| None::<ViewAnalyticsConfig>);
     let comment_config = use_state(|| None::<CommentRuntimeConfig>);
+    let behavior_config = use_state(|| None::<ApiBehaviorConfig>);
+    let behavior_overview = use_state(|| None::<AdminApiBehaviorOverviewResponse>);
+    let behavior_events = use_state(Vec::<AdminApiBehaviorEvent>::new);
+    let behavior_days = use_state(|| "30".to_string());
+    let behavior_path_filter = use_state(String::new);
+    let behavior_page_filter = use_state(String::new);
+    let behavior_device_filter = use_state(String::new);
+    let behavior_status_filter = use_state(String::new);
 
     let task_groups = use_state(Vec::<AdminCommentTaskGroup>::new);
     let grouped_status_counts = use_state(std::collections::HashMap::<String, usize>::new);
@@ -123,6 +146,68 @@ pub fn admin_page() -> Html {
     let on_refresh_audit_click = {
         let refresh_audit = refresh_audit.clone();
         Callback::from(move |_| refresh_audit.emit(()))
+    };
+
+    let refresh_behavior = {
+        let load_error = load_error.clone();
+        let behavior_config = behavior_config.clone();
+        let behavior_overview = behavior_overview.clone();
+        let behavior_events = behavior_events.clone();
+        let behavior_days = behavior_days.clone();
+        let behavior_path_filter = behavior_path_filter.clone();
+        let behavior_page_filter = behavior_page_filter.clone();
+        let behavior_device_filter = behavior_device_filter.clone();
+        let behavior_status_filter = behavior_status_filter.clone();
+
+        Callback::from(move |_| {
+            let load_error = load_error.clone();
+            let behavior_config = behavior_config.clone();
+            let behavior_overview = behavior_overview.clone();
+            let behavior_events = behavior_events.clone();
+            let days = (*behavior_days)
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0);
+            let path_filter = (*behavior_path_filter).trim().to_string();
+            let page_filter = (*behavior_page_filter).trim().to_string();
+            let device_filter = (*behavior_device_filter).trim().to_string();
+            let status_filter = (*behavior_status_filter).trim().parse::<i32>().ok();
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let config_result = fetch_admin_api_behavior_config().await;
+                let overview_result = fetch_admin_api_behavior_overview(days, Some(20)).await;
+                let events_result = fetch_admin_api_behavior_events(&AdminApiBehaviorEventsQuery {
+                    days,
+                    limit: Some(120),
+                    offset: Some(0),
+                    path_contains: if path_filter.is_empty() { None } else { Some(path_filter) },
+                    page_contains: if page_filter.is_empty() { None } else { Some(page_filter) },
+                    device_type: if device_filter.is_empty() { None } else { Some(device_filter) },
+                    method: None,
+                    status_code: status_filter,
+                    ip: None,
+                })
+                .await;
+
+                match (config_result, overview_result, events_result) {
+                    (Ok(config), Ok(overview), Ok(events)) => {
+                        behavior_config.set(Some(config));
+                        behavior_overview.set(Some(overview));
+                        behavior_events.set(events.events);
+                        load_error.set(None);
+                    },
+                    (cfg_err, over_err, events_err) => {
+                        load_error.set(Some(format!(
+                            "Behavior API unavailable. config={:?}, overview={:?}, events={:?}",
+                            cfg_err.err(),
+                            over_err.err(),
+                            events_err.err()
+                        )));
+                    },
+                }
+            });
+        })
     };
 
     let refresh_all = {
@@ -232,8 +317,10 @@ pub fn admin_page() -> Html {
 
     {
         let refresh_all = refresh_all.clone();
+        let refresh_behavior = refresh_behavior.clone();
         use_effect_with((), move |_| {
             refresh_all.emit(());
+            refresh_behavior.emit(());
             || ()
         });
     }
@@ -249,15 +336,21 @@ pub fn admin_page() -> Html {
 
     let on_reload_click = {
         let refresh_all = refresh_all.clone();
-        Callback::from(move |_| refresh_all.emit(()))
+        let refresh_behavior = refresh_behavior.clone();
+        Callback::from(move |_| {
+            refresh_all.emit(());
+            refresh_behavior.emit(());
+        })
     };
 
     let on_save_configs = {
         let view_config = view_config.clone();
         let comment_config = comment_config.clone();
+        let behavior_config = behavior_config.clone();
         let load_error = load_error.clone();
         let saving = saving.clone();
         let refresh_all = refresh_all.clone();
+        let refresh_behavior = refresh_behavior.clone();
         Callback::from(move |_| {
             let Some(view_config_value) = (*view_config).clone() else {
                 return;
@@ -265,25 +358,33 @@ pub fn admin_page() -> Html {
             let Some(comment_config_value) = (*comment_config).clone() else {
                 return;
             };
+            let Some(behavior_config_value) = (*behavior_config).clone() else {
+                return;
+            };
 
             let load_error = load_error.clone();
             let saving = saving.clone();
             let refresh_all = refresh_all.clone();
+            let refresh_behavior = refresh_behavior.clone();
             saving.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let view_result = update_admin_view_analytics_config(&view_config_value).await;
                 let comment_result =
                     update_admin_comment_runtime_config(&comment_config_value).await;
-                match (view_result, comment_result) {
-                    (Ok(_), Ok(_)) => {
+                let behavior_result =
+                    update_admin_api_behavior_config(&behavior_config_value).await;
+                match (view_result, comment_result, behavior_result) {
+                    (Ok(_), Ok(_), Ok(_)) => {
                         load_error.set(None);
                         refresh_all.emit(());
+                        refresh_behavior.emit(());
                     },
-                    (view_err, comment_err) => {
+                    (view_err, comment_err, behavior_err) => {
                         load_error.set(Some(format!(
-                            "Save failed. view={:?}, comment={:?}",
+                            "Save failed. view={:?}, comment={:?}, behavior={:?}",
                             view_err.err(),
-                            comment_err.err()
+                            comment_err.err(),
+                            behavior_err.err()
                         )));
                     },
                 }
@@ -615,6 +716,80 @@ pub fn admin_page() -> Html {
         })
     };
 
+    let on_behavior_days_change = {
+        let behavior_days = behavior_days.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                behavior_days.set(target.value());
+            }
+        })
+    };
+
+    let on_behavior_path_filter_change = {
+        let behavior_path_filter = behavior_path_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                behavior_path_filter.set(target.value());
+            }
+        })
+    };
+
+    let on_behavior_page_filter_change = {
+        let behavior_page_filter = behavior_page_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                behavior_page_filter.set(target.value());
+            }
+        })
+    };
+
+    let on_behavior_device_filter_change = {
+        let behavior_device_filter = behavior_device_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                behavior_device_filter.set(target.value());
+            }
+        })
+    };
+
+    let on_behavior_status_filter_change = {
+        let behavior_status_filter = behavior_status_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                behavior_status_filter.set(target.value());
+            }
+        })
+    };
+
+    let on_behavior_apply = {
+        let refresh_behavior = refresh_behavior.clone();
+        Callback::from(move |_| refresh_behavior.emit(()))
+    };
+
+    let on_behavior_cleanup = {
+        let behavior_config = behavior_config.clone();
+        let refresh_behavior = refresh_behavior.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |_| {
+            let Some(config) = (*behavior_config).clone() else {
+                return;
+            };
+            let request = AdminApiBehaviorCleanupRequest {
+                retention_days: Some(config.retention_days),
+            };
+            let refresh_behavior = refresh_behavior.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match admin_cleanup_api_behavior(&request).await {
+                    Ok(_) => refresh_behavior.emit(()),
+                    Err(err) => {
+                        load_error.set(Some(format!("Behavior cleanup failed: {}", err)));
+                    },
+                }
+            });
+        })
+    };
+
     let tab_tasks = {
         let active_tab = active_tab.clone();
         Callback::from(move |_| active_tab.set(AdminTab::Tasks))
@@ -626,6 +801,10 @@ pub fn admin_page() -> Html {
     let tab_audit = {
         let active_tab = active_tab.clone();
         Callback::from(move |_| active_tab.set(AdminTab::Audit))
+    };
+    let tab_behavior = {
+        let active_tab = active_tab.clone();
+        Callback::from(move |_| active_tab.set(AdminTab::Behavior))
     };
 
     let grouped_total_tasks: usize = task_groups.iter().map(|group| group.total).sum();
@@ -645,7 +824,7 @@ pub fn admin_page() -> Html {
                     <div>
                         <h1 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Admin Console" }</h1>
                         <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>
-                            { "Manage runtime config and all comments tables (tasks/published/audit)." }
+                            { "Manage runtime config, comments workflows, and API behavior analytics." }
                         </p>
                     </div>
                     <button class={classes!("btn-fluent-secondary")} onclick={on_reload_click.clone()}>
@@ -681,7 +860,7 @@ pub fn admin_page() -> Html {
                 "mb-5"
             )}>
                 <h2 class={classes!("m-0", "mb-4", "text-lg", "font-semibold")}>{ "Runtime Config" }</h2>
-                <div class={classes!("grid", "gap-4", "md:grid-cols-2")}>
+                <div class={classes!("grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-3")}>
                     <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
                         <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
                             { "View Analytics" }
@@ -833,6 +1012,82 @@ pub fn admin_page() -> Html {
                             <p class={classes!("text-sm", "text-[var(--muted)]", "m-0")}>{ "Unavailable" }</p>
                         }
                     </div>
+
+                    <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                        <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                            { "API Behavior" }
+                        </h3>
+                        if let Some(cfg) = (*behavior_config).clone() {
+                            <label class={classes!("block", "text-sm", "mb-2")}>
+                                { "retention_days" }
+                                <input
+                                    type="number"
+                                    value={cfg.retention_days.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let behavior_config = behavior_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<i64>() {
+                                                    let mut next = (*behavior_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.retention_days = v;
+                                                    }
+                                                    behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm", "mb-2")}>
+                                { "default_days" }
+                                <input
+                                    type="number"
+                                    value={cfg.default_days.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let behavior_config = behavior_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*behavior_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.default_days = v;
+                                                    }
+                                                    behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm")}>
+                                { "max_days" }
+                                <input
+                                    type="number"
+                                    value={cfg.max_days.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let behavior_config = behavior_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*behavior_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.max_days = v;
+                                                    }
+                                                    behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                        } else {
+                            <p class={classes!("text-sm", "text-[var(--muted)]", "m-0")}>{ "Unavailable" }</p>
+                        }
+                    </div>
                 </div>
                 <div class={classes!("mt-4")}>
                     <button class={classes!("btn-fluent-primary")} onclick={on_save_configs} disabled={*saving}>
@@ -855,6 +1110,7 @@ pub fn admin_page() -> Html {
                     <button class={if *active_tab == AdminTab::Tasks { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_tasks}>{ "Tasks (Grouped)" }</button>
                     <button class={if *active_tab == AdminTab::Published { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_published}>{ "Published" }</button>
                     <button class={if *active_tab == AdminTab::Audit { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_audit}>{ "Audit Logs" }</button>
+                    <button class={if *active_tab == AdminTab::Behavior { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_behavior}>{ "API Behavior" }</button>
                 </div>
 
                 if *active_tab == AdminTab::Tasks {
@@ -1145,7 +1401,7 @@ pub fn admin_page() -> Html {
                             </div>
                         }
                     </>
-                } else {
+                } else if *active_tab == AdminTab::Audit {
                     <>
                         <div class={classes!("flex", "items-center", "justify-between", "gap-2", "flex-wrap", "mb-3")}>
                             <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ format!("Audit Logs ({})", audit_logs.len()) }</h2>
@@ -1188,6 +1444,181 @@ pub fn admin_page() -> Html {
                                             <td class={classes!("py-2", "pr-3")}>{ log.operator.clone() }</td>
                                             <td class={classes!("py-2", "pr-3")}>{ format_ms(log.created_at) }</td>
                                         </tr>
+                                    }) }
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
+                } else {
+                    <>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "flex-wrap", "mb-3")}>
+                            <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "API Behavior Analytics" }</h2>
+                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                <input
+                                    type="number"
+                                    value={(*behavior_days).clone()}
+                                    oninput={on_behavior_days_change}
+                                    placeholder="days"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[110px]")}
+                                />
+                                <input
+                                    type="text"
+                                    value={(*behavior_path_filter).clone()}
+                                    oninput={on_behavior_path_filter_change}
+                                    placeholder="path contains"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[170px]")}
+                                />
+                                <input
+                                    type="text"
+                                    value={(*behavior_page_filter).clone()}
+                                    oninput={on_behavior_page_filter_change}
+                                    placeholder="page contains"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[170px]")}
+                                />
+                                <input
+                                    type="text"
+                                    value={(*behavior_device_filter).clone()}
+                                    oninput={on_behavior_device_filter_change}
+                                    placeholder="device"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[120px]")}
+                                />
+                                <input
+                                    type="number"
+                                    value={(*behavior_status_filter).clone()}
+                                    oninput={on_behavior_status_filter_change}
+                                    placeholder="status"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[110px]")}
+                                />
+                                <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_apply.clone()}>{ "Apply" }</button>
+                                <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_cleanup}>{ "Cleanup Old Logs" }</button>
+                            </div>
+                        </div>
+
+                        if let Some(overview) = (*behavior_overview).clone() {
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-4", "mb-4")}>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Events" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ overview.total_events }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Unique IPs" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ overview.unique_ips }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Unique Pages" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ overview.unique_pages }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Avg Latency" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ format!("{:.1} ms", overview.avg_latency_ms) }</p>
+                                </article>
+                            </div>
+
+                            <ViewTrendChart points={to_view_points(&overview.timeseries)} empty_text={"No behavior trend data".to_string()} />
+
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-3", "mt-4", "mb-4")}>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Top Endpoints" }</h3>
+                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
+                                        { for overview.top_endpoints.iter().map(|item| html! {
+                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
+                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
+                                                <span class={classes!("font-semibold")}>{ item.count }</span>
+                                            </li>
+                                        }) }
+                                    </ul>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Top Pages" }</h3>
+                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
+                                        { for overview.top_pages.iter().map(|item| html! {
+                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
+                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
+                                                <span class={classes!("font-semibold")}>{ item.count }</span>
+                                            </li>
+                                        }) }
+                                    </ul>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Device Distribution" }</h3>
+                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
+                                        { for overview.device_distribution.iter().map(|item| html! {
+                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
+                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
+                                                <span class={classes!("font-semibold")}>{ item.count }</span>
+                                            </li>
+                                        }) }
+                                    </ul>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Browser Distribution" }</h3>
+                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
+                                        { for overview.browser_distribution.iter().map(|item| html! {
+                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
+                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
+                                                <span class={classes!("font-semibold")}>{ item.count }</span>
+                                            </li>
+                                        }) }
+                                    </ul>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "OS Distribution" }</h3>
+                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
+                                        { for overview.os_distribution.iter().map(|item| html! {
+                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
+                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
+                                                <span class={classes!("font-semibold")}>{ item.count }</span>
+                                            </li>
+                                        }) }
+                                    </ul>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Region Distribution" }</h3>
+                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
+                                        { for overview.region_distribution.iter().map(|item| html! {
+                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
+                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
+                                                <span class={classes!("font-semibold")}>{ item.count }</span>
+                                            </li>
+                                        }) }
+                                    </ul>
+                                </article>
+                            </div>
+                        } else {
+                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]", "mb-4")}>{ "Behavior overview unavailable." }</p>
+                        }
+
+                        <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                            { format!("Recent Events ({})", behavior_events.len()) }
+                        </h3>
+                        <div class={classes!("overflow-x-auto")}>
+                            <table class={classes!("w-full", "text-sm")}>
+                                <thead>
+                                    <tr class={classes!("text-left", "text-[var(--muted)]")}>
+                                        <th class={classes!("py-2", "pr-3")}>{ "Time" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "Page" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "API" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "Status" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "Device" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "Browser/OS" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "IP/Region" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "Latency" }</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    { for (*behavior_events).iter().map(|event| {
+                                        html! {
+                                            <tr class={classes!("border-t", "border-[var(--border)]")}>
+                                                <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(event.occurred_at) }</td>
+                                                <td class={classes!("py-2", "pr-3", "max-w-[220px]", "truncate")} title={event.page_path.clone()}>{ event.page_path.clone() }</td>
+                                                <td class={classes!("py-2", "pr-3", "max-w-[260px]", "truncate")} title={format!("{} {}?{}", event.method, event.path, event.query)}>{ format!("{} {}", event.method, event.path) }</td>
+                                                <td class={classes!("py-2", "pr-3")}>{ event.status_code }</td>
+                                                <td class={classes!("py-2", "pr-3")}>{ event.device_type.clone() }</td>
+                                                <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{}/{}", event.browser_family, event.os_family) }</td>
+                                                <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{}/{}", event.client_ip, event.ip_region) }</td>
+                                                <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{} ms", event.latency_ms) }</td>
+                                            </tr>
+                                        }
                                     }) }
                                 </tbody>
                             </table>

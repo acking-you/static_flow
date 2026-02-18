@@ -26,16 +26,17 @@ use static_flow_shared::{
         COMMENT_STATUS_RUNNING,
     },
     lancedb_api::{
-        ArticleListResponse, ArticleViewTrackResponse, ArticleViewTrendResponse,
-        CategoriesResponse, ImageListResponse, ImageSearchResponse, ImageTextSearchResponse,
-        SearchResponse, StatsResponse, TagsResponse,
+        ApiBehaviorBucket, ApiBehaviorEvent, ApiBehaviorOverviewResponse, ArticleListResponse,
+        ArticleViewTrackResponse, ArticleViewTrendResponse, CategoriesResponse, ImageListResponse,
+        ImageSearchResponse, ImageTextSearchResponse, SearchResponse, StatsResponse, TagsResponse,
     },
     Article,
 };
 use tokio::time::sleep;
 
 use crate::state::{
-    AppState, CommentRuntimeConfig, ViewAnalyticsRuntimeConfig,
+    ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, ViewAnalyticsRuntimeConfig,
+    MAX_CONFIGURABLE_API_BEHAVIOR_DAYS, MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS,
     MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_LIST_LIMIT,
     MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS, MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS,
     MAX_CONFIGURABLE_VIEW_TREND_DAYS,
@@ -171,6 +172,85 @@ pub struct UpdateCommentRuntimeConfigRequest {
     pub list_default_limit: Option<usize>,
     #[serde(default)]
     pub cleanup_retention_days: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiBehaviorConfigResponse {
+    pub retention_days: i64,
+    pub default_days: usize,
+    pub max_days: usize,
+}
+
+impl From<ApiBehaviorRuntimeConfig> for ApiBehaviorConfigResponse {
+    fn from(value: ApiBehaviorRuntimeConfig) -> Self {
+        Self {
+            retention_days: value.retention_days,
+            default_days: value.default_days,
+            max_days: value.max_days,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateApiBehaviorConfigRequest {
+    #[serde(default)]
+    pub retention_days: Option<i64>,
+    #[serde(default)]
+    pub default_days: Option<usize>,
+    #[serde(default)]
+    pub max_days: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminApiBehaviorOverviewQuery {
+    #[serde(default)]
+    pub days: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminApiBehaviorEventsQuery {
+    #[serde(default)]
+    pub days: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub path_contains: Option<String>,
+    #[serde(default)]
+    pub page_contains: Option<String>,
+    #[serde(default)]
+    pub device_type: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub status_code: Option<i32>,
+    #[serde(default)]
+    pub ip: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminApiBehaviorEventsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub events: Vec<ApiBehaviorEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminApiBehaviorCleanupRequest {
+    #[serde(default)]
+    pub retention_days: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminApiBehaviorCleanupResponse {
+    pub deleted_events: usize,
+    pub before_ms: i64,
+    pub retention_days: i64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -615,6 +695,156 @@ pub async fn update_comment_runtime_config(
     }
 
     Ok(Json(next.into()))
+}
+
+pub async fn get_api_behavior_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ApiBehaviorConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let config = state.api_behavior_runtime_config.read().await.clone();
+    Ok(Json(config.into()))
+}
+
+pub async fn update_api_behavior_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateApiBehaviorConfigRequest>,
+) -> Result<Json<ApiBehaviorConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let current = state.api_behavior_runtime_config.read().await.clone();
+    let next = apply_api_behavior_config_update(current, request)?;
+    {
+        let mut writer = state.api_behavior_runtime_config.write().await;
+        *writer = next.clone();
+    }
+    Ok(Json(next.into()))
+}
+
+pub async fn admin_api_behavior_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminApiBehaviorOverviewQuery>,
+) -> Result<Json<ApiBehaviorOverviewResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let config = state.api_behavior_runtime_config.read().await.clone();
+    let days = normalize_behavior_window_days(query.days, &config);
+    let top_limit = normalize_behavior_top_limit(query.limit);
+    let since_ms = behavior_window_start_ms(days);
+    let events = state
+        .store
+        .list_api_behavior_events(Some(since_ms))
+        .await
+        .map_err(|e| internal_error("Failed to list api behavior events", e))?;
+    let overview = build_api_behavior_overview(events, days, top_limit);
+    Ok(Json(overview))
+}
+
+pub async fn admin_list_api_behavior_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminApiBehaviorEventsQuery>,
+) -> Result<Json<AdminApiBehaviorEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let config = state.api_behavior_runtime_config.read().await.clone();
+    let days = normalize_behavior_window_days(query.days, &config);
+    let since_ms = behavior_window_start_ms(days);
+    let mut events = state
+        .store
+        .list_api_behavior_events(Some(since_ms))
+        .await
+        .map_err(|e| internal_error("Failed to list api behavior events", e))?;
+
+    let path_filter = normalize_filter(query.path_contains);
+    let page_filter = normalize_filter(query.page_contains);
+    let device_filter = normalize_filter(query.device_type);
+    let method_filter = normalize_filter(query.method);
+    let ip_filter = normalize_filter(query.ip);
+    let status_filter = query
+        .status_code
+        .filter(|value| *value >= 100 && *value <= 599);
+
+    events.retain(|event| {
+        if let Some(filter) = path_filter.as_deref() {
+            if !event.path.to_ascii_lowercase().contains(filter) {
+                return false;
+            }
+        }
+        if let Some(filter) = page_filter.as_deref() {
+            if !event.page_path.to_ascii_lowercase().contains(filter) {
+                return false;
+            }
+        }
+        if let Some(filter) = device_filter.as_deref() {
+            if event.device_type.to_ascii_lowercase() != filter {
+                return false;
+            }
+        }
+        if let Some(filter) = method_filter.as_deref() {
+            if event.method.to_ascii_lowercase() != filter {
+                return false;
+            }
+        }
+        if let Some(filter) = ip_filter.as_deref() {
+            if !event.client_ip.to_ascii_lowercase().contains(filter) {
+                return false;
+            }
+        }
+        if let Some(code) = status_filter {
+            if event.status_code != code {
+                return false;
+            }
+        }
+        true
+    });
+
+    events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+    let total = events.len();
+    let offset = query.offset.unwrap_or(0);
+    let limit = normalize_behavior_events_limit(query.limit);
+    let paged = events
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let has_more = offset.saturating_add(paged.len()) < total;
+
+    Ok(Json(AdminApiBehaviorEventsResponse {
+        total,
+        offset,
+        limit,
+        has_more,
+        events: paged,
+    }))
+}
+
+pub async fn admin_cleanup_api_behavior(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AdminApiBehaviorCleanupRequest>,
+) -> Result<Json<AdminApiBehaviorCleanupResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let config = state.api_behavior_runtime_config.read().await.clone();
+    let retention_days = request.retention_days.unwrap_or(config.retention_days);
+    if retention_days <= 0 || retention_days > MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS {
+        return Err(bad_request(
+            "`retention_days` must be between 1 and 3650 for api behavior cleanup",
+        ));
+    }
+
+    let before_ms = chrono::Utc::now().timestamp_millis() - retention_days * 24 * 60 * 60 * 1000;
+    let deleted = state
+        .store
+        .cleanup_api_behavior_before(before_ms)
+        .await
+        .map_err(|e| internal_error("Failed to cleanup api behavior events", e))?;
+
+    Ok(Json(AdminApiBehaviorCleanupResponse {
+        deleted_events: deleted,
+        before_ms,
+        retention_days,
+    }))
 }
 
 pub async fn get_geoip_status(
@@ -2540,6 +2770,137 @@ fn normalize_positive_f32(value: Option<f32>) -> Option<f32> {
     value.filter(|item| item.is_finite() && *item > 0.0)
 }
 
+fn normalize_behavior_window_days(days: Option<usize>, config: &ApiBehaviorRuntimeConfig) -> usize {
+    let max_days = config.max_days.clamp(1, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS);
+    days.unwrap_or(config.default_days).clamp(1, max_days)
+}
+
+fn normalize_behavior_top_limit(limit: Option<usize>) -> usize {
+    limit.filter(|value| *value > 0).unwrap_or(20).min(200)
+}
+
+fn normalize_behavior_events_limit(limit: Option<usize>) -> usize {
+    limit.filter(|value| *value > 0).unwrap_or(100).min(500)
+}
+
+fn behavior_window_start_ms(days: usize) -> i64 {
+    let days_ms = (days as i64).saturating_mul(24 * 60 * 60 * 1000);
+    chrono::Utc::now().timestamp_millis() - days_ms
+}
+
+fn normalize_filter(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+}
+
+fn build_api_behavior_overview(
+    events: Vec<ApiBehaviorEvent>,
+    days: usize,
+    top_limit: usize,
+) -> ApiBehaviorOverviewResponse {
+    use std::collections::{HashMap, HashSet};
+
+    use chrono::FixedOffset;
+
+    let tz = FixedOffset::east_opt(8 * 3600).expect("UTC+8 offset should be valid");
+    let today = chrono::Utc::now().with_timezone(&tz).date_naive();
+    let total_events = events.len();
+
+    let mut total_latency: i64 = 0;
+    let mut unique_ips = HashSet::new();
+    let mut unique_pages = HashSet::new();
+    let mut day_counts: HashMap<String, u32> = HashMap::new();
+    let mut endpoint_counts: HashMap<String, u32> = HashMap::new();
+    let mut page_counts: HashMap<String, u32> = HashMap::new();
+    let mut device_counts: HashMap<String, u32> = HashMap::new();
+    let mut browser_counts: HashMap<String, u32> = HashMap::new();
+    let mut os_counts: HashMap<String, u32> = HashMap::new();
+    let mut region_counts: HashMap<String, u32> = HashMap::new();
+
+    for event in &events {
+        total_latency += event.latency_ms.max(0) as i64;
+        unique_ips.insert(event.client_ip.clone());
+        unique_pages.insert(event.page_path.clone());
+
+        if let Some(dt) = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.occurred_at)
+        {
+            let day_key = dt.with_timezone(&tz).format("%Y-%m-%d").to_string();
+            *day_counts.entry(day_key).or_insert(0) += 1;
+        }
+
+        let endpoint_key = format!("{} {}", event.method, event.path);
+        *endpoint_counts.entry(endpoint_key).or_insert(0) += 1;
+        *page_counts.entry(event.page_path.clone()).or_insert(0) += 1;
+        *device_counts.entry(event.device_type.clone()).or_insert(0) += 1;
+        *browser_counts
+            .entry(event.browser_family.clone())
+            .or_insert(0) += 1;
+        *os_counts.entry(event.os_family.clone()).or_insert(0) += 1;
+        *region_counts.entry(event.ip_region.clone()).or_insert(0) += 1;
+    }
+
+    let recent_events = events.into_iter().take(top_limit).collect::<Vec<_>>();
+    let timeseries = build_behavior_timeseries(&day_counts, today, days);
+    let avg_latency_ms =
+        if total_events == 0 { 0.0 } else { total_latency as f64 / (total_events as f64) };
+
+    ApiBehaviorOverviewResponse {
+        timezone: "Asia/Shanghai".to_string(),
+        days,
+        total_events,
+        unique_ips: unique_ips.len(),
+        unique_pages: unique_pages.len(),
+        avg_latency_ms,
+        timeseries,
+        top_endpoints: build_behavior_buckets(endpoint_counts, top_limit),
+        top_pages: build_behavior_buckets(page_counts, top_limit),
+        device_distribution: build_behavior_buckets(device_counts, top_limit),
+        browser_distribution: build_behavior_buckets(browser_counts, top_limit),
+        os_distribution: build_behavior_buckets(os_counts, top_limit),
+        region_distribution: build_behavior_buckets(region_counts, top_limit),
+        recent_events,
+    }
+}
+
+fn build_behavior_timeseries(
+    day_counts: &std::collections::HashMap<String, u32>,
+    end_day: chrono::NaiveDate,
+    days: usize,
+) -> Vec<ApiBehaviorBucket> {
+    let mut points = Vec::with_capacity(days);
+    for offset in (0..days).rev() {
+        let day = end_day - chrono::Duration::days(offset as i64);
+        let key = day.format("%Y-%m-%d").to_string();
+        points.push(ApiBehaviorBucket {
+            key: key.clone(),
+            count: *day_counts.get(&key).unwrap_or(&0),
+        });
+    }
+    points
+}
+
+fn build_behavior_buckets(
+    counts: std::collections::HashMap<String, u32>,
+    limit: usize,
+) -> Vec<ApiBehaviorBucket> {
+    let mut items = counts
+        .into_iter()
+        .map(|(key, count)| ApiBehaviorBucket {
+            key,
+            count,
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    items.truncate(limit);
+    items
+}
+
 fn apply_view_analytics_config_update(
     current: ViewAnalyticsRuntimeConfig,
     request: UpdateViewAnalyticsConfigRequest,
@@ -2606,15 +2967,50 @@ fn apply_comment_runtime_config_update(
     Ok(next)
 }
 
+fn apply_api_behavior_config_update(
+    current: ApiBehaviorRuntimeConfig,
+    request: UpdateApiBehaviorConfigRequest,
+) -> Result<ApiBehaviorRuntimeConfig, (StatusCode, Json<ErrorResponse>)> {
+    let mut next = current;
+
+    if let Some(value) = request.retention_days {
+        if value != -1 && (value <= 0 || value > MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS) {
+            return Err(bad_request("`retention_days` must be -1 or between 1 and 3650"));
+        }
+        next.retention_days = value;
+    }
+
+    if let Some(value) = request.max_days {
+        if value == 0 || value > MAX_CONFIGURABLE_API_BEHAVIOR_DAYS {
+            return Err(bad_request("`max_days` must be between 1 and 365"));
+        }
+        next.max_days = value;
+    }
+
+    if let Some(value) = request.default_days {
+        if value == 0 || value > MAX_CONFIGURABLE_API_BEHAVIOR_DAYS {
+            return Err(bad_request("`default_days` must be between 1 and 365"));
+        }
+        next.default_days = value;
+    }
+
+    if next.default_days > next.max_days {
+        return Err(bad_request("`default_days` must be less than or equal to `max_days`"));
+    }
+
+    Ok(next)
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     use super::{
-        apply_view_analytics_config_update, extract_client_ip, is_local_host_header,
-        parse_raw_markdown_lang, UpdateViewAnalyticsConfigRequest,
+        apply_api_behavior_config_update, apply_view_analytics_config_update, extract_client_ip,
+        is_local_host_header, parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
+        UpdateViewAnalyticsConfigRequest,
     };
-    use crate::state::ViewAnalyticsRuntimeConfig;
+    use crate::state::{ApiBehaviorRuntimeConfig, ViewAnalyticsRuntimeConfig};
 
     #[test]
     fn extract_client_ip_prefers_x_forwarded_for() {
@@ -2738,6 +3134,29 @@ mod tests {
         assert_eq!(config.dedupe_window_seconds, 120);
         assert_eq!(config.trend_default_days, 30);
         assert_eq!(config.trend_max_days, 240);
+    }
+
+    #[test]
+    fn update_api_behavior_config_rejects_invalid_ranges() {
+        let result = apply_api_behavior_config_update(
+            ApiBehaviorRuntimeConfig::default(),
+            UpdateApiBehaviorConfigRequest {
+                retention_days: Some(0),
+                default_days: None,
+                max_days: None,
+            },
+        );
+        assert!(result.is_err());
+
+        let result = apply_api_behavior_config_update(
+            ApiBehaviorRuntimeConfig::default(),
+            UpdateApiBehaviorConfigRequest {
+                retention_days: Some(30),
+                default_days: Some(200),
+                max_days: Some(30),
+            },
+        );
+        assert!(result.is_err());
     }
 
     #[test]

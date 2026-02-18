@@ -74,10 +74,9 @@ pub mod home {
         "El Psy Kongroo | 世界线收束中... | Rustacean | Database 练习生，痴迷一切底层黑魔法";
 
     pub const CMD_SHOW_README: &str = "cat ./README.md";
-    pub const INTRO: &str = "可视化博客 + Skill \
-                             工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
-                             统一存储文章与图片，支持全文语义与混合检索，并具备基于 AI + \
-                             Skill 的评论区自动回复能力。";
+    pub const INTRO: &str =
+        "可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
+         统一存储文章与图片，支持全文语义与混合检索，并具备基于 AI + Skill 的评论区自动回复能力。";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
     pub const BTN_VIEW_ARTICLES: &str = "查看文章";

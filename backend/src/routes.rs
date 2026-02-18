@@ -6,9 +6,10 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::{handlers, request_context, state::AppState};
+use crate::{behavior_analytics, handlers, request_context, state::AppState};
 
 pub fn create_router(state: AppState) -> Router {
+    let behavior_state = state.clone();
     let allow_origin_env = std::env::var("ALLOWED_ORIGINS").ok();
     let allowed_origins = parse_allowed_origins(allow_origin_env.as_deref());
 
@@ -71,6 +72,13 @@ pub fn create_router(state: AppState) -> Router {
             "/admin/comment-config",
             get(handlers::get_comment_runtime_config).post(handlers::update_comment_runtime_config),
         )
+        .route(
+            "/admin/api-behavior-config",
+            get(handlers::get_api_behavior_config).post(handlers::update_api_behavior_config),
+        )
+        .route("/admin/api-behavior/overview", get(handlers::admin_api_behavior_overview))
+        .route("/admin/api-behavior/events", get(handlers::admin_list_api_behavior_events))
+        .route("/admin/api-behavior/cleanup", post(handlers::admin_cleanup_api_behavior))
         .route("/admin/geoip/status", get(handlers::get_geoip_status))
         .route("/admin/comments/tasks", get(handlers::admin_list_comment_tasks))
         .route("/admin/comments/tasks/grouped", get(handlers::admin_list_comment_tasks_grouped))
@@ -106,6 +114,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/admin/comments/cleanup", post(handlers::admin_cleanup_comments))
         .with_state(state)
         .layer(middleware::from_fn(request_context::request_context_middleware))
+        .layer(middleware::from_fn_with_state(
+            behavior_state,
+            behavior_analytics::behavior_analytics_middleware,
+        ))
         .layer(cors)
 }
 

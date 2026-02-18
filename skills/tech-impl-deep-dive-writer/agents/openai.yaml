@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tech Impl Deep-Dive Writer"
+  short_description: "Mechanism-first technical deep-dive writing style"
+  default_prompt: "Use this skill to write implementation deep-dives with clear total-to-detail headings, principle-and-mechanism explanations, trade-off analysis, and a compact code index appendix instead of source-location dumps."

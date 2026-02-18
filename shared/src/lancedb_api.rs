@@ -6,9 +6,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use arrow_array::{
-    builder::{StringBuilder, TimestampMillisecondBuilder},
-    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, ListArray, RecordBatch,
-    RecordBatchIterator, StringArray,
+    builder::{Int32Builder, StringBuilder, TimestampMillisecondBuilder},
+    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int32Array, ListArray,
+    RecordBatch, RecordBatchIterator, StringArray, TimestampMillisecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::{Duration as ChronoDuration, FixedOffset, NaiveDate, Utc};
@@ -145,6 +145,74 @@ pub struct ArticleViewTrendResponse {
     pub points: Vec<ArticleViewPoint>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ApiBehaviorEvent {
+    pub event_id: String,
+    pub occurred_at: i64,
+    pub client_source: String,
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub page_path: String,
+    pub referrer: Option<String>,
+    pub status_code: i32,
+    pub latency_ms: i32,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub ua_raw: Option<String>,
+    pub device_type: String,
+    pub os_family: String,
+    pub browser_family: String,
+    pub request_id: String,
+    pub trace_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ApiBehaviorBucket {
+    pub key: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ApiBehaviorOverviewResponse {
+    pub timezone: String,
+    pub days: usize,
+    pub total_events: usize,
+    pub unique_ips: usize,
+    pub unique_pages: usize,
+    pub avg_latency_ms: f64,
+    pub timeseries: Vec<ApiBehaviorBucket>,
+    pub top_endpoints: Vec<ApiBehaviorBucket>,
+    pub top_pages: Vec<ApiBehaviorBucket>,
+    pub device_distribution: Vec<ApiBehaviorBucket>,
+    pub browser_distribution: Vec<ApiBehaviorBucket>,
+    pub os_distribution: Vec<ApiBehaviorBucket>,
+    pub region_distribution: Vec<ApiBehaviorBucket>,
+    pub recent_events: Vec<ApiBehaviorEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct NewApiBehaviorEventInput {
+    pub event_id: String,
+    pub occurred_at: i64,
+    pub client_source: String,
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub page_path: String,
+    pub referrer: Option<String>,
+    pub status_code: i32,
+    pub latency_ms: i32,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub ua_raw: Option<String>,
+    pub device_type: String,
+    pub os_family: String,
+    pub browser_family: String,
+    pub request_id: String,
+    pub trace_id: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageBlob {
     pub bytes: Vec<u8>,
@@ -158,6 +226,7 @@ pub struct StaticFlowDataStore {
     images_table: String,
     taxonomies_table: String,
     article_views_table: String,
+    api_behavior_table: String,
 }
 
 impl StaticFlowDataStore {
@@ -173,6 +242,7 @@ impl StaticFlowDataStore {
             images_table: "images".to_string(),
             taxonomies_table: "taxonomies".to_string(),
             article_views_table: "article_views".to_string(),
+            api_behavior_table: "api_behavior_events".to_string(),
         })
     }
 
@@ -223,6 +293,113 @@ impl StaticFlowDataStore {
                     .context("failed to open article_views table")
             },
         }
+    }
+
+    async fn api_behavior_table(&self) -> Result<Table> {
+        match self.db.open_table(&self.api_behavior_table).execute().await {
+            Ok(table) => Ok(table),
+            Err(_) => {
+                let schema = api_behavior_schema();
+                let batch = RecordBatch::new_empty(schema.clone());
+                let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
+                self.db
+                    .create_table(&self.api_behavior_table, Box::new(batches))
+                    .execute()
+                    .await
+                    .context("failed to create api_behavior_events table")?;
+                self.db
+                    .open_table(&self.api_behavior_table)
+                    .execute()
+                    .await
+                    .context("failed to open api_behavior_events table")
+            },
+        }
+    }
+
+    pub async fn append_api_behavior_event(&self, input: NewApiBehaviorEventInput) -> Result<()> {
+        let table = self.api_behavior_table().await?;
+        let now_ms = Utc::now().timestamp_millis();
+        let record = ApiBehaviorRecord {
+            event_id: normalize_required_text(input.event_id, 96, "evt"),
+            occurred_at: input.occurred_at,
+            client_source: normalize_required_text(input.client_source, 24, "unknown"),
+            method: normalize_required_text(input.method, 16, "GET"),
+            path: normalize_required_text(input.path, 512, "/"),
+            query: normalize_text(input.query, 2048),
+            page_path: normalize_required_text(input.page_path, 512, "unknown"),
+            referrer: normalize_optional_text(input.referrer, 1024),
+            status_code: input.status_code.max(0),
+            latency_ms: input.latency_ms.max(0),
+            client_ip: normalize_required_text(input.client_ip, 64, "unknown"),
+            ip_region: normalize_required_text(input.ip_region, 128, "Unknown"),
+            ua_raw: normalize_optional_text(input.ua_raw, 1024),
+            device_type: normalize_required_text(input.device_type, 24, "unknown"),
+            os_family: normalize_required_text(input.os_family, 48, "unknown"),
+            browser_family: normalize_required_text(input.browser_family, 48, "unknown"),
+            request_id: normalize_required_text(input.request_id, 128, "unknown"),
+            trace_id: normalize_required_text(input.trace_id, 128, "unknown"),
+            created_at: now_ms,
+            updated_at: now_ms,
+        };
+        upsert_api_behavior_record(&table, &record).await
+    }
+
+    pub async fn list_api_behavior_events(
+        &self,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<ApiBehaviorEvent>> {
+        let table = self.api_behavior_table().await?;
+        let batches = table
+            .query()
+            .select(Select::columns(&[
+                "event_id",
+                "occurred_at",
+                "client_source",
+                "method",
+                "path",
+                "query",
+                "page_path",
+                "referrer",
+                "status_code",
+                "latency_ms",
+                "client_ip",
+                "ip_region",
+                "ua_raw",
+                "device_type",
+                "os_family",
+                "browser_family",
+                "request_id",
+                "trace_id",
+            ]))
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut events = batches_to_api_behavior_events(&batches)?;
+        if let Some(min_ms) = since_ms {
+            events.retain(|item| item.occurred_at >= min_ms);
+        }
+        events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+        Ok(events)
+    }
+
+    pub async fn cleanup_api_behavior_before(&self, before_ms: i64) -> Result<usize> {
+        let table = self.api_behavior_table().await?;
+        let filter = format!("occurred_at < {before_ms}");
+        let deleted = table
+            .count_rows(Some(filter.clone()))
+            .await
+            .context("failed to count api behavior rows before cleanup")?
+            as usize;
+        if deleted == 0 {
+            return Ok(0);
+        }
+
+        table
+            .delete(&filter)
+            .await
+            .context("failed to cleanup api behavior rows")?;
+        Ok(deleted)
     }
 
     pub async fn track_article_view(
@@ -2032,6 +2209,30 @@ struct ArticleViewRecord {
     updated_at: i64,
 }
 
+#[derive(Debug, Clone)]
+struct ApiBehaviorRecord {
+    event_id: String,
+    occurred_at: i64,
+    client_source: String,
+    method: String,
+    path: String,
+    query: String,
+    page_path: String,
+    referrer: Option<String>,
+    status_code: i32,
+    latency_ms: i32,
+    client_ip: String,
+    ip_region: String,
+    ua_raw: Option<String>,
+    device_type: String,
+    os_family: String,
+    browser_family: String,
+    request_id: String,
+    trace_id: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
 const SHANGHAI_TIMEZONE: &str = "Asia/Shanghai";
 
 fn shanghai_tz() -> FixedOffset {
@@ -2051,6 +2252,31 @@ fn article_view_schema() -> Arc<Schema> {
         Field::new("day_bucket", DataType::Utf8, false),
         Field::new("hour_bucket", DataType::Utf8, false),
         Field::new("client_fingerprint", DataType::Utf8, false),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+    ]))
+}
+
+fn api_behavior_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("event_id", DataType::Utf8, false),
+        Field::new("occurred_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("client_source", DataType::Utf8, false),
+        Field::new("method", DataType::Utf8, false),
+        Field::new("path", DataType::Utf8, false),
+        Field::new("query", DataType::Utf8, false),
+        Field::new("page_path", DataType::Utf8, false),
+        Field::new("referrer", DataType::Utf8, true),
+        Field::new("status_code", DataType::Int32, false),
+        Field::new("latency_ms", DataType::Int32, false),
+        Field::new("client_ip", DataType::Utf8, false),
+        Field::new("ip_region", DataType::Utf8, false),
+        Field::new("ua_raw", DataType::Utf8, true),
+        Field::new("device_type", DataType::Utf8, false),
+        Field::new("os_family", DataType::Utf8, false),
+        Field::new("browser_family", DataType::Utf8, false),
+        Field::new("request_id", DataType::Utf8, false),
+        Field::new("trace_id", DataType::Utf8, false),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
@@ -2096,6 +2322,87 @@ async fn upsert_article_view_record(table: &Table, record: &ArticleViewRecord) -
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
 
     let mut merge = table.merge_insert(&["id"]);
+    merge.when_matched_update_all(None);
+    merge.when_not_matched_insert_all();
+    merge.execute(Box::new(batches)).await?;
+    Ok(())
+}
+
+fn build_api_behavior_batch(record: &ApiBehaviorRecord) -> Result<RecordBatch> {
+    let mut event_id_builder = StringBuilder::new();
+    let mut occurred_at_builder = TimestampMillisecondBuilder::new();
+    let mut client_source_builder = StringBuilder::new();
+    let mut method_builder = StringBuilder::new();
+    let mut path_builder = StringBuilder::new();
+    let mut query_builder = StringBuilder::new();
+    let mut page_path_builder = StringBuilder::new();
+    let mut referrer_builder = StringBuilder::new();
+    let mut status_code_builder = Int32Builder::new();
+    let mut latency_ms_builder = Int32Builder::new();
+    let mut client_ip_builder = StringBuilder::new();
+    let mut ip_region_builder = StringBuilder::new();
+    let mut ua_raw_builder = StringBuilder::new();
+    let mut device_type_builder = StringBuilder::new();
+    let mut os_family_builder = StringBuilder::new();
+    let mut browser_family_builder = StringBuilder::new();
+    let mut request_id_builder = StringBuilder::new();
+    let mut trace_id_builder = StringBuilder::new();
+    let mut created_at_builder = TimestampMillisecondBuilder::new();
+    let mut updated_at_builder = TimestampMillisecondBuilder::new();
+
+    event_id_builder.append_value(&record.event_id);
+    occurred_at_builder.append_value(record.occurred_at);
+    client_source_builder.append_value(&record.client_source);
+    method_builder.append_value(&record.method);
+    path_builder.append_value(&record.path);
+    query_builder.append_value(&record.query);
+    page_path_builder.append_value(&record.page_path);
+    referrer_builder.append_option(record.referrer.as_deref());
+    status_code_builder.append_value(record.status_code);
+    latency_ms_builder.append_value(record.latency_ms);
+    client_ip_builder.append_value(&record.client_ip);
+    ip_region_builder.append_value(&record.ip_region);
+    ua_raw_builder.append_option(record.ua_raw.as_deref());
+    device_type_builder.append_value(&record.device_type);
+    os_family_builder.append_value(&record.os_family);
+    browser_family_builder.append_value(&record.browser_family);
+    request_id_builder.append_value(&record.request_id);
+    trace_id_builder.append_value(&record.trace_id);
+    created_at_builder.append_value(record.created_at);
+    updated_at_builder.append_value(record.updated_at);
+
+    let schema = api_behavior_schema();
+    let arrays: Vec<ArrayRef> = vec![
+        Arc::new(event_id_builder.finish()),
+        Arc::new(occurred_at_builder.finish()),
+        Arc::new(client_source_builder.finish()),
+        Arc::new(method_builder.finish()),
+        Arc::new(path_builder.finish()),
+        Arc::new(query_builder.finish()),
+        Arc::new(page_path_builder.finish()),
+        Arc::new(referrer_builder.finish()),
+        Arc::new(status_code_builder.finish()),
+        Arc::new(latency_ms_builder.finish()),
+        Arc::new(client_ip_builder.finish()),
+        Arc::new(ip_region_builder.finish()),
+        Arc::new(ua_raw_builder.finish()),
+        Arc::new(device_type_builder.finish()),
+        Arc::new(os_family_builder.finish()),
+        Arc::new(browser_family_builder.finish()),
+        Arc::new(request_id_builder.finish()),
+        Arc::new(trace_id_builder.finish()),
+        Arc::new(created_at_builder.finish()),
+        Arc::new(updated_at_builder.finish()),
+    ];
+    Ok(RecordBatch::try_new(schema, arrays)?)
+}
+
+async fn upsert_api_behavior_record(table: &Table, record: &ApiBehaviorRecord) -> Result<()> {
+    let batch = build_api_behavior_batch(record)?;
+    let schema = batch.schema();
+    let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+
+    let mut merge = table.merge_insert(&["event_id"]);
     merge.when_matched_update_all(None);
     merge.when_not_matched_insert_all();
     merge.execute(Box::new(batches)).await?;
@@ -2228,6 +2535,61 @@ fn extract_image_bytes(
     Ok(None)
 }
 
+fn batches_to_api_behavior_events(batches: &[RecordBatch]) -> Result<Vec<ApiBehaviorEvent>> {
+    let mut events = Vec::new();
+    for batch in batches {
+        if batch.num_rows() == 0 {
+            continue;
+        }
+
+        let event_id = string_array(batch, "event_id")?;
+        let occurred_at = timestamp_ms_array(batch, "occurred_at")?;
+        let client_source = string_array(batch, "client_source")?;
+        let method = string_array(batch, "method")?;
+        let path = string_array(batch, "path")?;
+        let query = string_array(batch, "query")?;
+        let page_path = string_array(batch, "page_path")?;
+        let referrer = optional_string_array(batch, "referrer");
+        let status_code = int32_array(batch, "status_code")?;
+        let latency_ms = int32_array(batch, "latency_ms")?;
+        let client_ip = string_array(batch, "client_ip")?;
+        let ip_region = string_array(batch, "ip_region")?;
+        let ua_raw = optional_string_array(batch, "ua_raw");
+        let device_type = string_array(batch, "device_type")?;
+        let os_family = string_array(batch, "os_family")?;
+        let browser_family = string_array(batch, "browser_family")?;
+        let request_id = string_array(batch, "request_id")?;
+        let trace_id = string_array(batch, "trace_id")?;
+
+        for idx in 0..batch.num_rows() {
+            if occurred_at.is_null(idx) {
+                continue;
+            }
+            events.push(ApiBehaviorEvent {
+                event_id: value_string(event_id, idx),
+                occurred_at: occurred_at.value(idx),
+                client_source: value_string(client_source, idx),
+                method: value_string(method, idx),
+                path: value_string(path, idx),
+                query: value_string(query, idx),
+                page_path: value_string(page_path, idx),
+                referrer: referrer.and_then(|array| value_string_opt(array, idx)),
+                status_code: status_code.value(idx),
+                latency_ms: latency_ms.value(idx),
+                client_ip: value_string(client_ip, idx),
+                ip_region: value_string(ip_region, idx),
+                ua_raw: ua_raw.and_then(|array| value_string_opt(array, idx)),
+                device_type: value_string(device_type, idx),
+                os_family: value_string(os_family, idx),
+                browser_family: value_string(browser_family, idx),
+                request_id: value_string(request_id, idx),
+                trace_id: value_string(trace_id, idx),
+            });
+        }
+    }
+    Ok(events)
+}
+
 fn string_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray> {
     column(batch, name)?
         .as_any()
@@ -2253,8 +2615,18 @@ fn list_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ListArray> {
 fn int32_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a arrow_array::Int32Array> {
     column(batch, name)?
         .as_any()
-        .downcast_ref::<arrow_array::Int32Array>()
+        .downcast_ref::<Int32Array>()
         .with_context(|| format!("column {name} is not Int32Array"))
+}
+
+fn timestamp_ms_array<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<&'a TimestampMillisecondArray> {
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<TimestampMillisecondArray>()
+        .with_context(|| format!("column {name} is not TimestampMillisecondArray"))
 }
 
 fn binary_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a BinaryArray> {
@@ -2350,6 +2722,29 @@ fn image_mime_type(filename: &str) -> &'static str {
 
 fn escape_literal(input: &str) -> String {
     input.replace('\'', "''")
+}
+
+fn normalize_text(value: String, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.chars().take(max_chars.max(1)).collect::<String>()
+}
+
+fn normalize_optional_text(value: Option<String>, max_chars: usize) -> Option<String> {
+    value
+        .map(|item| normalize_text(item, max_chars))
+        .filter(|item| !item.is_empty())
+}
+
+fn normalize_required_text(value: String, max_chars: usize, fallback: &str) -> String {
+    let normalized = normalize_text(value, max_chars);
+    if normalized.is_empty() {
+        fallback.to_string()
+    } else {
+        normalized
+    }
 }
 
 fn extract_highlight(text: &str, keyword: &str) -> String {

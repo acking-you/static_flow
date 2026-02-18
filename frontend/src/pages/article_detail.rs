@@ -650,11 +650,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         .as_deref()
                         .map(|value| !value.trim().is_empty())
                         .unwrap_or(false);
-                    let preferred_lang = if *lang == ArticleContentLanguage::En && has_en {
-                        "en"
-                    } else {
-                        "zh"
-                    };
+                    let preferred_lang =
+                        if *lang == ArticleContentLanguage::En && has_en { "en" } else { "zh" };
                     seo::apply_article_seo(article, id, preferred_lang);
                 }
                 || ()

@@ -29,6 +29,11 @@ pub const DEFAULT_COMMENT_LIST_LIMIT: usize = 20;
 pub const MAX_CONFIGURABLE_COMMENT_LIST_LIMIT: usize = 200;
 pub const DEFAULT_COMMENT_CLEANUP_RETENTION_DAYS: i64 = -1;
 pub const MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS: i64 = 3650;
+pub const DEFAULT_API_BEHAVIOR_RETENTION_DAYS: i64 = 90;
+pub const DEFAULT_API_BEHAVIOR_DEFAULT_DAYS: usize = 30;
+pub const DEFAULT_API_BEHAVIOR_MAX_DAYS: usize = 180;
+pub const MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS: i64 = 3650;
+pub const MAX_CONFIGURABLE_API_BEHAVIOR_DAYS: usize = 365;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewAnalyticsRuntimeConfig {
@@ -64,6 +69,23 @@ impl Default for CommentRuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiBehaviorRuntimeConfig {
+    pub retention_days: i64,
+    pub default_days: usize,
+    pub max_days: usize,
+}
+
+impl Default for ApiBehaviorRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: DEFAULT_API_BEHAVIOR_RETENTION_DAYS,
+            default_days: DEFAULT_API_BEHAVIOR_DEFAULT_DAYS,
+            max_days: DEFAULT_API_BEHAVIOR_MAX_DAYS,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdminAccessConfig {
     pub local_only: bool,
@@ -80,6 +102,7 @@ pub struct AppState {
     pub(crate) stats_cache: SharedValueCache<StatsResponse>,
     pub(crate) view_analytics_config: Arc<RwLock<ViewAnalyticsRuntimeConfig>>,
     pub(crate) comment_runtime_config: Arc<RwLock<CommentRuntimeConfig>>,
+    pub(crate) api_behavior_runtime_config: Arc<RwLock<ApiBehaviorRuntimeConfig>>,
     pub(crate) comment_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) comment_worker_tx: mpsc::Sender<String>,
     pub(crate) admin_access: AdminAccessConfig,
@@ -93,6 +116,8 @@ impl AppState {
         geoip.warmup().await;
 
         let comment_runtime_config = Arc::new(RwLock::new(read_comment_runtime_config_from_env()));
+        let api_behavior_runtime_config =
+            Arc::new(RwLock::new(read_api_behavior_runtime_config_from_env()));
         let comment_worker_tx = comment_worker::spawn_comment_worker(
             comment_store.clone(),
             CommentAiWorkerConfig::from_env(content_db_uri.to_string()),
@@ -114,6 +139,7 @@ impl AppState {
             stats_cache: Arc::new(RwLock::new(None)),
             view_analytics_config: Arc::new(RwLock::new(ViewAnalyticsRuntimeConfig::default())),
             comment_runtime_config,
+            api_behavior_runtime_config,
             comment_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             comment_worker_tx,
             admin_access,
@@ -154,5 +180,32 @@ fn read_comment_runtime_config_from_env() -> CommentRuntimeConfig {
         submit_rate_limit_seconds,
         list_default_limit,
         cleanup_retention_days,
+    }
+}
+
+fn read_api_behavior_runtime_config_from_env() -> ApiBehaviorRuntimeConfig {
+    let retention_days = env::var("API_BEHAVIOR_RETENTION_DAYS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| {
+            *value == -1 || (*value >= 1 && *value <= MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS)
+        })
+        .unwrap_or(DEFAULT_API_BEHAVIOR_RETENTION_DAYS);
+    let max_days = env::var("API_BEHAVIOR_MAX_DAYS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0 && *value <= MAX_CONFIGURABLE_API_BEHAVIOR_DAYS)
+        .unwrap_or(DEFAULT_API_BEHAVIOR_MAX_DAYS);
+    let default_days = env::var("API_BEHAVIOR_DEFAULT_DAYS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0 && *value <= MAX_CONFIGURABLE_API_BEHAVIOR_DAYS)
+        .unwrap_or(DEFAULT_API_BEHAVIOR_DEFAULT_DAYS)
+        .min(max_days);
+
+    ApiBehaviorRuntimeConfig {
+        retention_days,
+        default_days,
+        max_days,
     }
 }

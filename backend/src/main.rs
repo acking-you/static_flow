@@ -1,3 +1,4 @@
+mod behavior_analytics;
 mod comment_worker;
 mod geoip;
 mod handlers;

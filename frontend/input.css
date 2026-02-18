@@ -3144,11 +3144,11 @@ button[aria-current="page"]:hover {
   text-align: center;
   background: var(--code-bg);
   border-radius: 8px;
-  overflow: auto;
-  /* Keep long diagrams readable: scroll container instead of shrinking SVG. */
-  max-height: min(92vh, 1600px);
-  /* 容器宽度适应父元素 */
+  /* Keep horizontal overflow local; height follows content naturally. */
+  overflow-x: auto;
+  overflow-y: hidden;
   width: 100%;
+  max-width: 100%;
 }
 
 .mermaid.mermaid-pending {
@@ -3198,9 +3198,9 @@ button[aria-current="page"]:hover {
 }
 
 .mermaid svg {
-  /* Do not downscale diagram content; rely on container scrollbars for overflow. */
-  width: max-content !important;
-  height: max-content !important;
+  /* Use SVG's own intrinsic size from Mermaid render output. */
+  width: auto !important;
+  height: auto !important;
   max-width: none !important;
   max-height: none !important;
   /* 小图表居中 */
@@ -3212,7 +3212,6 @@ button[aria-current="page"]:hover {
 @media (max-width: 768px) {
   .mermaid {
     padding: 1rem;
-    max-height: min(88vh, 1200px);
   }
 
   .mermaid.mermaid-pending {
@@ -3274,9 +3273,11 @@ button[aria-current="page"]:hover {
 .mermaid-wrapper {
   position: relative;
   margin: 2rem auto;
+  width: 100%;
+  max-width: 100%;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .mermaid-wrapper .mermaid {

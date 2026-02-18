@@ -1,5 +1,5 @@
 #[cfg(not(feature = "mock"))]
-use gloo_net::http::Request;
+use gloo_net::http::{Request, RequestBuilder};
 #[cfg(not(feature = "mock"))]
 use js_sys::Date;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,54 @@ pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
     Some(url) => url,
     None => "http://localhost:3000/api",
 };
+
+#[cfg(not(feature = "mock"))]
+fn current_page_path() -> Option<String> {
+    let window = web_sys::window()?;
+    let location = window.location();
+    let mut path = location.pathname().ok().unwrap_or_else(|| "/".to_string());
+    if path.trim().is_empty() {
+        path = "/".to_string();
+    }
+    let search = location.search().ok().unwrap_or_default();
+    let hash = location.hash().ok().unwrap_or_default();
+    if !search.is_empty() {
+        path.push_str(&search);
+    }
+    if !hash.is_empty() {
+        path.push_str(&hash);
+    }
+    Some(path)
+}
+
+#[cfg(not(feature = "mock"))]
+fn with_behavior_headers(mut builder: RequestBuilder) -> RequestBuilder {
+    builder = builder.header("x-sf-client", "web");
+    if let Some(path) = current_page_path() {
+        builder = builder.header("x-sf-page", &path);
+    }
+    builder
+}
+
+#[cfg(not(feature = "mock"))]
+fn api_get(url: &str) -> RequestBuilder {
+    with_behavior_headers(Request::get(url))
+}
+
+#[cfg(not(feature = "mock"))]
+fn api_post(url: &str) -> RequestBuilder {
+    with_behavior_headers(Request::post(url))
+}
+
+#[cfg(not(feature = "mock"))]
+fn api_patch(url: &str) -> RequestBuilder {
+    with_behavior_headers(Request::patch(url))
+}
+
+#[cfg(not(feature = "mock"))]
+fn api_delete(url: &str) -> RequestBuilder {
+    with_behavior_headers(Request::delete(url))
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TagInfo {
@@ -129,7 +177,7 @@ pub async fn fetch_articles(
             url.push_str(&params.join("&"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
             .send()
@@ -160,7 +208,7 @@ pub async fn fetch_article_detail(id: &str) -> Result<Option<Article>, String> {
     {
         let url = format!("{}/articles/{}?_ts={}", API_BASE, id, Date::now() as u64);
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
             .send()
@@ -217,7 +265,7 @@ pub async fn fetch_article_raw_markdown(id: &str, lang: &str) -> Result<String, 
             Date::now() as u64
         );
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
             .send()
@@ -261,7 +309,7 @@ pub async fn track_article_view(id: &str) -> Result<ArticleViewTrackResponse, St
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/articles/{}/view", API_BASE, urlencoding::encode(id));
-        let response = Request::post(&url)
+        let response = api_post(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
             .send()
@@ -335,7 +383,7 @@ pub async fn fetch_article_view_trend(
             url.push_str(&format!("&day={}", urlencoding::encode(day)));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
             .send()
@@ -364,7 +412,7 @@ pub async fn fetch_tags() -> Result<Vec<TagInfo>, String> {
     {
         let url = format!("{}/tags", API_BASE);
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -393,7 +441,7 @@ pub async fn fetch_categories() -> Result<Vec<CategoryInfo>, String> {
     {
         let url = format!("{}/categories", API_BASE);
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -446,7 +494,7 @@ pub async fn fetch_site_stats() -> Result<SiteStats, String> {
     {
         let url = format!("{}/stats", API_BASE);
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -566,7 +614,7 @@ pub async fn search_articles(
             url.push_str(&format!("&limit={limit}"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -636,7 +684,7 @@ pub async fn semantic_search_articles(
             url.push_str(&format!("&hybrid_fts_limit={fts_limit}"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -670,7 +718,7 @@ pub async fn fetch_related_articles(id: &str) -> Result<Vec<ArticleListItem>, St
     {
         let url = format!("{}/articles/{}/related", API_BASE, id);
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -723,7 +771,7 @@ pub async fn fetch_images_page(
             url.push_str(&format!("?offset={offset}"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -799,7 +847,7 @@ pub async fn search_images_by_id_page(
             url.push_str(&format!("&max_distance={max_distance}"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -875,7 +923,7 @@ pub async fn search_images_by_text_page(
             url.push_str(&format!("&max_distance={max_distance}"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -973,6 +1021,93 @@ pub struct ViewAnalyticsConfig {
     pub dedupe_window_seconds: u64,
     pub trend_default_days: usize,
     pub trend_max_days: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ApiBehaviorConfig {
+    pub retention_days: i64,
+    pub default_days: usize,
+    pub max_days: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ApiBehaviorBucket {
+    pub key: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminApiBehaviorEvent {
+    pub event_id: String,
+    pub occurred_at: i64,
+    pub client_source: String,
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub page_path: String,
+    pub referrer: Option<String>,
+    pub status_code: i32,
+    pub latency_ms: i32,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub ua_raw: Option<String>,
+    pub device_type: String,
+    pub os_family: String,
+    pub browser_family: String,
+    pub request_id: String,
+    pub trace_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminApiBehaviorOverviewResponse {
+    pub timezone: String,
+    pub days: usize,
+    pub total_events: usize,
+    pub unique_ips: usize,
+    pub unique_pages: usize,
+    pub avg_latency_ms: f64,
+    pub timeseries: Vec<ApiBehaviorBucket>,
+    pub top_endpoints: Vec<ApiBehaviorBucket>,
+    pub top_pages: Vec<ApiBehaviorBucket>,
+    pub device_distribution: Vec<ApiBehaviorBucket>,
+    pub browser_distribution: Vec<ApiBehaviorBucket>,
+    pub os_distribution: Vec<ApiBehaviorBucket>,
+    pub region_distribution: Vec<ApiBehaviorBucket>,
+    pub recent_events: Vec<AdminApiBehaviorEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminApiBehaviorEventsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub events: Vec<AdminApiBehaviorEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminApiBehaviorEventsQuery {
+    pub days: Option<usize>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub path_contains: Option<String>,
+    pub page_contains: Option<String>,
+    pub device_type: Option<String>,
+    pub method: Option<String>,
+    pub status_code: Option<i32>,
+    pub ip: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminApiBehaviorCleanupRequest {
+    pub retention_days: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminApiBehaviorCleanupResponse {
+    pub deleted_events: usize,
+    pub before_ms: i64,
+    pub retention_days: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1248,7 +1383,7 @@ pub async fn submit_article_comment(
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/comments/submit", API_BASE);
-        let response = Request::post(&url)
+        let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(&request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1292,7 +1427,7 @@ pub async fn fetch_article_comments(
             url.push_str(&format!("&limit={limit}"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1324,7 +1459,7 @@ pub async fn fetch_article_comment_stats(article_id: &str) -> Result<CommentStat
     {
         let url =
             format!("{}/comments/stats?article_id={}", API_BASE, urlencoding::encode(article_id),);
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1352,7 +1487,7 @@ pub async fn fetch_admin_view_analytics_config() -> Result<ViewAnalyticsConfig, 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/view-analytics-config", admin_base());
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1377,9 +1512,233 @@ pub async fn update_admin_view_analytics_config(
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/view-analytics-config", admin_base());
-        let response = Request::post(&url)
+        let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(config)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_api_behavior_config() -> Result<ApiBehaviorConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(ApiBehaviorConfig {
+            retention_days: 90,
+            default_days: 30,
+            max_days: 180,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/api-behavior-config", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn update_admin_api_behavior_config(
+    config: &ApiBehaviorConfig,
+) -> Result<ApiBehaviorConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(config.clone());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/api-behavior-config", admin_base());
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(config)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_api_behavior_overview(
+    days: Option<usize>,
+    limit: Option<usize>,
+) -> Result<AdminApiBehaviorOverviewResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminApiBehaviorOverviewResponse {
+            timezone: "Asia/Shanghai".to_string(),
+            days: days.unwrap_or(30),
+            total_events: 0,
+            unique_ips: 0,
+            unique_pages: 0,
+            avg_latency_ms: 0.0,
+            timeseries: vec![],
+            top_endpoints: vec![],
+            top_pages: vec![],
+            device_distribution: vec![],
+            browser_distribution: vec![],
+            os_distribution: vec![],
+            region_distribution: vec![],
+            recent_events: vec![],
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/api-behavior/overview", admin_base());
+        let mut params = Vec::new();
+        if let Some(days) = days {
+            params.push(format!("days={days}"));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_api_behavior_events(
+    query: &AdminApiBehaviorEventsQuery,
+) -> Result<AdminApiBehaviorEventsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminApiBehaviorEventsResponse {
+            total: 0,
+            offset: query.offset.unwrap_or(0),
+            limit: query.limit.unwrap_or(100),
+            has_more: false,
+            events: vec![],
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/api-behavior/events", admin_base());
+        let mut params = Vec::new();
+        if let Some(days) = query.days {
+            params.push(format!("days={days}"));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        if let Some(value) = query
+            .path_contains
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            params.push(format!("path_contains={}", urlencoding::encode(value)));
+        }
+        if let Some(value) = query
+            .page_contains
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            params.push(format!("page_contains={}", urlencoding::encode(value)));
+        }
+        if let Some(value) = query
+            .device_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            params.push(format!("device_type={}", urlencoding::encode(value)));
+        }
+        if let Some(value) = query
+            .method
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            params.push(format!("method={}", urlencoding::encode(value)));
+        }
+        if let Some(value) = query.status_code {
+            params.push(format!("status_code={value}"));
+        }
+        if let Some(value) = query.ip.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            params.push(format!("ip={}", urlencoding::encode(value)));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_cleanup_api_behavior(
+    request: &AdminApiBehaviorCleanupRequest,
+) -> Result<AdminApiBehaviorCleanupResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminApiBehaviorCleanupResponse {
+            deleted_events: 0,
+            before_ms: 0,
+            retention_days: request.retention_days.unwrap_or(90),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/api-behavior/cleanup", admin_base());
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await
@@ -1407,7 +1766,7 @@ pub async fn fetch_admin_comment_runtime_config() -> Result<CommentRuntimeConfig
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/comment-config", admin_base());
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1432,7 +1791,7 @@ pub async fn update_admin_comment_runtime_config(
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/comment-config", admin_base());
-        let response = Request::post(&url)
+        let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(config)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1478,7 +1837,7 @@ pub async fn fetch_admin_comment_tasks_grouped(
             url.push_str(&params.join("&"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1502,7 +1861,7 @@ pub async fn fetch_admin_comment_task(task_id: &str) -> Result<AdminCommentTask,
     {
         let url =
             format!("{}/admin/comments/tasks/{}", admin_base(), urlencoding::encode(task_id),);
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1553,7 +1912,7 @@ pub async fn fetch_admin_comment_task_ai_output(
             url.push_str(&params.join("&"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1580,7 +1939,7 @@ pub async fn patch_admin_comment_task(
     {
         let url =
             format!("{}/admin/comments/tasks/{}", admin_base(), urlencoding::encode(task_id),);
-        let response = Request::patch(&url)
+        let response = api_patch(&url)
             .header("Content-Type", "application/json")
             .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1638,7 +1997,7 @@ pub async fn admin_delete_comment_task(
     {
         let url =
             format!("{}/admin/comments/tasks/{}", admin_base(), urlencoding::encode(task_id),);
-        let response = Request::delete(&url)
+        let response = api_delete(&url)
             .header("Content-Type", "application/json")
             .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1686,7 +2045,7 @@ pub async fn fetch_admin_published_comments(
             url.push_str(&params.join("&"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1716,7 +2075,7 @@ pub async fn patch_admin_published_comment(
             admin_base(),
             urlencoding::encode(comment_id),
         );
-        let response = Request::patch(&url)
+        let response = api_patch(&url)
             .header("Content-Type", "application/json")
             .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1749,7 +2108,7 @@ pub async fn delete_admin_published_comment(
             admin_base(),
             urlencoding::encode(comment_id),
         );
-        let response = Request::delete(&url)
+        let response = api_delete(&url)
             .header("Content-Type", "application/json")
             .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1797,7 +2156,7 @@ pub async fn fetch_admin_comment_audit_logs(
             url.push_str(&params.join("&"));
         }
 
-        let response = Request::get(&url)
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -1825,7 +2184,7 @@ pub async fn admin_cleanup_comments(
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/comments/cleanup", admin_base());
-        let response = Request::post(&url)
+        let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -1860,7 +2219,7 @@ async fn admin_post_task_action(
             urlencoding::encode(task_id),
             action
         );
-        let response = Request::post(&url)
+        let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(request)
             .map_err(|e| format!("Serialize error: {:?}", e))?
