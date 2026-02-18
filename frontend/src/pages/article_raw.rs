@@ -4,7 +4,7 @@ use web_sys::window;
 use yew::prelude::*;
 use yew_router::prelude::{use_navigator, use_route};
 
-use crate::{i18n::current::article_raw_page as t, router::Route};
+use crate::{i18n::current::article_raw_page as t, router::Route, seo};
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct ArticleRawProps {
@@ -137,6 +137,19 @@ pub fn article_raw_page(props: &ArticleRawProps) -> Html {
     let page_title = t::TITLE_TEMPLATE
         .replacen("{}", &article_id, 1)
         .replacen("{}", lang_label, 1);
+
+    {
+        let article_id = article_id.clone();
+        let lang = lang.clone();
+        let page_title = page_title.clone();
+        use_effect_with(
+            (article_id.clone(), lang.clone(), page_title.clone()),
+            move |(id, lang, title)| {
+                seo::apply_raw_markdown_seo(id, lang, title);
+                || ()
+            },
+        );
+    }
 
     html! {
         <main class={classes!("container", "mx-auto", "px-4", "py-8", "min-h-[70vh]")}>

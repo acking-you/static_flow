@@ -157,6 +157,15 @@ pub fn app_router() -> Html {
 #[function_component(AppRouterInner)]
 fn app_router_inner() -> Html {
     let location = use_location();
+    let route = use_route::<Route>();
+
+    {
+        let route = route.clone();
+        use_effect_with(route.clone(), move |active_route| {
+            crate::seo::apply_route_seo(active_route.as_ref());
+            || ()
+        });
+    }
 
     // 判断是否在文章详情页（不显示Spotlight）
     let show_spotlight = location

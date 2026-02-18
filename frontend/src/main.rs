@@ -7,6 +7,7 @@ mod models;
 mod navigation_context;
 mod pages;
 mod router;
+mod seo;
 mod utils;
 
 use yew::prelude::*;

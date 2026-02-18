@@ -25,6 +25,7 @@ use crate::{
     },
     i18n::{current::article_detail_page as t, fill_one},
     router::Route,
+    seo,
     utils::{image_url, markdown_to_html},
 };
 
@@ -635,6 +636,30 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             }
             || ()
         });
+    }
+
+    {
+        let article_data = article_data.clone();
+        let article_id = article_id.clone();
+        use_effect_with(
+            (article_data.clone(), article_id.clone(), *content_language),
+            move |(article_opt, id, lang)| {
+                if let Some(article) = article_opt.as_ref() {
+                    let has_en = article
+                        .content_en
+                        .as_deref()
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false);
+                    let preferred_lang = if *lang == ArticleContentLanguage::En && has_en {
+                        "en"
+                    } else {
+                        "zh"
+                    };
+                    seo::apply_article_seo(article, id, preferred_lang);
+                }
+                || ()
+            },
+        );
     }
 
     {
