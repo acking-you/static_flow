@@ -1992,17 +1992,18 @@ a:hover {
 .article-detail {
   --article-max-width-base: var(--article-layout-width);
   --article-body-font-size: clamp(1.03rem, 0.98rem + 0.18vw, 1.1rem);
-  --article-body-line-height: 1.64;
-  --article-flow-space: 1.06em;
-  --article-block-space-tight: 0.94em;
-  --article-block-space: 1.22em;
-  --article-block-space-wide: 1.58em;
-  --article-heading-margin-top: 1.38em;
-  --article-heading-margin-bottom: 0.56em;
-  --article-list-margin: 0.84em;
-  --article-list-item-gap: 0.24em;
-  --article-block-padding-y: 0.82rem;
-  --article-block-padding-x: 1.04rem;
+  --article-body-line-height: 1.78;
+  --article-flow-space: 1.14em;
+  --article-paragraph-gap: 0.28em;
+  --article-block-space-tight: 1em;
+  --article-block-space: 1.3em;
+  --article-block-space-wide: 1.68em;
+  --article-heading-margin-top: 1.48em;
+  --article-heading-margin-bottom: 0.6em;
+  --article-list-margin: 0.9em;
+  --article-list-item-gap: 0.28em;
+  --article-block-padding-y: 0.88rem;
+  --article-block-padding-x: 1.08rem;
   --article-center-safe-gap: var(--article-center-gap-global);
   width: min(100%, var(--article-max-width-base));
   max-width: var(--article-max-width-base);
@@ -2029,14 +2030,16 @@ a:hover {
 @media (max-width: 768px) {
   .article-detail {
     --article-body-font-size: 1.02rem;
-    --article-body-line-height: 1.7;
-    --article-flow-space: 0.92em;
-    --article-block-space-tight: 0.82em;
-    --article-block-space: 1.02em;
-    --article-block-space-wide: 1.28em;
-    --article-heading-margin-top: 1.28em;
-    --article-heading-margin-bottom: 0.5em;
-    --article-list-margin: 0.76em;
+    --article-body-line-height: 1.74;
+    --article-flow-space: 1em;
+    --article-paragraph-gap: 0.26em;
+    --article-block-space-tight: 0.88em;
+    --article-block-space: 1.1em;
+    --article-block-space-wide: 1.38em;
+    --article-heading-margin-top: 1.38em;
+    --article-heading-margin-bottom: 0.54em;
+    --article-list-margin: 0.82em;
+    --article-list-item-gap: 0.24em;
   }
 }
 
@@ -2208,6 +2211,10 @@ a:hover {
 }
 
 .article-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-2);
@@ -2274,6 +2281,10 @@ a:hover {
   color: var(--text);
 }
 
+.article-content p + p {
+  margin-top: var(--article-paragraph-gap, 0.28em);
+}
+
 .article-content ul,
 .article-content ol {
   margin: var(--article-list-margin, 0.82em) 0;
@@ -2316,8 +2327,8 @@ a:hover {
 
 .article-content li > ul,
 .article-content li > ol {
-  margin-top: 0.45em;
-  margin-bottom: 0.25em;
+  margin-top: 0.58em;
+  margin-bottom: 0.32em;
 }
 
 .article-content li::marker {
@@ -2625,18 +2636,23 @@ a:hover {
   display: flex;
   justify-content: center;
   align-items: flex-start;
+  overflow-x: hidden;
+  overflow-y: visible;
+  padding-bottom: 0;
 }
 
 .article-content .md-media-wrap > img,
 .article-content .md-media-wrap > a {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   display: block;
-  max-width: none;
+  max-width: 100%;
+  width: auto;
 }
 
 .article-content .md-media-wrap > a > img {
-  max-width: none;
+  max-width: 100%;
   width: auto;
+  height: auto;
 }
 
 .article-content .md-quote-wrap > blockquote {
@@ -2859,17 +2875,18 @@ a:hover {
 .comment-ai-markdown {
   margin-top: 0.42rem;
   font-size: 0.94rem;
-  --article-flow-space: 0.9em;
-  --article-block-space-tight: 0.76em;
-  --article-block-space: 0.96em;
-  --article-block-space-wide: 1.18em;
-  --article-heading-margin-top: 1.16em;
-  --article-heading-margin-bottom: 0.45em;
-  --article-list-margin: 0.7em;
-  --article-list-item-gap: 0.2em;
+  --article-flow-space: 0.94em;
+  --article-paragraph-gap: 0.22em;
+  --article-block-space-tight: 0.82em;
+  --article-block-space: 1em;
+  --article-block-space-wide: 1.22em;
+  --article-heading-margin-top: 1.18em;
+  --article-heading-margin-bottom: 0.48em;
+  --article-list-margin: 0.74em;
+  --article-list-item-gap: 0.22em;
   --article-block-padding-y: 0.62rem;
   --article-block-padding-x: 0.82rem;
-  line-height: 1.62;
+  line-height: 1.64;
 }
 
 .selection-comment-fab {
