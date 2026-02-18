@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+
+  <!-- Top color bar -->
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+
+  <!-- Page number -->
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">1/6</text>
+
+  <!-- Title line 1: emotional hook in orange -->
+  <text x="540" y="360" fill="#FF6B35" font-family="Arial, sans-serif" font-size="72" text-anchor="middle" font-weight="bold">后悔没早做！</text>
+
+  <!-- Title line 2-3: content in black -->
+  <text x="540" y="470" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="64" text-anchor="middle" font-weight="bold">Rust 全栈造了个</text>
+  <text x="540" y="570" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="64" text-anchor="middle" font-weight="bold">AI 知识管理系统</text>
+
+  <!-- Ferris the Crab -->
+  <g transform="translate(750, 780) scale(3)">
+    <path d="M-30,-2 C-40,-14 -28,-20 -22,-10 Z" fill="#F74C00"/>
+    <path d="M30,-2 C40,-14 28,-20 22,-10 Z" fill="#F74C00"/>
+    <ellipse cx="0" cy="2" rx="24" ry="16" fill="#F74C00"/>
+    <rect x="-11" y="-16" width="4" height="10" rx="2" fill="#F74C00"/>
+    <rect x="7" y="-16" width="4" height="10" rx="2" fill="#F74C00"/>
+    <circle cx="-9" cy="-19" r="5" fill="#fff"/>
+    <circle cx="9" cy="-19" r="5" fill="#fff"/>
+    <circle cx="-8" cy="-19" r="2.5" fill="#222"/>
+    <circle cx="10" cy="-19" r="2.5" fill="#222"/>
+    <line x1="-18" y1="12" x2="-26" y2="20" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+    <line x1="-10" y1="15" x2="-14" y2="23" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+    <line x1="18" y1="12" x2="26" y2="20" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+    <line x1="10" y1="15" x2="14" y2="23" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Bottom tags -->
+  <text x="540" y="1200" fill="#999999" font-family="Arial, sans-serif" font-size="26" text-anchor="middle">Rust · LanceDB · 开源 · 全链路白嫖</text>
+
+  <!-- Author -->
+  <line x1="100" y1="1300" x2="980" y2="1300" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1360" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">LB7666 · github.com/acking-you/static_flow</text>
+</svg>

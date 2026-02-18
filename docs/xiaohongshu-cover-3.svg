@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">3/6</text>
+
+  <!-- Title -->
+  <text x="540" y="130" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">全栈 Rust 技术架构</text>
+  <text x="540" y="180" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">一套语言，前后端 + CLI + AI Skills</text>
+
+  <!-- Card 1: Frontend -->
+  <g transform="translate(80, 240)">
+    <rect x="0" y="0" width="420" height="160" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="160" rx="3" fill="#FF6B35"/>
+    <text x="30" y="45" fill="#FF6B35" font-family="Arial, sans-serif" font-size="28" font-weight="bold">Yew + WASM</text>
+    <text x="30" y="80" fill="#666666" font-family="Arial, sans-serif" font-size="22">前端框架</text>
+    <text x="30" y="115" fill="#999999" font-family="Arial, sans-serif" font-size="20">Rust 编译为 WebAssembly</text>
+    <text x="30" y="145" fill="#999999" font-family="Arial, sans-serif" font-size="20">部署在 GitHub Pages</text>
+  </g>
+
+  <!-- Card 2: Backend -->
+  <g transform="translate(580, 240)">
+    <rect x="0" y="0" width="420" height="160" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="160" rx="3" fill="#3182CE"/>
+    <text x="30" y="45" fill="#3182CE" font-family="Arial, sans-serif" font-size="28" font-weight="bold">Axum + Tokio</text>
+    <text x="30" y="80" fill="#666666" font-family="Arial, sans-serif" font-size="22">后端服务</text>
+    <text x="30" y="115" fill="#999999" font-family="Arial, sans-serif" font-size="20">异步运行时，高性能 API</text>
+    <text x="30" y="145" fill="#999999" font-family="Arial, sans-serif" font-size="20">运行在本地机器</text>
+  </g>
+
+  <!-- Card 3: LanceDB -->
+  <g transform="translate(80, 440)">
+    <rect x="0" y="0" width="420" height="160" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="160" rx="3" fill="#38A169"/>
+    <text x="30" y="45" fill="#38A169" font-family="Arial, sans-serif" font-size="28" font-weight="bold">LanceDB</text>
+    <text x="30" y="80" fill="#666666" font-family="Arial, sans-serif" font-size="22">嵌入式向量数据库</text>
+    <text x="30" y="115" fill="#999999" font-family="Arial, sans-serif" font-size="20">FTS + 向量混合检索</text>
+    <text x="30" y="145" fill="#999999" font-family="Arial, sans-serif" font-size="20">无需额外进程，直接读写文件</text>
+  </g>
+
+  <!-- Card 4: Shared -->
+  <g transform="translate(580, 440)">
+    <rect x="0" y="0" width="420" height="160" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="160" rx="3" fill="#805AD5"/>
+    <text x="30" y="45" fill="#805AD5" font-family="Arial, sans-serif" font-size="28" font-weight="bold">Shared Crate</text>
+    <text x="30" y="80" fill="#666666" font-family="Arial, sans-serif" font-size="22">前后端共享类型</text>
+    <text x="30" y="115" fill="#999999" font-family="Arial, sans-serif" font-size="20">改一个字段，编译器检查</text>
+    <text x="30" y="145" fill="#999999" font-family="Arial, sans-serif" font-size="20">所有调用方，重构更安心</text>
+  </g>
+
+  <!-- Card 5: sf-cli -->
+  <g transform="translate(80, 640)">
+    <rect x="0" y="0" width="420" height="160" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="160" rx="3" fill="#E53E3E"/>
+    <text x="30" y="45" fill="#E53E3E" font-family="Arial, sans-serif" font-size="28" font-weight="bold">sf-cli</text>
+    <text x="30" y="80" fill="#666666" font-family="Arial, sans-serif" font-size="22">Agent 操作接口</text>
+    <text x="30" y="115" fill="#999999" font-family="Arial, sans-serif" font-size="20">Coding Agent 通过 CLI</text>
+    <text x="30" y="145" fill="#999999" font-family="Arial, sans-serif" font-size="20">操作 LanceDB 完成发布</text>
+  </g>
+
+  <!-- Card 6: AI Skills -->
+  <g transform="translate(580, 640)">
+    <rect x="0" y="0" width="420" height="160" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="160" rx="3" fill="#D69E2E"/>
+    <text x="30" y="45" fill="#D69E2E" font-family="Arial, sans-serif" font-size="28" font-weight="bold">7 AI Skills</text>
+    <text x="30" y="80" fill="#666666" font-family="Arial, sans-serif" font-size="22">Markdown 即 Agent 大脑</text>
+    <text x="30" y="115" fill="#999999" font-family="Arial, sans-serif" font-size="20">发布 · 翻译 · 摘要 · 评论</text>
+    <text x="30" y="145" fill="#999999" font-family="Arial, sans-serif" font-size="20">深度文档 · 数据同步 · 部署</text>
+  </g>
+
+  <!-- Architecture -->
+  <rect x="80" y="870" width="920" height="100" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <text x="540" y="915" fill="#FF6B35" font-family="Arial, sans-serif" font-size="26" text-anchor="middle" font-weight="bold">部署架构</text>
+  <text x="540" y="950" fill="#999999" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">GitHub Pages → Nginx → pb-mapper 隧道 → 本地 Axum + LanceDB</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">2/6</text>
+
+  <!-- Title -->
+  <text x="540" y="140" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">学习方式的转变</text>
+
+  <!-- LEFT: Old way -->
+  <g transform="translate(80, 220)">
+    <rect x="0" y="0" width="420" height="500" rx="12" fill="#FFF5F5" stroke="#FFD4D4" stroke-width="1.5"/>
+    <text x="210" y="55" fill="#E53E3E" font-family="Arial, sans-serif" font-size="36" text-anchor="middle" font-weight="bold">以前</text>
+    <line x1="40" y1="80" x2="380" y2="80" stroke="#FFD4D4" stroke-width="1"/>
+
+    <text x="40" y="130" fill="#E53E3E" font-size="26" font-family="Arial, sans-serif">✗</text>
+    <text x="75" y="130" fill="#333333" font-size="24" font-family="Arial, sans-serif">找教程，抄例子</text>
+
+    <text x="40" y="190" fill="#E53E3E" font-size="26" font-family="Arial, sans-serif">✗</text>
+    <text x="75" y="190" fill="#333333" font-size="24" font-family="Arial, sans-serif">踩坑，搜 StackOverflow</text>
+
+    <text x="40" y="250" fill="#E53E3E" font-size="26" font-family="Arial, sans-serif">✗</text>
+    <text x="75" y="250" fill="#333333" font-size="24" font-family="Arial, sans-serif">答案过时，版本对不上</text>
+
+    <text x="40" y="310" fill="#E53E3E" font-size="26" font-family="Arial, sans-serif">✗</text>
+    <text x="75" y="310" fill="#333333" font-size="24" font-family="Arial, sans-serif">学完就忘，反复循环</text>
+
+    <text x="40" y="370" fill="#E53E3E" font-size="26" font-family="Arial, sans-serif">✗</text>
+    <text x="75" y="370" fill="#333333" font-size="24" font-family="Arial, sans-serif">笔记散落各处</text>
+
+    <text x="210" y="460" fill="#E53E3E" font-size="32" text-anchor="middle" opacity="0.3" font-weight="bold">短期记忆</text>
+  </g>
+
+  <!-- RIGHT: New way -->
+  <g transform="translate(580, 220)">
+    <rect x="0" y="0" width="420" height="500" rx="12" fill="#F0FFF4" stroke="#C6F6D5" stroke-width="1.5"/>
+    <text x="210" y="55" fill="#38A169" font-family="Arial, sans-serif" font-size="36" text-anchor="middle" font-weight="bold">现在</text>
+    <line x1="40" y1="80" x2="380" y2="80" stroke="#C6F6D5" stroke-width="1"/>
+
+    <text x="40" y="130" fill="#38A169" font-size="26" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="130" fill="#333333" font-size="24" font-family="Arial, sans-serif">跟 AI 对话理解原理</text>
+
+    <text x="40" y="190" fill="#38A169" font-size="26" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="190" fill="#333333" font-size="24" font-family="Arial, sans-serif">Skill 生成结构化笔记</text>
+
+    <text x="40" y="250" fill="#38A169" font-size="26" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="250" fill="#333333" font-size="24" font-family="Arial, sans-serif">自动翻译中英双语</text>
+
+    <text x="40" y="310" fill="#38A169" font-size="26" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="310" fill="#333333" font-size="24" font-family="Arial, sans-serif">Agent 一键发布入库</text>
+
+    <text x="40" y="370" fill="#38A169" font-size="26" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="370" fill="#333333" font-size="24" font-family="Arial, sans-serif">语义搜索随时复用</text>
+
+    <text x="210" y="460" fill="#38A169" font-size="32" text-anchor="middle" opacity="0.3" font-weight="bold">长期记忆</text>
+  </g>
+
+  <!-- Bottom insight -->
+  <rect x="80" y="800" width="920" height="120" rx="12" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="540" y="855" fill="#FF6B35" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">核心转变</text>
+  <text x="540" y="895" fill="#666666" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">每次学习都产出可检索、可积累、可复用的知识资产</text>
+
+  <!-- Quote -->
+  <text x="540" y="1040" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">"不是让你学得更快，</text>
+  <text x="540" y="1080" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">是让学习成果有了可检索的载体"</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>

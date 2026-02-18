@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">6/6</text>
+
+  <!-- Title -->
+  <text x="540" y="200" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="52" text-anchor="middle" font-weight="bold">开源 · 免费 · 本地优先</text>
+  <text x="540" y="260" fill="#999999" font-family="Arial, sans-serif" font-size="28" text-anchor="middle">数据永远在自己手里</text>
+
+  <!-- Three takeaways -->
+  <g transform="translate(80, 350)">
+    <rect x="0" y="0" width="920" height="110" rx="12" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+    <text x="40" y="45" fill="#FF6B35" font-family="Arial, sans-serif" font-size="30" font-weight="bold">长期记忆 &gt; 短期记忆</text>
+    <text x="40" y="85" fill="#666666" font-family="Arial, sans-serif" font-size="22">每次学习产出可检索的知识，AI 随时调用</text>
+  </g>
+
+  <g transform="translate(80, 490)">
+    <rect x="0" y="0" width="920" height="110" rx="12" fill="#F0FFF4" stroke="#C6F6D5" stroke-width="1.5"/>
+    <text x="40" y="45" fill="#38A169" font-family="Arial, sans-serif" font-size="30" font-weight="bold">Skills &gt; Agents</text>
+    <text x="40" y="85" fill="#666666" font-family="Arial, sans-serif" font-size="22">7 个 Markdown Skill = 7 个可复用的 AI 工作流</text>
+  </g>
+
+  <g transform="translate(80, 630)">
+    <rect x="0" y="0" width="920" height="110" rx="12" fill="#EBF8FF" stroke="#BEE3F8" stroke-width="1.5"/>
+    <text x="40" y="45" fill="#3182CE" font-family="Arial, sans-serif" font-size="30" font-weight="bold">本地优先</text>
+    <text x="40" y="85" fill="#666666" font-family="Arial, sans-serif" font-size="22">LanceDB 嵌入式数据库，不依赖任何云服务</text>
+  </g>
+
+  <!-- Divider -->
+  <line x1="100" y1="820" x2="980" y2="820" stroke="#EEEEEE" stroke-width="1"/>
+
+  <!-- GitHub -->
+  <g transform="translate(540, 910)">
+    <rect x="-380" y="-40" width="760" height="80" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <text x="-310" y="8" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="24" font-weight="bold">GitHub</text>
+    <text x="40" y="8" fill="#FF6B35" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">github.com/acking-you/static_flow</text>
+  </g>
+
+  <!-- Website -->
+  <g transform="translate(540, 1020)">
+    <rect x="-380" y="-40" width="760" height="80" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <text x="-310" y="8" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="24" font-weight="bold">网站</text>
+    <text x="40" y="8" fill="#FF6B35" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">acking-you.github.io</text>
+  </g>
+
+  <!-- CTA -->
+  <text x="540" y="1180" fill="#FF6B35" font-family="Arial, sans-serif" font-size="32" text-anchor="middle" font-weight="bold">欢迎 Star · Fork · 提 Issue</text>
+  <text x="540" y="1230" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">一起探索 AI 时代的学习方式</text>
+
+  <!-- Author -->
+  <line x1="100" y1="1310" x2="980" y2="1310" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1370" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · ackingliu</text>
+</svg>

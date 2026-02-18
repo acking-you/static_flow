@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">4/6</text>
+
+  <!-- Title -->
+  <text x="540" y="130" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">核心功能</text>
+
+  <!-- Feature 1 -->
+  <g transform="translate(80, 200)">
+    <rect x="0" y="0" width="920" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="240" rx="3" fill="#FF6B35"/>
+    <text x="30" y="45" fill="#FF6B35" font-family="Arial, sans-serif" font-size="30" font-weight="bold">01  混合搜索</text>
+    <text x="30" y="90" fill="#333333" font-family="Arial, sans-serif" font-size="24">FTS 全文检索 + 向量语义检索</text>
+    <text x="30" y="125" fill="#333333" font-family="Arial, sans-serif" font-size="24">RRF 算法融合排序</text>
+    <line x1="30" y1="150" x2="890" y2="150" stroke="#EEEEEE" stroke-width="1"/>
+    <text x="30" y="185" fill="#999999" font-family="Arial, sans-serif" font-size="22">搜「网络协议」→ 精确命中 + HTTP/TCP 语义相关文章</text>
+    <text x="30" y="220" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="20">内容直接命中排前，语义相关补充在后</text>
+  </g>
+
+  <!-- Feature 2 -->
+  <g transform="translate(80, 480)">
+    <rect x="0" y="0" width="920" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="240" rx="3" fill="#38A169"/>
+    <text x="30" y="45" fill="#38A169" font-family="Arial, sans-serif" font-size="30" font-weight="bold">02  AI 评论系统</text>
+    <text x="30" y="90" fill="#333333" font-family="Arial, sans-serif" font-size="24">选中文本精确评论 + 页脚通用评论</text>
+    <text x="30" y="125" fill="#333333" font-family="Arial, sans-serif" font-size="24">Codex 读取全文上下文生成回复</text>
+    <line x1="30" y1="150" x2="890" y2="150" stroke="#EEEEEE" stroke-width="1"/>
+    <text x="30" y="185" fill="#999999" font-family="Arial, sans-serif" font-size="22">提交 → 审核队列 → AI 回复 → SSE 实时推送</text>
+    <text x="30" y="220" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="20">匿名评论，SHA256 指纹标识，不收集个人信息</text>
+  </g>
+
+  <!-- Feature 3 -->
+  <g transform="translate(80, 760)">
+    <rect x="0" y="0" width="920" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="6" height="240" rx="3" fill="#3182CE"/>
+    <text x="30" y="45" fill="#3182CE" font-family="Arial, sans-serif" font-size="30" font-weight="bold">03  Skill 工作流</text>
+    <text x="30" y="90" fill="#333333" font-family="Arial, sans-serif" font-size="24">7 个 Skill 串联完整工作流</text>
+    <text x="30" y="125" fill="#333333" font-family="Arial, sans-serif" font-size="24">从对话到发布全链路自动化</text>
+    <line x1="30" y1="150" x2="890" y2="150" stroke="#EEEEEE" stroke-width="1"/>
+    <text x="30" y="185" fill="#999999" font-family="Arial, sans-serif" font-size="22">"Don't build agents, build skills instead."</text>
+    <text x="30" y="220" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="20">Markdown 文件即 Agent 大脑，不需要写框架代码</text>
+  </g>
+
+  <!-- More -->
+  <rect x="80" y="1060" width="920" height="80" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1" stroke-dasharray="6,4"/>
+  <text x="540" y="1110" fill="#999999" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">还有：双语翻译 · Mermaid 渲染 · API 行为监控 · 数据备份</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>

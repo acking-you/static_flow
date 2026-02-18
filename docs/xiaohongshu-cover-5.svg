@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">5/6</text>
+
+  <!-- Title -->
+  <text x="540" y="130" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">AI 学习闭环</text>
+  <text x="540" y="180" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">每次学习都在给知识库添砖加瓦</text>
+
+  <!-- Step 1 -->
+  <g transform="translate(540, 320)">
+    <rect x="-220" y="-55" width="440" height="110" rx="12" fill="#FAFAFA" stroke="#FF6B35" stroke-width="2"/>
+    <text x="0" y="-10" fill="#FF6B35" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">1. AI 对话学习</text>
+    <text x="0" y="30" fill="#666666" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">跟 AI 讨论，建立心智模型</text>
+  </g>
+
+  <!-- Arrow 1→2 -->
+  <line x1="540" y1="380" x2="540" y2="430" stroke="#CCCCCC" stroke-width="2"/>
+  <polygon points="540,435 532,422 548,422" fill="#CCCCCC"/>
+
+  <!-- Step 2 -->
+  <g transform="translate(540, 500)">
+    <rect x="-220" y="-55" width="440" height="110" rx="12" fill="#FAFAFA" stroke="#38A169" stroke-width="2"/>
+    <text x="0" y="-10" fill="#38A169" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">2. Skill 生成笔记</text>
+    <text x="0" y="30" fill="#666666" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">结构化 · 翻译双语 · 工程文档</text>
+  </g>
+
+  <!-- Arrow 2→3 -->
+  <line x1="540" y1="560" x2="540" y2="610" stroke="#CCCCCC" stroke-width="2"/>
+  <polygon points="540,615 532,602 548,602" fill="#CCCCCC"/>
+
+  <!-- Step 3 -->
+  <g transform="translate(540, 680)">
+    <rect x="-220" y="-55" width="440" height="110" rx="12" fill="#FAFAFA" stroke="#3182CE" stroke-width="2"/>
+    <text x="0" y="-10" fill="#3182CE" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">3. Agent 自动发布</text>
+    <text x="0" y="30" fill="#666666" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">sf-cli 入库 LanceDB + 向量索引</text>
+  </g>
+
+  <!-- Arrow 3→4 -->
+  <line x1="540" y1="740" x2="540" y2="790" stroke="#CCCCCC" stroke-width="2"/>
+  <polygon points="540,795 532,782 548,782" fill="#CCCCCC"/>
+
+  <!-- Step 4 -->
+  <g transform="translate(540, 860)">
+    <rect x="-220" y="-55" width="440" height="110" rx="12" fill="#FAFAFA" stroke="#805AD5" stroke-width="2"/>
+    <text x="0" y="-10" fill="#805AD5" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">4. 语义检索复用</text>
+    <text x="0" y="30" fill="#666666" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">下次学习时自动召回关联知识</text>
+  </g>
+
+  <!-- Loop arrow -->
+  <path d="M 320 880 C 160 880, 160 320, 320 320" stroke="#CCCCCC" stroke-width="2" fill="none" stroke-dasharray="6,4"/>
+  <polygon points="320,315 308,328 332,328" fill="#CCCCCC"/>
+  <text x="185" y="610" fill="#999999" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" transform="rotate(-90, 185, 610)">知识循环</text>
+
+  <!-- Bottom insight -->
+  <rect x="80" y="1040" width="920" height="100" rx="12" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="540" y="1085" fill="#FF6B35" font-family="Arial, sans-serif" font-size="28" text-anchor="middle" font-weight="bold">长期记忆 &gt; 短期记忆</text>
+  <text x="540" y="1120" fill="#666666" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">学习产出可检索的知识，AI 随时调用辅助新的学习</text>
+
+  <!-- Example -->
+  <text x="540" y="1210" fill="#999999" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">实例：学 C++20 协程 → 三轮 AI 对话 → Skill 生成文档 → 入库可搜索</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>
