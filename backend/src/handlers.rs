@@ -2231,12 +2231,12 @@ async fn ensure_article_exists(
     state: &AppState,
     id: &str,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let article = state
+    let exists = state
         .store
-        .get_article(id)
+        .article_exists(id)
         .await
-        .map_err(|e| internal_error("Failed to fetch article", e))?;
-    if article.is_some() {
+        .map_err(|e| internal_error("Failed to check article existence", e))?;
+    if exists {
         Ok(())
     } else {
         Err((

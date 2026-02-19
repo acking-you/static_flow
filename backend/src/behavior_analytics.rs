@@ -41,48 +41,53 @@ pub async fn behavior_analytics_middleware(
 
     let status_code = response.status().as_u16() as i32;
     let latency_ms = started_at.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    let occurred_at = chrono::Utc::now().timestamp_millis();
-    let client_ip = extract_client_ip(&headers);
-    let ip_region = state.geoip.resolve_region(&client_ip).await;
-    let ua_raw = header_value(&headers, header::USER_AGENT.as_str());
-    let (device_type, os_family, browser_family) = parse_user_agent(ua_raw.as_deref());
+    let response_headers = response.headers().clone();
 
-    let request_id = header_value(response.headers(), REQUEST_ID_HEADER)
-        .or_else(|| header_value(&headers, REQUEST_ID_HEADER))
-        .unwrap_or_else(|| "unknown".to_string());
-    let trace_id = header_value(response.headers(), TRACE_ID_HEADER)
-        .or_else(|| header_value(&headers, TRACE_ID_HEADER))
-        .unwrap_or_else(|| "unknown".to_string());
-    let client_source =
-        header_value(&headers, CLIENT_SOURCE_HEADER).unwrap_or_else(|| "unknown".to_string());
-    let page_path =
-        header_value(&headers, PAGE_PATH_HEADER).unwrap_or_else(|| "unknown".to_string());
-    let referrer = header_value(&headers, header::REFERER.as_str());
+    // Fire-and-forget: GeoIP + DB write run in background, don't block response
+    tokio::spawn(async move {
+        let occurred_at = chrono::Utc::now().timestamp_millis();
+        let client_ip = extract_client_ip(&headers);
+        let ip_region = state.geoip.resolve_region(&client_ip).await;
+        let ua_raw = header_value(&headers, header::USER_AGENT.as_str());
+        let (device_type, os_family, browser_family) = parse_user_agent(ua_raw.as_deref());
 
-    let input = NewApiBehaviorEventInput {
-        event_id: generate_event_id(),
-        occurred_at,
-        client_source,
-        method,
-        path,
-        query,
-        page_path,
-        referrer,
-        status_code,
-        latency_ms,
-        client_ip,
-        ip_region,
-        ua_raw,
-        device_type,
-        os_family,
-        browser_family,
-        request_id,
-        trace_id,
-    };
+        let request_id = header_value(&response_headers, REQUEST_ID_HEADER)
+            .or_else(|| header_value(&headers, REQUEST_ID_HEADER))
+            .unwrap_or_else(|| "unknown".to_string());
+        let trace_id = header_value(&response_headers, TRACE_ID_HEADER)
+            .or_else(|| header_value(&headers, TRACE_ID_HEADER))
+            .unwrap_or_else(|| "unknown".to_string());
+        let client_source =
+            header_value(&headers, CLIENT_SOURCE_HEADER).unwrap_or_else(|| "unknown".to_string());
+        let page_path =
+            header_value(&headers, PAGE_PATH_HEADER).unwrap_or_else(|| "unknown".to_string());
+        let referrer = header_value(&headers, header::REFERER.as_str());
 
-    if let Err(err) = state.store.append_api_behavior_event(input).await {
-        tracing::warn!("failed to append api behavior event: {err}");
-    }
+        let input = NewApiBehaviorEventInput {
+            event_id: generate_event_id(),
+            occurred_at,
+            client_source,
+            method,
+            path,
+            query,
+            page_path,
+            referrer,
+            status_code,
+            latency_ms,
+            client_ip,
+            ip_region,
+            ua_raw,
+            device_type,
+            os_family,
+            browser_family,
+            request_id,
+            trace_id,
+        };
+
+        if let Err(err) = state.store.append_api_behavior_event(input).await {
+            tracing::warn!("failed to append api behavior event: {err}");
+        }
+    });
 
     response
 }

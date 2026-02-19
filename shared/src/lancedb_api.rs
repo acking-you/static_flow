@@ -440,21 +440,35 @@ impl StaticFlowDataStore {
         };
         upsert_article_view_record(&table, &record).await?;
 
-        let total_views = table
-            .count_rows(Some(format!("article_id = '{escaped_article_id}'")))
-            .await
-            .context("failed to count total article views")? as usize;
-        let today_views = table
-            .count_rows(Some(format!(
-                "article_id = '{escaped_article_id}' AND day_bucket = '{escaped_day}'"
-            )))
-            .await
-            .context("failed to count today's views")? as u32;
-        let day_counts = fetch_article_view_day_counts(&table, article_id).await?;
+        let window = normalize_daily_window(daily_window_days, max_daily_window_days);
+        let since_date = now_local.date_naive() - ChronoDuration::days(window as i64);
+        let since_day = since_date.format("%Y-%m-%d").to_string();
+
+        let (total_views_result, today_views_result, day_counts_result) = futures::join!(
+            async {
+                table
+                    .count_rows(Some(format!("article_id = '{escaped_article_id}'")))
+                    .await
+                    .context("failed to count total article views")
+            },
+            async {
+                table
+                    .count_rows(Some(format!(
+                        "article_id = '{escaped_article_id}' AND day_bucket = '{escaped_day}'"
+                    )))
+                    .await
+                    .context("failed to count today's views")
+            },
+            fetch_article_view_day_counts(&table, article_id, Some(&since_day)),
+        );
+
+        let total_views = total_views_result? as usize;
+        let today_views = today_views_result? as u32;
+        let day_counts = day_counts_result?;
         let daily_points = build_recent_day_points(
             &day_counts,
             &day_bucket,
-            normalize_daily_window(daily_window_days, max_daily_window_days),
+            window,
         )?;
 
         Ok(ArticleViewTrackResponse {
@@ -477,11 +491,14 @@ impl StaticFlowDataStore {
         let table = self.article_views_table().await?;
         let now_local = Utc::now().with_timezone(&shanghai_tz());
         let today_bucket = now_local.format("%Y-%m-%d").to_string();
-        let day_counts = fetch_article_view_day_counts(&table, article_id).await?;
+        let window = normalize_daily_window(days, max_days);
+        let since_date = now_local.date_naive() - ChronoDuration::days(window as i64);
+        let since_day = since_date.format("%Y-%m-%d").to_string();
+        let day_counts = fetch_article_view_day_counts(&table, article_id, Some(&since_day)).await?;
         let points = build_recent_day_points(
             &day_counts,
             &today_bucket,
-            normalize_daily_window(days, max_days),
+            window,
         )?;
         let total_views = table
             .count_rows(Some(format!("article_id = '{}'", escape_literal(article_id))))
@@ -568,6 +585,16 @@ impl StaticFlowDataStore {
             started.elapsed().as_millis(),
         );
         Ok(article)
+    }
+
+    pub async fn article_exists(&self, id: &str) -> Result<bool> {
+        let table = self.articles_table().await?;
+        let filter = format!("id = '{}'", escape_literal(id));
+        let count = table
+            .count_rows(Some(filter))
+            .await
+            .context("failed to check article existence")?;
+        Ok(count > 0)
     }
 
     pub async fn get_article_raw_markdown(&self, id: &str, lang: &str) -> Result<Option<String>> {
@@ -2412,8 +2439,15 @@ async fn upsert_api_behavior_record(table: &Table, record: &ApiBehaviorRecord) -
 async fn fetch_article_view_day_counts(
     table: &Table,
     article_id: &str,
+    since_day: Option<&str>,
 ) -> Result<HashMap<String, u32>> {
-    let filter = format!("article_id = '{}'", escape_literal(article_id));
+    let escaped_id = escape_literal(article_id);
+    let filter = if let Some(day) = since_day {
+        let escaped_day = escape_literal(day);
+        format!("article_id = '{escaped_id}' AND day_bucket >= '{escaped_day}'")
+    } else {
+        format!("article_id = '{escaped_id}'")
+    };
     let batches = table
         .query()
         .only_if(filter)
