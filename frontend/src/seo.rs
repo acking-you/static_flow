@@ -288,6 +288,8 @@ fn route_path_for(route: &Route) -> String {
             task_id,
         } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
         Route::NotFound => config::route_path("/404"),
+        Route::MediaVideo => config::route_path("/media/video"),
+        Route::MediaAudio => config::route_path("/media/audio"),
     }
 }
 
@@ -480,6 +482,18 @@ pub fn apply_route_seo(route: Option<&Route>) {
                 &canonical_url,
                 "website",
                 "noindex,nofollow,noarchive",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::MediaVideo | Route::MediaAudio => {
+            apply_common_seo(
+                "Media Hub · StaticFlow",
+                "多媒体管理功能即将上线。",
+                &canonical_url,
+                "website",
+                "noindex,nofollow",
                 "zh-CN",
                 &og_image,
             );

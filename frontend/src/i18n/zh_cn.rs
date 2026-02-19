@@ -84,6 +84,9 @@ pub mod home {
     pub const BTN_SEARCH_STATICFLOW: &str = "Search StaticFlow";
 
     pub const CMD_SHOW_SOCIAL: &str = "cat ./social_links.json";
+    pub const CMD_SHOW_MEDIA_HUB: &str = "ls -l ./media-hub/";
+    pub const BTN_MEDIA_VIDEO: &str = "视频中心";
+    pub const BTN_MEDIA_AUDIO: &str = "音频中心";
     pub const CMD_SHOW_WRAPPED: &str = "./scripts/github-wrapped.sh --list-years";
     pub const CMD_SHOW_STATS: &str = "cat /proc/system/stats";
 
@@ -321,6 +324,18 @@ pub mod not_found_page {
     pub const BTN_ARCHIVE: &str = "文章归档";
 }
 
+
+pub mod coming_soon_page {
+    pub const TERMINAL_TITLE_TEMPLATE: &str = "{}.sh";
+    pub const CMD_INIT_TEMPLATE: &str = "./scripts/init-{}.sh --status";
+    pub const STATUS_LABEL: &str = "STATUS: ";
+    pub const STATUS_COMING_SOON: &str = "COMING SOON";
+    pub const DESC_VIDEO: &str = "视频中心正在开发中，即将支持在线播放与语义搜索，快速定位你想看的内容。";
+    pub const DESC_AUDIO: &str = "音频中心正在开发中，即将支持播客/音乐在线播放与智能检索。";
+    pub const DESC_DEFAULT: &str = "该功能模块正在开发中，敬请期待。";
+    pub const CMD_AVAILABLE_ROUTES: &str = "ls -l ./available_routes/";
+    pub const BTN_HOME: &str = "返回首页";
+}
 
 pub mod mock {
     pub const ARTICLE_TITLE_TEMPLATE: &str = "示例文章 {} - {} 技术与思考";

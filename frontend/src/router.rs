@@ -96,6 +96,20 @@ pub enum Route {
     #[at("/static_flow/admin/comments/runs/:task_id")]
     AdminCommentRuns { task_id: String },
 
+    #[cfg(not(feature = "mock"))]
+    #[at("/media/video")]
+    MediaVideo,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/media/video")]
+    MediaVideo,
+
+    #[cfg(not(feature = "mock"))]
+    #[at("/media/audio")]
+    MediaAudio,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/media/audio")]
+    MediaAudio,
+
     #[not_found]
     #[cfg(not(feature = "mock"))]
     #[at("/404")]
@@ -141,6 +155,8 @@ fn switch(route: Route) -> Html {
         } => {
             html! { <pages::admin_ai_stream::AdminCommentRunsPage task_id={task_id} /> }
         },
+        Route::MediaVideo => html! { <pages::coming_soon::ComingSoonPage feature={"video"} /> },
+        Route::MediaAudio => html! { <pages::coming_soon::ComingSoonPage feature={"audio"} /> },
         Route::NotFound => html! { <pages::not_found::NotFoundPage /> },
     }
 }

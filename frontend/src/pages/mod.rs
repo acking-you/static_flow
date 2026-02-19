@@ -4,6 +4,7 @@ pub mod article_detail;
 pub mod article_raw;
 pub mod categories;
 pub mod category_detail;
+pub mod coming_soon;
 pub mod home;
 pub mod latest_articles;
 pub mod not_found;

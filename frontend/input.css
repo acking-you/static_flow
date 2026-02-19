@@ -3198,12 +3198,13 @@ button[aria-current="page"]:hover {
 }
 
 .mermaid svg {
-  /* Use SVG's own intrinsic size from Mermaid render output. */
+  /* Scale oversized diagrams proportionally: viewBox + auto dimensions
+     let the browser shrink both axes to fit within max-width / max-height
+     while preserving aspect ratio.  Fullscreen overrides separately. */
   width: auto !important;
   height: auto !important;
-  max-width: none !important;
-  max-height: none !important;
-  /* 小图表居中 */
+  max-width: 100% !important;
+  max-height: 100vh !important;
   display: block;
   margin: 0 auto;
 }
