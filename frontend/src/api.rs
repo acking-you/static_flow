@@ -1096,6 +1096,7 @@ pub struct AdminApiBehaviorEventsQuery {
     pub method: Option<String>,
     pub status_code: Option<i32>,
     pub ip: Option<String>,
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1657,6 +1658,9 @@ pub async fn fetch_admin_api_behavior_events(
         let mut params = Vec::new();
         if let Some(days) = query.days {
             params.push(format!("days={days}"));
+        }
+        if let Some(value) = query.date.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            params.push(format!("date={}", urlencoding::encode(value)));
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));

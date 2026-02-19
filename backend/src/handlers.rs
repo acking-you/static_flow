@@ -229,6 +229,9 @@ pub struct AdminApiBehaviorEventsQuery {
     pub status_code: Option<i32>,
     #[serde(default)]
     pub ip: Option<String>,
+    /// Specific date in YYYY-MM-DD format (Shanghai timezone). Mutually exclusive with `days`.
+    #[serde(default)]
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -748,13 +751,52 @@ pub async fn admin_list_api_behavior_events(
     ensure_admin_access(&state, &headers)?;
 
     let config = state.api_behavior_runtime_config.read().await.clone();
-    let days = normalize_behavior_window_days(query.days, &config);
-    let since_ms = behavior_window_start_ms(days);
+
+    // When `date` is provided (YYYY-MM-DD), compute Shanghai-timezone day boundaries;
+    // otherwise fall back to the existing `days` window.
+    let (since_ms, until_ms) = if let Some(ref date_str) = query.date {
+        let nd = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid date format: {date_str}, expected YYYY-MM-DD"),
+                    code: 400,
+                }),
+            )
+        })?;
+        let tz = chrono::FixedOffset::east_opt(8 * 3600).expect("UTC+8");
+        let start = nd
+            .and_hms_opt(0, 0, 0)
+            .expect("valid midnight")
+            .and_local_timezone(tz)
+            .single()
+            .expect("unambiguous")
+            .timestamp_millis();
+        let end = nd
+            .succ_opt()
+            .unwrap_or(nd)
+            .and_hms_opt(0, 0, 0)
+            .expect("valid midnight")
+            .and_local_timezone(tz)
+            .single()
+            .expect("unambiguous")
+            .timestamp_millis();
+        (start, Some(end))
+    } else {
+        let days = normalize_behavior_window_days(query.days, &config);
+        (behavior_window_start_ms(days), None)
+    };
+
     let mut events = state
         .store
         .list_api_behavior_events(Some(since_ms))
         .await
         .map_err(|e| internal_error("Failed to list api behavior events", e))?;
+
+    // Apply upper bound when filtering by specific date
+    if let Some(end) = until_ms {
+        events.retain(|event| event.occurred_at < end);
+    }
 
     let path_filter = normalize_filter(query.path_contains);
     let page_filter = normalize_filter(query.page_contains);
@@ -802,7 +844,12 @@ pub async fn admin_list_api_behavior_events(
     events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
     let total = events.len();
     let offset = query.offset.unwrap_or(0);
-    let limit = normalize_behavior_events_limit(query.limit);
+    let limit = if query.date.is_some() {
+        // Date-specific queries allow up to 2000 to avoid truncation
+        query.limit.filter(|v| *v > 0).unwrap_or(2000).min(2000)
+    } else {
+        normalize_behavior_events_limit(query.limit)
+    };
     let paged = events
         .into_iter()
         .skip(offset)

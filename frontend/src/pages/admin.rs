@@ -36,13 +36,16 @@ enum AdminTab {
 }
 
 fn format_ms(ts_ms: i64) -> String {
-    Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64))
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_else(|| ts_ms.to_string())
-        .replace('T', " ")
-        .trim_end_matches('Z')
-        .to_string()
+    let d = Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64));
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        d.get_full_year(),
+        d.get_month() + 1, // JS months are 0-indexed
+        d.get_date(),
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
+    )
 }
 
 fn status_badge_class(status: &str) -> Classes {
@@ -87,6 +90,10 @@ pub fn admin_page() -> Html {
     let behavior_overview = use_state(|| None::<AdminApiBehaviorOverviewResponse>);
     let behavior_events = use_state(Vec::<AdminApiBehaviorEvent>::new);
     let behavior_days = use_state(|| "30".to_string());
+    let behavior_date = use_state(String::new);
+    let behavior_has_more = use_state(|| false);
+    let behavior_total = use_state(|| 0_usize);
+    let behavior_offset = use_state(|| 0_usize);
     let behavior_path_filter = use_state(String::new);
     let behavior_page_filter = use_state(String::new);
     let behavior_device_filter = use_state(String::new);
@@ -154,6 +161,10 @@ pub fn admin_page() -> Html {
         let behavior_overview = behavior_overview.clone();
         let behavior_events = behavior_events.clone();
         let behavior_days = behavior_days.clone();
+        let behavior_date = behavior_date.clone();
+        let behavior_has_more = behavior_has_more.clone();
+        let behavior_total = behavior_total.clone();
+        let behavior_offset = behavior_offset.clone();
         let behavior_path_filter = behavior_path_filter.clone();
         let behavior_page_filter = behavior_page_filter.clone();
         let behavior_device_filter = behavior_device_filter.clone();
@@ -164,6 +175,10 @@ pub fn admin_page() -> Html {
             let behavior_config = behavior_config.clone();
             let behavior_overview = behavior_overview.clone();
             let behavior_events = behavior_events.clone();
+            let behavior_has_more = behavior_has_more.clone();
+            let behavior_total = behavior_total.clone();
+            let behavior_offset = behavior_offset.clone();
+            let date_val = (*behavior_date).trim().to_string();
             let days = (*behavior_days)
                 .trim()
                 .parse::<usize>()
@@ -174,12 +189,18 @@ pub fn admin_page() -> Html {
             let device_filter = (*behavior_device_filter).trim().to_string();
             let status_filter = (*behavior_status_filter).trim().parse::<i32>().ok();
 
+            let (query_days, query_date, query_limit) = if date_val.is_empty() {
+                (days, None, Some(120_usize))
+            } else {
+                (None, Some(date_val), Some(500_usize))
+            };
+
             wasm_bindgen_futures::spawn_local(async move {
                 let config_result = fetch_admin_api_behavior_config().await;
-                let overview_result = fetch_admin_api_behavior_overview(days, Some(20)).await;
+                let overview_result = fetch_admin_api_behavior_overview(query_days, Some(20)).await;
                 let events_result = fetch_admin_api_behavior_events(&AdminApiBehaviorEventsQuery {
-                    days,
-                    limit: Some(120),
+                    days: query_days,
+                    limit: query_limit,
                     offset: Some(0),
                     path_contains: if path_filter.is_empty() { None } else { Some(path_filter) },
                     page_contains: if page_filter.is_empty() { None } else { Some(page_filter) },
@@ -187,6 +208,7 @@ pub fn admin_page() -> Html {
                     method: None,
                     status_code: status_filter,
                     ip: None,
+                    date: query_date,
                 })
                 .await;
 
@@ -194,6 +216,9 @@ pub fn admin_page() -> Html {
                     (Ok(config), Ok(overview), Ok(events)) => {
                         behavior_config.set(Some(config));
                         behavior_overview.set(Some(overview));
+                        behavior_has_more.set(events.has_more);
+                        behavior_total.set(events.total);
+                        behavior_offset.set(events.events.len());
                         behavior_events.set(events.events);
                         load_error.set(None);
                     },
@@ -722,6 +747,84 @@ pub fn admin_page() -> Html {
             if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
                 behavior_days.set(target.value());
             }
+        })
+    };
+
+    let on_behavior_date_change = {
+        let behavior_date = behavior_date.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                behavior_date.set(target.value());
+            }
+        })
+    };
+
+    let on_behavior_load_more = {
+        let load_error = load_error.clone();
+        let behavior_events = behavior_events.clone();
+        let behavior_days = behavior_days.clone();
+        let behavior_date = behavior_date.clone();
+        let behavior_has_more = behavior_has_more.clone();
+        let behavior_total = behavior_total.clone();
+        let behavior_offset = behavior_offset.clone();
+        let behavior_path_filter = behavior_path_filter.clone();
+        let behavior_page_filter = behavior_page_filter.clone();
+        let behavior_device_filter = behavior_device_filter.clone();
+        let behavior_status_filter = behavior_status_filter.clone();
+
+        Callback::from(move |_| {
+            let load_error = load_error.clone();
+            let behavior_events = behavior_events.clone();
+            let behavior_has_more = behavior_has_more.clone();
+            let behavior_total = behavior_total.clone();
+            let behavior_offset = behavior_offset.clone();
+            let current_offset = *behavior_offset;
+            let date_val = (*behavior_date).trim().to_string();
+            let days = (*behavior_days)
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0);
+            let path_filter = (*behavior_path_filter).trim().to_string();
+            let page_filter = (*behavior_page_filter).trim().to_string();
+            let device_filter = (*behavior_device_filter).trim().to_string();
+            let status_filter = (*behavior_status_filter).trim().parse::<i32>().ok();
+
+            let (query_days, query_date, query_limit) = if date_val.is_empty() {
+                (days, None, Some(120_usize))
+            } else {
+                (None, Some(date_val), Some(500_usize))
+            };
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_admin_api_behavior_events(&AdminApiBehaviorEventsQuery {
+                    days: query_days,
+                    limit: query_limit,
+                    offset: Some(current_offset),
+                    path_contains: if path_filter.is_empty() { None } else { Some(path_filter) },
+                    page_contains: if page_filter.is_empty() { None } else { Some(page_filter) },
+                    device_type: if device_filter.is_empty() { None } else { Some(device_filter) },
+                    method: None,
+                    status_code: status_filter,
+                    ip: None,
+                    date: query_date,
+                })
+                .await;
+
+                match result {
+                    Ok(resp) => {
+                        let mut existing = (*behavior_events).clone();
+                        existing.extend(resp.events);
+                        behavior_has_more.set(resp.has_more);
+                        behavior_total.set(resp.total);
+                        behavior_offset.set(existing.len());
+                        behavior_events.set(existing);
+                    },
+                    Err(err) => {
+                        load_error.set(Some(format!("Load more failed: {}", err)));
+                    },
+                }
+            });
         })
     };
 
@@ -1459,7 +1562,14 @@ pub fn admin_page() -> Html {
                                     value={(*behavior_days).clone()}
                                     oninput={on_behavior_days_change}
                                     placeholder="days"
+                                    disabled={!(*behavior_date).is_empty()}
                                     class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[110px]")}
+                                />
+                                <input
+                                    type="date"
+                                    value={(*behavior_date).clone()}
+                                    oninput={on_behavior_date_change}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[160px]")}
                                 />
                                 <input
                                     type="text"
@@ -1589,7 +1699,13 @@ pub fn admin_page() -> Html {
                         }
 
                         <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                            { format!("Recent Events ({})", behavior_events.len()) }
+                            {
+                                if (*behavior_date).is_empty() {
+                                    format!("Recent Events ({}/{})", behavior_events.len(), *behavior_total)
+                                } else {
+                                    format!("Events for {} ({}/{})", *behavior_date, behavior_events.len(), *behavior_total)
+                                }
+                            }
                         </h3>
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
@@ -1623,6 +1739,13 @@ pub fn admin_page() -> Html {
                                 </tbody>
                             </table>
                         </div>
+                        if *behavior_has_more {
+                            <div class={classes!("flex", "justify-center", "mt-3")}>
+                                <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_load_more}>
+                                    { format!("Load More (showing {}/{})", behavior_events.len(), *behavior_total) }
+                                </button>
+                            </div>
+                        }
                     </>
                 }
             </section>
