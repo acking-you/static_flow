@@ -1,0 +1,6 @@
+[submodule "tools/ncmdump-rs"]
+	path = tools/ncmdump-rs
+	url = git@github.com:acking-you/ncmdump-rs.git
+[submodule "tools/pb-mapper"]
+	path = tools/pb-mapper
+	url = git@github.com:acking-you/pb-mapper.git
