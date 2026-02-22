@@ -30,13 +30,16 @@ async fn main() -> Result<()> {
     let db_uri = env::var("LANCEDB_URI").unwrap_or_else(|_| "../data/lancedb".to_string());
     let comments_db_uri =
         env::var("COMMENTS_LANCEDB_URI").unwrap_or_else(|_| "../data/lancedb-comments".to_string());
+    let music_db_uri =
+        env::var("MUSIC_LANCEDB_URI").unwrap_or_else(|_| "../data/lancedb-music".to_string());
 
     tracing::info!("Starting StaticFlow backend server");
     tracing::info!("LanceDB URI: {}", db_uri);
     tracing::info!("Comments LanceDB URI: {}", comments_db_uri);
+    tracing::info!("Music LanceDB URI: {}", music_db_uri);
 
     // Initialize application state
-    let app_state = state::AppState::new(&db_uri, &comments_db_uri).await?;
+    let app_state = state::AppState::new(&db_uri, &comments_db_uri, &music_db_uri).await?;
 
     // Build router
     let app = routes::create_router(app_state);

@@ -12,6 +12,7 @@ cd "$ROOT_DIR"
 DB_ROOT="${DB_ROOT:-$ROOT_DIR/tmp/cli-e2e-run}"
 DB_PATH="${DB_PATH:-${LANCEDB_URI:-$DB_ROOT/lancedb}}"
 COMMENTS_DB_PATH="${COMMENTS_DB_PATH:-${COMMENTS_LANCEDB_URI:-$DB_ROOT/lancedb-comments}}"
+MUSIC_DB_PATH="${MUSIC_DB_PATH:-${MUSIC_LANCEDB_URI:-$DB_ROOT/lancedb-music}}"
 HOST="${HOST:-127.0.0.1}"
 PORT_BASE="${PORT_BASE:-39080}"
 PORT_SCAN_LIMIT="${PORT_SCAN_LIMIT:-120}"
@@ -213,6 +214,19 @@ print_check_urls() {
   echo "- ${base}/api/image-search-text?q=system%20architecture"
 
   echo
+  echo "[14.5) Music API routes]"
+  echo "- ${base}/api/music"
+  echo "- ${base}/api/music?limit=5"
+  echo "- ${base}/api/music/artists"
+  echo "- ${base}/api/music/albums"
+  echo "- ${base}/api/music/search?q=test"
+  echo "- ${base}/api/music/<song_id>"
+  echo "- ${base}/api/music/<song_id>/audio"
+  echo "- ${base}/api/music/<song_id>/lyrics"
+  echo "- curl -X POST \"${base}/api/music/<song_id>/play\""
+  echo "- ${base}/api/music/comments/list?song_id=<song_id>"
+
+  echo
   echo "[15) GET /admin/view-analytics-config (local admin)]"
   echo "- ${base}/admin/view-analytics-config"
 
@@ -269,6 +283,7 @@ print_check_urls() {
 
 [[ -d "$DB_PATH" ]] || fail "DB path not found: $DB_PATH. Run ./scripts/test_cli_e2e.sh first, or set DB_ROOT/DB_PATH to an existing content DB."
 mkdir -p "$COMMENTS_DB_PATH"
+mkdir -p "$MUSIC_DB_PATH"
 
 PORT_CHOSEN="$(choose_port)"
 BACKEND_BIN_PATH="$(resolve_backend_bin)"
@@ -282,6 +297,7 @@ COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE="${COMMENT_AI_RESULT_CLEANUP_ON_S
 log "Using DB_ROOT=$DB_ROOT"
 log "Using CONTENT_DB_PATH=$DB_PATH"
 log "Using COMMENTS_DB_PATH=$COMMENTS_DB_PATH"
+log "Using MUSIC_DB_PATH=$MUSIC_DB_PATH"
 log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
 log "Using HOST=$HOST PORT=$PORT_CHOSEN"
 log "Comment AI env: COMMENT_AI_CONTENT_API_BASE=$COMMENT_AI_CONTENT_API_BASE_EFFECTIVE COMMENT_AI_CODEX_SANDBOX=$COMMENT_AI_CODEX_SANDBOX_EFFECTIVE COMMENT_AI_CODEX_JSON_STREAM=$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE COMMENT_AI_CODEX_BYPASS=$COMMENT_AI_CODEX_BYPASS_EFFECTIVE COMMENT_AI_RESULT_DIR=$COMMENT_AI_RESULT_DIR_EFFECTIVE COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS=$COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE"
@@ -292,6 +308,7 @@ BIND_ADDR="$HOST" \
 PORT="$PORT_CHOSEN" \
 LANCEDB_URI="$DB_PATH" \
 COMMENTS_LANCEDB_URI="$COMMENTS_DB_PATH" \
+MUSIC_LANCEDB_URI="$MUSIC_DB_PATH" \
 COMMENT_AI_CONTENT_API_BASE="$COMMENT_AI_CONTENT_API_BASE_EFFECTIVE" \
 COMMENT_AI_CODEX_SANDBOX="$COMMENT_AI_CODEX_SANDBOX_EFFECTIVE" \
 COMMENT_AI_CODEX_JSON_STREAM="$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE" \

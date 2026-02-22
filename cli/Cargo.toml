@@ -26,6 +26,7 @@ tracing-subscriber = { workspace = true }
 regex = "1"
 resvg = "0.45"
 rand = "0.8"
+lofty = "0.23"
 
 [dev-dependencies]
 tempfile = "3.10"

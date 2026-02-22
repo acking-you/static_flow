@@ -6,6 +6,7 @@ pub mod query;
 pub mod sync_notes;
 pub mod write_article;
 pub mod write_images;
+pub mod write_music;
 
 use anyhow::Result;
 
@@ -101,6 +102,38 @@ pub async fn run(cli: Cli) -> Result<()> {
                 thumbnail_size,
                 !no_auto_optimize,
             )
+            .await
+        },
+        Commands::WriteMusic {
+            db_path,
+            file,
+            id,
+            title,
+            artist,
+            album,
+            album_id,
+            cover,
+            content_db_path,
+            lyrics,
+            lyrics_translation,
+            source,
+            source_id,
+            tags,
+        } => {
+            write_music::run(&db_path, &file, write_music::WriteMusicOptions {
+                id,
+                title,
+                artist,
+                album,
+                album_id,
+                cover,
+                _content_db_path: content_db_path,
+                lyrics,
+                lyrics_translation,
+                source,
+                source_id,
+                tags,
+            })
             .await
         },
         Commands::Query {

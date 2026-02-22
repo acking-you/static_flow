@@ -65,3 +65,8 @@ debug = true  # 保留调试信息
 # 针对依赖的优化（开发时依赖用 release 优化，加快运行）
 [profile.dev.package."*"]
 opt-level = 2
+
+# Patch: fix object_store LocalUpload::complete() fstat-after-rename
+# failure on WSL2 9p/drvfs (NTFS mounts)
+[patch.crates-io]
+object_store = { path = "patches/object_store" }

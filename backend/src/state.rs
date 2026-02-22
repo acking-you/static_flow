@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use static_flow_shared::{
     comments_store::CommentDataStore,
     lancedb_api::{CategoryInfo, StaticFlowDataStore, StatsResponse, TagInfo},
+    music_store::MusicDataStore,
 };
 use tokio::sync::{mpsc, RwLock};
 
@@ -86,6 +87,23 @@ impl Default for ApiBehaviorRuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicRuntimeConfig {
+    pub play_dedupe_window_seconds: u64,
+    pub comment_rate_limit_seconds: u64,
+    pub list_default_limit: usize,
+}
+
+impl Default for MusicRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            play_dedupe_window_seconds: 60,
+            comment_rate_limit_seconds: 60,
+            list_default_limit: 20,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdminAccessConfig {
     pub local_only: bool,
@@ -106,12 +124,17 @@ pub struct AppState {
     pub(crate) comment_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) comment_worker_tx: mpsc::Sender<String>,
     pub(crate) admin_access: AdminAccessConfig,
+    pub(crate) music_store: Arc<MusicDataStore>,
+    pub(crate) music_play_dedupe_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) music_comment_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) music_runtime_config: Arc<RwLock<MusicRuntimeConfig>>,
 }
 
 impl AppState {
-    pub async fn new(content_db_uri: &str, comments_db_uri: &str) -> Result<Self> {
+    pub async fn new(content_db_uri: &str, comments_db_uri: &str, music_db_uri: &str) -> Result<Self> {
         let store = StaticFlowDataStore::connect(content_db_uri).await?;
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
+        let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
 
@@ -143,6 +166,10 @@ impl AppState {
             comment_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             comment_worker_tx,
             admin_access,
+            music_store,
+            music_play_dedupe_guard: Arc::new(RwLock::new(HashMap::new())),
+            music_comment_guard: Arc::new(RwLock::new(HashMap::new())),
+            music_runtime_config: Arc::new(RwLock::new(MusicRuntimeConfig::default())),
         })
     }
 }

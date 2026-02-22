@@ -30,16 +30,21 @@ use static_flow_shared::{
         ArticleViewTrackResponse, ArticleViewTrendResponse, CategoriesResponse, ImageListResponse,
         ImageSearchResponse, ImageTextSearchResponse, SearchResponse, StatsResponse, TagsResponse,
     },
+    music_store::{
+        AlbumInfo, ArtistInfo, MusicCommentItem, MusicCommentListResponse, MusicCommentRecord,
+        PlayTrackResponse, SongDetail, SongListResponse, SongLyrics,
+        SongSearchResult,
+    },
     Article,
 };
 use tokio::time::sleep;
 
 use crate::state::{
-    ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, ViewAnalyticsRuntimeConfig,
-    MAX_CONFIGURABLE_API_BEHAVIOR_DAYS, MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS,
-    MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_LIST_LIMIT,
-    MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS, MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS,
-    MAX_CONFIGURABLE_VIEW_TREND_DAYS,
+    ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, MusicRuntimeConfig,
+    ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
+    MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS,
+    MAX_CONFIGURABLE_COMMENT_LIST_LIMIT, MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS,
+    MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS, MAX_CONFIGURABLE_VIEW_TREND_DAYS,
 };
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +99,61 @@ pub struct ImageTextSearchQuery {
 #[derive(Debug, Deserialize)]
 pub struct ImageRenderQuery {
     pub thumb: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListSongsQuery {
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub sort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct SearchSongsQuery {
+    pub q: Option<String>,
+    pub mode: Option<String>, // reserved for semantic/hybrid search
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListMusicCommentsQuery {
+    pub song_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitMusicCommentRequest {
+    pub song_id: String,
+    pub nickname: String,
+    pub comment_text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MusicConfigResponse {
+    pub play_dedupe_window_seconds: u64,
+    pub comment_rate_limit_seconds: u64,
+    pub list_default_limit: usize,
+}
+
+impl From<MusicRuntimeConfig> for MusicConfigResponse {
+    fn from(c: MusicRuntimeConfig) -> Self {
+        Self {
+            play_dedupe_window_seconds: c.play_dedupe_window_seconds,
+            comment_rate_limit_seconds: c.comment_rate_limit_seconds,
+            list_default_limit: c.list_default_limit,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMusicConfigRequest {
+    pub play_dedupe_window_seconds: Option<u64>,
+    pub comment_rate_limit_seconds: Option<u64>,
+    pub list_default_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3046,6 +3106,413 @@ fn apply_api_behavior_config_update(
     }
 
     Ok(next)
+}
+
+// ---------------------------------------------------------------------------
+// Music handlers
+// ---------------------------------------------------------------------------
+
+pub async fn list_songs(
+    State(state): State<AppState>,
+    Query(query): Query<ListSongsQuery>,
+) -> Result<Json<SongListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let config = state.music_runtime_config.read().await.clone();
+    let limit = query.limit.unwrap_or(config.list_default_limit);
+    let offset = query.offset.unwrap_or(0);
+    let result = state
+        .music_store
+        .list_songs(
+            limit,
+            offset,
+            query.artist.as_deref(),
+            query.album.as_deref(),
+            query.sort.as_deref(),
+        )
+        .await
+        .map_err(|e| internal_error("Failed to list songs", e))?;
+    Ok(Json(result))
+}
+
+pub async fn get_song(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<SongDetail>, (StatusCode, Json<ErrorResponse>)> {
+    let song = state
+        .music_store
+        .get_song(&id)
+        .await
+        .map_err(|e| internal_error("Failed to get song", e))?;
+    match song {
+        Some(s) => Ok(Json(s)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Song not found".to_string(),
+                code: 404,
+            }),
+        )),
+    }
+}
+
+pub async fn stream_song_audio(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let audio = state
+        .music_store
+        .get_song_audio(&id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch song audio", e))?;
+    let (data, fmt) = match audio {
+        Some(v) => v,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Song audio not found".to_string(),
+                    code: 404,
+                }),
+            ));
+        }
+    };
+
+    let content_type = match fmt.as_str() {
+        "flac" => "audio/flac",
+        _ => "audio/mpeg",
+    };
+    let total_len = data.len();
+
+    let range_header = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok());
+
+    if let Some(range_str) = range_header {
+        if let Some(parsed) = parse_range_header(range_str, total_len) {
+            let (start, end) = parsed;
+            let chunk = data[start..=end].to_vec();
+            let content_range = format!("bytes {start}-{end}/{total_len}");
+            return Ok(Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_LENGTH, chunk.len().to_string())
+                .header(header::CONTENT_RANGE, content_range)
+                .header(header::CACHE_CONTROL, "public, max-age=86400")
+                .body(Body::from(chunk))
+                .unwrap());
+        }
+    }
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, total_len.to_string())
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from(data))
+        .unwrap())
+}
+
+fn parse_range_header(range_str: &str, total: usize) -> Option<(usize, usize)> {
+    let range_str = range_str.strip_prefix("bytes=")?;
+    let mut parts = range_str.splitn(2, '-');
+    let start_str = parts.next()?.trim();
+    let end_str = parts.next().unwrap_or("").trim();
+    let start: usize = start_str.parse().ok()?;
+    if start >= total {
+        return None;
+    }
+    let end = if end_str.is_empty() {
+        total - 1
+    } else {
+        end_str.parse::<usize>().ok()?.min(total - 1)
+    };
+    if start > end {
+        return None;
+    }
+    Some((start, end))
+}
+
+pub async fn get_song_lyrics(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<SongLyrics>, (StatusCode, Json<ErrorResponse>)> {
+    let lyrics = state
+        .music_store
+        .get_song_lyrics(&id)
+        .await
+        .map_err(|e| internal_error("Failed to get song lyrics", e))?;
+    match lyrics {
+        Some(l) => Ok(Json(l)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Song not found".to_string(),
+                code: 404,
+            }),
+        )),
+    }
+}
+
+pub async fn search_songs(
+    State(state): State<AppState>,
+    Query(query): Query<SearchSongsQuery>,
+) -> Result<Json<Vec<SongSearchResult>>, (StatusCode, Json<ErrorResponse>)> {
+    let q = query.q.unwrap_or_default();
+    if q.trim().is_empty() {
+        return Err(bad_request("`q` is required"));
+    }
+    let limit = query.limit.unwrap_or(20);
+    let results = state
+        .music_store
+        .search_songs_fts(q.trim(), limit)
+        .await
+        .map_err(|e| internal_error("Failed to search songs", e))?;
+    Ok(Json(results))
+}
+
+pub async fn list_music_artists(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ArtistInfo>>, (StatusCode, Json<ErrorResponse>)> {
+    let artists = state
+        .music_store
+        .list_artists()
+        .await
+        .map_err(|e| internal_error("Failed to list artists", e))?;
+    Ok(Json(artists))
+}
+
+pub async fn list_music_albums(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<AlbumInfo>>, (StatusCode, Json<ErrorResponse>)> {
+    let albums = state
+        .music_store
+        .list_albums()
+        .await
+        .map_err(|e| internal_error("Failed to list albums", e))?;
+    Ok(Json(albums))
+}
+
+pub async fn track_song_play(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<PlayTrackResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let exists = state
+        .music_store
+        .song_exists(&id)
+        .await
+        .map_err(|e| internal_error("Failed to check song existence", e))?;
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Song not found".to_string(),
+                code: 404,
+            }),
+        ));
+    }
+
+    let fingerprint = build_client_fingerprint(&headers);
+    let config = state.music_runtime_config.read().await.clone();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // Dedupe guard (in-memory, same pattern as article views)
+    {
+        let window_ms = (config.play_dedupe_window_seconds.max(1) as i64) * 1_000;
+        let mut guard = state.music_play_dedupe_guard.write().await;
+        let key = format!("{id}:{fingerprint}");
+        if let Some(last) = guard.get(&key) {
+            if now_ms - *last < window_ms {
+                // Still call store to get total_plays but mark counted=false
+                let result = state
+                    .music_store
+                    .track_play(&id, &fingerprint, config.play_dedupe_window_seconds)
+                    .await
+                    .map_err(|e| internal_error("Failed to track play", e))?;
+                return Ok(Json(result));
+            }
+        }
+        guard.insert(key, now_ms);
+        let stale_before = now_ms - window_ms * 6;
+        guard.retain(|_, v| *v >= stale_before);
+    }
+
+    let result = state
+        .music_store
+        .track_play(&id, &fingerprint, config.play_dedupe_window_seconds)
+        .await
+        .map_err(|e| internal_error("Failed to track play", e))?;
+    Ok(Json(result))
+}
+
+pub async fn submit_music_comment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitMusicCommentRequest>,
+) -> Result<Json<MusicCommentItem>, (StatusCode, Json<ErrorResponse>)> {
+    let song_id = request.song_id.trim();
+    if song_id.is_empty() {
+        return Err(bad_request("`song_id` is required"));
+    }
+    let nickname = request.nickname.trim();
+    if nickname.is_empty() {
+        return Err(bad_request("`nickname` is required"));
+    }
+    if nickname.chars().count() > 50 {
+        return Err(bad_request("`nickname` must be <= 50 chars"));
+    }
+    let comment_text = request.comment_text.trim();
+    if comment_text.is_empty() {
+        return Err(bad_request("`comment_text` is required"));
+    }
+    if comment_text.chars().count() > 2000 {
+        return Err(bad_request("`comment_text` must be <= 2000 chars"));
+    }
+
+    let exists = state
+        .music_store
+        .song_exists(song_id)
+        .await
+        .map_err(|e| internal_error("Failed to check song existence", e))?;
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Song not found".to_string(),
+                code: 404,
+            }),
+        ));
+    }
+
+    let fingerprint = build_client_fingerprint(&headers);
+    let ip = extract_client_ip(&headers);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let config = state.music_runtime_config.read().await.clone();
+
+    // Rate limit
+    enforce_music_comment_rate_limit(
+        state.music_comment_guard.as_ref(),
+        &fingerprint,
+        now_ms,
+        config.comment_rate_limit_seconds,
+    )
+    .await?;
+
+    let ip_region = state.geoip.resolve_region(&ip).await;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let comment_id = format!("mc-{:x}-{:04x}", now_ms, nanos & 0xFFFF);
+
+    let record = MusicCommentRecord {
+        id: comment_id,
+        song_id: song_id.to_string(),
+        nickname: nickname.to_string(),
+        comment_text: comment_text.to_string(),
+        client_fingerprint: fingerprint,
+        client_ip: Some(ip),
+        ip_region: Some(ip_region),
+        created_at: now_ms,
+    };
+    let item = state
+        .music_store
+        .submit_comment(record)
+        .await
+        .map_err(|e| internal_error("Failed to submit music comment", e))?;
+    Ok(Json(item))
+}
+
+async fn enforce_music_comment_rate_limit(
+    guard: &tokio::sync::RwLock<HashMap<String, i64>>,
+    fingerprint: &str,
+    now_ms: i64,
+    rate_limit_seconds: u64,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let window_ms = (rate_limit_seconds.max(1) as i64) * 1_000;
+    let mut writer = guard.write().await;
+    if let Some(last) = writer.get(fingerprint) {
+        if now_ms - *last < window_ms {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Music comment rate-limited. Retry in {} seconds.",
+                        rate_limit_seconds
+                    ),
+                    code: 429,
+                }),
+            ));
+        }
+    }
+    writer.insert(fingerprint.to_string(), now_ms);
+    let stale_before = now_ms - window_ms * 6;
+    writer.retain(|_, v| *v >= stale_before);
+    Ok(())
+}
+
+pub async fn list_music_comments(
+    State(state): State<AppState>,
+    Query(query): Query<ListMusicCommentsQuery>,
+) -> Result<Json<MusicCommentListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let song_id = query.song_id.unwrap_or_default();
+    if song_id.trim().is_empty() {
+        return Err(bad_request("`song_id` is required"));
+    }
+    let config = state.music_runtime_config.read().await.clone();
+    let limit = query.limit.unwrap_or(config.list_default_limit);
+    let offset = query.offset.unwrap_or(0);
+    let result = state
+        .music_store
+        .list_comments(song_id.trim(), limit, offset)
+        .await
+        .map_err(|e| internal_error("Failed to list music comments", e))?;
+    Ok(Json(result))
+}
+
+pub async fn get_music_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<MusicConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let config = state.music_runtime_config.read().await.clone();
+    Ok(Json(MusicConfigResponse::from(config)))
+}
+
+pub async fn update_music_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateMusicConfigRequest>,
+) -> Result<Json<MusicConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let mut config = state.music_runtime_config.write().await;
+    if let Some(v) = request.play_dedupe_window_seconds {
+        if v == 0 || v > 3600 {
+            return Err(bad_request(
+                "`play_dedupe_window_seconds` must be between 1 and 3600",
+            ));
+        }
+        config.play_dedupe_window_seconds = v;
+    }
+    if let Some(v) = request.comment_rate_limit_seconds {
+        if v == 0 || v > 3600 {
+            return Err(bad_request(
+                "`comment_rate_limit_seconds` must be between 1 and 3600",
+            ));
+        }
+        config.comment_rate_limit_seconds = v;
+    }
+    if let Some(v) = request.list_default_limit {
+        if v == 0 || v > 200 {
+            return Err(bad_request(
+                "`list_default_limit` must be between 1 and 200",
+            ));
+        }
+        config.list_default_limit = v;
+    }
+    Ok(Json(MusicConfigResponse::from(config.clone())))
 }
 
 #[cfg(test)]

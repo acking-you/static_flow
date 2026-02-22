@@ -290,6 +290,9 @@ fn route_path_for(route: &Route) -> String {
         Route::NotFound => config::route_path("/404"),
         Route::MediaVideo => config::route_path("/media/video"),
         Route::MediaAudio => config::route_path("/media/audio"),
+        Route::MusicPlayer {
+            id,
+        } => config::route_path(&format!("/media/audio/{}", urlencoding::encode(id))),
     }
 }
 
@@ -487,10 +490,10 @@ pub fn apply_route_seo(route: Option<&Route>) {
             );
             apply_default_hreflang(&canonical_url);
         },
-        Route::MediaVideo | Route::MediaAudio => {
+        Route::MediaVideo | Route::MediaAudio | Route::MusicPlayer { .. } => {
             apply_common_seo(
-                "Media Hub · StaticFlow",
-                "多媒体管理功能即将上线。",
+                "Music Hub · StaticFlow",
+                "音乐库 — 探索和播放音乐收藏。",
                 &canonical_url,
                 "website",
                 "noindex,nofollow",

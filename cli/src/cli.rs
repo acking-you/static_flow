@@ -148,6 +148,51 @@ pub enum Commands {
         #[arg(long)]
         no_auto_optimize: bool,
     },
+    /// Write a music file (mp3/flac) into the music LanceDB.
+    WriteMusic {
+        /// Music LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb-music")]
+        db_path: PathBuf,
+        /// Audio file path (mp3/flac).
+        #[arg(long)]
+        file: PathBuf,
+        /// Custom song id (defaults to "manual-{file_stem}").
+        #[arg(long)]
+        id: Option<String>,
+        /// Song title (auto-extracted from file tags if omitted).
+        #[arg(long)]
+        title: Option<String>,
+        /// Artist name (auto-extracted from file tags if omitted).
+        #[arg(long)]
+        artist: Option<String>,
+        /// Album name (auto-extracted from file tags if omitted).
+        #[arg(long)]
+        album: Option<String>,
+        /// Album ID for grouping.
+        #[arg(long)]
+        album_id: Option<String>,
+        /// Cover image file path.
+        #[arg(long)]
+        cover: Option<PathBuf>,
+        /// Content DB path for cover image import.
+        #[arg(long, default_value = "./data/lancedb")]
+        content_db_path: PathBuf,
+        /// LRC lyrics file path.
+        #[arg(long)]
+        lyrics: Option<PathBuf>,
+        /// Translated LRC lyrics file path.
+        #[arg(long)]
+        lyrics_translation: Option<PathBuf>,
+        /// Source identifier.
+        #[arg(long, default_value = "manual")]
+        source: String,
+        /// Source platform track ID.
+        #[arg(long)]
+        source_id: Option<String>,
+        /// Comma-separated tags.
+        #[arg(long)]
+        tags: Option<String>,
+    },
     /// Query a table and print the first rows.
     Query {
         /// LanceDB directory path.

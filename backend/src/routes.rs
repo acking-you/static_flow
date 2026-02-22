@@ -64,6 +64,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/images", get(handlers::list_images))
         .route("/api/image-search", get(handlers::search_images))
         .route("/api/image-search-text", get(handlers::search_images_by_text))
+        // Music API (read-only)
+        .route("/api/music", get(handlers::list_songs))
+        .route("/api/music/search", get(handlers::search_songs))
+        .route("/api/music/artists", get(handlers::list_music_artists))
+        .route("/api/music/albums", get(handlers::list_music_albums))
+        .route("/api/music/:id", get(handlers::get_song))
+        .route("/api/music/:id/audio", get(handlers::stream_song_audio))
+        .route("/api/music/:id/lyrics", get(handlers::get_song_lyrics))
+        // Music API (write, rate-limited)
+        .route("/api/music/:id/play", post(handlers::track_song_play))
+        .route("/api/music/comments/submit", post(handlers::submit_music_comment))
+        .route("/api/music/comments/list", get(handlers::list_music_comments))
         .route(
             "/admin/view-analytics-config",
             get(handlers::get_view_analytics_config).post(handlers::update_view_analytics_config),
@@ -112,6 +124,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/admin/comments/audit-logs", get(handlers::admin_list_comment_audit_logs))
         .route("/admin/comments/cleanup", post(handlers::admin_cleanup_comments))
+        .route(
+            "/admin/music-config",
+            get(handlers::get_music_config).post(handlers::update_music_config),
+        )
         .with_state(state)
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(

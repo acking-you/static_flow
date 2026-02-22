@@ -110,6 +110,13 @@ pub enum Route {
     #[at("/static_flow/media/audio")]
     MediaAudio,
 
+    #[cfg(not(feature = "mock"))]
+    #[at("/media/audio/:id")]
+    MusicPlayer { id: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/media/audio/:id")]
+    MusicPlayer { id: String },
+
     #[not_found]
     #[cfg(not(feature = "mock"))]
     #[at("/404")]
@@ -156,7 +163,8 @@ fn switch(route: Route) -> Html {
             html! { <pages::admin_ai_stream::AdminCommentRunsPage task_id={task_id} /> }
         },
         Route::MediaVideo => html! { <pages::coming_soon::ComingSoonPage feature={"video"} /> },
-        Route::MediaAudio => html! { <pages::coming_soon::ComingSoonPage feature={"audio"} /> },
+        Route::MediaAudio => html! { <pages::music_library::MusicLibraryPage /> },
+        Route::MusicPlayer { id } => html! { <pages::music_player::MusicPlayerPage id={id} /> },
         Route::NotFound => html! { <pages::not_found::NotFoundPage /> },
     }
 }

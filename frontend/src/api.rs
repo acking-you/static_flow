@@ -2239,3 +2239,218 @@ async fn admin_post_task_action(
             .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Music API types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SongListItem {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover_image: Option<String>,
+    pub duration_ms: u64,
+    pub format: String,
+    pub tags: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SongDetail {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover_image: Option<String>,
+    pub duration_ms: u64,
+    pub format: String,
+    pub bitrate: u64,
+    pub tags: String,
+    pub source: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SongLyrics {
+    pub song_id: String,
+    pub lyrics_lrc: Option<String>,
+    pub lyrics_translation: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MusicCommentItem {
+    pub id: String,
+    pub song_id: String,
+    pub nickname: String,
+    pub comment_text: String,
+    pub ip_region: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayTrackResponse {
+    pub song_id: String,
+    pub counted: bool,
+    pub total_plays: u64,
+}
+
+#[cfg(not(feature = "mock"))]
+#[derive(Debug, Deserialize)]
+struct SongListApiResponse {
+    songs: Vec<SongListItem>,
+    #[allow(dead_code)]
+    total: usize,
+    #[allow(dead_code)]
+    has_more: bool,
+}
+
+#[cfg(not(feature = "mock"))]
+#[derive(Debug, Deserialize)]
+struct MusicCommentListApiResponse {
+    comments: Vec<MusicCommentItem>,
+    #[allow(dead_code)]
+    total: usize,
+}
+
+pub fn song_audio_url(id: &str) -> String {
+    #[cfg(feature = "mock")]
+    { format!("/mock/music/{}/audio", id) }
+    #[cfg(not(feature = "mock"))]
+    { format!("{}/music/{}/audio", API_BASE, urlencoding::encode(id)) }
+}
+
+pub fn song_cover_url(cover: Option<&str>) -> String {
+    match cover {
+        Some(f) if !f.is_empty() => {
+            // If it's already a full URL, use directly
+            if f.starts_with("http://") || f.starts_with("https://") {
+                return f.to_string();
+            }
+            #[cfg(feature = "mock")]
+            { format!("/mock/images/{}", f) }
+            #[cfg(not(feature = "mock"))]
+            { format!("{}/images/{}", API_BASE, urlencoding::encode(f)) }
+        }
+        _ => String::new(),
+    }
+}
+
+pub async fn fetch_songs(
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<SongListItem>, String> {
+    #[cfg(feature = "mock")]
+    { return Ok(vec![]); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/music", API_BASE);
+        let mut params = Vec::new();
+        if let Some(l) = limit { params.push(format!("limit={l}")); }
+        if let Some(o) = offset { params.push(format!("offset={o}")); }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        let r: SongListApiResponse = response.json().await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(r.songs)
+    }
+}
+
+pub async fn fetch_song_detail(id: &str) -> Result<Option<SongDetail>, String> {
+    #[cfg(feature = "mock")]
+    { return Ok(None); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/music/{}", API_BASE, urlencoding::encode(id));
+        let response = api_get(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if response.status() == 404 { return Ok(None); }
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        let d: SongDetail = response.json().await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(Some(d))
+    }
+}
+
+pub async fn fetch_song_lyrics(id: &str) -> Result<Option<SongLyrics>, String> {
+    #[cfg(feature = "mock")]
+    { return Ok(None); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/music/{}/lyrics", API_BASE, urlencoding::encode(id));
+        let response = api_get(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if response.status() == 404 { return Ok(None); }
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        let l: SongLyrics = response.json().await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(Some(l))
+    }
+}
+
+pub async fn track_song_play(id: &str) -> Result<PlayTrackResponse, String> {
+    #[cfg(feature = "mock")]
+    { return Ok(PlayTrackResponse { song_id: id.to_string(), counted: true, total_plays: 42 }); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/music/{}/play", API_BASE, urlencoding::encode(id));
+        let response = api_post(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        response.json().await.map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn submit_music_comment(
+    song_id: &str, nickname: &str, text: &str,
+) -> Result<MusicCommentItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(MusicCommentItem {
+            id: "mock".to_string(), song_id: song_id.to_string(),
+            nickname: nickname.to_string(), comment_text: text.to_string(),
+            ip_region: None, created_at: 0,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/music/comments/submit", API_BASE);
+        let body = serde_json::json!({ "song_id": song_id, "nickname": nickname, "comment_text": text });
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body).map_err(|e| format!("Serialize error: {:?}", e))?
+            .send().await.map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        response.json().await.map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_music_comments(
+    song_id: &str, limit: Option<usize>, offset: Option<usize>,
+) -> Result<Vec<MusicCommentItem>, String> {
+    #[cfg(feature = "mock")]
+    { return Ok(vec![]); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/music/comments/list?song_id={}", API_BASE, urlencoding::encode(song_id));
+        if let Some(l) = limit { url.push_str(&format!("&limit={l}")); }
+        if let Some(o) = offset { url.push_str(&format!("&offset={o}")); }
+        let response = api_get(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        let r: MusicCommentListApiResponse = response.json().await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(r.comments)
+    }
+}

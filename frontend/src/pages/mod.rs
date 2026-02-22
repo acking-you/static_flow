@@ -7,6 +7,8 @@ pub mod category_detail;
 pub mod coming_soon;
 pub mod home;
 pub mod latest_articles;
+pub mod music_library;
+pub mod music_player;
 pub mod not_found;
 pub mod posts;
 pub mod search;
