@@ -11,6 +11,7 @@ use chrono::Utc;
 use futures::TryStreamExt;
 use lancedb::{
     connect,
+    index::Index,
     query::{ExecutableQuery, QueryBase, Select},
     Connection, Table,
 };
@@ -477,7 +478,19 @@ impl MusicDataStore {
     }
 
     async fn songs_table(&self) -> Result<Table> {
-        ensure_table(&self.db, SONGS_TABLE, songs_schema()).await
+        let table = ensure_table(&self.db, SONGS_TABLE, songs_schema()).await?;
+        // Auto-ensure FTS index on searchable_text for full-text search
+        let indices = table.list_indices().await.unwrap_or_default();
+        if !indices.iter().any(|idx| idx.columns == ["searchable_text"]) {
+            if let Err(err) = table
+                .create_index(&["searchable_text"], Index::FTS(Default::default()))
+                .execute()
+                .await
+            {
+                tracing::warn!("Failed to auto-create FTS index on songs.searchable_text: {err}");
+            }
+        }
+        Ok(table)
     }
 
     async fn plays_table(&self) -> Result<Table> {

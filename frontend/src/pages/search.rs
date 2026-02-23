@@ -48,7 +48,7 @@ pub fn search_page() -> Html {
         .unwrap_or_else(|| "keyword".to_string())
         .to_lowercase();
     let mode =
-        if matches!(mode.as_str(), "semantic" | "image") { mode } else { "keyword".to_string() };
+        if matches!(mode.as_str(), "semantic" | "image" | "music") { mode } else { "keyword".to_string() };
     let enhanced_highlight = query
         .as_ref()
         .and_then(|q| q.enhanced_highlight)
@@ -103,6 +103,8 @@ pub fn search_page() -> Html {
             .unwrap_or_default()
     });
     let semantic_advanced_open = use_state(|| hybrid);
+    let music_results = use_state(Vec::<crate::api::SongSearchResult>::new);
+    let music_loading = use_state(|| false);
     let hybrid_rrf_k_input = use_state(|| hybrid_rrf_k.to_string());
     let hybrid_vector_limit_input = use_state(|| {
         hybrid_vector_limit
@@ -345,7 +347,7 @@ pub fn search_page() -> Html {
                 hybrid_vector_limit,
                 hybrid_fts_limit,
             )| {
-                if mode == "image" || kw.trim().is_empty() {
+                if mode == "image" || mode == "music" || kw.trim().is_empty() {
                     loading.set(false);
                     results.set(vec![]);
                 } else {
@@ -392,6 +394,38 @@ pub fn search_page() -> Html {
                     });
                 }
 
+                || ()
+            },
+        );
+    }
+
+    // Music search effect
+    {
+        let music_results = music_results.clone();
+        let music_loading = music_loading.clone();
+        let keyword = keyword.clone();
+        let mode = mode.clone();
+
+        use_effect_with(
+            (keyword.clone(), mode.clone()),
+            move |(kw, mode)| {
+                if mode != "music" || kw.trim().is_empty() {
+                    music_loading.set(false);
+                    music_results.set(vec![]);
+                } else {
+                    music_loading.set(true);
+                    let music_results = music_results.clone();
+                    let music_loading = music_loading.clone();
+                    let q = kw.clone();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match crate::api::search_songs(&q, Some(20)).await {
+                            Ok(data) => music_results.set(data),
+                            Err(_) => music_results.set(vec![]),
+                        }
+                        music_loading.set(false);
+                    });
+                }
                 || ()
             },
         );
@@ -901,6 +935,18 @@ pub fn search_page() -> Html {
         None,
         None,
     );
+    let music_href = build_search_href(
+        Some("music"),
+        &keyword,
+        false,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
     let scoped_max_distance = if mode == "semantic" { max_distance } else { None };
     let limited_href = build_search_href(
         Some(mode.as_str()),
@@ -1103,7 +1149,11 @@ pub fn search_page() -> Html {
         .map(|value| (value - 1.2).abs() < 0.0001)
         .unwrap_or(false);
 
-    let hero_label = if mode == "image" && !keyword.is_empty() {
+    let hero_label = if mode == "music" && !keyword.is_empty() {
+        keyword.clone()
+    } else if mode == "music" {
+        "MUSIC SEARCH".to_string()
+    } else if mode == "image" && !keyword.is_empty() {
         keyword.clone()
     } else if mode == "image" {
         "IMAGE SEARCH".to_string()
@@ -1181,7 +1231,22 @@ pub fn search_page() -> Html {
                         "mb-8",
                         "opacity-80"
                     )}>
-                        if mode == "image" && !keyword.is_empty() {
+                        if mode == "music" && !keyword.is_empty() {
+                            if *music_loading {
+                                <span class={classes!("search-status-loading")}>
+                                    <i class={classes!("fas", "fa-spinner", "fa-spin", "mr-2")}></i>
+                                    { t::MUSIC_SEARCHING }
+                                </span>
+                            } else if music_results.is_empty() {
+                                { fill_one(t::MUSIC_MISS_TEMPLATE, &keyword) }
+                            } else {
+                                <span class={classes!("search-status-found")}>
+                                    { fill_one(t::MUSIC_FOUND_TEMPLATE, music_results.len().to_string()) }
+                                </span>
+                            }
+                        } else if mode == "music" {
+                            { "MUSIC SEARCH" }
+                        } else if mode == "image" && !keyword.is_empty() {
                             if *image_text_loading {
                                 <span class={classes!("search-status-loading")}>
                                     <i class={classes!("fas", "fa-spinner", "fa-spin", "mr-2")}></i>
@@ -1258,7 +1323,15 @@ pub fn search_page() -> Html {
                         )}>
                             <i class={classes!("fas", "fa-search")}></i>
                             <span style="font-family: 'Space Mono', monospace;">
-                                if mode == "image" {
+                                if mode == "music" {
+                                    if *music_loading {
+                                        { t::STATUS_SCANNING }
+                                    } else if !keyword.is_empty() {
+                                        { format!("{} RESULTS", music_results.len()) }
+                                    } else {
+                                        { t::STATUS_READY }
+                                    }
+                                } else if mode == "image" {
                                     if *image_loading || *image_text_loading {
                                         { t::STATUS_SCANNING }
                                     } else if !keyword.is_empty() {
@@ -1329,9 +1402,22 @@ pub fn search_page() -> Html {
                         >
                             { t::MODE_IMAGE }
                         </a>
+                        <a
+                            href={music_href}
+                            class={classes!(
+                                mode_button_base.clone(),
+                                if mode == "music" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                if mode == "music" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                if mode == "music" { "bg-[var(--primary)]/10" } else { "" },
+                                if mode != "music" { "hover:text-[var(--primary)]" } else { "" },
+                                if mode != "music" { "hover:border-[var(--primary)]/60" } else { "" }
+                            )}
+                        >
+                            { t::MODE_MUSIC }
+                        </a>
                     </div>
 
-                    if mode != "image" && !keyword.is_empty() {
+                    if mode != "image" && mode != "music" && !keyword.is_empty() {
                         <div class={classes!(
                             "mt-6",
                             "flex",
@@ -2196,6 +2282,100 @@ pub fn search_page() -> Html {
                                 </div>
                             }
                         </>
+                    } else if mode == "music" && *music_loading {
+                        <div class={classes!(
+                            "search-loading",
+                            "flex",
+                            "items-center",
+                            "justify-center",
+                            "gap-3",
+                            "py-12",
+                            "text-[var(--muted)]",
+                            "text-lg"
+                        )}>
+                            <i class={classes!(
+                                "fas",
+                                "fa-spinner",
+                                "fa-spin",
+                                "text-2xl",
+                                "text-[var(--primary)]"
+                            )}></i>
+                            <span style="font-family: 'Space Mono', monospace;">{ t::SEARCHING_SHORT }</span>
+                        </div>
+                    } else if mode == "music" && !music_results.is_empty() {
+                        <div class={classes!(
+                            "grid",
+                            "grid-cols-2",
+                            "sm:grid-cols-3",
+                            "lg:grid-cols-4",
+                            "xl:grid-cols-5",
+                            "gap-5"
+                        )}>
+                            { for music_results.iter().map(|r| {
+                                let cover_url = crate::api::song_cover_url(r.cover_image.as_deref());
+                                let id = r.id.clone();
+                                html! {
+                                    <Link<Route> to={Route::MusicPlayer { id }}>
+                                        <div class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl \
+                                                    overflow-hidden flex flex-col transition-all duration-300 ease-out \
+                                                    hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-2">
+                                            <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">
+                                                if cover_url.is_empty() {
+                                                    <div class="w-full h-full flex items-center justify-center text-[var(--muted)]">
+                                                        <i class="fas fa-music text-5xl opacity-30"></i>
+                                                    </div>
+                                                } else {
+                                                    <img src={cover_url} alt={r.title.clone()} loading="lazy"
+                                                        class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105" />
+                                                }
+                                                <div class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 \
+                                                            flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                                    <div class="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
+                                                        <i class="fas fa-play text-black text-lg"></i>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="p-3">
+                                                <h3 class="text-sm font-semibold text-[var(--text)] truncate"
+                                                    style="font-family: 'Fraunces', serif;">
+                                                    {&r.title}
+                                                </h3>
+                                                <p class="text-xs text-[var(--muted)] truncate mt-0.5">
+                                                    {&r.artist}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </Link<Route>>
+                                }
+                            })}
+                        </div>
+                    } else if mode == "music" && !keyword.is_empty() {
+                        <div class={classes!(
+                            "search-empty",
+                            "text-center",
+                            "py-16",
+                            "px-4",
+                            "bg-[var(--surface)]",
+                            "liquid-glass",
+                            "rounded-2xl",
+                            "border",
+                            "border-[var(--primary)]/30"
+                        )}>
+                            <i class={classes!(
+                                "fas",
+                                "fa-music",
+                                "text-6xl",
+                                "text-[var(--primary)]",
+                                "mb-6",
+                                "opacity-50"
+                            )}></i>
+                            <p class={classes!("text-xl", "mb-2", "font-bold")} style="font-family: 'Space Mono', monospace;">
+                                { t::NO_RESULTS_TITLE }
+                            </p>
+                            <p class={classes!("text-base", "text-[var(--muted)]", "opacity-70")}>
+                                { fill_one(t::MUSIC_MISS_TEMPLATE, &keyword) }
+                            </p>
+                        </div>
                     } else if *loading {
                         <div class={classes!(
                             "search-loading",

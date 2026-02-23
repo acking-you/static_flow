@@ -131,6 +131,10 @@ pub mod search {
     pub const MODE_KEYWORD: &str = "Keyword";
     pub const MODE_SEMANTIC: &str = "Semantic";
     pub const MODE_IMAGE: &str = "Image";
+    pub const MODE_MUSIC: &str = "Music";
+    pub const MUSIC_SEARCHING: &str = "正在搜索音乐...";
+    pub const MUSIC_MISS_TEMPLATE: &str = "未找到与「{}」相关的音乐";
+    pub const MUSIC_FOUND_TEMPLATE: &str = "找到 {} 首相关音乐";
     pub const RESULT_SCOPE: &str = "Result Scope";
     pub const RESULT_SCOPE_LIMITED_TEMPLATE: &str = "默认 {} 条";
     pub const RESULT_SCOPE_ALL: &str = "全部召回";
