@@ -102,6 +102,8 @@ pub struct SyncedLyricsProps {
     #[prop_or_default]
     pub lyrics_translation: Option<AttrValue>,
     pub current_time: f64,
+    #[prop_or_default]
+    pub lyrics_offset: f64,
 }
 
 #[function_component(SyncedLyrics)]
@@ -124,7 +126,7 @@ pub fn synced_lyrics(props: &SyncedLyricsProps) -> Html {
     }
 
     // Find current line index via binary search
-    let ct = props.current_time;
+    let ct = props.current_time + props.lyrics_offset;
     let current_idx = parsed.partition_point(|l| l.time <= ct).saturating_sub(1);
 
     // Auto-scroll to current line

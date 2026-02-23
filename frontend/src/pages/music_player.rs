@@ -32,6 +32,7 @@ pub fn music_player_page(props: &Props) -> Html {
     let player_ctx = use_context::<MusicPlayerContext>();
     let navigator = use_navigator();
     let current_time = player_ctx.as_ref().map(|c| c.current_time).unwrap_or(0.0);
+    let lyrics_offset = player_ctx.as_ref().map(|c| c.lyrics_offset).unwrap_or(0.0);
 
     // Navigate when global song_id changes (prev/next/auto-next)
     {
@@ -218,6 +219,19 @@ pub fn music_player_page(props: &Props) -> Html {
         }
     });
 
+    let on_offset_dec = { let ctx = player_ctx.clone(); let off = lyrics_offset;
+        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetLyricsOffset(off - 0.5)); } })
+    };
+    let on_offset_inc = { let ctx = player_ctx.clone(); let off = lyrics_offset;
+        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetLyricsOffset(off + 0.5)); } })
+    };
+    let on_offset_reset = { let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetLyricsOffset(0.0)); } })
+    };
+    let offset_display = if lyrics_offset > 0.0 { format!("+{:.1}s", lyrics_offset) }
+        else if lyrics_offset < 0.0 { format!("{:.1}s", lyrics_offset) }
+        else { "0.0s".to_string() };
+
     if *song_loading { return html! { <div class="flex justify-center py-20"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" /></div> }; }
     if let Some(err) = (*error).as_ref() { return html! { <div class="text-center py-20 text-red-500">{format!("Error: {}", err)}</div> }; }
     let detail = match (*song).as_ref() { Some(d) => d, None => { return html! { <div class="text-center py-20 text-[var(--muted)]">{"Song not found"}</div> }; } };
@@ -273,7 +287,7 @@ pub fn music_player_page(props: &Props) -> Html {
                             <Icon name={IconName::Music} size={64} class={classes!("opacity-30")} />
                         </div>
                     } else {
-                        <img src={cover_url} alt={detail.title.clone()} class="w-full h-full object-cover" />
+                        <img src={cover_url} alt={detail.title.clone()} referrerpolicy="no-referrer" class="w-full h-full object-cover" />
                     }
                 </div>
                 <h1 class="text-2xl sm:text-3xl font-bold text-[var(--text)] text-center mb-1" style="font-family: 'Fraunces', serif;">{&detail.title}</h1>
@@ -369,8 +383,24 @@ pub fn music_player_page(props: &Props) -> Html {
                 </div>
             } else if lyrics_lrc.is_some() {
                 <div class="mb-8 bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
-                    <h2 class="text-sm font-semibold text-[var(--muted)] px-4 pt-3 pb-1">{"Lyrics"}</h2>
-                    <SyncedLyrics lyrics_lrc={lyrics_lrc.map(AttrValue::from)} lyrics_translation={lyrics_trans.map(AttrValue::from)} current_time={current_time} />
+                    <div class="flex items-center justify-between px-4 pt-3 pb-1">
+                        <h2 class="text-sm font-semibold text-[var(--muted)]">{"Lyrics"}</h2>
+                        <div class="flex items-center gap-1.5 text-xs">
+                            <button onclick={on_offset_dec} type="button"
+                                class="w-6 h-6 rounded bg-[var(--surface-alt)] border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--primary)] transition-colors flex items-center justify-center font-mono"
+                                aria-label="Lyrics offset -0.5s">{"-"}</button>
+                            <span class="tabular-nums text-[var(--muted)] min-w-[3.5rem] text-center font-mono">{&offset_display}</span>
+                            <button onclick={on_offset_inc} type="button"
+                                class="w-6 h-6 rounded bg-[var(--surface-alt)] border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--primary)] transition-colors flex items-center justify-center font-mono"
+                                aria-label="Lyrics offset +0.5s">{"+"}</button>
+                            if lyrics_offset != 0.0 {
+                                <button onclick={on_offset_reset} type="button"
+                                    class="ml-1 px-1.5 h-6 rounded bg-[var(--surface-alt)] border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--primary)] transition-colors font-mono"
+                                    aria-label="Reset lyrics offset">{"↺"}</button>
+                            }
+                        </div>
+                    </div>
+                    <SyncedLyrics lyrics_lrc={lyrics_lrc.map(AttrValue::from)} lyrics_translation={lyrics_trans.map(AttrValue::from)} current_time={current_time} lyrics_offset={lyrics_offset} />
                 </div>
             }
 

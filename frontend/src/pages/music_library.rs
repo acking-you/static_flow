@@ -231,7 +231,7 @@ fn render_song_card(
                             <Icon name={IconName::Music} size={48} class={classes!("opacity-30")} />
                         </div>
                     } else {
-                        <img src={cover_url} alt={song.title.clone()} loading="lazy"
+                        <img src={cover_url} alt={song.title.clone()} loading="lazy" referrerpolicy="no-referrer"
                             class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105" />
                     }
                     <div class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 \

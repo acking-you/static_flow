@@ -23,6 +23,7 @@ pub struct MusicPlayerState {
     pub history_index: Option<usize>,
     pub next_mode: NextSongMode,
     pub candidates: Vec<SongSearchResult>,
+    pub lyrics_offset: f64,
 }
 
 impl Default for MusicPlayerState {
@@ -40,6 +41,7 @@ impl Default for MusicPlayerState {
             history_index: None,
             next_mode: NextSongMode::Random,
             candidates: Vec::new(),
+            lyrics_offset: 0.0,
         }
     }
 }
@@ -58,6 +60,7 @@ pub enum MusicAction {
     PlayNext { fallback: Option<(SongDetail, String)> },
     SetNextMode(NextSongMode),
     SetCandidates(Vec<SongSearchResult>),
+    SetLyricsOffset(f64),
 }
 
 impl Reducible for MusicPlayerState {
@@ -83,6 +86,7 @@ impl Reducible for MusicPlayerState {
                 next.playing = true;
                 next.visible = true;
                 next.minimized = false;
+                next.lyrics_offset = 0.0;
             }
             MusicAction::TogglePlay => {
                 next.playing = !next.playing;
@@ -169,6 +173,10 @@ impl Reducible for MusicPlayerState {
             }
             MusicAction::SetCandidates(c) => {
                 next.candidates = c;
+            }
+            MusicAction::SetLyricsOffset(o) => {
+                let limit = if next.duration > 0.0 { next.duration } else { 600.0 };
+                next.lyrics_offset = o.clamp(-limit, limit);
             }
         }
         Rc::new(next)

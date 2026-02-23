@@ -103,7 +103,7 @@ pub fn mini_player() -> Html {
                         <Icon name={IconName::Music} size={16} class={classes!("opacity-40")} />
                     </div>
                 } else {
-                    <img src={cover_url} alt={title.clone()}
+                    <img src={cover_url} alt={title.clone()} referrerpolicy="no-referrer"
                         class="w-full h-full object-cover" />
                 }
             </div>

@@ -2459,7 +2459,7 @@ pub fn search_page() -> Html {
                                                         <i class="fas fa-music text-5xl opacity-30"></i>
                                                     </div>
                                                 } else {
-                                                    <img src={cover_url} alt={r.title.clone()} loading="lazy"
+                                                    <img src={cover_url} alt={r.title.clone()} loading="lazy" referrerpolicy="no-referrer"
                                                         class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105" />
                                                 }
                                                 <div class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 \
