@@ -44,6 +44,12 @@ pub async fn run(db_path: &Path) -> Result<()> {
             if let Err(err) = ensure_fts_index(&songs_table, "searchable_text").await {
                 tracing::warn!("Failed to create FTS index on songs.searchable_text: {err}");
             }
+            if let Err(err) = ensure_vector_index(&songs_table, "vector_en").await {
+                tracing::warn!("Failed to create vector index on songs.vector_en: {err}");
+            }
+            if let Err(err) = ensure_vector_index(&songs_table, "vector_zh").await {
+                tracing::warn!("Failed to create vector index on songs.vector_zh: {err}");
+            }
         } else {
             tracing::info!("songs table not found in music DB, skipping");
         }

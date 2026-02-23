@@ -30,13 +30,10 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
             tag,
             category,
         } => {
-            let articles = store
-                .list_articles(tag.as_deref(), category.as_deref())
+            let resp = store
+                .list_articles(tag.as_deref(), category.as_deref(), None, None)
                 .await?;
-            print_json(&ArticleListResponse {
-                total: articles.len(),
-                articles,
-            })
+            print_json(&resp)
         },
         ApiCommands::GetArticle {
             id,
@@ -53,6 +50,9 @@ pub async fn run(db_path: &Path, command: ApiCommands) -> Result<()> {
             let articles = store.related_articles(&id, 4).await?;
             print_json(&ArticleListResponse {
                 total: articles.len(),
+                offset: 0,
+                limit: articles.len(),
+                has_more: false,
                 articles,
             })
         },

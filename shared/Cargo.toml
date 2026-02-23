@@ -15,4 +15,5 @@ chrono = { workspace = true }
 fastembed = "5"
 futures = "0.3"
 lancedb = { workspace = true }
+rand = "0.8"
 serde_json = { workspace = true }

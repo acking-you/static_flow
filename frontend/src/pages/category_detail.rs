@@ -41,7 +41,7 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
             loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let category_ref = category.as_deref();
-                match crate::api::fetch_articles(None, category_ref).await {
+                match crate::api::fetch_all_articles(None, category_ref).await {
                     Ok(data) => {
                         articles.set(data);
                         loading.set(false);

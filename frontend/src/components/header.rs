@@ -610,11 +610,17 @@ fn build_search_url(
     encoded_query: &str,
 ) -> String {
     let mut params = vec![format!("q={encoded_query}")];
+
+    let is_music_context = matches!(
+        route,
+        Some(Route::MediaAudio) | Some(Route::MusicPlayer { .. })
+    );
+
     if matches!(route, Some(Route::Search)) {
         if let Some(current) = location.and_then(|loc| loc.query::<HeaderSearchQuery>().ok()) {
             if let Some(mode) = current
                 .mode
-                .filter(|value| matches!(value.as_str(), "keyword" | "semantic" | "image"))
+                .filter(|value| matches!(value.as_str(), "keyword" | "semantic" | "image" | "music"))
             {
                 if mode != "keyword" {
                     params.push(format!("mode={}", urlencoding::encode(&mode)));
@@ -651,6 +657,8 @@ fn build_search_url(
                 }
             }
         }
+    } else if is_music_context {
+        params.push("mode=music".to_string());
     }
     crate::config::route_path(&format!("/search?{}", params.join("&")))
 }

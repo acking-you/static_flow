@@ -72,6 +72,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/music/:id", get(handlers::get_song))
         .route("/api/music/:id/audio", get(handlers::stream_song_audio))
         .route("/api/music/:id/lyrics", get(handlers::get_song_lyrics))
+        .route("/api/music/:id/related", get(handlers::related_songs))
         // Music API (write, rate-limited)
         .route("/api/music/:id/play", post(handlers::track_song_play))
         .route("/api/music/comments/submit", post(handlers::submit_music_comment))

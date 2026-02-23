@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use static_flow_shared::embedding::text::{
+    detect_language, embed_text_with_language, TextEmbeddingLanguage,
+};
 use static_flow_shared::music_store::{MusicDataStore, SongRecord};
 
 pub struct WriteMusicOptions {
@@ -71,6 +74,17 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
         .unwrap_or_default();
     let searchable_text = format!("{} {} {} {}", title, artist, album, lyrics_plain);
 
+    // Generate vector embeddings for semantic search
+    let lang = detect_language(&searchable_text);
+    let primary_vector = embed_text_with_language(&searchable_text, lang);
+    let (vector_en, vector_zh) = match lang {
+        TextEmbeddingLanguage::Chinese => {
+            let en_vector = embed_text_with_language(&searchable_text, TextEmbeddingLanguage::English);
+            (Some(en_vector), Some(primary_vector))
+        }
+        TextEmbeddingLanguage::English => (Some(primary_vector), None),
+    };
+
     // Handle cover image (just store the filename reference for now)
     let cover_image = if let Some(ref cover_path) = opts.cover {
         let cover_filename = cover_path
@@ -109,6 +123,8 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
         source_id: opts.source_id,
         tags: tags_str,
         searchable_text,
+        vector_en,
+        vector_zh,
         created_at: now,
         updated_at: now,
     };

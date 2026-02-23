@@ -67,7 +67,7 @@ pub fn posts_page() -> Html {
                 let tag_ref = tag.as_deref();
                 let category_ref = category.as_deref();
 
-                match crate::api::fetch_articles(tag_ref, category_ref).await {
+                match crate::api::fetch_all_articles(tag_ref, category_ref).await {
                     Ok(data) => articles.set(data),
                     Err(e) => {
                         web_sys::console::error_1(

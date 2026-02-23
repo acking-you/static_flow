@@ -119,6 +119,20 @@ struct ArticleListResponse {
     articles: Vec<ArticleListItem>,
     #[allow(dead_code)]
     total: usize,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: usize,
+    #[serde(default)]
+    has_more: bool,
+}
+
+/// Public pagination result for article pages
+#[derive(Debug, Clone)]
+pub struct ArticlePage {
+    pub articles: Vec<ArticleListItem>,
+    pub total: usize,
+    pub has_more: bool,
 }
 
 #[cfg(not(feature = "mock"))]
@@ -133,11 +147,13 @@ struct CategoriesResponse {
     categories: Vec<CategoryInfo>,
 }
 
-/// 获取文章列表，支持按标签和分类过滤
+/// 获取文章列表，支持按标签和分类过滤，支持分页
 pub async fn fetch_articles(
     tag: Option<&str>,
     category: Option<&str>,
-) -> Result<Vec<ArticleListItem>, String> {
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<ArticlePage, String> {
     #[cfg(feature = "mock")]
     {
         let mut articles = models::get_mock_articles();
@@ -156,7 +172,15 @@ pub async fn fetch_articles(
                 .collect();
         }
 
-        return Ok(articles);
+        let total = articles.len();
+        let off = offset.unwrap_or(0);
+        let articles = match limit {
+            Some(l) => articles.into_iter().skip(off).take(l).collect(),
+            None => articles,
+        };
+        let has_more = limit.map_or(false, |l| off + l < total);
+
+        return Ok(ArticlePage { articles, total, has_more });
     }
 
     #[cfg(not(feature = "mock"))]
@@ -169,6 +193,12 @@ pub async fn fetch_articles(
         }
         if let Some(c) = category {
             params.push(format!("category={}", c));
+        }
+        if let Some(l) = limit {
+            params.push(format!("limit={}", l));
+        }
+        if let Some(o) = offset {
+            params.push(format!("offset={}", o));
         }
         params.push(format!("_ts={}", Date::now() as u64));
 
@@ -193,8 +223,21 @@ pub async fn fetch_articles(
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
 
-        Ok(json_response.articles)
+        Ok(ArticlePage {
+            articles: json_response.articles,
+            total: json_response.total,
+            has_more: json_response.has_more,
+        })
     }
+}
+
+/// Fetch all articles without pagination (for posts/archive pages)
+pub async fn fetch_all_articles(
+    tag: Option<&str>,
+    category: Option<&str>,
+) -> Result<Vec<ArticleListItem>, String> {
+    let page = fetch_articles(tag, category, None, None).await?;
+    Ok(page.articles)
 }
 
 /// 获取文章详情
@@ -2387,15 +2430,18 @@ pub async fn fetch_songs(
     }
 }
 
-pub async fn search_songs(q: &str, limit: Option<usize>) -> Result<Vec<SongSearchResult>, String> {
+pub async fn search_songs(q: &str, limit: Option<usize>, mode: Option<&str>) -> Result<Vec<SongSearchResult>, String> {
     #[cfg(feature = "mock")]
-    { let _ = (q, limit); return Ok(vec![]); }
+    { let _ = (q, limit, mode); return Ok(vec![]); }
 
     #[cfg(not(feature = "mock"))]
     {
         let mut url = format!("{}/music/search?q={}", API_BASE, urlencoding::encode(q));
         if let Some(l) = limit {
             url.push_str(&format!("&limit={l}"));
+        }
+        if let Some(m) = mode {
+            url.push_str(&format!("&mode={}", urlencoding::encode(m)));
         }
         let response = api_get(&url).send().await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -2437,6 +2483,20 @@ pub async fn fetch_song_lyrics(id: &str) -> Result<Option<SongLyrics>, String> {
         let l: SongLyrics = response.json().await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(Some(l))
+    }
+}
+
+pub async fn fetch_related_songs(id: &str) -> Result<Vec<SongSearchResult>, String> {
+    #[cfg(feature = "mock")]
+    { return Ok(vec![]); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/music/{}/related", API_BASE, urlencoding::encode(id));
+        let response = api_get(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        response.json().await.map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 

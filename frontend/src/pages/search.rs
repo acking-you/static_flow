@@ -49,6 +49,16 @@ pub fn search_page() -> Html {
         .to_lowercase();
     let mode =
         if matches!(mode.as_str(), "semantic" | "image" | "music") { mode } else { "keyword".to_string() };
+    let music_sub_mode = query
+        .as_ref()
+        .and_then(|q| q.music_sub_mode.clone())
+        .unwrap_or_else(|| "keyword".to_string())
+        .to_lowercase();
+    let music_sub_mode = if matches!(music_sub_mode.as_str(), "semantic" | "hybrid") {
+        music_sub_mode
+    } else {
+        "keyword".to_string()
+    };
     let enhanced_highlight = query
         .as_ref()
         .and_then(|q| q.enhanced_highlight)
@@ -405,10 +415,11 @@ pub fn search_page() -> Html {
         let music_loading = music_loading.clone();
         let keyword = keyword.clone();
         let mode = mode.clone();
+        let music_sub_mode = music_sub_mode.clone();
 
         use_effect_with(
-            (keyword.clone(), mode.clone()),
-            move |(kw, mode)| {
+            (keyword.clone(), mode.clone(), music_sub_mode.clone()),
+            move |(kw, mode, sub_mode)| {
                 if mode != "music" || kw.trim().is_empty() {
                     music_loading.set(false);
                     music_results.set(vec![]);
@@ -417,9 +428,14 @@ pub fn search_page() -> Html {
                     let music_results = music_results.clone();
                     let music_loading = music_loading.clone();
                     let q = kw.clone();
+                    let api_mode = match sub_mode.as_str() {
+                        "semantic" => Some("semantic"),
+                        "hybrid" => Some("hybrid"),
+                        _ => None,
+                    };
 
                     wasm_bindgen_futures::spawn_local(async move {
-                        match crate::api::search_songs(&q, Some(20)).await {
+                        match crate::api::search_songs(&q, Some(20), api_mode).await {
                             Ok(data) => music_results.set(data),
                             Err(_) => music_results.set(vec![]),
                         }
@@ -896,6 +912,7 @@ pub fn search_page() -> Html {
         None,
         None,
         None,
+        None,
     );
     let semantic_fast_href = build_search_href(
         Some("semantic"),
@@ -908,6 +925,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let semantic_precise_href = build_search_href(
         Some("semantic"),
@@ -920,6 +938,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let semantic_href =
         if enhanced_highlight { semantic_precise_href.clone() } else { semantic_fast_href.clone() };
@@ -931,6 +950,7 @@ pub fn search_page() -> Html {
         false,
         max_distance,
         false,
+        None,
         None,
         None,
         None,
@@ -946,6 +966,46 @@ pub fn search_page() -> Html {
         None,
         None,
         None,
+        Some(music_sub_mode.as_str()),
+    );
+    let music_sub_keyword_href = build_search_href(
+        Some("music"),
+        &keyword,
+        false,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+        Some("keyword"),
+    );
+    let music_sub_semantic_href = build_search_href(
+        Some("music"),
+        &keyword,
+        false,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+        Some("semantic"),
+    );
+    let music_sub_hybrid_href = build_search_href(
+        Some("music"),
+        &keyword,
+        false,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+        Some("hybrid"),
     );
     let scoped_max_distance = if mode == "semantic" { max_distance } else { None };
     let limited_href = build_search_href(
@@ -959,6 +1019,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let all_results_href = build_search_href(
         Some(mode.as_str()),
@@ -971,6 +1032,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let hybrid_default_scope_hint = if fetch_all {
         t::HYBRID_DEFAULT_SCOPE_ALL.to_string()
@@ -999,6 +1061,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let semantic_distance_strict_href = build_search_href(
         Some("semantic"),
@@ -1011,6 +1074,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let semantic_distance_relaxed_href = build_search_href(
         Some("semantic"),
@@ -1023,6 +1087,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let image_distance_off_href = build_search_href(
         Some("image"),
@@ -1032,6 +1097,7 @@ pub fn search_page() -> Html {
         false,
         None,
         false,
+        None,
         None,
         None,
         None,
@@ -1049,6 +1115,7 @@ pub fn search_page() -> Html {
         false,
         parsed_image_distance_input,
         false,
+        None,
         None,
         None,
         None,
@@ -1104,6 +1171,7 @@ pub fn search_page() -> Html {
         None,
         None,
         None,
+        None,
     );
     let semantic_hybrid_on_href = build_search_href(
         Some("semantic"),
@@ -1116,6 +1184,7 @@ pub fn search_page() -> Html {
         Some(hybrid_rrf_k),
         hybrid_vector_limit,
         hybrid_fts_limit,
+        None,
     );
     let semantic_hybrid_apply_href = build_search_href(
         Some("semantic"),
@@ -1128,6 +1197,7 @@ pub fn search_page() -> Html {
         parsed_hybrid_rrf_k_input.or(Some(hybrid_rrf_k)),
         parsed_hybrid_vector_limit_input,
         parsed_hybrid_fts_limit_input,
+        None,
     );
     let toggle_semantic_advanced = {
         let semantic_advanced_open = semantic_advanced_open.clone();
@@ -1416,6 +1486,70 @@ pub fn search_page() -> Html {
                             { t::MODE_MUSIC }
                         </a>
                     </div>
+
+                    if mode == "music" && !keyword.is_empty() {
+                        <div class={classes!(
+                            "mt-4",
+                            "flex",
+                            "items-center",
+                            "justify-center",
+                            "gap-2",
+                            "flex-wrap"
+                        )}>
+                            <span class={classes!(
+                                "text-xs",
+                                "uppercase",
+                                "tracking-[0.15em]",
+                                "text-[var(--muted)]",
+                                "font-semibold"
+                            )}
+                            style="font-family: 'Space Mono', monospace;">
+                                { "Search" }
+                            </span>
+                            <a
+                                href={music_sub_keyword_href}
+                                class={classes!(
+                                    mode_button_base.clone(),
+                                    "text-xs",
+                                    if music_sub_mode == "keyword" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                    if music_sub_mode == "keyword" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                    if music_sub_mode == "keyword" { "bg-[var(--primary)]/10" } else { "" },
+                                    if music_sub_mode != "keyword" { "hover:text-[var(--primary)]" } else { "" },
+                                    if music_sub_mode != "keyword" { "hover:border-[var(--primary)]/60" } else { "" }
+                                )}
+                            >
+                                { "Keyword" }
+                            </a>
+                            <a
+                                href={music_sub_semantic_href}
+                                class={classes!(
+                                    mode_button_base.clone(),
+                                    "text-xs",
+                                    if music_sub_mode == "semantic" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                    if music_sub_mode == "semantic" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                    if music_sub_mode == "semantic" { "bg-[var(--primary)]/10" } else { "" },
+                                    if music_sub_mode != "semantic" { "hover:text-[var(--primary)]" } else { "" },
+                                    if music_sub_mode != "semantic" { "hover:border-[var(--primary)]/60" } else { "" }
+                                )}
+                            >
+                                { "Semantic" }
+                            </a>
+                            <a
+                                href={music_sub_hybrid_href}
+                                class={classes!(
+                                    mode_button_base.clone(),
+                                    "text-xs",
+                                    if music_sub_mode == "hybrid" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
+                                    if music_sub_mode == "hybrid" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
+                                    if music_sub_mode == "hybrid" { "bg-[var(--primary)]/10" } else { "" },
+                                    if music_sub_mode != "hybrid" { "hover:text-[var(--primary)]" } else { "" },
+                                    if music_sub_mode != "hybrid" { "hover:border-[var(--primary)]/60" } else { "" }
+                                )}
+                            >
+                                { "Hybrid" }
+                            </a>
+                        </div>
+                    }
 
                     if mode != "image" && mode != "music" && !keyword.is_empty() {
                         <div class={classes!(
@@ -2857,6 +2991,7 @@ fn render_search_result(result: &SearchResult) -> Html {
 struct SearchPageQuery {
     q: Option<String>,
     mode: Option<String>,
+    music_sub_mode: Option<String>,
     enhanced_highlight: Option<bool>,
     hybrid: Option<bool>,
     hybrid_rrf_k: Option<f32>,
@@ -2878,6 +3013,7 @@ fn build_search_href(
     hybrid_rrf_k: Option<f32>,
     hybrid_vector_limit: Option<usize>,
     hybrid_fts_limit: Option<usize>,
+    music_sub_mode: Option<&str>,
 ) -> String {
     let has_keyword = !keyword.trim().is_empty();
     let mut params = Vec::new();
@@ -2915,6 +3051,13 @@ fn build_search_href(
             }
             if let Some(fts_limit) = hybrid_fts_limit.filter(|value| *value > 0) {
                 params.push(format!("hybrid_fts_limit={fts_limit}"));
+            }
+        }
+        if mode == Some("music") {
+            if let Some(sub) = music_sub_mode {
+                if sub != "keyword" {
+                    params.push(format!("music_sub_mode={sub}"));
+                }
             }
         }
     }

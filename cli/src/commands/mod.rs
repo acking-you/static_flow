@@ -1,5 +1,6 @@
 pub mod api;
 pub mod db_manage;
+pub mod embed_songs;
 pub mod ensure_indexes;
 pub mod init;
 pub mod query;
@@ -135,6 +136,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 tags,
             })
             .await
+        },
+        Commands::EmbedSongs { db_path } => {
+            embed_songs::run(&db_path).await
         },
         Commands::Query {
             db_path,

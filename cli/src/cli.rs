@@ -193,6 +193,12 @@ pub enum Commands {
         #[arg(long)]
         tags: Option<String>,
     },
+    /// Backfill vector embeddings for all songs missing vectors.
+    EmbedSongs {
+        /// Music LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb-music")]
+        db_path: PathBuf,
+    },
     /// Query a table and print the first rows.
     Query {
         /// LanceDB directory path.

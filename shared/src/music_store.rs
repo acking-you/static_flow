@@ -2,8 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use arrow_array::{
-    builder::{BinaryBuilder, StringBuilder, TimestampMillisecondBuilder, UInt64Builder},
-    Array, BinaryArray, RecordBatch, RecordBatchIterator, StringArray,
+    builder::{
+        BinaryBuilder, FixedSizeListBuilder, Float32Builder, StringBuilder,
+        TimestampMillisecondBuilder, UInt64Builder,
+    },
+    Array, BinaryArray, FixedSizeListArray, RecordBatch, RecordBatchIterator, StringArray,
     TimestampMillisecondArray, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -13,9 +16,15 @@ use lancedb::{
     connect,
     index::Index,
     query::{ExecutableQuery, QueryBase, Select},
+    table::NewColumnTransform,
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::embedding::text::{
+    detect_language, embed_text_with_language, TextEmbeddingLanguage, TEXT_VECTOR_DIM_EN,
+    TEXT_VECTOR_DIM_ZH,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,6 +55,8 @@ pub struct SongRecord {
     pub source_id: Option<String>,
     pub tags: String,
     pub searchable_text: String,
+    pub vector_en: Option<Vec<f32>>,
+    pub vector_zh: Option<Vec<f32>>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -188,6 +199,22 @@ fn songs_schema() -> Arc<Schema> {
         Field::new("source_id", DataType::Utf8, true),
         Field::new("tags", DataType::Utf8, false),
         Field::new("searchable_text", DataType::Utf8, false),
+        Field::new(
+            "vector_en",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                TEXT_VECTOR_DIM_EN as i32,
+            ),
+            true,
+        ),
+        Field::new(
+            "vector_zh",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                TEXT_VECTOR_DIM_ZH as i32,
+            ),
+            true,
+        ),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
@@ -277,6 +304,16 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
     let mut source_id = StringBuilder::new();
     let mut tags = StringBuilder::new();
     let mut searchable_text = StringBuilder::new();
+    let mut vector_en_builder = FixedSizeListBuilder::new(
+        Float32Builder::new(),
+        TEXT_VECTOR_DIM_EN as i32,
+    )
+    .with_field(Field::new("item", DataType::Float32, false));
+    let mut vector_zh_builder = FixedSizeListBuilder::new(
+        Float32Builder::new(),
+        TEXT_VECTOR_DIM_ZH as i32,
+    )
+    .with_field(Field::new("item", DataType::Float32, false));
     let mut created_at = TimestampMillisecondBuilder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
 
@@ -296,6 +333,39 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
     append_optional_str(&mut source_id, &record.source_id);
     tags.append_value(&record.tags);
     searchable_text.append_value(&record.searchable_text);
+
+    // vector_en
+    match &record.vector_en {
+        Some(v) if v.len() == TEXT_VECTOR_DIM_EN => {
+            for val in v {
+                vector_en_builder.values().append_value(*val);
+            }
+            vector_en_builder.append(true);
+        }
+        _ => {
+            for _ in 0..TEXT_VECTOR_DIM_EN {
+                vector_en_builder.values().append_value(0.0);
+            }
+            vector_en_builder.append(false);
+        }
+    }
+
+    // vector_zh
+    match &record.vector_zh {
+        Some(v) if v.len() == TEXT_VECTOR_DIM_ZH => {
+            for val in v {
+                vector_zh_builder.values().append_value(*val);
+            }
+            vector_zh_builder.append(true);
+        }
+        _ => {
+            for _ in 0..TEXT_VECTOR_DIM_ZH {
+                vector_zh_builder.values().append_value(0.0);
+            }
+            vector_zh_builder.append(false);
+        }
+    }
+
     created_at.append_value(record.created_at);
     updated_at.append_value(record.updated_at);
 
@@ -316,6 +386,8 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
         Arc::new(source_id.finish()),
         Arc::new(tags.finish()),
         Arc::new(searchable_text.finish()),
+        Arc::new(vector_en_builder.finish()),
+        Arc::new(vector_zh_builder.finish()),
         Arc::new(created_at.finish()),
         Arc::new(updated_at.finish()),
     ])
@@ -479,6 +551,40 @@ impl MusicDataStore {
 
     async fn songs_table(&self) -> Result<Table> {
         let table = ensure_table(&self.db, SONGS_TABLE, songs_schema()).await?;
+
+        // Auto-migrate: add missing vector columns to existing tables
+        let schema = table.schema().await?;
+        let mut missing_fields = Vec::new();
+        if schema.field_with_name("vector_en").is_err() {
+            missing_fields.push(Field::new(
+                "vector_en",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, false)),
+                    TEXT_VECTOR_DIM_EN as i32,
+                ),
+                true,
+            ));
+        }
+        if schema.field_with_name("vector_zh").is_err() {
+            missing_fields.push(Field::new(
+                "vector_zh",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, false)),
+                    TEXT_VECTOR_DIM_ZH as i32,
+                ),
+                true,
+            ));
+        }
+        if !missing_fields.is_empty() {
+            let names: Vec<&str> = missing_fields.iter().map(|f| f.name().as_str()).collect();
+            tracing::info!("Auto-migrating songs table: adding vector columns {:?}", names);
+            let new_schema = Arc::new(Schema::new(missing_fields));
+            table
+                .add_columns(NewColumnTransform::AllNulls(new_schema), None)
+                .await
+                .context("failed to add vector columns to songs table")?;
+        }
+
         // Auto-ensure FTS index on searchable_text for full-text search
         let indices = table.list_indices().await.unwrap_or_default();
         if !indices.iter().any(|idx| idx.columns == ["searchable_text"]) {
@@ -673,6 +779,10 @@ impl MusicDataStore {
         // Sort client-side (LanceDB doesn't support ORDER BY directly)
         match sort_by {
             Some("popular") => {}, // would need play counts; skip for now
+            Some("random") => {
+                use rand::seq::SliceRandom;
+                songs.shuffle(&mut rand::thread_rng());
+            }
             _ => songs.reverse(),   // latest first (default insert order)
         }
 
@@ -714,6 +824,199 @@ impl MusicDataStore {
                     album: extract_string(batch, "album", row),
                     cover_image: extract_optional_string(batch, "cover_image", row),
                     score: 1.0,
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    pub async fn search_songs_semantic(
+        &self,
+        query_text: &str,
+        limit: usize,
+        max_distance: Option<f32>,
+    ) -> Result<Vec<SongSearchResult>> {
+        let table = self.songs_table().await?;
+        let cols = &["id", "title", "artist", "album", "cover_image"];
+        let effective_limit = limit.min(50).max(1);
+
+        let lang = detect_language(query_text);
+        let (primary_col, fallback_col) = match lang {
+            TextEmbeddingLanguage::Chinese => ("vector_zh", "vector_en"),
+            TextEmbeddingLanguage::English => ("vector_en", "vector_zh"),
+        };
+
+        let vector = embed_text_with_language(query_text, lang);
+
+        let results = self
+            .run_vector_search(&table, cols, &vector, primary_col, effective_limit, max_distance)
+            .await?;
+
+        if !results.is_empty() {
+            return Ok(results);
+        }
+
+        // Fallback to the other language column
+        let fallback_lang = match lang {
+            TextEmbeddingLanguage::Chinese => TextEmbeddingLanguage::English,
+            TextEmbeddingLanguage::English => TextEmbeddingLanguage::Chinese,
+        };
+        let fallback_vector = embed_text_with_language(query_text, fallback_lang);
+        self.run_vector_search(&table, cols, &fallback_vector, fallback_col, effective_limit, max_distance)
+            .await
+    }
+
+    async fn run_vector_search(
+        &self,
+        table: &Table,
+        cols: &[&str],
+        vector: &[f32],
+        column: &str,
+        limit: usize,
+        max_distance: Option<f32>,
+    ) -> Result<Vec<SongSearchResult>> {
+        // Check if the vector column exists in the table schema.
+        // Existing tables created before vector support won't have it.
+        let schema = table.schema().await?;
+        if schema.field_with_name(column).is_err() {
+            tracing::debug!("Column {column} not found in songs table, skipping vector search");
+            return Ok(vec![]);
+        }
+
+        let mut query = table
+            .query()
+            .nearest_to(vector)?
+            .column(column)
+            .only_if(format!("{column} IS NOT NULL"))
+            .select(Select::columns(cols))
+            .limit(limit);
+
+        if let Some(dist) = max_distance {
+            query = query.distance_range(None, Some(dist));
+        }
+
+        let batches = query.execute().await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for batch in &batch_list {
+            for row in 0..batch.num_rows() {
+                let distance = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
+                    .map(|a| a.value(row))
+                    .unwrap_or(f32::MAX);
+                results.push(SongSearchResult {
+                    id: extract_string(batch, "id", row),
+                    title: extract_string(batch, "title", row),
+                    artist: extract_string(batch, "artist", row),
+                    album: extract_string(batch, "album", row),
+                    cover_image: extract_optional_string(batch, "cover_image", row),
+                    score: 1.0 / (1.0 + distance),
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    pub async fn search_songs_hybrid(
+        &self,
+        query_text: &str,
+        limit: usize,
+        rrf_k: Option<f32>,
+        vector_limit: Option<usize>,
+        fts_limit: Option<usize>,
+    ) -> Result<Vec<SongSearchResult>> {
+        let effective_limit = limit.min(50).max(1);
+        let vec_limit = vector_limit.unwrap_or(effective_limit * 2);
+        let lex_limit = fts_limit.unwrap_or(effective_limit * 2);
+
+        // Run FTS and vector search in parallel
+        let fts_fut = self.search_songs_fts(query_text, lex_limit);
+        let vec_fut = self.search_songs_semantic(query_text, vec_limit, None);
+        let (fts_res, vec_res) = futures::join!(fts_fut, vec_fut);
+
+        let fts_rows = fts_res.unwrap_or_default();
+        let vec_rows = vec_res.unwrap_or_default();
+
+        let k = rrf_k.unwrap_or(60.0);
+        let mut fused = fuse_song_rrf(vec_rows, fts_rows, k);
+        fused.truncate(effective_limit);
+        Ok(fused)
+    }
+
+    // -- Related songs (vector similarity) --
+
+    async fn fetch_song_vector(&self, table: &Table, id: &str) -> Result<Option<(Vec<f32>, &'static str)>> {
+        let filter = format!("id = '{}'", escape_literal(id));
+        let batches = table
+            .query()
+            .only_if(filter)
+            .limit(1)
+            .select(Select::columns(&["vector_en", "vector_zh"]))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+
+        if let Some(vector) = Self::extract_fsl_vector(&batch_list, "vector_en") {
+            return Ok(Some((vector, "vector_en")));
+        }
+        if let Some(vector) = Self::extract_fsl_vector(&batch_list, "vector_zh") {
+            return Ok(Some((vector, "vector_zh")));
+        }
+        Ok(None)
+    }
+
+    fn extract_fsl_vector(batches: &[RecordBatch], column: &str) -> Option<Vec<f32>> {
+        for batch in batches {
+            if batch.num_rows() == 0 { continue; }
+            let arr = batch.schema().index_of(column).ok().and_then(|idx| {
+                batch.column(idx).as_any().downcast_ref::<FixedSizeListArray>()
+            })?;
+            if arr.is_null(0) { return None; }
+            let values = arr.value(0);
+            let float_arr = values.as_any().downcast_ref::<arrow_array::Float32Array>()?;
+            return Some(float_arr.values().to_vec());
+        }
+        None
+    }
+
+    pub async fn related_songs(&self, song_id: &str, limit: usize) -> Result<Vec<SongSearchResult>> {
+        let table = self.songs_table().await?;
+        let vector_info = self.fetch_song_vector(&table, song_id).await?;
+        let (vector, col) = match vector_info {
+            Some(v) => v,
+            None => return Ok(vec![]),
+        };
+
+        let filter = format!("{col} IS NOT NULL AND id != '{}'", escape_literal(song_id));
+        let cols = &["id", "title", "artist", "album", "cover_image"];
+        let effective_limit = limit.min(20).max(1);
+
+        let query = table
+            .query()
+            .nearest_to(vector.as_slice())?
+            .column(col)
+            .only_if(filter)
+            .select(Select::columns(cols))
+            .limit(effective_limit);
+
+        let batches = query.execute().await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let mut results = Vec::new();
+        for batch in &batch_list {
+            for row in 0..batch.num_rows() {
+                let distance = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
+                    .map(|a| a.value(row))
+                    .unwrap_or(f32::MAX);
+                results.push(SongSearchResult {
+                    id: extract_string(batch, "id", row),
+                    title: extract_string(batch, "title", row),
+                    artist: extract_string(batch, "artist", row),
+                    album: extract_string(batch, "album", row),
+                    cover_image: extract_optional_string(batch, "cover_image", row),
+                    score: 1.0 / (1.0 + distance),
                 });
             }
         }
@@ -904,4 +1207,190 @@ impl MusicDataStore {
             song_id: song_id.to_string(),
         })
     }
+
+    // -- Vector backfill --
+
+    /// Backfill vector embeddings for all songs that have NULL vector_en.
+    /// Returns the number of songs updated.
+    pub async fn backfill_song_vectors(&self) -> Result<usize> {
+        let table = self.songs_table().await?;
+
+        // Read songs missing vectors
+        let batches = table
+            .query()
+            .only_if("vector_en IS NULL".to_string())
+            .select(Select::columns(&["id", "searchable_text"]))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+
+        let mut ids = Vec::new();
+        let mut texts = Vec::new();
+        for batch in &batch_list {
+            for row in 0..batch.num_rows() {
+                ids.push(extract_string(batch, "id", row));
+                texts.push(extract_string(batch, "searchable_text", row));
+            }
+        }
+
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let total = ids.len();
+        tracing::info!("Backfilling vectors for {total} songs...");
+
+        // Build partial batch: id + vector_en + vector_zh
+        let partial_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new(
+                "vector_en",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, false)),
+                    TEXT_VECTOR_DIM_EN as i32,
+                ),
+                true,
+            ),
+            Field::new(
+                "vector_zh",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, false)),
+                    TEXT_VECTOR_DIM_ZH as i32,
+                ),
+                true,
+            ),
+        ]));
+
+        let mut id_builder = StringBuilder::new();
+        let mut vec_en_builder =
+            FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32)
+                .with_field(Field::new("item", DataType::Float32, false));
+        let mut vec_zh_builder =
+            FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_ZH as i32)
+                .with_field(Field::new("item", DataType::Float32, false));
+
+        for (i, text) in texts.iter().enumerate() {
+            id_builder.append_value(&ids[i]);
+
+            let lang = detect_language(text);
+            let primary_vector = embed_text_with_language(text, lang);
+
+            match lang {
+                TextEmbeddingLanguage::Chinese => {
+                    let en_vector =
+                        embed_text_with_language(text, TextEmbeddingLanguage::English);
+                    let en_vals = vec_en_builder.values();
+                    for v in &en_vector {
+                        en_vals.append_value(*v);
+                    }
+                    vec_en_builder.append(true);
+
+                    let zh_vals = vec_zh_builder.values();
+                    for v in &primary_vector {
+                        zh_vals.append_value(*v);
+                    }
+                    vec_zh_builder.append(true);
+                }
+                TextEmbeddingLanguage::English => {
+                    let en_vals = vec_en_builder.values();
+                    for v in &primary_vector {
+                        en_vals.append_value(*v);
+                    }
+                    vec_en_builder.append(true);
+
+                    // NULL zh vector: fill zeros + append(false)
+                    let zh_vals = vec_zh_builder.values();
+                    for _ in 0..TEXT_VECTOR_DIM_ZH {
+                        zh_vals.append_value(0.0);
+                    }
+                    vec_zh_builder.append(false);
+                }
+            }
+
+            if (i + 1) % 10 == 0 || i + 1 == total {
+                tracing::info!("  embedded {}/{total}", i + 1);
+            }
+        }
+
+        let batch = RecordBatch::try_new(partial_schema.clone(), vec![
+            Arc::new(id_builder.finish()),
+            Arc::new(vec_en_builder.finish()),
+            Arc::new(vec_zh_builder.finish()),
+        ])
+        .context("failed to build vector backfill batch")?;
+
+        let batches =
+            RecordBatchIterator::new(vec![Ok(batch)].into_iter(), partial_schema);
+        let mut merge = table.merge_insert(&["id"]);
+        merge.when_matched_update_all(None);
+        merge
+            .execute(Box::new(batches))
+            .await
+            .context("failed to merge vector backfill batch")?;
+
+        tracing::info!("Backfilled vectors for {total} songs");
+        Ok(total)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RRF fusion for hybrid search
+// ---------------------------------------------------------------------------
+
+fn fuse_song_rrf(
+    vector_rows: Vec<SongSearchResult>,
+    fts_rows: Vec<SongSearchResult>,
+    rrf_k: f32,
+) -> Vec<SongSearchResult> {
+    struct Accum {
+        score: f32,
+        best_rank: usize,
+        row: SongSearchResult,
+    }
+
+    let rrf_score = |rank: usize| -> f32 { 1.0 / (rrf_k + rank as f32 + 1.0) };
+
+    let mut fused: HashMap<String, Accum> = HashMap::new();
+
+    for (rank, row) in vector_rows.into_iter().enumerate() {
+        let boost = rrf_score(rank);
+        let entry = fused.entry(row.id.clone()).or_insert_with(|| Accum {
+            score: 0.0,
+            best_rank: rank,
+            row: row.clone(),
+        });
+        entry.score += boost;
+        if rank < entry.best_rank {
+            entry.best_rank = rank;
+            entry.row = row;
+        }
+    }
+
+    for (rank, row) in fts_rows.into_iter().enumerate() {
+        let boost = rrf_score(rank);
+        let entry = fused.entry(row.id.clone()).or_insert_with(|| Accum {
+            score: 0.0,
+            best_rank: rank,
+            row: row.clone(),
+        });
+        entry.score += boost;
+        if rank < entry.best_rank {
+            entry.best_rank = rank;
+            entry.row = row;
+        }
+    }
+
+    let mut results: Vec<_> = fused.into_values().collect();
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.best_rank.cmp(&b.best_rank))
+    });
+
+    results.into_iter().map(|a| {
+        let mut row = a.row;
+        row.score = a.score;
+        row
+    }).collect()
 }

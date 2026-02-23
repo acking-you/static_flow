@@ -41,7 +41,7 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
             loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let tag_ref = tag.as_deref();
-                match crate::api::fetch_articles(tag_ref, None).await {
+                match crate::api::fetch_all_articles(tag_ref, None).await {
                     Ok(data) => {
                         articles.set(data);
                         loading.set(false);

@@ -14,29 +14,42 @@ use crate::{
         pagination::Pagination,
         scroll_to_top_button::ScrollToTopButton,
     },
-    hooks::use_pagination,
     i18n::current::latest_articles_page as t,
 };
+
+const PAGE_SIZE: usize = 12;
 
 #[function_component(LatestArticlesPage)]
 pub fn latest_articles_page() -> Html {
     let route_location = use_location();
     let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
+    let current_page = use_state(|| 1_usize);
+    let total = use_state(|| 0_usize);
 
-    let (visible_articles, current_page_num, total_pages, go_to_page) =
-        use_pagination((*articles).clone(), 12);
+    let total_pages = {
+        let t = *total;
+        if t == 0 { 1 } else { (t + PAGE_SIZE - 1) / PAGE_SIZE }
+    };
+    let current_page_num = *current_page;
 
     {
         let articles = articles.clone();
         let loading = loading.clone();
-        use_effect_with((), move |_| {
+        let total = total.clone();
+        let page = *current_page;
+        use_effect_with(page, move |page| {
+            let offset = (*page - 1) * PAGE_SIZE;
             loading.set(true);
             let articles = articles.clone();
             let loading = loading.clone();
+            let total = total.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match crate::api::fetch_articles(None, None).await {
-                    Ok(data) => articles.set(data),
+                match crate::api::fetch_articles(None, None, Some(PAGE_SIZE), Some(offset)).await {
+                    Ok(data) => {
+                        total.set(data.total);
+                        articles.set(data.articles);
+                    }
                     Err(e) => {
                         web_sys::console::error_1(
                             &format!("Failed to fetch articles: {}", e).into(),
@@ -114,7 +127,7 @@ pub fn latest_articles_page() -> Html {
     }
 
     {
-        let go_to_page_cb = go_to_page.clone();
+        let current_page = current_page.clone();
         let location_dep = route_location.clone();
         let article_len = articles.len();
         use_effect_with((location_dep, article_len), move |_| {
@@ -127,7 +140,7 @@ pub fn latest_articles_page() -> Html {
                         .get("page")
                         .and_then(|raw| raw.parse::<usize>().ok())
                     {
-                        go_to_page_cb.emit(page_num);
+                        current_page.set(page_num);
                     }
 
                     let scroll_y = context.scroll_y.max(0.0);
@@ -142,6 +155,11 @@ pub fn latest_articles_page() -> Html {
             || ()
         });
     }
+
+    let go_to_page = {
+        let current_page = current_page.clone();
+        Callback::from(move |page: usize| { current_page.set(page); })
+    };
 
     let pagination_controls = if total_pages > 1 {
         html! {
@@ -213,7 +231,7 @@ pub fn latest_articles_page() -> Html {
                                 <LoadingSpinner size={SpinnerSize::Large} />
                             </div>
                         }
-                    } else if visible_articles.is_empty() {
+                    } else if articles.is_empty() {
                         html! {
                             <div class={classes!(
                                 "empty-state",
@@ -244,7 +262,7 @@ pub fn latest_articles_page() -> Html {
                                     "gap-6",
                                     "mb-12"
                                 )}>
-                                    { for visible_articles.iter().map(|article| {
+                                    { for articles.iter().map(|article| {
                                         html! {
                                             <ArticleCard
                                                 key={article.id.clone()}

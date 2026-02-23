@@ -86,6 +86,12 @@ pub struct ImageTextSearchResponse {
 pub struct ArticleListResponse {
     pub articles: Vec<ArticleListItem>,
     pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub limit: usize,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -553,7 +559,9 @@ impl StaticFlowDataStore {
         &self,
         tag: Option<&str>,
         category: Option<&str>,
-    ) -> Result<Vec<ArticleListItem>> {
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<ArticleListResponse> {
         let table = self.articles_table().await?;
         let path = if tag.is_some() || category.is_some() { "filtered_scan" } else { "full_scan" };
         let reason =
@@ -561,9 +569,24 @@ impl StaticFlowDataStore {
 
         log_query_path("list_articles", path, path, &reason);
         let started = Instant::now();
-        let articles = fetch_article_list(&table, tag, category).await?;
-        log_query_result("list_articles", path, articles.len(), started.elapsed().as_millis());
-        Ok(articles)
+        let all_articles = fetch_article_list(&table, tag, category).await?;
+        let total = all_articles.len();
+        log_query_result("list_articles", path, total, started.elapsed().as_millis());
+
+        let off = offset.unwrap_or(0);
+        let (articles, lim, has_more) = match limit {
+            Some(l) => {
+                let page: Vec<_> = all_articles.into_iter().skip(off).take(l).collect();
+                let has_more = off + l < total;
+                (page, l, has_more)
+            }
+            None => {
+                let len = all_articles.len();
+                (all_articles, len, false)
+            }
+        };
+
+        Ok(ArticleListResponse { articles, total, offset: off, limit: lim, has_more })
     }
 
     pub async fn get_article(&self, id: &str) -> Result<Option<Article>> {
@@ -619,7 +642,7 @@ impl StaticFlowDataStore {
         log_query_path("list_tags", path, path, "aggregated from list_articles in-memory");
 
         let started = Instant::now();
-        let articles = self.list_articles(None, None).await?;
+        let articles = self.list_articles(None, None, None, None).await?.articles;
         let mut tag_counts: HashMap<String, usize> = HashMap::new();
         for article in articles {
             for tag in article.tags {
@@ -642,7 +665,7 @@ impl StaticFlowDataStore {
 
     pub async fn list_categories(&self) -> Result<Vec<CategoryInfo>> {
         let started = Instant::now();
-        let articles = self.list_articles(None, None).await?;
+        let articles = self.list_articles(None, None, None, None).await?.articles;
         let mut category_counts: HashMap<String, usize> = HashMap::new();
         for article in articles {
             *category_counts.entry(article.category).or_insert(0) += 1;

@@ -111,10 +111,9 @@ pub struct ListSongsQuery {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct SearchSongsQuery {
     pub q: Option<String>,
-    pub mode: Option<String>, // reserved for semantic/hybrid search
+    pub mode: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -162,6 +161,10 @@ pub struct ArticleQuery {
     pub tag: Option<String>,
     #[serde(default)]
     pub category: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -570,16 +573,18 @@ pub async fn list_articles(
     State(state): State<AppState>,
     Query(query): Query<ArticleQuery>,
 ) -> Result<Json<ArticleListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let articles = state
+    let resp = state
         .store
-        .list_articles(query.tag.as_deref(), query.category.as_deref())
+        .list_articles(
+            query.tag.as_deref(),
+            query.category.as_deref(),
+            query.limit,
+            query.offset,
+        )
         .await
         .map_err(|e| internal_error("Failed to fetch articles", e))?;
 
-    Ok(Json(ArticleListResponse {
-        total: articles.len(),
-        articles,
-    }))
+    Ok(Json(resp))
 }
 
 pub async fn get_article(
@@ -2214,6 +2219,9 @@ pub async fn related_articles(
 
     Ok(Json(ArticleListResponse {
         total: articles.len(),
+        offset: 0,
+        limit: articles.len(),
+        has_more: false,
         articles,
     }))
 }
@@ -3154,6 +3162,18 @@ pub async fn get_song(
     }
 }
 
+pub async fn related_songs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<SongSearchResult>>, (StatusCode, Json<ErrorResponse>)> {
+    let results = state
+        .music_store
+        .related_songs(&id, 4)
+        .await
+        .map_err(|e| internal_error("Failed to fetch related songs", e))?;
+    Ok(Json(results))
+}
+
 pub async fn stream_song_audio(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3264,11 +3284,25 @@ pub async fn search_songs(
         return Err(bad_request("`q` is required"));
     }
     let limit = query.limit.unwrap_or(20);
-    let results = state
-        .music_store
-        .search_songs_fts(q.trim(), limit)
-        .await
-        .map_err(|e| internal_error("Failed to search songs", e))?;
+    let mode = query.mode.as_deref().unwrap_or("keyword");
+
+    let results = match mode {
+        "semantic" => state
+            .music_store
+            .search_songs_semantic(q.trim(), limit, None)
+            .await
+            .map_err(|e| internal_error("Failed to semantic search songs", e))?,
+        "hybrid" => state
+            .music_store
+            .search_songs_hybrid(q.trim(), limit, None, None, None)
+            .await
+            .map_err(|e| internal_error("Failed to hybrid search songs", e))?,
+        _ => state
+            .music_store
+            .search_songs_fts(q.trim(), limit)
+            .await
+            .map_err(|e| internal_error("Failed to search songs", e))?,
+    };
     Ok(Json(results))
 }
 

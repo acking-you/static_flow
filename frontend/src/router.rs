@@ -3,6 +3,7 @@ use yew_router::prelude::*;
 
 use crate::{
     components::{footer::Footer, header::Header, spotlight::Spotlight},
+    music_context::{MusicAction, MusicPlayerContext},
     pages,
 };
 
@@ -183,6 +184,21 @@ fn app_router_inner() -> Html {
     let location = use_location();
     let route = use_route::<Route>();
 
+    // Auto-minimize player when navigating away from MusicPlayer page
+    {
+        let route = route.clone();
+        let player_ctx = use_context::<MusicPlayerContext>();
+        use_effect_with(route.clone(), move |route| {
+            if let Some(ref ctx) = player_ctx {
+                let is_player = matches!(route, Some(Route::MusicPlayer { .. }));
+                if ctx.visible && !ctx.minimized && !is_player {
+                    ctx.dispatch(MusicAction::Minimize);
+                }
+            }
+            || ()
+        });
+    }
+
     {
         let route = route.clone();
         use_effect_with(route.clone(), move |active_route| {
@@ -207,6 +223,8 @@ fn app_router_inner() -> Html {
                 <Switch<Route> render={switch} />
             </div>
             <Footer />
+            <crate::components::persistent_audio::PersistentAudio />
+            <crate::components::mini_player::MiniPlayer />
         </div>
     }
 }

@@ -8,58 +8,85 @@ use crate::router::Route;
 
 const PAGE_SIZE: usize = 20;
 
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct MusicLibraryQuery {
+    artist: Option<String>,
+    album: Option<String>,
+}
+
 #[function_component(MusicLibraryPage)]
 pub fn music_library_page() -> Html {
-    let songs = use_state(Vec::<api::SongListItem>::new);
-    let total = use_state(|| 0_usize);
+    let location = use_location();
+    let query_string = location.as_ref().map(|l| l.query_str().to_string()).unwrap_or_default();
+
+    // Initialize filter state directly from URL to avoid double-fetch on mount
+    let initial_query = location.as_ref()
+        .and_then(|loc| loc.query::<MusicLibraryQuery>().ok())
+        .unwrap_or(MusicLibraryQuery { artist: None, album: None });
+
+    let page_songs = use_state(Vec::<api::SongListItem>::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
-
-    let active_artist = use_state(|| None::<String>);
-    let active_album = use_state(|| None::<String>);
+    let active_artist = use_state(|| initial_query.artist.clone());
+    let active_album = use_state(|| initial_query.album.clone());
     let current_page = use_state(|| 1_usize);
+    let total = use_state(|| 0_usize);
 
-    // Fetch songs when page/filter changes
+    // Sync URL query params → state on subsequent navigation
     {
-        let songs = songs.clone();
-        let total = total.clone();
-        let loading = loading.clone();
-        let error = error.clone();
         let active_artist = active_artist.clone();
         let active_album = active_album.clone();
         let current_page = current_page.clone();
+        let location = location.clone();
+        use_effect_with(query_string, move |_| {
+            if let Some(ref loc) = location {
+                if let Ok(q) = loc.query::<MusicLibraryQuery>() {
+                    active_artist.set(q.artist);
+                    active_album.set(q.album);
+                    current_page.set(1);
+                }
+            }
+            || ()
+        });
+    }
 
+    // Fetch one page of songs when filter or page changes
+    {
+        let page_songs = page_songs.clone();
+        let loading = loading.clone();
+        let error = error.clone();
+        let total = total.clone();
         let deps = (
-            *current_page,
             (*active_artist).clone(),
             (*active_album).clone(),
+            *current_page,
         );
-
         use_effect_with(deps, move |deps| {
-            let (page, artist, album) = deps.clone();
+            let (artist, album, page) = deps.clone();
+            let offset = (page - 1) * PAGE_SIZE;
             loading.set(true);
             error.set(None);
-
             wasm_bindgen_futures::spawn_local(async move {
-                let offset = (page - 1) * PAGE_SIZE;
                 match api::fetch_songs(
-                    Some(PAGE_SIZE),
-                    Some(offset),
-                    artist.as_deref(),
-                    album.as_deref(),
-                    None,
+                    Some(PAGE_SIZE), Some(offset),
+                    artist.as_deref(), album.as_deref(), None,
                 ).await {
                     Ok(resp) => {
-                        songs.set(resp.songs);
                         total.set(resp.total);
+                        page_songs.set(resp.songs);
                     }
-                    Err(e) => { error.set(Some(e)); }
+                    Err(e) => {
+                        error.set(Some(e));
+                    }
                 }
                 loading.set(false);
             });
             || ()
         });
     }
+
+    let total_val = *total;
+    let total_pages = if total_val == 0 { 1 } else { (total_val + PAGE_SIZE - 1) / PAGE_SIZE };
 
     let on_artist_click = {
         let active_artist = active_artist.clone();
@@ -112,11 +139,8 @@ pub fn music_library_page() -> Html {
         Callback::from(move |page: usize| { current_page.set(page); })
     };
 
-    let total_pages = (*total + PAGE_SIZE - 1) / PAGE_SIZE;
-
     html! {
         <div class="max-w-7xl mx-auto px-4 py-8">
-            // Header
             <div class="mb-6">
                 <h1 class="text-3xl font-bold text-[var(--text)]" style="font-family: 'Fraunces', serif;">
                     {"Music Library"}
@@ -126,7 +150,6 @@ pub fn music_library_page() -> Html {
                 </p>
             </div>
 
-            // Active filter chips
             if active_artist.is_some() || active_album.is_some() {
                 <div class="flex flex-wrap gap-2 mb-4">
                     if let Some(ref artist) = *active_artist {
@@ -160,19 +183,16 @@ pub fn music_library_page() -> Html {
                 <div class="text-center py-20 text-red-500">
                     {format!("Failed to load: {}", err)}
                 </div>
-            } else if songs.is_empty() {
+            } else if page_songs.is_empty() {
                 <div class="text-center py-20 text-[var(--muted)]">
                     {"No music found"}
                 </div>
             } else {
-                // Song grid
                 <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
-                    { for songs.iter().map(|song| {
+                    { for page_songs.iter().map(|song| {
                         render_song_card(song, &on_artist_click, &on_album_click)
                     })}
                 </div>
-
-                // Pagination
                 if total_pages > 1 {
                     <div class="flex justify-center mt-8">
                         <Pagination
@@ -214,20 +234,17 @@ fn render_song_card(
                         <img src={cover_url} alt={song.title.clone()} loading="lazy"
                             class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105" />
                     }
-                    // Play overlay on hover
                     <div class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 \
                                 flex items-center justify-center opacity-0 group-hover:opacity-100">
                         <div class="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
                             <Icon name={IconName::Play} size={20} color="#000" />
                         </div>
                     </div>
-                    // Duration badge
                     <div class="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded">
                         {&duration}
                     </div>
                 </div>
             </Link<Route>>
-
             <div class="p-3 flex flex-col gap-1">
                 <h3 class="text-sm font-semibold text-[var(--text)] truncate leading-tight"
                     style="font-family: 'Fraunces', serif;">
@@ -256,3 +273,4 @@ fn format_duration(ms: u64) -> String {
     let seconds = total_seconds % 60;
     format!("{:02}:{:02}", minutes, seconds)
 }
+
