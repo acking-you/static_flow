@@ -2295,14 +2295,23 @@ pub struct PlayTrackResponse {
     pub total_plays: u64,
 }
 
-#[cfg(not(feature = "mock"))]
-#[derive(Debug, Deserialize)]
-struct SongListApiResponse {
-    songs: Vec<SongListItem>,
-    #[allow(dead_code)]
-    total: usize,
-    #[allow(dead_code)]
-    has_more: bool,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SongSearchResult {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover_image: Option<String>,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SongListResponse {
+    pub songs: Vec<SongListItem>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
 }
 
 #[cfg(not(feature = "mock"))]
@@ -2339,9 +2348,16 @@ pub fn song_cover_url(cover: Option<&str>) -> String {
 pub async fn fetch_songs(
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<SongListItem>, String> {
+    artist: Option<&str>,
+    album: Option<&str>,
+    sort: Option<&str>,
+) -> Result<SongListResponse, String> {
     #[cfg(feature = "mock")]
-    { return Ok(vec![]); }
+    {
+        return Ok(SongListResponse {
+            songs: vec![], total: 0, offset: 0, limit: 20, has_more: false,
+        });
+    }
 
     #[cfg(not(feature = "mock"))]
     {
@@ -2349,6 +2365,15 @@ pub async fn fetch_songs(
         let mut params = Vec::new();
         if let Some(l) = limit { params.push(format!("limit={l}")); }
         if let Some(o) = offset { params.push(format!("offset={o}")); }
+        if let Some(a) = artist {
+            params.push(format!("artist={}", urlencoding::encode(a)));
+        }
+        if let Some(a) = album {
+            params.push(format!("album={}", urlencoding::encode(a)));
+        }
+        if let Some(s) = sort {
+            params.push(format!("sort={}", urlencoding::encode(s)));
+        }
         if !params.is_empty() {
             url.push('?');
             url.push_str(&params.join("&"));
@@ -2356,9 +2381,28 @@ pub async fn fetch_songs(
         let response = api_get(&url).send().await
             .map_err(|e| format!("Network error: {:?}", e))?;
         if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        let r: SongListApiResponse = response.json().await
+        let r: SongListResponse = response.json().await
             .map_err(|e| format!("Parse error: {:?}", e))?;
-        Ok(r.songs)
+        Ok(r)
+    }
+}
+
+pub async fn search_songs(q: &str, limit: Option<usize>) -> Result<Vec<SongSearchResult>, String> {
+    #[cfg(feature = "mock")]
+    { let _ = (q, limit); return Ok(vec![]); }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/music/search?q={}", API_BASE, urlencoding::encode(q));
+        if let Some(l) = limit {
+            url.push_str(&format!("&limit={l}"));
+        }
+        let response = api_get(&url).send().await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
+        let r: Vec<SongSearchResult> = response.json().await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(r)
     }
 }
 

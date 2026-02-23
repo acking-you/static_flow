@@ -1,99 +1,402 @@
+use gloo_timers::callback::Timeout;
+use wasm_bindgen::JsCast;
+use web_sys::HtmlInputElement;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::api;
+use crate::components::icons::{Icon, IconName};
+use crate::components::pagination::Pagination;
 use crate::router::Route;
+
+const PAGE_SIZE: usize = 20;
 
 #[function_component(MusicLibraryPage)]
 pub fn music_library_page() -> Html {
-    let songs = use_state(|| Vec::new());
+    let songs = use_state(Vec::<api::SongListItem>::new);
+    let total = use_state(|| 0_usize);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
 
+    let search_query = use_state(String::new);
+    let search_results = use_state(Vec::<api::SongSearchResult>::new);
+    let searching = use_state(|| false);
+    let search_active = use_state(|| false);
+
+    let active_artist = use_state(|| None::<String>);
+    let active_album = use_state(|| None::<String>);
+    let current_page = use_state(|| 1_usize);
+
+    let debounce_handle = use_mut_ref(|| None::<Timeout>);
+
+    // Fetch songs when page/filter changes
     {
         let songs = songs.clone();
+        let total = total.clone();
         let loading = loading.clone();
         let error = error.clone();
-        use_effect_with((), move |_| {
+        let active_artist = active_artist.clone();
+        let active_album = active_album.clone();
+        let current_page = current_page.clone();
+
+        let deps = (
+            *current_page,
+            (*active_artist).clone(),
+            (*active_album).clone(),
+        );
+
+        use_effect_with(deps, move |deps| {
+            let (page, artist, album) = deps.clone();
+            loading.set(true);
+            error.set(None);
+
             wasm_bindgen_futures::spawn_local(async move {
-                match api::fetch_songs(Some(20), None).await {
-                    Ok(list) => {
-                        songs.set(list);
-                        loading.set(false);
+                let offset = (page - 1) * PAGE_SIZE;
+                match api::fetch_songs(
+                    Some(PAGE_SIZE),
+                    Some(offset),
+                    artist.as_deref(),
+                    album.as_deref(),
+                    None,
+                ).await {
+                    Ok(resp) => {
+                        songs.set(resp.songs);
+                        total.set(resp.total);
                     }
-                    Err(e) => {
-                        error.set(Some(e));
-                        loading.set(false);
-                    }
+                    Err(e) => { error.set(Some(e)); }
                 }
+                loading.set(false);
             });
             || ()
         });
     }
 
+    // Search handler with debounce
+    let on_search_input = {
+        let search_query = search_query.clone();
+        let search_results = search_results.clone();
+        let searching = searching.clone();
+        let search_active = search_active.clone();
+        let debounce_handle = debounce_handle.clone();
+
+        Callback::from(move |e: InputEvent| {
+            let input = e.target()
+                .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+                .map(|i| i.value())
+                .unwrap_or_default();
+
+            search_query.set(input.clone());
+
+            // Cancel previous debounce
+            *debounce_handle.borrow_mut() = None;
+
+            if input.trim().is_empty() {
+                search_active.set(false);
+                search_results.set(vec![]);
+                return;
+            }
+
+            let search_results = search_results.clone();
+            let searching = searching.clone();
+            let search_active = search_active.clone();
+
+            let timeout = Timeout::new(300, move || {
+                let q = input.clone();
+                searching.set(true);
+                search_active.set(true);
+
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::search_songs(&q, Some(20)).await {
+                        Ok(results) => { search_results.set(results); }
+                        Err(_) => { search_results.set(vec![]); }
+                    }
+                    searching.set(false);
+                });
+            });
+            *debounce_handle.borrow_mut() = Some(timeout);
+        })
+    };
+
+    let clear_search = {
+        let search_query = search_query.clone();
+        let search_results = search_results.clone();
+        let search_active = search_active.clone();
+        Callback::from(move |_: MouseEvent| {
+            search_query.set(String::new());
+            search_results.set(vec![]);
+            search_active.set(false);
+        })
+    };
+
+    let on_artist_click = {
+        let active_artist = active_artist.clone();
+        let current_page = current_page.clone();
+        move |artist: String| {
+            let active_artist = active_artist.clone();
+            let current_page = current_page.clone();
+            Callback::from(move |e: MouseEvent| {
+                e.prevent_default();
+                active_artist.set(Some(artist.clone()));
+                current_page.set(1);
+            })
+        }
+    };
+
+    let on_album_click = {
+        let active_album = active_album.clone();
+        let current_page = current_page.clone();
+        move |album: String| {
+            let active_album = active_album.clone();
+            let current_page = current_page.clone();
+            Callback::from(move |e: MouseEvent| {
+                e.prevent_default();
+                active_album.set(Some(album.clone()));
+                current_page.set(1);
+            })
+        }
+    };
+
+    let clear_artist = {
+        let active_artist = active_artist.clone();
+        let current_page = current_page.clone();
+        Callback::from(move |_: MouseEvent| {
+            active_artist.set(None);
+            current_page.set(1);
+        })
+    };
+
+    let clear_album = {
+        let active_album = active_album.clone();
+        let current_page = current_page.clone();
+        Callback::from(move |_: MouseEvent| {
+            active_album.set(None);
+            current_page.set(1);
+        })
+    };
+
+    let on_page_change = {
+        let current_page = current_page.clone();
+        Callback::from(move |page: usize| { current_page.set(page); })
+    };
+
+    let total_pages = (*total + PAGE_SIZE - 1) / PAGE_SIZE;
+
     html! {
         <div class="max-w-7xl mx-auto px-4 py-8">
-            <div class="mb-8">
-                <h1 class="text-3xl font-bold text-[var(--text-primary)] mb-2">
+            // Header
+            <div class="mb-6">
+                <h1 class="text-3xl font-bold text-[var(--text)]" style="font-family: 'Fraunces', serif;">
                     {"Music Library"}
                 </h1>
-                <p class="text-[var(--text-secondary)]">
+                <p class="text-[var(--muted)] mt-1">
                     {"Explore and play the music collection"}
                 </p>
             </div>
 
-            if *loading {
-                <div class="flex justify-center py-20">
-                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent)]"></div>
+            // Search bar
+            <div class="relative mb-5">
+                <div class="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]">
+                    <Icon name={IconName::Search} size={18} />
                 </div>
-            } else if let Some(err) = (*error).as_ref() {
+                <input type="text"
+                    placeholder="Search songs, artists, albums..."
+                    value={(*search_query).clone()}
+                    oninput={on_search_input}
+                    class="w-full pl-10 pr-10 py-2.5 rounded-xl bg-[var(--surface)] border border-[var(--border)] \
+                           text-[var(--text)] placeholder-[var(--muted)] text-sm \
+                           focus:outline-none focus:border-[var(--primary)] transition-colors"
+                />
+                if !(*search_query).is_empty() {
+                    <button onclick={clear_search} type="button"
+                        class="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors">
+                        <Icon name={IconName::X} size={16} />
+                    </button>
+                }
+            </div>
+
+            // Active filter chips
+            if active_artist.is_some() || active_album.is_some() {
+                <div class="flex flex-wrap gap-2 mb-4">
+                    if let Some(ref artist) = *active_artist {
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs \
+                                     bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/20">
+                            {format!("Artist: {}", artist)}
+                            <button onclick={clear_artist.clone()} type="button"
+                                class="hover:opacity-70 transition-opacity">
+                                <Icon name={IconName::X} size={12} />
+                            </button>
+                        </span>
+                    }
+                    if let Some(ref album) = *active_album {
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs \
+                                     bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/20">
+                            {format!("Album: {}", album)}
+                            <button onclick={clear_album.clone()} type="button"
+                                class="hover:opacity-70 transition-opacity">
+                                <Icon name={IconName::X} size={12} />
+                            </button>
+                        </span>
+                    }
+                </div>
+            }
+
+            // Search results overlay
+            if *search_active {
+                { render_search_results(&search_results, *searching) }
+            } else if *loading {
+                <div class="flex justify-center py-20">
+                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
+                </div>
+            } else if let Some(ref err) = *error {
                 <div class="text-center py-20 text-red-500">
                     {format!("Failed to load: {}", err)}
                 </div>
             } else if songs.is_empty() {
-                <div class="text-center py-20 text-[var(--text-secondary)]">
-                    {"No music yet"}
+                <div class="text-center py-20 text-[var(--muted)]">
+                    {"No music found"}
                 </div>
             } else {
-                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                // Song grid
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
                     { for songs.iter().map(|song| {
-                        let cover_url = api::song_cover_url(song.cover_image.as_deref());
-                        let duration = format_duration(song.duration_ms);
-                        let id = song.id.clone();
-                        html! {
-                            <Link<Route> to={Route::MusicPlayer { id }}>
-                                <div class="group rounded-xl overflow-hidden bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)] transition-all duration-200 hover:shadow-lg cursor-pointer">
-                                    <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">
-                                        if cover_url.is_empty() {
-                                            <div class="w-full h-full flex items-center justify-center text-[var(--text-tertiary)]">
-                                                <svg xmlns="http://www.w3.org/2000/svg" class="w-16 h-16 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                                    <path d="M9 18V5l12-2v13"/>
-                                                    <circle cx="6" cy="18" r="3"/>
-                                                    <circle cx="18" cy="16" r="3"/>
-                                                </svg>
-                                            </div>
-                                        } else {
-                                            <img src={cover_url} alt={song.title.clone()}
-                                                class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                                        }
-                                        <div class="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded">
-                                            {&duration}
-                                        </div>
-                                    </div>
-                                    <div class="p-3">
-                                        <h3 class="text-sm font-medium text-[var(--text-primary)] truncate">
-                                            {&song.title}
-                                        </h3>
-                                        <p class="text-xs text-[var(--text-secondary)] truncate mt-0.5">
-                                            {&song.artist}
-                                        </p>
-                                    </div>
-                                </div>
-                            </Link<Route>>
-                        }
+                        render_song_card(song, &on_artist_click, &on_album_click)
                     })}
                 </div>
+
+                // Pagination
+                if total_pages > 1 {
+                    <div class="flex justify-center mt-8">
+                        <Pagination
+                            current_page={*current_page}
+                            total_pages={total_pages}
+                            on_page_change={on_page_change.clone()}
+                        />
+                    </div>
+                }
             }
+        </div>
+    }
+}
+
+fn render_song_card(
+    song: &api::SongListItem,
+    on_artist_click: &dyn Fn(String) -> Callback<MouseEvent>,
+    on_album_click: &dyn Fn(String) -> Callback<MouseEvent>,
+) -> Html {
+    let cover_url = api::song_cover_url(song.cover_image.as_deref());
+    let duration = format_duration(song.duration_ms);
+    let id = song.id.clone();
+    let artist = song.artist.clone();
+    let album = song.album.clone();
+    let artist_cb = on_artist_click(artist.clone());
+    let album_cb = on_album_click(album.clone());
+
+    html! {
+        <div class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl \
+                    overflow-hidden flex flex-col transition-all duration-300 ease-out \
+                    hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-2">
+            <Link<Route> to={Route::MusicPlayer { id }}>
+                <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">
+                    if cover_url.is_empty() {
+                        <div class="w-full h-full flex items-center justify-center text-[var(--muted)]">
+                            <Icon name={IconName::Music} size={48} class={classes!("opacity-30")} />
+                        </div>
+                    } else {
+                        <img src={cover_url} alt={song.title.clone()} loading="lazy"
+                            class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105" />
+                    }
+                    // Play overlay on hover
+                    <div class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 \
+                                flex items-center justify-center opacity-0 group-hover:opacity-100">
+                        <div class="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
+                            <Icon name={IconName::Play} size={20} color="#000" />
+                        </div>
+                    </div>
+                    // Duration badge
+                    <div class="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded">
+                        {&duration}
+                    </div>
+                </div>
+            </Link<Route>>
+
+            <div class="p-3 flex flex-col gap-1">
+                <h3 class="text-sm font-semibold text-[var(--text)] truncate leading-tight"
+                    style="font-family: 'Fraunces', serif;">
+                    {&song.title}
+                </h3>
+                <a href="#" onclick={artist_cb}
+                    class="text-xs text-[var(--muted)] truncate hover:text-[var(--primary)] transition-colors cursor-pointer">
+                    {&song.artist}
+                </a>
+                if !song.album.is_empty() {
+                    <a href="#" onclick={album_cb}
+                        class="inline-flex items-center self-start px-2 py-0.5 rounded-full text-[10px] \
+                               bg-[var(--surface-alt)] border border-[var(--border)] text-[var(--muted)] \
+                               hover:border-[var(--primary)] hover:text-[var(--primary)] transition-all truncate max-w-full">
+                        {&song.album}
+                    </a>
+                }
+            </div>
+        </div>
+    }
+}
+
+fn render_search_results(results: &[api::SongSearchResult], searching: bool) -> Html {
+    if searching {
+        return html! {
+            <div class="flex justify-center py-12">
+                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--primary)]" />
+            </div>
+        };
+    }
+
+    if results.is_empty() {
+        return html! {
+            <div class="text-center py-12 text-[var(--muted)]">
+                {"No results found"}
+            </div>
+        };
+    }
+
+    html! {
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+            { for results.iter().map(|r| {
+                let cover_url = api::song_cover_url(r.cover_image.as_deref());
+                let id = r.id.clone();
+                html! {
+                    <Link<Route> to={Route::MusicPlayer { id }}>
+                        <div class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl \
+                                    overflow-hidden flex flex-col transition-all duration-300 ease-out \
+                                    hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-2">
+                            <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">
+                                if cover_url.is_empty() {
+                                    <div class="w-full h-full flex items-center justify-center text-[var(--muted)]">
+                                        <Icon name={IconName::Music} size={48} class={classes!("opacity-30")} />
+                                    </div>
+                                } else {
+                                    <img src={cover_url} alt={r.title.clone()} loading="lazy"
+                                        class="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105" />
+                                }
+                                <div class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 \
+                                            flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                    <div class="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
+                                        <Icon name={IconName::Play} size={20} color="#000" />
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-3">
+                                <h3 class="text-sm font-semibold text-[var(--text)] truncate"
+                                    style="font-family: 'Fraunces', serif;">
+                                    {&r.title}
+                                </h3>
+                                <p class="text-xs text-[var(--muted)] truncate mt-0.5">
+                                    {&r.artist}
+                                </p>
+                            </div>
+                        </div>
+                    </Link<Route>>
+                }
+            })}
         </div>
     }
 }

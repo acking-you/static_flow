@@ -37,10 +37,10 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 # LanceDB + Arrow
-lancedb = "0.23"
-arrow-array = "56.2"
-arrow-schema = "56.2"
-arrow = "56.2"
+lancedb = "0.26"
+arrow-array = "57.2"
+arrow-schema = "57.2"
+arrow = "57.2"
 # sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono"] }
 # meilisearch-sdk = "0.25"
 

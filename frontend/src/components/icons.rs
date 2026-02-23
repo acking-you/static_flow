@@ -28,6 +28,15 @@ pub enum IconName {
     Tag,
     Hash,
     Folder,
+
+    // Media player
+    Play,
+    Pause,
+    SkipBack,
+    SkipForward,
+    Volume2,
+    VolumeX,
+    Music,
 }
 
 impl IconName {
@@ -63,12 +72,22 @@ impl IconName {
                 "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 \
                  7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"
             },
+
+            IconName::Play => "M5 3l14 9-14 9V3z",
+            IconName::Pause => "M6 4h4v16H6zM14 4h4v16h-4z",
+            IconName::SkipBack => "M19 20L9 12l10-8v16zM5 19V5",
+            IconName::SkipForward => "M5 4l10 8-10 8V4zM19 5v14",
+            IconName::Volume2 => {
+                "M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"
+            },
+            IconName::VolumeX => "M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6",
+            IconName::Music => "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
         }
     }
 
     /// 是否需要填充（某些 icon 有多个 path）
     pub fn needs_fill(&self) -> bool {
-        matches!(self, IconName::Home | IconName::Folder)
+        matches!(self, IconName::Home | IconName::Folder | IconName::Play)
     }
 }
 
