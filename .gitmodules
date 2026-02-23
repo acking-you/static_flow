@@ -4,3 +4,7 @@
 [submodule "tools/pb-mapper"]
 	path = tools/pb-mapper
 	url = git@github.com:acking-you/pb-mapper.git
+[submodule "patches/object_store"]
+	path = patches/object_store
+	url = git@github.com:acking-you/arrow-rs-object-store.git
+	branch = dev
