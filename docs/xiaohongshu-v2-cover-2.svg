@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">2/4</text>
+
+  <!-- Title -->
+  <text x="540" y="120" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">许愿点歌 → 自动入库</text>
+  <text x="540" y="170" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">全链路 AI 自动化流程</text>
+
+  <!-- Arrow defs -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#FF6B35"/>
+    </marker>
+  </defs>
+
+  <!-- Step 1: User comment -->
+  <rect x="240" y="220" width="600" height="90" rx="12" fill="#EBF8FF" stroke="#BEE3F8" stroke-width="1.5"/>
+  <text x="290" y="255" fill="#3182CE" font-family="Arial, sans-serif" font-size="28" font-weight="bold">💬</text>
+  <text x="330" y="255" fill="#3182CE" font-family="Arial, sans-serif" font-size="26" font-weight="bold">用户评论许愿</text>
+  <text x="330" y="290" fill="#666666" font-family="Arial, sans-serif" font-size="22">「想听周杰伦的晴天」</text>
+
+  <!-- Arrow 1 -->
+  <line x1="540" y1="310" x2="540" y2="360" stroke="#FF6B35" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Step 2: Admin review -->
+  <rect x="240" y="370" width="600" height="90" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <text x="290" y="405" fill="#805AD5" font-family="Arial, sans-serif" font-size="28" font-weight="bold">✅</text>
+  <text x="330" y="405" fill="#805AD5" font-family="Arial, sans-serif" font-size="26" font-weight="bold">Admin 审核通过</text>
+  <text x="330" y="440" fill="#666666" font-family="Arial, sans-serif" font-size="22">评论管理面板一键审批</text>
+
+  <!-- Arrow 2 -->
+  <line x1="540" y1="460" x2="540" y2="510" stroke="#FF6B35" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Step 3: Codex Skill -->
+  <rect x="240" y="520" width="600" height="90" rx="12" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="290" y="555" fill="#FF6B35" font-family="Arial, sans-serif" font-size="28" font-weight="bold">🤖</text>
+  <text x="330" y="555" fill="#FF6B35" font-family="Arial, sans-serif" font-size="26" font-weight="bold">Codex 调用 music-ingestion Skill</text>
+  <text x="330" y="590" fill="#666666" font-family="Arial, sans-serif" font-size="22">AI Agent 自动解析歌曲信息</text>
+
+  <!-- Arrow 3 -->
+  <line x1="540" y1="610" x2="540" y2="660" stroke="#FF6B35" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Step 4: Search sources -->
+  <rect x="240" y="670" width="600" height="90" rx="12" fill="#F0FFF4" stroke="#C6F6D5" stroke-width="1.5"/>
+  <text x="290" y="705" fill="#38A169" font-family="Arial, sans-serif" font-size="28" font-weight="bold">🔍</text>
+  <text x="330" y="705" fill="#38A169" font-family="Arial, sans-serif" font-size="26" font-weight="bold">自动搜索 B站 / 网易云</text>
+  <text x="330" y="740" fill="#666666" font-family="Arial, sans-serif" font-size="22">双源搜索，智能选择最佳音源</text>
+
+  <!-- Arrow 4 -->
+  <line x1="540" y1="760" x2="540" y2="810" stroke="#FF6B35" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Step 5: Download + ingest -->
+  <rect x="240" y="820" width="600" height="90" rx="12" fill="#FAF5FF" stroke="#E9D8FD" stroke-width="1.5"/>
+  <text x="290" y="855" fill="#805AD5" font-family="Arial, sans-serif" font-size="28" font-weight="bold">📥</text>
+  <text x="330" y="855" fill="#805AD5" font-family="Arial, sans-serif" font-size="26" font-weight="bold">下载 + 入库 LanceDB</text>
+  <text x="330" y="890" fill="#666666" font-family="Arial, sans-serif" font-size="22">自动生成元数据 + 向量嵌入</text>
+
+  <!-- Arrow 5 -->
+  <line x1="540" y1="910" x2="540" y2="960" stroke="#FF6B35" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Step 6: Auto reply -->
+  <rect x="240" y="970" width="600" height="90" rx="12" fill="#EBF8FF" stroke="#BEE3F8" stroke-width="1.5"/>
+  <text x="290" y="1005" fill="#3182CE" font-family="Arial, sans-serif" font-size="28" font-weight="bold">💬</text>
+  <text x="330" y="1005" fill="#3182CE" font-family="Arial, sans-serif" font-size="26" font-weight="bold">评论自动回复</text>
+  <text x="330" y="1040" fill="#666666" font-family="Arial, sans-serif" font-size="22">「已入库，去听吧 🎵」</text>
+
+  <!-- Bottom insight -->
+  <rect x="180" y="1120" width="720" height="80" rx="12" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="540" y="1170" fill="#FF6B35" font-family="Arial, sans-serif" font-size="28" text-anchor="middle" font-weight="bold">全程零人工干预，从许愿到可播放 &lt; 2 分钟</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>

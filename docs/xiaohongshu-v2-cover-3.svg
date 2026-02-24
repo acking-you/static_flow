@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">3/4</text>
+
+  <!-- Title -->
+  <text x="540" y="130" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">音乐库能力全景</text>
+
+  <!-- Card 1: Multi-source search -->
+  <rect x="80" y="200" width="440" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <rect x="80" y="200" width="440" height="6" rx="3" fill="#3182CE"/>
+  <text x="120" y="260" fill="#3182CE" font-family="Arial, sans-serif" font-size="36" font-weight="bold">🔍 多源搜索</text>
+  <text x="120" y="310" fill="#333333" font-family="Arial, sans-serif" font-size="24">B站音频 + 网易云音乐</text>
+  <text x="120" y="350" fill="#333333" font-family="Arial, sans-serif" font-size="24">双源并行，智能选择最佳音源</text>
+  <text x="120" y="390" fill="#999999" font-family="Arial, sans-serif" font-size="20">支持 MP3 / FLAC / NCM 解密</text>
+
+  <!-- Card 2: Hybrid search -->
+  <rect x="560" y="200" width="440" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <rect x="560" y="200" width="440" height="6" rx="3" fill="#805AD5"/>
+  <text x="600" y="260" fill="#805AD5" font-family="Arial, sans-serif" font-size="36" font-weight="bold">🧠 混合检索</text>
+  <text x="600" y="310" fill="#333333" font-family="Arial, sans-serif" font-size="24">FTS 全文 + 向量语义搜索</text>
+  <text x="600" y="350" fill="#333333" font-family="Arial, sans-serif" font-size="24">RRF 融合排序，中英双语向量</text>
+  <text x="600" y="390" fill="#999999" font-family="Arial, sans-serif" font-size="20">BGE-Small 384d/512d 双模型</text>
+
+  <!-- Card 3: Online playback -->
+  <rect x="80" y="490" width="440" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <rect x="80" y="490" width="440" height="6" rx="3" fill="#38A169"/>
+  <text x="120" y="550" fill="#38A169" font-family="Arial, sans-serif" font-size="36" font-weight="bold">🎵 在线播放</text>
+  <text x="120" y="600" fill="#333333" font-family="Arial, sans-serif" font-size="24">全局播放器 + 播放列表</text>
+  <text x="120" y="640" fill="#333333" font-family="Arial, sans-serif" font-size="24">歌词同步滚动显示</text>
+  <text x="120" y="680" fill="#999999" font-family="Arial, sans-serif" font-size="20">WASM 前端，丝滑体验</text>
+
+  <!-- Card 4: Wish & auto-ingest -->
+  <rect x="560" y="490" width="440" height="240" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <rect x="560" y="490" width="440" height="6" rx="3" fill="#FF6B35"/>
+  <text x="600" y="550" fill="#FF6B35" font-family="Arial, sans-serif" font-size="36" font-weight="bold">🌟 许愿点歌</text>
+  <text x="600" y="600" fill="#333333" font-family="Arial, sans-serif" font-size="24">评论许愿 → AI 自动入库</text>
+  <text x="600" y="640" fill="#333333" font-family="Arial, sans-serif" font-size="24">Codex + Skill 全链路自动化</text>
+  <text x="600" y="680" fill="#999999" font-family="Arial, sans-serif" font-size="20">零人工干预，2 分钟完成</text>
+
+  <!-- Card 5: Stats & interaction -->
+  <rect x="80" y="780" width="920" height="180" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+  <rect x="80" y="780" width="920" height="6" rx="3" fill="#E53E3E"/>
+  <text x="540" y="840" fill="#E53E3E" font-family="Arial, sans-serif" font-size="36" text-anchor="middle" font-weight="bold">📊 播放统计 + 评论互动</text>
+  <text x="540" y="890" fill="#333333" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">播放次数追踪 · 热门排行 · 评论讨论 · 收藏管理</text>
+  <text x="540" y="930" fill="#999999" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">所有数据本地存储，LanceDB 嵌入式数据库</text>
+
+  <!-- Bottom insight -->
+  <rect x="140" y="1030" width="800" height="100" rx="16" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="540" y="1090" fill="#FF6B35" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">想听什么搜什么，搜不到就许愿</text>
+
+  <!-- Tech stack -->
+  <text x="540" y="1200" fill="#BBBBBB" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">LanceDB · BGE Embedding · RRF Fusion · Yew/WASM</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+
+  <!-- Top color bar -->
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+
+  <!-- Page number -->
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">1/4</text>
+
+  <!-- Version badge (small, top-left) -->
+  <rect x="60" y="100" width="240" height="48" rx="24" fill="#FF6B35"/>
+  <text x="180" y="132" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="24" text-anchor="middle" font-weight="bold">StaticFlow 2.0</text>
+
+  <!-- Main title: story hook, two lines -->
+  <text x="540" y="260" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="64" text-anchor="middle" font-weight="bold">朋友说想听一首歌</text>
+  <text x="540" y="350" fill="#FF6B35" font-family="Arial, sans-serif" font-size="64" text-anchor="middle" font-weight="bold">2 分钟后就能在线听了</text>
+
+  <!-- Subtitle -->
+  <text x="540" y="410" fill="#999999" font-family="Arial, sans-serif" font-size="28" text-anchor="middle">我用 Rust + AI 造了个自动点歌系统</text>
+
+  <!-- Music hero section — large music icon + text -->
+  <rect x="120" y="430" width="840" height="340" rx="20" fill="#EBF8FF" stroke="#BEE3F8" stroke-width="1.5"/>
+
+  <!-- Large music note icon -->
+  <g transform="translate(300, 530)">
+    <circle cx="0" cy="60" r="28" fill="#3182CE" opacity="0.15"/>
+    <circle cx="80" cy="45" r="24" fill="#3182CE" opacity="0.15"/>
+    <rect x="-4" y="-60" width="8" height="120" rx="4" fill="#3182CE" opacity="0.6"/>
+    <rect x="76" y="-75" width="8" height="120" rx="4" fill="#3182CE" opacity="0.6"/>
+    <rect x="-4" y="-75" width="84" height="8" rx="4" fill="#3182CE" opacity="0.6"/>
+    <circle cx="0" cy="60" r="20" fill="#3182CE"/>
+    <circle cx="80" cy="45" r="17" fill="#3182CE"/>
+  </g>
+
+  <!-- Music hero text -->
+  <text x="620" y="540" fill="#3182CE" font-family="Arial, sans-serif" font-size="56" text-anchor="middle" font-weight="bold">音乐模块上线</text>
+  <text x="620" y="600" fill="#3182CE" font-family="Arial, sans-serif" font-size="28" text-anchor="middle" opacity="0.7">搜索 · 播放 · 歌词 · 许愿点歌</text>
+
+  <!-- NEW badge on music section -->
+  <rect x="830" y="445" width="100" height="40" rx="20" fill="#E53E3E"/>
+  <text x="880" y="472" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="22" text-anchor="middle" font-weight="bold">NEW</text>
+
+  <!-- Ferris (smaller, left side) -->
+  <g transform="translate(170, 600) scale(2)">
+    <path d="M-30,-2 C-40,-14 -28,-20 -22,-10 Z" fill="#F74C00"/>
+    <path d="M30,-2 C40,-14 28,-20 22,-10 Z" fill="#F74C00"/>
+    <ellipse cx="0" cy="2" rx="24" ry="16" fill="#F74C00"/>
+    <rect x="-11" y="-16" width="4" height="10" rx="2" fill="#F74C00"/>
+    <rect x="7" y="-16" width="4" height="10" rx="2" fill="#F74C00"/>
+    <circle cx="-9" cy="-19" r="5" fill="#fff"/>
+    <circle cx="9" cy="-19" r="5" fill="#fff"/>
+    <circle cx="-8" cy="-19" r="2.5" fill="#222"/>
+    <circle cx="10" cy="-19" r="2.5" fill="#222"/>
+    <line x1="-18" y1="12" x2="-26" y2="20" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+    <line x1="-10" y1="15" x2="-14" y2="23" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+    <line x1="18" y1="12" x2="26" y2="20" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+    <line x1="10" y1="15" x2="14" y2="23" stroke="#F74C00" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Key selling point -->
+  <rect x="140" y="820" width="800" height="100" rx="16" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="540" y="885" fill="#FF6B35" font-family="Arial, sans-serif" font-size="40" text-anchor="middle" font-weight="bold">评论许愿 → AI 自动入库</text>
+
+  <!-- Capability tags — music enlarged + highlighted -->
+  <rect x="100" y="980" width="180" height="70" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="190" y="1025" fill="#FF6B35" font-family="Arial, sans-serif" font-size="26" text-anchor="middle" font-weight="bold">文章</text>
+
+  <!-- Music tag: bigger, filled, with NEW dot -->
+  <rect x="320" y="960" width="280" height="110" rx="16" fill="#3182CE"/>
+  <text x="460" y="1010" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="36" text-anchor="middle" font-weight="bold">🎵 音乐</text>
+  <text x="460" y="1050" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" opacity="0.8">本次重点更新</text>
+
+  <rect x="640" y="980" width="180" height="70" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="730" y="1025" fill="#805AD5" font-family="Arial, sans-serif" font-size="26" text-anchor="middle" font-weight="bold">视频</text>
+
+  <rect x="860" y="980" width="100" height="70" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="910" y="1025" fill="#38A169" font-family="Arial, sans-serif" font-size="26" text-anchor="middle" font-weight="bold">…</text>
+
+  <!-- Subtitle tags -->
+  <text x="540" y="1150" fill="#999999" font-family="Arial, sans-serif" font-size="26" text-anchor="middle">文章 · 音乐 · 视频 · 全链路 AI</text>
+
+  <!-- Tech stack line -->
+  <text x="540" y="1210" fill="#BBBBBB" font-family="Arial, sans-serif" font-size="22" text-anchor="middle">Rust · Yew/WASM · Axum · LanceDB · Codex Skills</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1300" x2="980" y2="1300" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1360" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>

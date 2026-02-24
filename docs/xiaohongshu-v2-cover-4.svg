@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <rect width="1080" height="1440" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1080" height="6" fill="#FF6B35"/>
+  <text x="1010" y="70" fill="#CCCCCC" font-family="Arial, sans-serif" font-size="24">4/4</text>
+
+  <!-- Title -->
+  <text x="540" y="130" fill="#1A1A1A" font-family="Arial, sans-serif" font-size="48" text-anchor="middle" font-weight="bold">从博客到内容平台</text>
+  <text x="540" y="180" fill="#999999" font-family="Arial, sans-serif" font-size="26" text-anchor="middle">StaticFlow 1.0 → 2.0 升级全览</text>
+
+  <!-- LEFT: 1.0 -->
+  <g transform="translate(80, 240)">
+    <rect x="0" y="0" width="420" height="620" rx="12" fill="#FAFAFA" stroke="#EEEEEE" stroke-width="1.5"/>
+    <rect x="0" y="0" width="420" height="50" rx="12" fill="#E2E8F0"/>
+    <rect x="0" y="25" width="420" height="25" fill="#E2E8F0"/>
+    <text x="210" y="35" fill="#4A5568" font-family="Arial, sans-serif" font-size="28" text-anchor="middle" font-weight="bold">1.0 · 知识博客</text>
+
+    <text x="40" y="110" fill="#38A169" font-size="24" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="110" fill="#333333" font-size="24" font-family="Arial, sans-serif">Markdown 文章发布</text>
+
+    <text x="40" y="170" fill="#38A169" font-size="24" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="170" fill="#333333" font-size="24" font-family="Arial, sans-serif">FTS + 向量混合搜索</text>
+
+    <text x="40" y="230" fill="#38A169" font-size="24" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="230" fill="#333333" font-size="24" font-family="Arial, sans-serif">AI 精确评论</text>
+
+    <text x="40" y="290" fill="#38A169" font-size="24" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="290" fill="#333333" font-size="24" font-family="Arial, sans-serif">中英双语翻译</text>
+
+    <text x="40" y="350" fill="#38A169" font-size="24" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="350" fill="#333333" font-size="24" font-family="Arial, sans-serif">Skill 工作流自动化</text>
+
+    <text x="40" y="410" fill="#38A169" font-size="24" font-family="Arial, sans-serif">✓</text>
+    <text x="75" y="410" fill="#333333" font-size="24" font-family="Arial, sans-serif">本地优先 + 开源</text>
+
+    <text x="210" y="560" fill="#4A5568" font-size="60" text-anchor="middle" opacity="0.15" font-weight="bold">1.0</text>
+  </g>
+
+  <!-- RIGHT: 2.0 -->
+  <g transform="translate(580, 240)">
+    <rect x="0" y="0" width="420" height="620" rx="12" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="420" height="50" rx="12" fill="#FF6B35"/>
+    <rect x="0" y="25" width="420" height="25" fill="#FF6B35"/>
+    <text x="210" y="35" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" text-anchor="middle" font-weight="bold">2.0 · 内容平台</text>
+
+    <text x="40" y="110" fill="#FF6B35" font-size="24" font-family="Arial, sans-serif">★</text>
+    <text x="75" y="110" fill="#333333" font-size="24" font-family="Arial, sans-serif" font-weight="bold">音乐库（B站+网易云）</text>
+
+    <text x="40" y="170" fill="#FF6B35" font-size="24" font-family="Arial, sans-serif">★</text>
+    <text x="75" y="170" fill="#333333" font-size="24" font-family="Arial, sans-serif" font-weight="bold">许愿点歌 + AI 入库</text>
+
+    <text x="40" y="230" fill="#FF6B35" font-size="24" font-family="Arial, sans-serif">★</text>
+    <text x="75" y="230" fill="#333333" font-size="24" font-family="Arial, sans-serif" font-weight="bold">在线播放 + 歌词同步</text>
+
+    <text x="40" y="290" fill="#FF6B35" font-size="24" font-family="Arial, sans-serif">★</text>
+    <text x="75" y="290" fill="#333333" font-size="24" font-family="Arial, sans-serif" font-weight="bold">音乐语义搜索</text>
+
+    <text x="40" y="350" fill="#FF6B35" font-size="24" font-family="Arial, sans-serif">★</text>
+    <text x="75" y="350" fill="#333333" font-size="24" font-family="Arial, sans-serif" font-weight="bold">播放统计 + 评论互动</text>
+
+    <text x="40" y="410" fill="#805AD5" font-size="24" font-family="Arial, sans-serif">◇</text>
+    <text x="75" y="410" fill="#805AD5" font-size="24" font-family="Arial, sans-serif">视频模块（规划中）</text>
+
+    <text x="40" y="470" fill="#805AD5" font-size="24" font-family="Arial, sans-serif">◇</text>
+    <text x="75" y="470" fill="#805AD5" font-size="24" font-family="Arial, sans-serif">更多 Skill 扩展</text>
+
+    <text x="210" y="570" fill="#FF6B35" font-size="60" text-anchor="middle" opacity="0.15" font-weight="bold">2.0</text>
+  </g>
+
+  <!-- Arrow between -->
+  <text x="540" y="560" fill="#FF6B35" font-family="Arial, sans-serif" font-size="48" text-anchor="middle">→</text>
+
+  <!-- Bottom insight -->
+  <rect x="140" y="940" width="800" height="120" rx="16" fill="#FFF7ED" stroke="#FEEBC8" stroke-width="1.5"/>
+  <text x="540" y="990" fill="#FF6B35" font-family="Arial, sans-serif" font-size="30" text-anchor="middle" font-weight="bold">定位升级</text>
+  <text x="540" y="1035" fill="#666666" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">从「AI 知识博客」到「本地优先的个人内容平台」</text>
+
+  <!-- Quote -->
+  <text x="540" y="1150" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">"不只是写文章，是把所有内容都管起来"</text>
+
+  <!-- Bottom -->
+  <line x1="100" y1="1280" x2="980" y2="1280" stroke="#EEEEEE" stroke-width="1"/>
+  <text x="540" y="1340" fill="#999999" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">LB7666 · StaticFlow</text>
+</svg>
