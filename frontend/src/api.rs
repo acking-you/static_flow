@@ -2634,7 +2634,7 @@ pub async fn track_song_play(id: &str) -> Result<PlayTrackResponse, String> {
 
 pub async fn submit_music_comment(
     song_id: &str,
-    nickname: &str,
+    nickname: Option<&str>,
     text: &str,
 ) -> Result<MusicCommentItem, String> {
     #[cfg(feature = "mock")]
@@ -2642,7 +2642,7 @@ pub async fn submit_music_comment(
         return Ok(MusicCommentItem {
             id: "mock".to_string(),
             song_id: song_id.to_string(),
-            nickname: nickname.to_string(),
+            nickname: nickname.unwrap_or("Reader").to_string(),
             comment_text: text.to_string(),
             ip_region: None,
             created_at: 0,
@@ -2652,8 +2652,16 @@ pub async fn submit_music_comment(
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/music/comments/submit", API_BASE);
-        let body =
-            serde_json::json!({ "song_id": song_id, "nickname": nickname, "comment_text": text });
+        let mut body = serde_json::json!({
+            "song_id": song_id,
+            "comment_text": text
+        });
+        if let Some(value) = nickname {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                body["nickname"] = serde_json::Value::String(trimmed.to_string());
+            }
+        }
         let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -2784,7 +2792,7 @@ pub async fn submit_music_wish(
     song_name: &str,
     artist_hint: Option<&str>,
     wish_message: &str,
-    nickname: &str,
+    nickname: Option<&str>,
     requester_email: Option<&str>,
     frontend_page_url: Option<&str>,
 ) -> Result<SubmitMusicWishResponse, String> {
@@ -2802,8 +2810,13 @@ pub async fn submit_music_wish(
         let mut body = serde_json::json!({
             "song_name": song_name,
             "wish_message": wish_message,
-            "nickname": nickname,
         });
+        if let Some(value) = nickname {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                body["nickname"] = serde_json::Value::String(trimmed.to_string());
+            }
+        }
         if let Some(hint) = artist_hint {
             body["artist_hint"] = serde_json::Value::String(hint.to_string());
         }

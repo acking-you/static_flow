@@ -58,6 +58,58 @@ pub fn music_library_page() -> Html {
     let wish_submit_msg = use_state(|| None::<String>);
     let wish_submit_err = use_state(|| None::<String>);
 
+    // Hero search state
+    let hero_query = use_state(String::new);
+    let hero_focused = use_state(|| false);
+
+    let on_hero_input = {
+        let hero_query = hero_query.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                hero_query.set(input.value());
+            }
+        })
+    };
+
+    let do_hero_search = {
+        let hero_query = hero_query.clone();
+        move || {
+            let q = hero_query.trim().to_string();
+            if q.is_empty() {
+                return;
+            }
+            let encoded = urlencoding::encode(&q);
+            let url = crate::config::route_path(&format!("/search?q={encoded}&mode=music"));
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().set_href(&url);
+            }
+        }
+    };
+
+    let on_hero_search = {
+        let do_search = do_hero_search.clone();
+        Callback::from(move |_: MouseEvent| do_search())
+    };
+
+    let on_hero_keypress = {
+        let do_search = do_hero_search;
+        Callback::from(move |e: KeyboardEvent| {
+            if e.key() == "Enter" {
+                do_search();
+            }
+        })
+    };
+
+    let on_hero_focus = {
+        let hero_focused = hero_focused.clone();
+        Callback::from(move |_: FocusEvent| hero_focused.set(true))
+    };
+
+    let on_hero_blur = {
+        let hero_focused = hero_focused.clone();
+        Callback::from(move |_: FocusEvent| hero_focused.set(false))
+    };
+
     // Sync URL query params → state on subsequent navigation
     {
         let active_artist = active_artist.clone();
@@ -245,10 +297,11 @@ pub fn music_library_page() -> Html {
             let message = (*wish_form_message).trim().to_string();
             let nickname = (*wish_form_nickname).trim().to_string();
             let email = (*wish_form_email).trim().to_string();
-            if song.is_empty() || message.is_empty() || nickname.is_empty() {
+            if song.is_empty() || message.is_empty() {
                 return;
             }
             let artist_opt = if artist.is_empty() { None } else { Some(artist.clone()) };
+            let nickname_opt = if nickname.is_empty() { None } else { Some(nickname.clone()) };
             let email_opt = if email.is_empty() { None } else { Some(email.clone()) };
             let frontend_page_url = web_sys::window().and_then(|w| w.location().href().ok());
             let wish_submitting = wish_submitting.clone();
@@ -267,7 +320,7 @@ pub fn music_library_page() -> Html {
                     &song,
                     artist_opt.as_deref(),
                     &message,
-                    &nickname,
+                    nickname_opt.as_deref(),
                     email_opt.as_deref(),
                     frontend_page_url.as_deref(),
                 )
@@ -302,6 +355,28 @@ pub fn music_library_page() -> Html {
                 <p class="text-[var(--muted)] mt-1">
                     {"Explore and play the music collection"}
                 </p>
+            </div>
+
+            // Hero search box
+            <div class={classes!(
+                "music-search-hero",
+                hero_focused.then_some("focused"),
+            )}>
+                <div class="music-search-hero-inner">
+                    <i class="fas fa-music music-search-icon" />
+                    <input type="text"
+                        placeholder="搜索歌曲、歌手或专辑..."
+                        class="music-search-input"
+                        value={(*hero_query).clone()}
+                        oninput={on_hero_input}
+                        onkeypress={on_hero_keypress}
+                        onfocus={on_hero_focus}
+                        onblur={on_hero_blur}
+                    />
+                    <button class="music-search-btn" onclick={on_hero_search} type="button">
+                        <i class="fas fa-search" />
+                    </button>
+                </div>
             </div>
 
             if active_artist.is_some() || active_album.is_some() {
@@ -413,8 +488,7 @@ pub fn music_library_page() -> Html {
                                 s.set(input.value());
                             })}
                             class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
-                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]"
-                            required=true />
+                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]" />
                     </div>
                     <div>
                         <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::EMAIL_LABEL}</label>

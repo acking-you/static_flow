@@ -164,9 +164,10 @@ pub fn music_player_page(props: &Props) -> Html {
             e.prevent_default();
             let nick = (*nickname).clone();
             let text = (*comment_text).clone();
-            if nick.trim().is_empty() || text.trim().is_empty() {
+            if text.trim().is_empty() {
                 return;
             }
+            let nick_opt = if nick.trim().is_empty() { None } else { Some(nick.clone()) };
             let id = id.clone();
             let nickname = nickname.clone();
             let comment_text = comment_text.clone();
@@ -176,7 +177,7 @@ pub fn music_player_page(props: &Props) -> Html {
             submitting.set(true);
             submit_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
-                match api::submit_music_comment(&id, &nick, &text).await {
+                match api::submit_music_comment(&id, nick_opt.as_deref(), &text).await {
                     Ok(nc) => {
                         let mut l = (*comments).clone();
                         l.insert(0, nc);
@@ -580,7 +581,7 @@ pub fn music_player_page(props: &Props) -> Html {
                 <h2 class="text-lg font-semibold text-[var(--text)] mb-4">{format!("Comments ({})", comments.len())}</h2>
                 <form onsubmit={on_submit_comment} class="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4">
                     <div class="flex gap-3 mb-3">
-                        <input type="text" placeholder="Nickname" value={(*nickname).clone()} oninput={on_nickname_input}
+                        <input type="text" placeholder="Nickname (optional)" value={(*nickname).clone()} oninput={on_nickname_input}
                             class="flex-1 px-3 py-2 rounded-lg bg-[var(--bg)] border border-[var(--border)] text-sm text-[var(--text)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--primary)]" />
                     </div>
                     <div class="flex gap-3">

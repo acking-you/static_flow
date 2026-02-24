@@ -135,7 +135,8 @@ pub struct ListMusicCommentsQuery {
 #[derive(Debug, Deserialize)]
 pub struct SubmitMusicCommentRequest {
     pub song_id: String,
-    pub nickname: String,
+    #[serde(default)]
+    pub nickname: Option<String>,
     pub comment_text: String,
 }
 
@@ -1031,11 +1032,12 @@ pub async fn submit_comment(
 
     let ip = extract_client_ip(&headers);
     let fingerprint = build_client_fingerprint(&headers);
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let runtime_config = state.comment_runtime_config.read().await.clone();
     enforce_comment_submit_rate_limit(
         state.comment_submit_guard.as_ref(),
-        &fingerprint,
+        &rate_limit_key,
         now_ms,
         runtime_config.submit_rate_limit_seconds,
     )
@@ -2436,6 +2438,15 @@ fn build_client_fingerprint(headers: &HeaderMap) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn build_submit_rate_limit_key(headers: &HeaderMap, fingerprint: &str) -> String {
+    let ip = extract_client_ip(headers);
+    if ip == "unknown" {
+        format!("fp:{fingerprint}")
+    } else {
+        format!("ip:{ip}")
+    }
+}
+
 fn extract_client_ip(headers: &HeaderMap) -> String {
     // Prefer proxy chain source headers, then vendor/common real-ip headers.
     parse_first_ip_from_header(headers.get("x-forwarded-for"))
@@ -2527,27 +2538,24 @@ fn parse_raw_markdown_lang(raw: &str) -> Option<&'static str> {
 
 async fn enforce_comment_submit_rate_limit(
     guard: &tokio::sync::RwLock<HashMap<String, i64>>,
-    fingerprint: &str,
+    rate_limit_key: &str,
     now_ms: i64,
     rate_limit_seconds: u64,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let window_ms = (rate_limit_seconds.max(1) as i64) * 1_000;
     let mut writer = guard.write().await;
-    if let Some(last) = writer.get(fingerprint) {
+    if let Some(last) = writer.get(rate_limit_key) {
         if now_ms - *last < window_ms {
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(ErrorResponse {
-                    error: format!(
-                        "Comment submit rate-limited. Retry in {} seconds.",
-                        rate_limit_seconds
-                    ),
+                    error: format!("Submit rate-limited. Retry in {} seconds.", rate_limit_seconds),
                     code: 429,
                 }),
             ));
         }
     }
-    writer.insert(fingerprint.to_string(), now_ms);
+    writer.insert(rate_limit_key.to_string(), now_ms);
     let stale_before = now_ms - window_ms * 6;
     writer.retain(|_, value| *value >= stale_before);
     Ok(())
@@ -2811,6 +2819,23 @@ fn normalize_optional_markdown(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
+}
+
+fn normalize_public_nickname_input(
+    nickname: Option<String>,
+    fingerprint: &str,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    let normalized = nickname
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+    if let Some(value) = normalized {
+        if value.chars().count() > 50 {
+            return Err(bad_request("`nickname` must be <= 50 chars"));
+        }
+        return Ok(value);
+    }
+    let (generated, _) = derive_author_identity_for_public(fingerprint);
+    Ok(generated)
 }
 
 fn normalize_comment_list_limit(limit: Option<usize>, default_limit: usize) -> usize {
@@ -3442,13 +3467,6 @@ pub async fn submit_music_comment(
     if song_id.is_empty() {
         return Err(bad_request("`song_id` is required"));
     }
-    let nickname = request.nickname.trim();
-    if nickname.is_empty() {
-        return Err(bad_request("`nickname` is required"));
-    }
-    if nickname.chars().count() > 50 {
-        return Err(bad_request("`nickname` must be <= 50 chars"));
-    }
     let comment_text = request.comment_text.trim();
     if comment_text.is_empty() {
         return Err(bad_request("`comment_text` is required"));
@@ -3473,14 +3491,16 @@ pub async fn submit_music_comment(
     }
 
     let fingerprint = build_client_fingerprint(&headers);
+    let nickname = normalize_public_nickname_input(request.nickname, &fingerprint)?;
     let ip = extract_client_ip(&headers);
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let config = state.music_runtime_config.read().await.clone();
 
-    // Rate limit
-    enforce_music_comment_rate_limit(
+    // Reuse blog comment limiter semantics.
+    enforce_comment_submit_rate_limit(
         state.music_comment_guard.as_ref(),
-        &fingerprint,
+        &rate_limit_key,
         now_ms,
         config.comment_rate_limit_seconds,
     )
@@ -3496,7 +3516,7 @@ pub async fn submit_music_comment(
     let record = MusicCommentRecord {
         id: comment_id,
         song_id: song_id.to_string(),
-        nickname: nickname.to_string(),
+        nickname,
         comment_text: comment_text.to_string(),
         client_fingerprint: fingerprint,
         client_ip: Some(ip),
@@ -3509,34 +3529,6 @@ pub async fn submit_music_comment(
         .await
         .map_err(|e| internal_error("Failed to submit music comment", e))?;
     Ok(Json(item))
-}
-
-async fn enforce_music_comment_rate_limit(
-    guard: &tokio::sync::RwLock<HashMap<String, i64>>,
-    fingerprint: &str,
-    now_ms: i64,
-    rate_limit_seconds: u64,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let window_ms = (rate_limit_seconds.max(1) as i64) * 1_000;
-    let mut writer = guard.write().await;
-    if let Some(last) = writer.get(fingerprint) {
-        if now_ms - *last < window_ms {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Music comment rate-limited. Retry in {} seconds.",
-                        rate_limit_seconds
-                    ),
-                    code: 429,
-                }),
-            ));
-        }
-    }
-    writer.insert(fingerprint.to_string(), now_ms);
-    let stale_before = now_ms - window_ms * 6;
-    writer.retain(|_, v| *v >= stale_before);
-    Ok(())
 }
 
 pub async fn list_music_comments(
@@ -3600,7 +3592,8 @@ pub struct SubmitMusicWishRequest {
     pub song_name: String,
     pub artist_hint: Option<String>,
     pub wish_message: String,
-    pub nickname: String,
+    #[serde(default)]
+    pub nickname: Option<String>,
     #[serde(default)]
     pub requester_email: Option<String>,
     #[serde(default)]
@@ -3642,13 +3635,6 @@ pub async fn submit_music_wish(
     if wish_message.chars().count() > 2000 {
         return Err(bad_request("`wish_message` must be <= 2000 chars"));
     }
-    let nickname = request.nickname.trim();
-    if nickname.is_empty() {
-        return Err(bad_request("`nickname` is required"));
-    }
-    if nickname.chars().count() > 50 {
-        return Err(bad_request("`nickname` must be <= 50 chars"));
-    }
     let requester_email = normalize_requester_email_input(request.requester_email)
         .map_err(|err| bad_request(&err.to_string()))?;
     let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
@@ -3656,10 +3642,12 @@ pub async fn submit_music_wish(
 
     let ip = extract_client_ip(&headers);
     let fingerprint = build_client_fingerprint(&headers);
+    let nickname = normalize_public_nickname_input(request.nickname, &fingerprint)?;
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
     enforce_comment_submit_rate_limit(
         state.music_wish_submit_guard.as_ref(),
-        &fingerprint,
+        &rate_limit_key,
         now_ms,
         60,
     )
@@ -3674,7 +3662,7 @@ pub async fn submit_music_wish(
             song_name: song_name.to_string(),
             artist_hint: request.artist_hint,
             wish_message: wish_message.to_string(),
-            nickname: nickname.to_string(),
+            nickname,
             requester_email,
             frontend_page_url,
             fingerprint,
@@ -4022,8 +4010,9 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     use super::{
-        apply_api_behavior_config_update, apply_view_analytics_config_update, extract_client_ip,
-        is_local_host_header, parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
+        apply_api_behavior_config_update, apply_view_analytics_config_update,
+        build_submit_rate_limit_key, extract_client_ip, is_local_host_header,
+        normalize_public_nickname_input, parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
         UpdateViewAnalyticsConfigRequest,
     };
     use crate::state::{ApiBehaviorRuntimeConfig, ViewAnalyticsRuntimeConfig};
@@ -4183,5 +4172,20 @@ mod tests {
         assert_eq!(parse_raw_markdown_lang(" En "), Some("en"));
         assert_eq!(parse_raw_markdown_lang("cn"), None);
         assert_eq!(parse_raw_markdown_lang(""), None);
+    }
+
+    #[test]
+    fn normalize_public_nickname_generates_default_when_missing() {
+        let generated = normalize_public_nickname_input(None, "fp-test")
+            .expect("should generate nickname from fingerprint");
+        assert!(generated.starts_with("Reader-"));
+    }
+
+    #[test]
+    fn submit_rate_limit_key_prefers_ip_over_fingerprint() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.66"));
+        let key = build_submit_rate_limit_key(&headers, "fp-abc");
+        assert_eq!(key, "ip:198.51.100.66");
     }
 }

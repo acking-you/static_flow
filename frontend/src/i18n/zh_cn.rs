@@ -354,8 +354,8 @@ pub mod music_wish {
     pub const ARTIST_PLACEHOLDER: &str = "歌手名（可选）";
     pub const MESSAGE_LABEL: &str = "留言";
     pub const MESSAGE_PLACEHOLDER: &str = "说说你为什么想听这首歌...（必填）";
-    pub const NICKNAME_LABEL: &str = "昵称";
-    pub const NICKNAME_PLACEHOLDER: &str = "你的昵称（必填）";
+    pub const NICKNAME_LABEL: &str = "昵称（可选）";
+    pub const NICKNAME_PLACEHOLDER: &str = "你的昵称（可选，不填会自动生成）";
     pub const EMAIL_LABEL: &str = "邮箱（可选）";
     pub const EMAIL_PLACEHOLDER: &str = "填写邮箱可实时接收完成进度";
     pub const EMAIL_HELP_TEXT: &str = "可选，但建议填写；任务完成后会自动通知你";

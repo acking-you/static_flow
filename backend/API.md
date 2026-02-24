@@ -646,6 +646,10 @@ curl “http://localhost:3000/api/image-search-text?q=clickhouse execution pipel
 - `POST /api/music/comments/submit` — 提交音乐评论
 - `GET /api/music/comments/list` — 音乐评论列表
 
+说明：
+- `nickname` 为可选字段；不传或为空时，后端自动生成匿名名（与博客评论区一致）
+- 提交限流基于客户端 IP（若 IP 不可得则回退到客户端指纹）
+
 示例：
 
 ```bash
@@ -672,8 +676,9 @@ curl -X POST “http://localhost:3000/api/music/song-001/play”
 `POST /api/music/wishes/submit`
 
 说明：
-- 默认频率限制：同一用户指纹每 60 秒最多提交 1 条
+- 默认频率限制：同一 IP 每 60 秒最多提交 1 条（IP 不可得时回退客户端指纹）
 - 提交后状态为 `pending`，等待管理员审核
+- `nickname` 为可选字段；不传或为空时，后端自动生成匿名名（与博客评论区一致）
 - 支持可选邮箱通知：`requester_email`（可选）用于任务完成后发送通知
 - 支持可选前端完整 URL：`frontend_page_url`（可选）用于拼接完成邮件中的播放链接
 
