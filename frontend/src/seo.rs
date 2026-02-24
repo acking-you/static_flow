@@ -8,9 +8,8 @@ const SITE_NAME: &str = "StaticFlow";
 const SITE_BASE_URL: &str = "https://acking-you.github.io";
 const DEFAULT_AUTHOR: &str = "ackingliu";
 const DEFAULT_OG_IMAGE: &str = "/static/android-chrome-512x512.png";
-const DEFAULT_DESCRIPTION: &str = "可视化博客 + Skill \
-                                   工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
-                                   统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。";
+const DEFAULT_DESCRIPTION: &str = "本地优先的个人内容平台：文章、音乐、视频统一托管于 LanceDB，\
+                                   支持全文 / 语义 / 混合检索，结合 AI + Skill 工作流一键发布与部署。";
 
 fn document() -> Option<Document> {
     window().and_then(|win| win.document())
@@ -312,7 +311,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
     match active_route {
         Route::Home => {
             apply_common_seo(
-                "StaticFlow · AI + Skill 驱动的本地优先技术博客",
+                "StaticFlow · AI + Skill 驱动的本地优先内容平台",
                 DEFAULT_DESCRIPTION,
                 &canonical_url,
                 "website",

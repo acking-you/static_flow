@@ -354,6 +354,28 @@ pub fn home_page() -> Html {
                                     </a>
                                 </div>
 
+                                // Media Hub entry
+                                <div class="terminal-line" style="margin-top: 1.5rem;">
+                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                    <span class="terminal-content">{ t::CMD_SHOW_MEDIA_HUB }</span>
+                                </div>
+                                <div class={classes!("flex", "flex-wrap", "gap-3", "mt-3", "ml-8")}>
+                                    <Link<Route>
+                                        to={Route::MediaVideo}
+                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                    >
+                                        <i class="fas fa-video mr-2"></i>
+                                        { t::BTN_MEDIA_VIDEO }
+                                    </Link<Route>>
+                                    <Link<Route>
+                                        to={Route::MediaAudio}
+                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                    >
+                                        <i class="fas fa-headphones mr-2"></i>
+                                        { t::BTN_MEDIA_AUDIO }
+                                    </Link<Route>>
+                                </div>
+
                                 // Social links as terminal output
                                 <div class="terminal-line" style="margin-top: 1.5rem;">
                                     <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
@@ -392,28 +414,6 @@ pub fn home_page() -> Html {
                                         </svg>
                                         <span class={classes!("sr-only")}>{ common_text::BILIBILI }</span>
                                     </a>
-                                </div>
-
-                                // Media Hub entry
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_MEDIA_HUB }</span>
-                                </div>
-                                <div class={classes!("flex", "flex-wrap", "gap-3", "mt-3", "ml-8")}>
-                                    <Link<Route>
-                                        to={Route::MediaVideo}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
-                                    >
-                                        <i class="fas fa-video mr-2"></i>
-                                        { t::BTN_MEDIA_VIDEO }
-                                    </Link<Route>>
-                                    <Link<Route>
-                                        to={Route::MediaAudio}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
-                                    >
-                                        <i class="fas fa-headphones mr-2"></i>
-                                        { t::BTN_MEDIA_AUDIO }
-                                    </Link<Route>>
                                 </div>
 
                                 // GitHub Wrapped - Featured Entry with Year Selector

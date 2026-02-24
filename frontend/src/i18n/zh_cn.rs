@@ -77,8 +77,9 @@ pub mod home {
 
     pub const CMD_SHOW_README: &str = "cat ./README.md";
     pub const INTRO: &str =
-        "可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB \
-         统一存储文章与图片，支持全文语义与混合检索，并具备基于 AI + Skill 的评论区自动回复能力。";
+        "本地优先的个人内容平台：文章、音乐、视频（规划中）统一托管于 LanceDB，\
+         支持全文 / 语义 / 混合检索；结合 AI + Skill 工作流实现内容创作、分类、\
+         评论自动回复与许愿点歌等能力，一键发布与部署。";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
     pub const BTN_VIEW_ARTICLES: &str = "查看文章";
