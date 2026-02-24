@@ -210,6 +210,23 @@ pub fn music_library_page() -> Html {
         });
     }
 
+    // Manual refresh wishes callback
+    let on_refresh_wishes = {
+        let wishes = wishes.clone();
+        let wish_loading = wish_loading.clone();
+        Callback::from(move |_: MouseEvent| {
+            let wishes = wishes.clone();
+            let wish_loading = wish_loading.clone();
+            wish_loading.set(true);
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
+                    wishes.set(list);
+                }
+                wish_loading.set(false);
+            });
+        })
+    };
+
     let on_wish_submit = {
         let wish_form_song = wish_form_song.clone();
         let wish_form_artist = wish_form_artist.clone();
@@ -399,6 +416,29 @@ pub fn music_library_page() -> Html {
                         <div class="sm:col-span-2 text-red-500 text-sm">{err}</div>
                     }
                 </form>
+
+                // Refresh button
+                <div class="flex justify-end mb-4">
+                    <button
+                        onclick={on_refresh_wishes}
+                        disabled={*wish_loading}
+                        class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg \
+                               border border-[var(--border)] bg-[var(--surface)] \
+                               text-[var(--text)] text-sm font-medium \
+                               hover:bg-[var(--surface-alt)] transition-colors \
+                               disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <svg class={if *wish_loading { "w-4 h-4 animate-spin" } else { "w-4 h-4" }}
+                             xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                             stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                  d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 \
+                                     3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 \
+                                     13.803-3.7l3.181 3.182" />
+                        </svg>
+                        {if *wish_loading { wish_t::REFRESHING } else { wish_t::REFRESH_BTN }}
+                    </button>
+                </div>
 
                 if *wish_loading {
                     <div class="flex justify-center py-8">

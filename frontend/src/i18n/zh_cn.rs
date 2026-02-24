@@ -366,6 +366,8 @@ pub mod music_wish {
     pub const LISTEN_NOW: &str = "去听歌 →";
     pub const EMPTY_LIST: &str = "还没有人许愿，来做第一个吧！";
     pub const SUBMIT_SUCCESS: &str = "心愿已提交，等待审核中";
+    pub const REFRESH_BTN: &str = "刷新状态";
+    pub const REFRESHING: &str = "刷新中...";
 }
 
 pub mod mock {
