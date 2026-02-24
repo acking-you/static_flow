@@ -53,6 +53,7 @@ pub fn music_library_page() -> Html {
     let wish_form_artist = use_state(String::new);
     let wish_form_message = use_state(String::new);
     let wish_form_nickname = use_state(String::new);
+    let wish_form_email = use_state(String::new);
     let wish_submitting = use_state(|| false);
     let wish_submit_msg = use_state(|| None::<String>);
     let wish_submit_err = use_state(|| None::<String>);
@@ -232,6 +233,7 @@ pub fn music_library_page() -> Html {
         let wish_form_artist = wish_form_artist.clone();
         let wish_form_message = wish_form_message.clone();
         let wish_form_nickname = wish_form_nickname.clone();
+        let wish_form_email = wish_form_email.clone();
         let wish_submitting = wish_submitting.clone();
         let wish_submit_msg = wish_submit_msg.clone();
         let wish_submit_err = wish_submit_err.clone();
@@ -242,10 +244,13 @@ pub fn music_library_page() -> Html {
             let artist = (*wish_form_artist).trim().to_string();
             let message = (*wish_form_message).trim().to_string();
             let nickname = (*wish_form_nickname).trim().to_string();
+            let email = (*wish_form_email).trim().to_string();
             if song.is_empty() || message.is_empty() || nickname.is_empty() {
                 return;
             }
             let artist_opt = if artist.is_empty() { None } else { Some(artist.clone()) };
+            let email_opt = if email.is_empty() { None } else { Some(email.clone()) };
+            let frontend_page_url = web_sys::window().and_then(|w| w.location().href().ok());
             let wish_submitting = wish_submitting.clone();
             let wish_submit_msg = wish_submit_msg.clone();
             let wish_submit_err = wish_submit_err.clone();
@@ -253,18 +258,27 @@ pub fn music_library_page() -> Html {
             let wish_form_song = wish_form_song.clone();
             let wish_form_artist = wish_form_artist.clone();
             let wish_form_message = wish_form_message.clone();
+            let wish_form_email = wish_form_email.clone();
             wish_submitting.set(true);
             wish_submit_msg.set(None);
             wish_submit_err.set(None);
             wasm_bindgen_futures::spawn_local(async move {
-                match api::submit_music_wish(&song, artist_opt.as_deref(), &message, &nickname)
-                    .await
+                match api::submit_music_wish(
+                    &song,
+                    artist_opt.as_deref(),
+                    &message,
+                    &nickname,
+                    email_opt.as_deref(),
+                    frontend_page_url.as_deref(),
+                )
+                .await
                 {
                     Ok(_) => {
                         wish_submit_msg.set(Some(wish_t::SUBMIT_SUCCESS.to_string()));
                         wish_form_song.set(String::new());
                         wish_form_artist.set(String::new());
                         wish_form_message.set(String::new());
+                        wish_form_email.set(String::new());
                         // Refresh list
                         if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
                             wishes.set(list);
@@ -401,6 +415,18 @@ pub fn music_library_page() -> Html {
                             class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
                                    text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]"
                             required=true />
+                    </div>
+                    <div>
+                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::EMAIL_LABEL}</label>
+                        <input type="email" placeholder={wish_t::EMAIL_PLACEHOLDER}
+                            value={(*wish_form_email).clone()}
+                            oninput={let s = wish_form_email.clone(); Callback::from(move |e: InputEvent| {
+                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+                                s.set(input.value());
+                            })}
+                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
+                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]" />
+                        <p class="mt-1 text-[11px] text-[var(--muted)]">{wish_t::EMAIL_HELP_TEXT}</p>
                     </div>
                     <div class="flex items-end">
                         <button type="submit" disabled={*wish_submitting}

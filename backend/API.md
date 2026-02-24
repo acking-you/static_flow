@@ -674,6 +674,8 @@ curl -X POST “http://localhost:3000/api/music/song-001/play”
 说明：
 - 默认频率限制：同一用户指纹每 60 秒最多提交 1 条
 - 提交后状态为 `pending`，等待管理员审核
+- 支持可选邮箱通知：`requester_email`（可选）用于任务完成后发送通知
+- 支持可选前端完整 URL：`frontend_page_url`（可选）用于拼接完成邮件中的播放链接
 
 请求体示例：
 
@@ -682,7 +684,9 @@ curl -X POST “http://localhost:3000/api/music/song-001/play”
   “song_name”: “晴天”,
   “artist_hint”: “周杰伦”,
   “wish_message”: “想听这首歌，很有回忆”,
-  “nickname”: “Listener-abc”
+  “nickname”: “Listener-abc”,
+  “requester_email”: “user@example.com”,
+  “frontend_page_url”: “https://example.com/media/audio”
 }
 ```
 

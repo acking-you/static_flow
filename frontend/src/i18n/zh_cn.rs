@@ -76,10 +76,10 @@ pub mod home {
         "El Psy Kongroo | 世界线收束中... | Rustacean | Database 练习生，痴迷一切底层黑魔法";
 
     pub const CMD_SHOW_README: &str = "cat ./README.md";
-    pub const INTRO: &str =
-        "本地优先的个人内容平台：文章、音乐、视频（规划中）统一托管于 LanceDB，\
-         支持全文 / 语义 / 混合检索；结合 AI + Skill 工作流实现内容创作、分类、\
-         评论自动回复与许愿点歌等能力，一键发布与部署。";
+    pub const INTRO: &str = "本地优先的个人内容平台：文章、音乐、视频（规划中）统一托管于 \
+                             LanceDB，支持全文 / 语义 / 混合检索；结合 AI + Skill \
+                             工作流实现内容创作、分类、评论自动回复与许愿点歌等能力，\
+                             一键发布与部署。";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
     pub const BTN_VIEW_ARTICLES: &str = "查看文章";
@@ -356,6 +356,9 @@ pub mod music_wish {
     pub const MESSAGE_PLACEHOLDER: &str = "说说你为什么想听这首歌...（必填）";
     pub const NICKNAME_LABEL: &str = "昵称";
     pub const NICKNAME_PLACEHOLDER: &str = "你的昵称（必填）";
+    pub const EMAIL_LABEL: &str = "邮箱（可选）";
+    pub const EMAIL_PLACEHOLDER: &str = "填写邮箱可实时接收完成进度";
+    pub const EMAIL_HELP_TEXT: &str = "可选，但建议填写；任务完成后会自动通知你";
     pub const SUBMIT_BTN: &str = "提交心愿";
     pub const SUBMITTING: &str = "提交中...";
     pub const STATUS_PENDING: &str = "等待审核";

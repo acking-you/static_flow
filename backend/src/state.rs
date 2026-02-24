@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, RwLock};
 
 use crate::{
     comment_worker::{self, CommentAiWorkerConfig},
+    email::EmailNotifier,
     geoip::GeoIpResolver,
     music_wish_worker::{self, MusicWishWorkerConfig},
 };
@@ -133,6 +134,7 @@ pub struct AppState {
     pub(crate) music_wish_store: Arc<MusicWishStore>,
     pub(crate) music_wish_worker_tx: mpsc::Sender<String>,
     pub(crate) music_wish_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
 }
 
 impl AppState {
@@ -147,6 +149,7 @@ impl AppState {
         let music_wish_store = Arc::new(MusicWishStore::connect(music_db_uri).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
+        let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
 
         let comment_runtime_config = Arc::new(RwLock::new(read_comment_runtime_config_from_env()));
         let api_behavior_runtime_config =
@@ -158,6 +161,7 @@ impl AppState {
         let music_wish_worker_tx = music_wish_worker::spawn_music_wish_worker(
             music_wish_store.clone(),
             MusicWishWorkerConfig::from_env(music_db_uri.to_string()),
+            email_notifier.clone(),
         );
         let admin_access = AdminAccessConfig {
             local_only: parse_bool_env("ADMIN_LOCAL_ONLY", true),
@@ -187,6 +191,7 @@ impl AppState {
             music_wish_store,
             music_wish_worker_tx,
             music_wish_submit_guard: Arc::new(RwLock::new(HashMap::new())),
+            email_notifier,
         })
     }
 }

@@ -1,0 +1,14 @@
+{
+  "public_mailbox": {
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "username": "acking0you@gmail.com",
+    "app_password": "replace-with-app-password",
+    "display_name": "StaticFlow"
+  },
+  "admin_mailbox": {
+    "username": "a2394525220@gmail.com",
+    "app_password": "replace-with-app-password"
+  },
+  "admin_recipient": "a2394525220@gmail.com"
+}

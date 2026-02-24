@@ -1,5 +1,6 @@
 mod behavior_analytics;
 mod comment_worker;
+mod email;
 mod geoip;
 mod handlers;
 mod music_wish_worker;

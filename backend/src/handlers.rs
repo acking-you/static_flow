@@ -35,20 +35,24 @@ use static_flow_shared::{
         PlayTrackResponse, SongDetail, SongListResponse, SongLyrics, SongSearchResult,
     },
     music_wish_store::{
-        MusicWishAiRunChunkRecord, MusicWishAiRunRecord, MusicWishRecord,
-        NewMusicWishInput, WISH_STATUS_DONE, WISH_STATUS_FAILED, WISH_STATUS_PENDING,
-        WISH_STATUS_REJECTED, WISH_STATUS_RUNNING,
+        MusicWishAiRunChunkRecord, MusicWishAiRunRecord, MusicWishRecord, NewMusicWishInput,
+        WISH_STATUS_DONE, WISH_STATUS_FAILED, WISH_STATUS_PENDING, WISH_STATUS_REJECTED,
+        WISH_STATUS_RUNNING,
     },
     Article,
 };
 use tokio::time::sleep;
 
-use crate::state::{
-    ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, MusicRuntimeConfig,
-    ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
-    MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS,
-    MAX_CONFIGURABLE_COMMENT_LIST_LIMIT, MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS,
-    MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS, MAX_CONFIGURABLE_VIEW_TREND_DAYS,
+use crate::{
+    email::{normalize_frontend_page_url_input, normalize_requester_email_input},
+    state::{
+        ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, MusicRuntimeConfig,
+        ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
+        MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS,
+        MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_LIST_LIMIT,
+        MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS, MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS,
+        MAX_CONFIGURABLE_VIEW_TREND_DAYS,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -1250,7 +1254,11 @@ pub async fn admin_list_comment_tasks_grouped(
     let total_tasks = groups.iter().map(|group| group.total).sum::<usize>();
     let total_articles = groups.len();
     let offset = query.offset.unwrap_or(0);
-    let paged = groups.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+    let paged = groups
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
     let has_more = offset.saturating_add(paged.len()) < total_articles;
 
     Ok(Json(AdminCommentTaskGroupedResponse {
@@ -3593,6 +3601,10 @@ pub struct SubmitMusicWishRequest {
     pub artist_hint: Option<String>,
     pub wish_message: String,
     pub nickname: String,
+    #[serde(default)]
+    pub requester_email: Option<String>,
+    #[serde(default)]
+    pub frontend_page_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3637,6 +3649,10 @@ pub async fn submit_music_wish(
     if nickname.chars().count() > 50 {
         return Err(bad_request("`nickname` must be <= 50 chars"));
     }
+    let requester_email = normalize_requester_email_input(request.requester_email)
+        .map_err(|err| bad_request(&err.to_string()))?;
+    let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
+        .map_err(|err| bad_request(&err.to_string()))?;
 
     let ip = extract_client_ip(&headers);
     let fingerprint = build_client_fingerprint(&headers);
@@ -3659,12 +3675,30 @@ pub async fn submit_music_wish(
             artist_hint: request.artist_hint,
             wish_message: wish_message.to_string(),
             nickname: nickname.to_string(),
+            requester_email,
+            frontend_page_url,
             fingerprint,
             client_ip: ip,
             ip_region,
         })
         .await
         .map_err(|e| internal_error("Failed to create music wish", e))?;
+
+    if let Some(notifier) = state.email_notifier.clone() {
+        let wish_for_email = wish.clone();
+        tokio::spawn(async move {
+            if let Err(err) = notifier
+                .send_admin_new_wish_notification(&wish_for_email)
+                .await
+            {
+                tracing::warn!(
+                    "failed to send admin notification email for wish {}: {}",
+                    wish_for_email.wish_id,
+                    err
+                );
+            }
+        });
+    }
 
     Ok(Json(SubmitMusicWishResponse {
         wish_id: wish.wish_id,
@@ -3782,7 +3816,14 @@ pub async fn admin_approve_and_run_music_wish(
 
     let wish = state
         .music_wish_store
-        .transition_wish(&wish_id, WISH_STATUS_RUNNING, request.admin_note.as_deref(), None, None, None)
+        .transition_wish(
+            &wish_id,
+            WISH_STATUS_RUNNING,
+            request.admin_note.as_deref(),
+            None,
+            None,
+            None,
+        )
         .await
         .map_err(|e| internal_error("Failed to transition music wish", e))?;
 
@@ -3806,7 +3847,14 @@ pub async fn admin_reject_music_wish(
     ensure_admin_access(&state, &headers)?;
     let wish = state
         .music_wish_store
-        .transition_wish(&wish_id, WISH_STATUS_REJECTED, request.admin_note.as_deref(), None, None, None)
+        .transition_wish(
+            &wish_id,
+            WISH_STATUS_REJECTED,
+            request.admin_note.as_deref(),
+            None,
+            None,
+            None,
+        )
         .await
         .map_err(|e| internal_error("Failed to reject music wish", e))?;
     Ok(Json(wish))
@@ -3963,7 +4011,9 @@ pub async fn admin_music_wish_ai_stream(
     };
 
     Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new().interval(Duration::from_secs(15)).text("keep-alive"),
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
     ))
 }
 

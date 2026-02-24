@@ -23,6 +23,8 @@ use tokio::{
     time::timeout,
 };
 
+use crate::email::{build_music_player_url, EmailNotifier};
+
 #[derive(Clone, Debug)]
 pub struct MusicWishWorkerConfig {
     pub runner_program: String,
@@ -108,11 +110,15 @@ const RUN_CHUNK_MAX_SEGMENTS: usize = 4096;
 pub fn spawn_music_wish_worker(
     store: Arc<MusicWishStore>,
     config: MusicWishWorkerConfig,
+    email_notifier: Option<Arc<EmailNotifier>>,
 ) -> mpsc::Sender<String> {
     let (sender, mut receiver) = mpsc::channel::<String>(128);
     tokio::spawn(async move {
         while let Some(wish_id) = receiver.recv().await {
-            if let Err(err) = process_one_wish(store.clone(), config.clone(), &wish_id).await {
+            if let Err(err) =
+                process_one_wish(store.clone(), config.clone(), email_notifier.clone(), &wish_id)
+                    .await
+            {
                 tracing::error!("music wish worker failed for {wish_id}: {err}");
             }
         }
@@ -123,6 +129,7 @@ pub fn spawn_music_wish_worker(
 async fn process_one_wish(
     store: Arc<MusicWishStore>,
     config: MusicWishWorkerConfig,
+    email_notifier: Option<Arc<EmailNotifier>>,
     wish_id: &str,
 ) -> Result<()> {
     let wish = match store.get_wish(wish_id).await? {
@@ -174,7 +181,8 @@ async fn process_one_wish(
                 let result_path = build_result_file_path(&config.result_dir, wish_id);
                 if let Ok(result_json) = read_result_json(&result_path).await {
                     tracing::info!(
-                        "music wish runner timed out but result file exists for {wish_id}, treating as success"
+                        "music wish runner timed out but result file exists for {wish_id}, \
+                         treating as success"
                     );
                     let ingested_song_id = result_json
                         .get("ingested_song_id")
@@ -199,6 +207,13 @@ async fn process_one_wish(
                     {
                         tracing::warn!("failed to mark timed-out wish as done: {e}");
                     }
+                    send_done_notification(
+                        email_notifier.as_ref(),
+                        &wish,
+                        ingested_song_id.as_deref(),
+                        &reply_markdown,
+                    )
+                    .await;
                     let _ = store
                         .finalize_ai_run(
                             &run_id,
@@ -256,7 +271,14 @@ async fn process_one_wish(
         .to_string();
 
     if let Err(err) = store
-        .transition_wish(wish_id, WISH_STATUS_DONE, None, None, ingested_song_id.as_deref(), Some(&reply_markdown))
+        .transition_wish(
+            wish_id,
+            WISH_STATUS_DONE,
+            None,
+            None,
+            ingested_song_id.as_deref(),
+            Some(&reply_markdown),
+        )
         .await
     {
         let reason = format!("failed to mark wish done: {err}");
@@ -272,6 +294,13 @@ async fn process_one_wish(
         mark_wish_failed(&store, wish_id, reason).await;
         return Ok(());
     }
+    send_done_notification(
+        email_notifier.as_ref(),
+        &wish,
+        ingested_song_id.as_deref(),
+        &reply_markdown,
+    )
+    .await;
 
     let _ = store
         .finalize_ai_run(
@@ -477,4 +506,48 @@ async fn mark_wish_failed(store: &MusicWishStore, wish_id: &str, message: String
 
 fn parse_bool_env(raw: &str) -> bool {
     matches!(raw.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on")
+}
+
+async fn send_done_notification(
+    notifier: Option<&Arc<EmailNotifier>>,
+    wish: &MusicWishRecord,
+    ingested_song_id: Option<&str>,
+    reply_markdown: &str,
+) {
+    let Some(notifier) = notifier else {
+        return;
+    };
+    let Some(requester_email) = wish.requester_email.as_deref() else {
+        return;
+    };
+
+    let play_url = match (wish.frontend_page_url.as_deref(), ingested_song_id) {
+        (Some(frontend_page_url), Some(song_id)) => {
+            match build_music_player_url(frontend_page_url, song_id) {
+                Ok(url) => Some(url),
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to build play URL for done wish {}: {}",
+                        wish.wish_id,
+                        err
+                    );
+                    None
+                },
+            }
+        },
+        _ => None,
+    };
+
+    let mut done_wish = wish.clone();
+    done_wish.status = WISH_STATUS_DONE.to_string();
+    done_wish.ingested_song_id = ingested_song_id.map(str::to_string);
+    done_wish.ai_reply = Some(reply_markdown.to_string());
+    done_wish.requester_email = Some(requester_email.to_string());
+
+    if let Err(err) = notifier
+        .send_user_wish_done_notification(&done_wish, play_url.as_deref())
+        .await
+    {
+        tracing::warn!("failed to send done notification email for wish {}: {}", wish.wish_id, err);
+    }
 }

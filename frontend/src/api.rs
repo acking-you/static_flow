@@ -2785,6 +2785,8 @@ pub async fn submit_music_wish(
     artist_hint: Option<&str>,
     wish_message: &str,
     nickname: &str,
+    requester_email: Option<&str>,
+    frontend_page_url: Option<&str>,
 ) -> Result<SubmitMusicWishResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -2804,6 +2806,12 @@ pub async fn submit_music_wish(
         });
         if let Some(hint) = artist_hint {
             body["artist_hint"] = serde_json::Value::String(hint.to_string());
+        }
+        if let Some(email) = requester_email {
+            body["requester_email"] = serde_json::Value::String(email.to_string());
+        }
+        if let Some(page_url) = frontend_page_url {
+            body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
         }
         let response = api_post(&url)
             .json(&body)

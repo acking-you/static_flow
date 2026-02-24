@@ -33,6 +33,8 @@ pub struct NewMusicWishInput {
     pub artist_hint: Option<String>,
     pub wish_message: String,
     pub nickname: String,
+    pub requester_email: Option<String>,
+    pub frontend_page_url: Option<String>,
     pub fingerprint: String,
     pub client_ip: String,
     pub ip_region: String,
@@ -45,6 +47,10 @@ pub struct MusicWishRecord {
     pub artist_hint: Option<String>,
     pub wish_message: String,
     pub nickname: String,
+    #[serde(skip_serializing)]
+    pub requester_email: Option<String>,
+    #[serde(skip_serializing)]
+    pub frontend_page_url: Option<String>,
     pub status: String,
     pub fingerprint: String,
     pub client_ip: String,
@@ -123,19 +129,41 @@ impl MusicWishStore {
 
     async fn wishes_table(&self) -> Result<Table> {
         let table = ensure_table(&self.db, &self.wishes_table, wish_schema()).await?;
-        // auto-migrate: add ai_reply column if missing
-        if table
-            .schema()
-            .await
+        // auto-migrate: add newly introduced nullable columns if missing
+        let schema = table.schema().await.ok();
+        if schema
+            .as_ref()
+            .map(|s| s.field_with_name("requester_email").is_err())
+            .unwrap_or(false)
+        {
+            let new_field =
+                Arc::new(Schema::new(vec![Field::new("requester_email", DataType::Utf8, true)]));
+            table
+                .add_columns(lancedb::table::NewColumnTransform::AllNulls(new_field), None)
+                .await
+                .ok();
+        }
+        if schema
+            .as_ref()
+            .map(|s| s.field_with_name("frontend_page_url").is_err())
+            .unwrap_or(false)
+        {
+            let new_field =
+                Arc::new(Schema::new(vec![Field::new("frontend_page_url", DataType::Utf8, true)]));
+            table
+                .add_columns(lancedb::table::NewColumnTransform::AllNulls(new_field), None)
+                .await
+                .ok();
+        }
+        if schema
+            .as_ref()
             .map(|s| s.field_with_name("ai_reply").is_err())
             .unwrap_or(false)
         {
-            let new_field = Arc::new(Schema::new(vec![Field::new("ai_reply", DataType::Utf8, true)]));
+            let new_field =
+                Arc::new(Schema::new(vec![Field::new("ai_reply", DataType::Utf8, true)]));
             table
-                .add_columns(
-                    lancedb::table::NewColumnTransform::AllNulls(new_field),
-                    None,
-                )
+                .add_columns(lancedb::table::NewColumnTransform::AllNulls(new_field), None)
                 .await
                 .ok();
         }
@@ -156,6 +184,8 @@ impl MusicWishStore {
             artist_hint: normalize_opt(input.artist_hint),
             wish_message: input.wish_message,
             nickname: input.nickname,
+            requester_email: normalize_opt(input.requester_email),
+            frontend_page_url: normalize_opt(input.frontend_page_url),
             status: WISH_STATUS_PENDING.to_string(),
             fingerprint: input.fingerprint,
             client_ip: input.client_ip,
@@ -342,7 +372,10 @@ fn validate_wish_transition(current: &str, next: &str) -> Result<()> {
             | (WISH_STATUS_RUNNING, WISH_STATUS_DONE | WISH_STATUS_FAILED)
             | (
                 WISH_STATUS_FAILED,
-                WISH_STATUS_APPROVED | WISH_STATUS_RUNNING | WISH_STATUS_REJECTED | WISH_STATUS_DONE
+                WISH_STATUS_APPROVED
+                    | WISH_STATUS_RUNNING
+                    | WISH_STATUS_REJECTED
+                    | WISH_STATUS_DONE
             )
     );
     if ok {
@@ -400,6 +433,8 @@ fn wish_schema() -> Arc<Schema> {
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("ai_reply", DataType::Utf8, true),
+        Field::new("requester_email", DataType::Utf8, true),
+        Field::new("frontend_page_url", DataType::Utf8, true),
     ]))
 }
 
@@ -447,6 +482,8 @@ fn build_wish_batch(r: &MusicWishRecord) -> Result<RecordBatch> {
     let mut created_at = TimestampMillisecondBuilder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
     let mut ai_reply = StringBuilder::new();
+    let mut requester_email = StringBuilder::new();
+    let mut frontend_page_url = StringBuilder::new();
 
     wish_id.append_value(&r.wish_id);
     song_name.append_value(&r.song_name);
@@ -464,6 +501,8 @@ fn build_wish_batch(r: &MusicWishRecord) -> Result<RecordBatch> {
     created_at.append_value(r.created_at);
     updated_at.append_value(r.updated_at);
     ai_reply.append_option(r.ai_reply.as_deref());
+    requester_email.append_option(r.requester_email.as_deref());
+    frontend_page_url.append_option(r.frontend_page_url.as_deref());
 
     let columns: Vec<ArrayRef> = vec![
         Arc::new(wish_id.finish()),
@@ -482,6 +521,8 @@ fn build_wish_batch(r: &MusicWishRecord) -> Result<RecordBatch> {
         Arc::new(created_at.finish()),
         Arc::new(updated_at.finish()),
         Arc::new(ai_reply.finish()),
+        Arc::new(requester_email.finish()),
+        Arc::new(frontend_page_url.finish()),
     ];
     Ok(RecordBatch::try_new(wish_schema(), columns)?)
 }
@@ -604,6 +645,8 @@ async fn query_wishes(
         "artist_hint",
         "wish_message",
         "nickname",
+        "requester_email",
+        "frontend_page_url",
         "status",
         "fingerprint",
         "client_ip",
@@ -630,6 +673,8 @@ async fn query_wishes(
         let c_artist_hint = string_col(&batch, "artist_hint")?;
         let c_wish_message = string_col(&batch, "wish_message")?;
         let c_nickname = string_col(&batch, "nickname")?;
+        let c_requester_email = string_col(&batch, "requester_email")?;
+        let c_frontend_page_url = string_col(&batch, "frontend_page_url")?;
         let c_status = string_col(&batch, "status")?;
         let c_fingerprint = string_col(&batch, "fingerprint")?;
         let c_client_ip = string_col(&batch, "client_ip")?;
@@ -649,6 +694,8 @@ async fn query_wishes(
                 artist_hint: nullable_str(c_artist_hint, i),
                 wish_message: c_wish_message.value(i).to_string(),
                 nickname: c_nickname.value(i).to_string(),
+                requester_email: nullable_str(c_requester_email, i),
+                frontend_page_url: nullable_str(c_frontend_page_url, i),
                 status: c_status.value(i).to_string(),
                 fingerprint: c_fingerprint.value(i).to_string(),
                 client_ip: c_client_ip.value(i).to_string(),
@@ -821,5 +868,98 @@ fn nullable_ts(arr: &TimestampMillisecondArray, i: usize) -> Option<i64> {
         None
     } else {
         Some(arr.value(i))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use anyhow::{Context, Result};
+    use arrow_array::{RecordBatch, RecordBatchIterator};
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    use lancedb::connect;
+
+    use super::MusicWishStore;
+    use crate::music_wish_store::NewMusicWishInput;
+
+    #[tokio::test]
+    async fn create_wish_works_after_legacy_schema_migration() -> Result<()> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("failed to get system time")?
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("sf-music-wish-migration-{unique}"));
+        tokio::fs::create_dir_all(&db_path)
+            .await
+            .with_context(|| format!("failed to create {}", db_path.display()))?;
+        let db_uri = db_path.display().to_string();
+
+        let db = connect(&db_uri)
+            .execute()
+            .await
+            .context("failed to connect temp lancedb")?;
+        let schema = legacy_wish_schema();
+        let batch = RecordBatch::new_empty(schema.clone());
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        db.create_table("music_wishes", Box::new(batches))
+            .execute()
+            .await
+            .context("failed to create legacy music_wishes table")?;
+
+        let store = MusicWishStore::connect(&db_uri).await?;
+        let created = store
+            .create_wish(NewMusicWishInput {
+                wish_id: "mw-test-legacy-migration".to_string(),
+                song_name: "Song".to_string(),
+                artist_hint: Some("Artist".to_string()),
+                wish_message: "Message".to_string(),
+                nickname: "Nick".to_string(),
+                requester_email: Some("user@example.com".to_string()),
+                frontend_page_url: Some("https://example.com/media/audio".to_string()),
+                fingerprint: "fp-1".to_string(),
+                client_ip: "127.0.0.1".to_string(),
+                ip_region: "Local".to_string(),
+            })
+            .await
+            .context("create_wish should succeed after migration")?;
+
+        assert_eq!(created.attempt_count, 0);
+        assert_eq!(created.requester_email.as_deref(), Some("user@example.com"));
+        assert_eq!(created.frontend_page_url.as_deref(), Some("https://example.com/media/audio"));
+
+        let stored = store
+            .get_wish("mw-test-legacy-migration")
+            .await?
+            .context("new wish must exist")?;
+        assert_eq!(stored.attempt_count, 0);
+        assert_eq!(stored.status, "pending");
+
+        let _ = tokio::fs::remove_dir_all(&db_path).await;
+        Ok(())
+    }
+
+    fn legacy_wish_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("wish_id", DataType::Utf8, false),
+            Field::new("song_name", DataType::Utf8, false),
+            Field::new("artist_hint", DataType::Utf8, true),
+            Field::new("wish_message", DataType::Utf8, false),
+            Field::new("nickname", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+            Field::new("fingerprint", DataType::Utf8, false),
+            Field::new("client_ip", DataType::Utf8, false),
+            Field::new("ip_region", DataType::Utf8, false),
+            Field::new("admin_note", DataType::Utf8, true),
+            Field::new("failure_reason", DataType::Utf8, true),
+            Field::new("ingested_song_id", DataType::Utf8, true),
+            Field::new("attempt_count", DataType::Int32, false),
+            Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new("ai_reply", DataType::Utf8, true),
+        ]))
     }
 }
