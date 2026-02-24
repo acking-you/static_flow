@@ -3,12 +3,16 @@ use web_sys::HtmlInputElement;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-use crate::api;
-use crate::components::icons::{Icon, IconName};
-use crate::components::synced_lyrics::SyncedLyrics;
-use crate::components::persistent_audio::resolve_next_song;
-use crate::music_context::{MusicAction, MusicPlayerContext, NextSongMode};
-use crate::router::Route;
+use crate::{
+    api,
+    components::{
+        icons::{Icon, IconName},
+        persistent_audio::resolve_next_song,
+        synced_lyrics::SyncedLyrics,
+    },
+    music_context::{MusicAction, MusicPlayerContext, NextSongMode},
+    router::Route,
+};
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct Props {
@@ -20,7 +24,7 @@ pub fn music_player_page(props: &Props) -> Html {
     let id = props.id.clone();
     let song = use_state(|| None::<api::SongDetail>);
     let lyrics = use_state(|| None::<api::SongLyrics>);
-    let comments = use_state(|| Vec::<api::MusicCommentItem>::new());
+    let comments = use_state(Vec::<api::MusicCommentItem>::new);
     let song_loading = use_state(|| true);
     let lyrics_loading = use_state(|| true);
     let comments_loading = use_state(|| true);
@@ -43,7 +47,9 @@ pub fn music_player_page(props: &Props) -> Html {
             if let Some(ref new_id) = ctx_song_id {
                 if *new_id != id {
                     if let Some(ref nav) = navigator {
-                        nav.replace(&Route::MusicPlayer { id: new_id.clone() });
+                        nav.replace(&Route::MusicPlayer {
+                            id: new_id.clone(),
+                        });
                     }
                 }
             }
@@ -83,12 +89,19 @@ pub fn music_player_page(props: &Props) -> Html {
                     match api::fetch_song_detail(&id).await {
                         Ok(Some(d)) => {
                             if let Some(ref ctx) = player_ctx {
-                                ctx.dispatch(MusicAction::PlaySong { song: d.clone(), id: id.clone() });
+                                ctx.dispatch(MusicAction::PlaySong {
+                                    song: d.clone(),
+                                    id: id.clone(),
+                                });
                             }
                             song.set(Some(d));
-                        }
-                        Ok(None) => { error.set(Some("Song not found".to_string())); }
-                        Err(e) => { error.set(Some(e)); }
+                        },
+                        Ok(None) => {
+                            error.set(Some("Song not found".to_string()));
+                        },
+                        Err(e) => {
+                            error.set(Some(e));
+                        },
                     }
                     song_loading.set(false);
                     // fire-and-forget play tracking
@@ -141,75 +154,188 @@ pub fn music_player_page(props: &Props) -> Html {
     }
 
     let on_submit_comment = {
-        let id = id.clone(); let nickname = nickname.clone(); let comment_text = comment_text.clone();
-        let comments = comments.clone(); let submitting = submitting.clone(); let submit_error = submit_error.clone();
+        let id = id.clone();
+        let nickname = nickname.clone();
+        let comment_text = comment_text.clone();
+        let comments = comments.clone();
+        let submitting = submitting.clone();
+        let submit_error = submit_error.clone();
         Callback::from(move |e: SubmitEvent| {
             e.prevent_default();
-            let nick = (*nickname).clone(); let text = (*comment_text).clone();
-            if nick.trim().is_empty() || text.trim().is_empty() { return; }
-            let id = id.clone(); let nickname = nickname.clone(); let comment_text = comment_text.clone();
-            let comments = comments.clone(); let submitting = submitting.clone(); let submit_error = submit_error.clone();
-            submitting.set(true); submit_error.set(None);
+            let nick = (*nickname).clone();
+            let text = (*comment_text).clone();
+            if nick.trim().is_empty() || text.trim().is_empty() {
+                return;
+            }
+            let id = id.clone();
+            let nickname = nickname.clone();
+            let comment_text = comment_text.clone();
+            let comments = comments.clone();
+            let submitting = submitting.clone();
+            let submit_error = submit_error.clone();
+            submitting.set(true);
+            submit_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match api::submit_music_comment(&id, &nick, &text).await {
-                    Ok(nc) => { let mut l = (*comments).clone(); l.insert(0, nc); comments.set(l); nickname.set(String::new()); comment_text.set(String::new()); }
-                    Err(e) => { submit_error.set(Some(e)); }
+                    Ok(nc) => {
+                        let mut l = (*comments).clone();
+                        l.insert(0, nc);
+                        comments.set(l);
+                        nickname.set(String::new());
+                        comment_text.set(String::new());
+                    },
+                    Err(e) => {
+                        submit_error.set(Some(e));
+                    },
                 }
                 submitting.set(false);
             });
         })
     };
-    let on_nickname_input = { let nickname = nickname.clone(); Callback::from(move |e: InputEvent| {
-        if let Some(input) = e.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()) { nickname.set(input.value()); }
-    })};
-    let on_comment_input = { let comment_text = comment_text.clone(); Callback::from(move |e: InputEvent| {
-        if let Some(input) = e.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()) { comment_text.set(input.value()); }
-    })};
+    let on_nickname_input = {
+        let nickname = nickname.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(input) = e
+                .target()
+                .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+            {
+                nickname.set(input.value());
+            }
+        })
+    };
+    let on_comment_input = {
+        let comment_text = comment_text.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(input) = e
+                .target()
+                .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+            {
+                comment_text.set(input.value());
+            }
+        })
+    };
 
-    let on_toggle_play = { let ctx = player_ctx.clone(); Callback::from(move |_: MouseEvent| {
-        if let Some(ref c) = ctx { c.dispatch(MusicAction::TogglePlay); }
-    })};
-    let can_prev = player_ctx.as_ref().map(|c| c.history_index.map(|i| i > 0).unwrap_or(false)).unwrap_or(false);
-    let on_prev = { let ctx = player_ctx.clone(); Callback::from(move |_: MouseEvent| {
-        if let Some(ref c) = ctx { c.dispatch(MusicAction::PlayPrev); }
-    })};
-    let on_next = { let ctx = player_ctx.clone(); Callback::from(move |_: MouseEvent| {
-        if let Some(ref c) = ctx { let c2 = c.clone(); wasm_bindgen_futures::spawn_local(async move {
-            let fallback = resolve_next_song(&c2).await; c2.dispatch(MusicAction::PlayNext { fallback });
-        }); }
-    })};
-    let is_semantic = player_ctx.as_ref().map(|c| c.next_mode == NextSongMode::Semantic).unwrap_or(false);
-    let on_toggle_mode = { let ctx = player_ctx.clone(); Callback::from(move |_: MouseEvent| {
-        if let Some(ref c) = ctx {
-            let m = if c.next_mode == NextSongMode::Semantic { NextSongMode::Random } else { NextSongMode::Semantic };
-            c.dispatch(MusicAction::SetNextMode(m));
-        }
-    })};
-    let candidates = player_ctx.as_ref().map(|c| c.candidates.clone()).unwrap_or_default();
-    let on_seek = { let ctx = player_ctx.clone(); Callback::from(move |e: InputEvent| {
-        if let Some(input) = e.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-            if let Ok(v) = input.value().parse::<f64>() {
-                if let Some(ref c) = ctx { c.dispatch(MusicAction::SetTime(v)); }
-                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                    if let Ok(Some(el)) = doc.query_selector("audio") {
-                        if let Some(audio) = el.dyn_ref::<web_sys::HtmlAudioElement>() { audio.set_current_time(v); }
+    let on_toggle_play = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::TogglePlay);
+            }
+        })
+    };
+    let can_prev = player_ctx
+        .as_ref()
+        .map(|c| c.history_index.map(|i| i > 0).unwrap_or(false))
+        .unwrap_or(false);
+    let on_prev = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::PlayPrev);
+            }
+        })
+    };
+    let on_next = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                let c2 = c.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let fallback = resolve_next_song(&c2).await;
+                    c2.dispatch(MusicAction::PlayNext {
+                        fallback,
+                    });
+                });
+            }
+        })
+    };
+    let next_mode = player_ctx
+        .as_ref()
+        .map(|c| c.next_mode.clone())
+        .unwrap_or(NextSongMode::Random);
+    let on_toggle_mode = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                let m = match c.next_mode {
+                    NextSongMode::Random => NextSongMode::Semantic,
+                    NextSongMode::Semantic => NextSongMode::PlaylistSequential,
+                    NextSongMode::PlaylistSequential => NextSongMode::Random,
+                };
+                c.dispatch(MusicAction::SetNextMode(m));
+            }
+        })
+    };
+    let mode_icon = match next_mode {
+        NextSongMode::PlaylistSequential => IconName::List,
+        _ => IconName::Shuffle,
+    };
+    let mode_title = match next_mode {
+        NextSongMode::Random => "Mode: Random",
+        NextSongMode::Semantic => "Mode: Semantic",
+        NextSongMode::PlaylistSequential => "Mode: Playlist Sequential",
+    };
+    let mode_active = !matches!(next_mode, NextSongMode::Random);
+    let candidates = player_ctx
+        .as_ref()
+        .map(|c| c.candidates.clone())
+        .unwrap_or_default();
+    let on_seek = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(input) = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                if let Ok(v) = input.value().parse::<f64>() {
+                    if let Some(ref c) = ctx {
+                        c.dispatch(MusicAction::SetTime(v));
+                    }
+                    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                        if let Ok(Some(el)) = doc.query_selector("audio") {
+                            if let Some(audio) = el.dyn_ref::<web_sys::HtmlAudioElement>() {
+                                audio.set_current_time(v);
+                            }
+                        }
                     }
                 }
             }
-        }
-    })};
-    let on_volume = { let ctx = player_ctx.clone(); Callback::from(move |e: InputEvent| {
-        if let Some(input) = e.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-            if let Ok(v) = input.value().parse::<f64>() { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetVolume(v)); } }
-        }
-    })};
-    let on_toggle_mute = { let ctx = player_ctx.clone(); let cv = player_ctx.as_ref().map(|c| c.volume).unwrap_or(1.0);
-        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetVolume(if cv > 0.0 { 0.0 } else { 1.0 })); } })
+        })
     };
-    let on_minimize = { let ctx = player_ctx.clone(); let navigator = navigator.clone();
+    let on_volume = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(input) = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                if let Ok(v) = input.value().parse::<f64>() {
+                    if let Some(ref c) = ctx {
+                        c.dispatch(MusicAction::SetVolume(v));
+                    }
+                }
+            }
+        })
+    };
+    let on_toggle_mute = {
+        let ctx = player_ctx.clone();
+        let cv = player_ctx.as_ref().map(|c| c.volume).unwrap_or(1.0);
         Callback::from(move |_: MouseEvent| {
-            if let Some(ref c) = ctx { c.dispatch(MusicAction::Minimize); }
-            if let Some(ref nav) = navigator { nav.push(&Route::MediaAudio); }
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::SetVolume(if cv > 0.0 { 0.0 } else { 1.0 }));
+            }
+        })
+    };
+    let on_minimize = {
+        let ctx = player_ctx.clone();
+        let navigator = navigator.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::Minimize);
+            }
+            if let Some(ref nav) = navigator {
+                nav.push(&Route::MediaAudio);
+            }
         })
     };
 
@@ -219,28 +345,60 @@ pub fn music_player_page(props: &Props) -> Html {
         }
     });
 
-    let on_offset_dec = { let ctx = player_ctx.clone(); let off = lyrics_offset;
-        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetLyricsOffset(off - 0.5)); } })
+    let on_offset_dec = {
+        let ctx = player_ctx.clone();
+        let off = lyrics_offset;
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::SetLyricsOffset(off - 0.5));
+            }
+        })
     };
-    let on_offset_inc = { let ctx = player_ctx.clone(); let off = lyrics_offset;
-        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetLyricsOffset(off + 0.5)); } })
+    let on_offset_inc = {
+        let ctx = player_ctx.clone();
+        let off = lyrics_offset;
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::SetLyricsOffset(off + 0.5));
+            }
+        })
     };
-    let on_offset_reset = { let ctx = player_ctx.clone();
-        Callback::from(move |_: MouseEvent| { if let Some(ref c) = ctx { c.dispatch(MusicAction::SetLyricsOffset(0.0)); } })
+    let on_offset_reset = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::SetLyricsOffset(0.0));
+            }
+        })
     };
-    let offset_display = if lyrics_offset > 0.0 { format!("+{:.1}s", lyrics_offset) }
-        else if lyrics_offset < 0.0 { format!("{:.1}s", lyrics_offset) }
-        else { "0.0s".to_string() };
+    let offset_display = if lyrics_offset > 0.0 {
+        format!("+{:.1}s", lyrics_offset)
+    } else if lyrics_offset < 0.0 {
+        format!("{:.1}s", lyrics_offset)
+    } else {
+        "0.0s".to_string()
+    };
 
-    if *song_loading { return html! { <div class="flex justify-center py-20"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" /></div> }; }
-    if let Some(err) = (*error).as_ref() { return html! { <div class="text-center py-20 text-red-500">{format!("Error: {}", err)}</div> }; }
-    let detail = match (*song).as_ref() { Some(d) => d, None => { return html! { <div class="text-center py-20 text-[var(--muted)]">{"Song not found"}</div> }; } };
+    if *song_loading {
+        return html! { <div class="flex justify-center py-20"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" /></div> };
+    }
+    if let Some(err) = (*error).as_ref() {
+        return html! { <div class="text-center py-20 text-red-500">{format!("Error: {}", err)}</div> };
+    }
+    let detail = match (*song).as_ref() {
+        Some(d) => d,
+        None => {
+            return html! { <div class="text-center py-20 text-[var(--muted)]">{"Song not found"}</div> };
+        },
+    };
 
     let cover_url = api::song_cover_url(detail.cover_image.as_deref());
     let audio_url = api::song_audio_url(&id);
     let duration_str = format_duration(detail.duration_ms);
     let lyrics_lrc = (*lyrics).as_ref().and_then(|l| l.lyrics_lrc.clone());
-    let lyrics_trans = (*lyrics).as_ref().and_then(|l| l.lyrics_translation.clone());
+    let lyrics_trans = (*lyrics)
+        .as_ref()
+        .and_then(|l| l.lyrics_translation.clone());
     let playing = player_ctx.as_ref().map(|c| c.playing).unwrap_or(false);
     let duration = player_ctx.as_ref().map(|c| c.duration).unwrap_or(0.0);
     let volume = player_ctx.as_ref().map(|c| c.volume).unwrap_or(1.0);
@@ -314,9 +472,9 @@ pub fn music_player_page(props: &Props) -> Html {
                 </div>
                 <div class="flex items-center gap-3">
                     <button onclick={on_toggle_mode} type="button"
-                        class={classes!("transition-colors", if is_semantic { "text-[var(--primary)]" } else { "text-[var(--muted)] hover:text-[var(--text)]" })}
-                        aria-label="Toggle next-song mode" title={if is_semantic { "Mode: Semantic" } else { "Mode: Random" }}>
-                        <Icon name={IconName::Shuffle} size={18} />
+                        class={classes!("transition-colors", if mode_active { "text-[var(--primary)]" } else { "text-[var(--muted)] hover:text-[var(--text)]" })}
+                        aria-label="Toggle next-song mode" title={mode_title}>
+                        <Icon name={mode_icon} size={18} />
                     </button>
                     <button onclick={on_prev} type="button" disabled={!can_prev}
                         class="text-[var(--muted)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed" aria-label="Previous song">
@@ -365,11 +523,11 @@ pub fn music_player_page(props: &Props) -> Html {
             </div>
 
             // Semantic candidates (Up Next)
-            if is_semantic && !candidates.is_empty() {
+            if matches!(next_mode, NextSongMode::Semantic) && !candidates.is_empty() {
                 <div class="mb-8">
                     <h2 class="text-sm font-semibold text-[var(--muted)] mb-3">{"Up Next (Semantic)"}</h2>
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        { for candidates.iter().map(|c| render_candidate_card(c)) }
+                        { for candidates.iter().map(render_candidate_card) }
                     </div>
                 </div>
             }
@@ -470,7 +628,7 @@ fn render_candidate_card(c: &api::SongSearchResult) -> Html {
                         <Icon name={IconName::Music} size={32} class={classes!("opacity-30")} />
                     </div>
                 } else {
-                    <img src={cover} alt={c.title.clone()} loading="lazy"
+                    <img src={cover} alt={c.title.clone()} loading="lazy" referrerpolicy="no-referrer"
                         class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
                 }
                 <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-200 \
@@ -488,12 +646,30 @@ fn render_candidate_card(c: &api::SongSearchResult) -> Html {
     }
 }
 
-fn format_duration(ms: u64) -> String { let s = ms / 1000; format!("{:02}:{:02}", s / 60, s % 60) }
-fn format_time(secs: f64) -> String { if secs.is_nan() || secs.is_infinite() { return "00:00".to_string(); } let t = secs as u64; format!("{:02}:{:02}", t / 60, t % 60) }
+fn format_duration(ms: u64) -> String {
+    let s = ms / 1000;
+    format!("{:02}:{:02}", s / 60, s % 60)
+}
+fn format_time(secs: f64) -> String {
+    if secs.is_nan() || secs.is_infinite() {
+        return "00:00".to_string();
+    }
+    let t = secs as u64;
+    format!("{:02}:{:02}", t / 60, t % 60)
+}
 fn format_timestamp(epoch_ms: i64) -> String {
     let secs = epoch_ms / 1000;
     let hours_ago = (js_sys::Date::now() as i64 / 1000 - secs) / 3600;
-    if hours_ago < 1 { "just now".to_string() }
-    else if hours_ago < 24 { format!("{}h ago", hours_ago) }
-    else { let d = hours_ago / 24; if d < 30 { format!("{}d ago", d) } else { format!("day {}", secs / 86400) } }
+    if hours_ago < 1 {
+        "just now".to_string()
+    } else if hours_ago < 24 {
+        format!("{}h ago", hours_ago)
+    } else {
+        let d = hours_ago / 24;
+        if d < 30 {
+            format!("{}d ago", d)
+        } else {
+            format!("day {}", secs / 86400)
+        }
+    }
 }

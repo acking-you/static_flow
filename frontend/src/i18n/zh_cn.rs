@@ -49,6 +49,7 @@ pub mod header {
     pub const NAV_POSTS: &str = "文章";
     pub const NAV_TAGS: &str = "标签";
     pub const NAV_CATEGORIES: &str = "分类";
+    pub const NAV_MUSIC: &str = "音乐";
     pub const NAV_MAIN_ARIA: &str = "主导航";
     pub const IMAGE_SEARCH_TITLE: &str = "图片搜索";
     pub const SEARCH_ARIA: &str = "搜索";
@@ -63,6 +64,7 @@ pub mod home {
     pub const STATS_ARTICLES: &str = "文章";
     pub const STATS_TAGS: &str = "标签";
     pub const STATS_CATEGORIES: &str = "分类";
+    pub const STATS_MUSIC: &str = "音乐库";
 
     pub const TERMINAL_TITLE: &str = "system_info.sh";
     pub const CMD_SHOW_AVATAR: &str = "cat ./profile/avatar.jpg";
@@ -334,11 +336,35 @@ pub mod coming_soon_page {
     pub const CMD_INIT_TEMPLATE: &str = "./scripts/init-{}.sh --status";
     pub const STATUS_LABEL: &str = "STATUS: ";
     pub const STATUS_COMING_SOON: &str = "COMING SOON";
-    pub const DESC_VIDEO: &str = "视频中心正在开发中，即将支持在线播放与语义搜索，快速定位你想看的内容。";
+    pub const DESC_VIDEO: &str =
+        "视频中心正在开发中，即将支持在线播放与语义搜索，快速定位你想看的内容。";
     pub const DESC_AUDIO: &str = "音频中心正在开发中，即将支持播客/音乐在线播放与智能检索。";
     pub const DESC_DEFAULT: &str = "该功能模块正在开发中，敬请期待。";
     pub const CMD_AVAILABLE_ROUTES: &str = "ls -l ./available_routes/";
     pub const BTN_HOME: &str = "返回首页";
+}
+
+pub mod music_wish {
+    pub const SECTION_TITLE: &str = "许愿点歌";
+    pub const SECTION_SUBTITLE: &str = "想听什么歌？留下你的心愿，我们会尽力帮你找到";
+    pub const SONG_NAME_LABEL: &str = "歌名";
+    pub const SONG_NAME_PLACEHOLDER: &str = "输入歌曲名称（必填）";
+    pub const ARTIST_LABEL: &str = "歌手";
+    pub const ARTIST_PLACEHOLDER: &str = "歌手名（可选）";
+    pub const MESSAGE_LABEL: &str = "留言";
+    pub const MESSAGE_PLACEHOLDER: &str = "说说你为什么想听这首歌...（必填）";
+    pub const NICKNAME_LABEL: &str = "昵称";
+    pub const NICKNAME_PLACEHOLDER: &str = "你的昵称（必填）";
+    pub const SUBMIT_BTN: &str = "提交心愿";
+    pub const SUBMITTING: &str = "提交中...";
+    pub const STATUS_PENDING: &str = "等待审核";
+    pub const STATUS_APPROVED: &str = "已通过";
+    pub const STATUS_RUNNING: &str = "搜索中";
+    pub const STATUS_DONE: &str = "已入库";
+    pub const STATUS_FAILED: &str = "搜索失败";
+    pub const LISTEN_NOW: &str = "去听歌 →";
+    pub const EMPTY_LIST: &str = "还没有人许愿，来做第一个吧！";
+    pub const SUBMIT_SUCCESS: &str = "心愿已提交，等待审核中";
 }
 
 pub mod mock {

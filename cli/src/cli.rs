@@ -199,6 +199,24 @@ pub enum Commands {
         #[arg(long, default_value = "./data/lancedb-music")]
         db_path: PathBuf,
     },
+    /// Manually complete a music wish (mark done + set ai_reply).
+    CompleteWish {
+        /// Music LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb-music")]
+        db_path: PathBuf,
+        /// Wish ID to complete.
+        #[arg(long)]
+        wish_id: String,
+        /// Song ID that was ingested for this wish.
+        #[arg(long)]
+        ingested_song_id: Option<String>,
+        /// Reply message shown to the wisher.
+        #[arg(long)]
+        ai_reply: Option<String>,
+        /// Admin note (internal).
+        #[arg(long)]
+        admin_note: Option<String>,
+    },
     /// Query a table and print the first rows.
     Query {
         /// LanceDB directory path.

@@ -11,6 +11,9 @@ pub mod lancedb_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod music_store;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod music_wish_store;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LocalizedText {
     pub zh: Option<String>,

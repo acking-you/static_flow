@@ -17,7 +17,9 @@ fn parse_lrc(lrc: &str, translation: Option<&str>) -> Vec<LrcLine> {
 
     for raw in lrc.lines() {
         let raw = raw.trim();
-        if raw.is_empty() { continue; }
+        if raw.is_empty() {
+            continue;
+        }
 
         // Collect all timestamps from the line
         let mut times = Vec::new();
@@ -37,21 +39,33 @@ fn parse_lrc(lrc: &str, translation: Option<&str>) -> Vec<LrcLine> {
         }
 
         let text = rest.trim().to_string();
-        if times.is_empty() || text.is_empty() { continue; }
+        if times.is_empty() || text.is_empty() {
+            continue;
+        }
 
         for t in times {
-            lines.push(LrcLine { time: t, text: text.clone(), translation: None });
+            lines.push(LrcLine {
+                time: t,
+                text: text.clone(),
+                translation: None,
+            });
         }
     }
 
-    lines.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    lines.sort_by(|a, b| {
+        a.time
+            .partial_cmp(&b.time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Merge translation lyrics by nearest timestamp
     if let Some(trans) = translation {
         let mut trans_lines: Vec<(f64, String)> = Vec::new();
         for raw in trans.lines() {
             let raw = raw.trim();
-            if raw.is_empty() { continue; }
+            if raw.is_empty() {
+                continue;
+            }
             let mut rest = raw;
             let mut time = None;
             while rest.starts_with('[') {
@@ -60,8 +74,12 @@ fn parse_lrc(lrc: &str, translation: Option<&str>) -> Vec<LrcLine> {
                     if let Some(t) = parse_timestamp(tag) {
                         time = Some(t);
                         rest = &rest[end + 1..];
-                    } else { break; }
-                } else { break; }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
             let text = rest.trim().to_string();
             if let Some(t) = time {
@@ -75,7 +93,9 @@ fn parse_lrc(lrc: &str, translation: Option<&str>) -> Vec<LrcLine> {
         // Match each translation to the closest original line
         for (tt, ttext) in &trans_lines {
             if let Some(best) = lines.iter_mut().min_by(|a, b| {
-                (a.time - tt).abs().partial_cmp(&(b.time - tt).abs())
+                (a.time - tt)
+                    .abs()
+                    .partial_cmp(&(b.time - tt).abs())
                     .unwrap_or(std::cmp::Ordering::Equal)
             }) {
                 best.translation = Some(ttext.clone());
@@ -89,7 +109,9 @@ fn parse_lrc(lrc: &str, translation: Option<&str>) -> Vec<LrcLine> {
 fn parse_timestamp(tag: &str) -> Option<f64> {
     // Format: mm:ss.xx or mm:ss
     let parts: Vec<&str> = tag.split(':').collect();
-    if parts.len() != 2 { return None; }
+    if parts.len() != 2 {
+        return None;
+    }
     let minutes: f64 = parts[0].parse().ok()?;
     let seconds: f64 = parts[1].parse().ok()?;
     Some(minutes * 60.0 + seconds)
@@ -111,15 +133,13 @@ pub fn synced_lyrics(props: &SyncedLyricsProps) -> Html {
     let container_ref = use_node_ref();
     let prev_idx = use_state(|| usize::MAX);
 
-    let parsed = use_memo(
-        (props.lyrics_lrc.clone(), props.lyrics_translation.clone()),
-        |(lrc, trans)| {
+    let parsed =
+        use_memo((props.lyrics_lrc.clone(), props.lyrics_translation.clone()), |(lrc, trans)| {
             match lrc {
                 Some(l) => parse_lrc(l.as_str(), trans.as_ref().map(|t| t.as_str())),
                 None => Vec::new(),
             }
-        },
-    );
+        });
 
     if parsed.is_empty() {
         return html! {};
@@ -152,8 +172,11 @@ pub fn synced_lyrics(props: &SyncedLyricsProps) -> Html {
                 let selector = format!("[data-lyric-idx=\"{}\"]", idx);
                 if let Ok(Some(el)) = container.query_selector(&selector) {
                     let opts = ScrollToOptions::new();
-                    opts.set_top(el.unchecked_ref::<web_sys::HtmlElement>().offset_top() as f64
-                        - container.client_height() as f64 / 2.0 + 20.0);
+                    opts.set_top(
+                        el.unchecked_ref::<web_sys::HtmlElement>().offset_top() as f64
+                            - container.client_height() as f64 / 2.0
+                            + 20.0,
+                    );
                     if time_jump {
                         opts.set_behavior(web_sys::ScrollBehavior::Instant);
                     } else {

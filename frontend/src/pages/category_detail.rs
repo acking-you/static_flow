@@ -71,7 +71,6 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
 
     {
         let category = filter_value.clone();
-        let total_posts = total_posts;
         use_effect_with((category.clone(), total_posts), move |_| {
             let persist = move || {
                 if crate::navigation_context::is_return_armed() {
@@ -109,7 +108,6 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
 
     {
         let category = filter_value.clone();
-        let total_posts = total_posts;
         use_effect_with((category, total_posts), move |_| {
             if total_posts > 0 {
                 if let Some(context) =

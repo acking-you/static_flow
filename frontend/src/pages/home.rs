@@ -14,11 +14,13 @@ pub fn home_page() -> Html {
     let total_articles = use_state(|| 0usize);
     let total_tags = use_state(|| 0usize);
     let total_categories = use_state(|| 0usize);
+    let total_music = use_state(|| 0usize);
 
     {
         let total_articles = total_articles.clone();
         let total_tags = total_tags.clone();
         let total_categories = total_categories.clone();
+        let total_music = total_music.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_site_stats().await {
@@ -29,6 +31,15 @@ pub fn home_page() -> Html {
                     },
                     Err(e) => {
                         console::error_1(&format!("Failed to fetch home stats: {}", e).into());
+                    },
+                }
+
+                match crate::api::fetch_songs(Some(1), Some(0), None, None, None).await {
+                    Ok(resp) => {
+                        total_music.set(resp.total);
+                    },
+                    Err(e) => {
+                        console::error_1(&format!("Failed to fetch music stats: {}", e).into());
                     },
                 }
             });
@@ -49,6 +60,12 @@ pub fn home_page() -> Html {
             total_categories.to_string(),
             t::STATS_CATEGORIES.to_string(),
             Some(Route::Categories),
+        ),
+        (
+            IconName::Music,
+            total_music.to_string(),
+            t::STATS_MUSIC.to_string(),
+            Some(Route::MediaAudio),
         ),
     ];
 
@@ -424,7 +441,7 @@ pub fn home_page() -> Html {
                                     "grid",
                                     "gap-5",
                                     "grid-cols-1",
-                                    "md:grid-cols-3",
+                                    "md:grid-cols-4",
                                     "w-full"
                                 )}>
                                     { for stats.into_iter().map(|(_icon, value, label, route)| {

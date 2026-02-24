@@ -71,7 +71,6 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
 
     {
         let tag = filter_value.clone();
-        let total_posts = total_posts;
         use_effect_with((tag.clone(), total_posts), move |_| {
             let persist = move || {
                 if crate::navigation_context::is_return_armed() {
@@ -109,7 +108,6 @@ pub fn tag_detail_page(props: &TagDetailProps) -> Html {
 
     {
         let tag = filter_value.clone();
-        let total_posts = total_posts;
         use_effect_with((tag, total_posts), move |_| {
             if total_posts > 0 {
                 if let Some(context) =

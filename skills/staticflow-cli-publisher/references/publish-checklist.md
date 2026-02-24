@@ -156,3 +156,34 @@ All managed tables:
 3. Re-run verification commands.
 4. Report what succeeded, what failed, and next safe command.
 5. If image resolution fails, add/fix `--media-root` and retry.
+
+## 8. Music Commands
+
+Music DB 路径与 content DB 分离，默认 `<db_root>/lancedb-music`。
+
+写入单曲（含自动 embedding）:
+```bash
+<cli> write-music --db-path <music_db_path> --file <audio.mp3|flac> \
+  [--id <song_id>] [--title <title>] [--artist <artist>] [--album <album>] \
+  [--album-id <album_id>] [--cover <cover.jpg>] [--content-db-path <content_db>] \
+  [--lyrics <lyrics.lrc>] [--lyrics-translation <trans.lrc>] \
+  [--source <source>] [--source-id <platform_id>] [--tags "tag1,tag2"]
+```
+
+批量回填 embedding:
+```bash
+<cli> embed-songs --db-path <music_db_path>
+```
+
+索引维护（自动检测 music DB）:
+```bash
+<cli> ensure-indexes --db-path <content_db_path>
+```
+
+验证:
+```bash
+<cli> db --db-path <music_db_path> query-rows songs --limit 5
+<cli> db --db-path <music_db_path> list-indexes songs --with-stats
+```
+
+参考: `cli/src/commands/write_music.rs:10-23` (WriteMusicOptions), `cli/src/commands/ensure_indexes.rs`

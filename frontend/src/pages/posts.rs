@@ -134,7 +134,6 @@ pub fn posts_page() -> Html {
         let tag = query.tag.clone();
         let category = query.category.clone();
         let expanded_years_serialized = expanded_years_serialized.clone();
-        let total_posts = total_posts;
         use_effect_with(
             (
                 location_dep.clone(),
@@ -193,7 +192,6 @@ pub fn posts_page() -> Html {
     {
         let location_dep = location.clone();
         let expanded_years = expanded_years.clone();
-        let total_posts = total_posts;
         use_effect_with((location_dep, total_posts), move |_| {
             if total_posts > 0 {
                 if let Some(context) =

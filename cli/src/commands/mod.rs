@@ -1,4 +1,5 @@
 pub mod api;
+pub mod complete_wish;
 pub mod db_manage;
 pub mod embed_songs;
 pub mod ensure_indexes;
@@ -137,8 +138,24 @@ pub async fn run(cli: Cli) -> Result<()> {
             })
             .await
         },
-        Commands::EmbedSongs { db_path } => {
-            embed_songs::run(&db_path).await
+        Commands::EmbedSongs {
+            db_path,
+        } => embed_songs::run(&db_path).await,
+        Commands::CompleteWish {
+            db_path,
+            wish_id,
+            ingested_song_id,
+            ai_reply,
+            admin_note,
+        } => {
+            complete_wish::run(
+                &db_path,
+                &wish_id,
+                ingested_song_id.as_deref(),
+                ai_reply.as_deref(),
+                admin_note.as_deref(),
+            )
+            .await
         },
         Commands::Query {
             db_path,

@@ -115,9 +115,9 @@ pub struct ArticleViewTrendResponse {
 
 #[cfg(not(feature = "mock"))]
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ArticleListResponse {
     articles: Vec<ArticleListItem>,
-    #[allow(dead_code)]
     total: usize,
     #[serde(default)]
     offset: usize,
@@ -132,6 +132,7 @@ struct ArticleListResponse {
 pub struct ArticlePage {
     pub articles: Vec<ArticleListItem>,
     pub total: usize,
+    #[allow(dead_code)]
     pub has_more: bool,
 }
 
@@ -180,7 +181,11 @@ pub async fn fetch_articles(
         };
         let has_more = limit.map_or(false, |l| off + l < total);
 
-        return Ok(ArticlePage { articles, total, has_more });
+        return Ok(ArticlePage {
+            articles,
+            total,
+            has_more,
+        });
     }
 
     #[cfg(not(feature = "mock"))]
@@ -679,6 +684,7 @@ pub async fn search_articles(
 ///
 /// When `enhanced_highlight` is true, backend will run semantic snippet
 /// reranking to improve highlight precision at extra latency cost.
+#[allow(clippy::too_many_arguments)]
 pub async fn semantic_search_articles(
     keyword: &str,
     enhanced_highlight: bool,
@@ -1702,7 +1708,12 @@ pub async fn fetch_admin_api_behavior_events(
         if let Some(days) = query.days {
             params.push(format!("days={days}"));
         }
-        if let Some(value) = query.date.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        if let Some(value) = query
+            .date
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             params.push(format!("date={}", urlencoding::encode(value)));
         }
         if let Some(limit) = query.limit {
@@ -2367,9 +2378,13 @@ struct MusicCommentListApiResponse {
 
 pub fn song_audio_url(id: &str) -> String {
     #[cfg(feature = "mock")]
-    { format!("/mock/music/{}/audio", id) }
+    {
+        format!("/mock/music/{}/audio", id)
+    }
     #[cfg(not(feature = "mock"))]
-    { format!("{}/music/{}/audio", API_BASE, urlencoding::encode(id)) }
+    {
+        format!("{}/music/{}/audio", API_BASE, urlencoding::encode(id))
+    }
 }
 
 pub fn song_cover_url(cover: Option<&str>) -> String {
@@ -2380,10 +2395,14 @@ pub fn song_cover_url(cover: Option<&str>) -> String {
                 return f.to_string();
             }
             #[cfg(feature = "mock")]
-            { format!("/mock/images/{}", f) }
+            {
+                format!("/mock/images/{}", f)
+            }
             #[cfg(not(feature = "mock"))]
-            { format!("{}/images/{}", API_BASE, urlencoding::encode(f)) }
-        }
+            {
+                format!("{}/images/{}", API_BASE, urlencoding::encode(f))
+            }
+        },
         _ => String::new(),
     }
 }
@@ -2398,7 +2417,11 @@ pub async fn fetch_songs(
     #[cfg(feature = "mock")]
     {
         return Ok(SongListResponse {
-            songs: vec![], total: 0, offset: 0, limit: 20, has_more: false,
+            songs: vec![],
+            total: 0,
+            offset: 0,
+            limit: 20,
+            has_more: false,
         });
     }
 
@@ -2406,8 +2429,12 @@ pub async fn fetch_songs(
     {
         let mut url = format!("{}/music", API_BASE);
         let mut params = Vec::new();
-        if let Some(l) = limit { params.push(format!("limit={l}")); }
-        if let Some(o) = offset { params.push(format!("offset={o}")); }
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        if let Some(o) = offset {
+            params.push(format!("offset={o}"));
+        }
         if let Some(a) = artist {
             params.push(format!("artist={}", urlencoding::encode(a)));
         }
@@ -2421,18 +2448,31 @@ pub async fn fetch_songs(
             url.push('?');
             url.push_str(&params.join("&"));
         }
-        let response = api_get(&url).send().await
+        let response = api_get(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        let r: SongListResponse = response.json().await
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let r: SongListResponse = response
+            .json()
+            .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(r)
     }
 }
 
-pub async fn search_songs(q: &str, limit: Option<usize>, mode: Option<&str>) -> Result<Vec<SongSearchResult>, String> {
+pub async fn search_songs(
+    q: &str,
+    limit: Option<usize>,
+    mode: Option<&str>,
+) -> Result<Vec<SongSearchResult>, String> {
     #[cfg(feature = "mock")]
-    { let _ = (q, limit, mode); return Ok(vec![]); }
+    {
+        let _ = (q, limit, mode);
+        return Ok(vec![]);
+    }
 
     #[cfg(not(feature = "mock"))]
     {
@@ -2443,10 +2483,16 @@ pub async fn search_songs(q: &str, limit: Option<usize>, mode: Option<&str>) -> 
         if let Some(m) = mode {
             url.push_str(&format!("&mode={}", urlencoding::encode(m)));
         }
-        let response = api_get(&url).send().await
+        let response = api_get(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        let r: Vec<SongSearchResult> = response.json().await
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let r: Vec<SongSearchResult> = response
+            .json()
+            .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(r)
     }
@@ -2454,16 +2500,26 @@ pub async fn search_songs(q: &str, limit: Option<usize>, mode: Option<&str>) -> 
 
 pub async fn fetch_song_detail(id: &str) -> Result<Option<SongDetail>, String> {
     #[cfg(feature = "mock")]
-    { return Ok(None); }
+    {
+        return Ok(None);
+    }
 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/music/{}", API_BASE, urlencoding::encode(id));
-        let response = api_get(&url).send().await
+        let response = api_get(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if response.status() == 404 { return Ok(None); }
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        let d: SongDetail = response.json().await
+        if response.status() == 404 {
+            return Ok(None);
+        }
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let d: SongDetail = response
+            .json()
+            .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(Some(d))
     }
@@ -2471,16 +2527,26 @@ pub async fn fetch_song_detail(id: &str) -> Result<Option<SongDetail>, String> {
 
 pub async fn fetch_song_lyrics(id: &str) -> Result<Option<SongLyrics>, String> {
     #[cfg(feature = "mock")]
-    { return Ok(None); }
+    {
+        return Ok(None);
+    }
 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/music/{}/lyrics", API_BASE, urlencoding::encode(id));
-        let response = api_get(&url).send().await
+        let response = api_get(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if response.status() == 404 { return Ok(None); }
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        let l: SongLyrics = response.json().await
+        if response.status() == 404 {
+            return Ok(None);
+        }
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let l: SongLyrics = response
+            .json()
+            .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(Some(l))
     }
@@ -2488,73 +2554,461 @@ pub async fn fetch_song_lyrics(id: &str) -> Result<Option<SongLyrics>, String> {
 
 pub async fn fetch_related_songs(id: &str) -> Result<Vec<SongSearchResult>, String> {
     #[cfg(feature = "mock")]
-    { return Ok(vec![]); }
+    {
+        return Ok(vec![]);
+    }
 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/music/{}/related", API_BASE, urlencoding::encode(id));
-        let response = api_get(&url).send().await
+        let response = api_get(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        response.json().await.map_err(|e| format!("Parse error: {:?}", e))
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 
 pub async fn track_song_play(id: &str) -> Result<PlayTrackResponse, String> {
     #[cfg(feature = "mock")]
-    { return Ok(PlayTrackResponse { song_id: id.to_string(), counted: true, total_plays: 42 }); }
+    {
+        return Ok(PlayTrackResponse {
+            song_id: id.to_string(),
+            counted: true,
+            total_plays: 42,
+        });
+    }
 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/music/{}/play", API_BASE, urlencoding::encode(id));
-        let response = api_post(&url).send().await
+        let response = api_post(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        response.json().await.map_err(|e| format!("Parse error: {:?}", e))
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 
 pub async fn submit_music_comment(
-    song_id: &str, nickname: &str, text: &str,
+    song_id: &str,
+    nickname: &str,
+    text: &str,
 ) -> Result<MusicCommentItem, String> {
     #[cfg(feature = "mock")]
     {
         return Ok(MusicCommentItem {
-            id: "mock".to_string(), song_id: song_id.to_string(),
-            nickname: nickname.to_string(), comment_text: text.to_string(),
-            ip_region: None, created_at: 0,
+            id: "mock".to_string(),
+            song_id: song_id.to_string(),
+            nickname: nickname.to_string(),
+            comment_text: text.to_string(),
+            ip_region: None,
+            created_at: 0,
         });
     }
 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/music/comments/submit", API_BASE);
-        let body = serde_json::json!({ "song_id": song_id, "nickname": nickname, "comment_text": text });
+        let body =
+            serde_json::json!({ "song_id": song_id, "nickname": nickname, "comment_text": text });
         let response = api_post(&url)
             .header("Content-Type", "application/json")
-            .json(&body).map_err(|e| format!("Serialize error: {:?}", e))?
-            .send().await.map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        response.json().await.map_err(|e| format!("Parse error: {:?}", e))
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 
 pub async fn fetch_music_comments(
-    song_id: &str, limit: Option<usize>, offset: Option<usize>,
+    song_id: &str,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<Vec<MusicCommentItem>, String> {
     #[cfg(feature = "mock")]
-    { return Ok(vec![]); }
+    {
+        return Ok(vec![]);
+    }
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/music/comments/list?song_id={}", API_BASE, urlencoding::encode(song_id));
-        if let Some(l) = limit { url.push_str(&format!("&limit={l}")); }
-        if let Some(o) = offset { url.push_str(&format!("&offset={o}")); }
-        let response = api_get(&url).send().await
+        let mut url =
+            format!("{}/music/comments/list?song_id={}", API_BASE, urlencoding::encode(song_id));
+        if let Some(l) = limit {
+            url.push_str(&format!("&limit={l}"));
+        }
+        if let Some(o) = offset {
+            url.push_str(&format!("&offset={o}"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
             .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() { return Err(format!("HTTP error: {}", response.status())); }
-        let r: MusicCommentListApiResponse = response.json().await
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let r: MusicCommentListApiResponse = response
+            .json()
+            .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(r.comments)
+    }
+}
+
+// Music Wish types
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MusicWishItem {
+    pub wish_id: String,
+    pub song_name: String,
+    pub artist_hint: Option<String>,
+    pub wish_message: String,
+    pub nickname: String,
+    pub status: String,
+    pub ip_region: String,
+    pub ingested_song_id: Option<String>,
+    pub ai_reply: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub attempt_count: i32,
+    pub fingerprint: String,
+    pub client_ip: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicWishListResponse {
+    pub wishes: Vec<MusicWishItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitMusicWishResponse {
+    pub wish_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicWishAiRunRecord {
+    pub run_id: String,
+    pub wish_id: String,
+    pub status: String,
+    pub runner_program: String,
+    pub exit_code: Option<i32>,
+    pub final_reply_markdown: Option<String>,
+    pub failure_reason: Option<String>,
+    pub started_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicWishAiRunChunk {
+    pub chunk_id: String,
+    pub run_id: String,
+    pub wish_id: String,
+    pub stream: String,
+    pub batch_index: i32,
+    pub content: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminMusicWishAiOutputResponse {
+    pub runs: Vec<MusicWishAiRunRecord>,
+    pub chunks: Vec<MusicWishAiRunChunk>,
+}
+
+pub async fn submit_music_wish(
+    song_name: &str,
+    artist_hint: Option<&str>,
+    wish_message: &str,
+    nickname: &str,
+) -> Result<SubmitMusicWishResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(SubmitMusicWishResponse {
+            wish_id: "mock-wish-1".to_string(),
+            status: "pending".to_string(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/music/wishes/submit", API_BASE);
+        let mut body = serde_json::json!({
+            "song_name": song_name,
+            "wish_message": wish_message,
+            "nickname": nickname,
+        });
+        if let Some(hint) = artist_hint {
+            body["artist_hint"] = serde_json::Value::String(hint.to_string());
+        }
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("HTTP {}: {}", status, text));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_music_wishes(limit: Option<usize>) -> Result<Vec<MusicWishItem>, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(vec![]);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/music/wishes/list", API_BASE);
+        if let Some(l) = limit {
+            url.push_str(&format!("?limit={l}"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let r: MusicWishListResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(r.wishes)
+    }
+}
+
+pub async fn fetch_admin_music_wishes(
+    status: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<MusicWishItem>, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(vec![]);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let mut url = format!("{base}/admin/music-wishes/tasks?");
+        if let Some(s) = status {
+            url.push_str(&format!("status={}&", urlencoding::encode(s)));
+        }
+        if let Some(l) = limit {
+            url.push_str(&format!("limit={l}&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_approve_and_run_music_wish(
+    wish_id: &str,
+    admin_note: Option<&str>,
+) -> Result<MusicWishItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url = format!(
+            "{base}/admin/music-wishes/tasks/{}/approve-and-run",
+            urlencoding::encode(wish_id)
+        );
+        let body = serde_json::json!({ "admin_note": admin_note });
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_reject_music_wish(
+    wish_id: &str,
+    admin_note: Option<&str>,
+) -> Result<MusicWishItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url =
+            format!("{base}/admin/music-wishes/tasks/{}/reject", urlencoding::encode(wish_id));
+        let body = serde_json::json!({ "admin_note": admin_note });
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_retry_music_wish(wish_id: &str) -> Result<MusicWishItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url = format!("{base}/admin/music-wishes/tasks/{}/retry", urlencoding::encode(wish_id));
+        let response = api_post(&url)
+            .json(&serde_json::json!({}))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_delete_music_wish(wish_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url = format!("{base}/admin/music-wishes/tasks/{}", urlencoding::encode(wish_id));
+        let response = gloo_net::http::Request::delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn fetch_admin_music_wish_ai_output(
+    wish_id: &str,
+) -> Result<AdminMusicWishAiOutputResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminMusicWishAiOutputResponse {
+            runs: vec![],
+            chunks: vec![],
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url =
+            format!("{base}/admin/music-wishes/tasks/{}/ai-output", urlencoding::encode(wish_id));
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub fn build_admin_music_wish_ai_stream_url(wish_id: &str) -> String {
+    #[cfg(feature = "mock")]
+    {
+        return format!("/mock/admin/music-wishes/tasks/{}/ai-output/stream", wish_id);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        format!("{base}/admin/music-wishes/tasks/{}/ai-output/stream", urlencoding::encode(wish_id))
     }
 }

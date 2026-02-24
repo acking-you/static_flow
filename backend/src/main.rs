@@ -2,6 +2,7 @@ mod behavior_analytics;
 mod comment_worker;
 mod geoip;
 mod handlers;
+mod music_wish_worker;
 mod request_context;
 mod routes;
 mod state;

@@ -32,8 +32,12 @@ use static_flow_shared::{
     },
     music_store::{
         AlbumInfo, ArtistInfo, MusicCommentItem, MusicCommentListResponse, MusicCommentRecord,
-        PlayTrackResponse, SongDetail, SongListResponse, SongLyrics,
-        SongSearchResult,
+        PlayTrackResponse, SongDetail, SongListResponse, SongLyrics, SongSearchResult,
+    },
+    music_wish_store::{
+        MusicWishAiRunChunkRecord, MusicWishAiRunRecord, MusicWishRecord,
+        NewMusicWishInput, WISH_STATUS_DONE, WISH_STATUS_FAILED, WISH_STATUS_PENDING,
+        WISH_STATUS_REJECTED, WISH_STATUS_RUNNING,
     },
     Article,
 };
@@ -292,7 +296,8 @@ pub struct AdminApiBehaviorEventsQuery {
     pub status_code: Option<i32>,
     #[serde(default)]
     pub ip: Option<String>,
-    /// Specific date in YYYY-MM-DD format (Shanghai timezone). Mutually exclusive with `days`.
+    /// Specific date in YYYY-MM-DD format (Shanghai timezone). Mutually
+    /// exclusive with `days`.
     #[serde(default)]
     pub date: Option<String>,
 }
@@ -575,12 +580,7 @@ pub async fn list_articles(
 ) -> Result<Json<ArticleListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let resp = state
         .store
-        .list_articles(
-            query.tag.as_deref(),
-            query.category.as_deref(),
-            query.limit,
-            query.offset,
-        )
+        .list_articles(query.tag.as_deref(), query.category.as_deref(), query.limit, query.offset)
         .await
         .map_err(|e| internal_error("Failed to fetch articles", e))?;
 
@@ -817,8 +817,8 @@ pub async fn admin_list_api_behavior_events(
 
     let config = state.api_behavior_runtime_config.read().await.clone();
 
-    // When `date` is provided (YYYY-MM-DD), compute Shanghai-timezone day boundaries;
-    // otherwise fall back to the existing `days` window.
+    // When `date` is provided (YYYY-MM-DD), compute Shanghai-timezone day
+    // boundaries; otherwise fall back to the existing `days` window.
     let (since_ms, until_ms) = if let Some(ref date_str) = query.date {
         let nd = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").map_err(|_| {
             (
@@ -3194,7 +3194,7 @@ pub async fn stream_song_audio(
                     code: 404,
                 }),
             ));
-        }
+        },
     };
 
     let content_type = match fmt.as_str() {
@@ -3203,9 +3203,7 @@ pub async fn stream_song_audio(
     };
     let total_len = data.len();
 
-    let range_header = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok());
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
     if let Some(range_str) = range_header {
         if let Some(parsed) = parse_range_header(range_str, total_len) {
@@ -3243,11 +3241,8 @@ fn parse_range_header(range_str: &str, total: usize) -> Option<(usize, usize)> {
     if start >= total {
         return None;
     }
-    let end = if end_str.is_empty() {
-        total - 1
-    } else {
-        end_str.parse::<usize>().ok()?.min(total - 1)
-    };
+    let end =
+        if end_str.is_empty() { total - 1 } else { end_str.parse::<usize>().ok()?.min(total - 1) };
     if start > end {
         return None;
     }
@@ -3524,29 +3519,384 @@ pub async fn update_music_config(
     let mut config = state.music_runtime_config.write().await;
     if let Some(v) = request.play_dedupe_window_seconds {
         if v == 0 || v > 3600 {
-            return Err(bad_request(
-                "`play_dedupe_window_seconds` must be between 1 and 3600",
-            ));
+            return Err(bad_request("`play_dedupe_window_seconds` must be between 1 and 3600"));
         }
         config.play_dedupe_window_seconds = v;
     }
     if let Some(v) = request.comment_rate_limit_seconds {
         if v == 0 || v > 3600 {
-            return Err(bad_request(
-                "`comment_rate_limit_seconds` must be between 1 and 3600",
-            ));
+            return Err(bad_request("`comment_rate_limit_seconds` must be between 1 and 3600"));
         }
         config.comment_rate_limit_seconds = v;
     }
     if let Some(v) = request.list_default_limit {
         if v == 0 || v > 200 {
-            return Err(bad_request(
-                "`list_default_limit` must be between 1 and 200",
-            ));
+            return Err(bad_request("`list_default_limit` must be between 1 and 200"));
         }
         config.list_default_limit = v;
     }
     Ok(Json(MusicConfigResponse::from(config.clone())))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitMusicWishRequest {
+    pub song_name: String,
+    pub artist_hint: Option<String>,
+    pub wish_message: String,
+    pub nickname: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmitMusicWishResponse {
+    pub wish_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MusicWishListQuery {
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MusicWishListResponse {
+    pub wishes: Vec<MusicWishRecord>,
+}
+
+pub async fn submit_music_wish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitMusicWishRequest>,
+) -> Result<Json<SubmitMusicWishResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let song_name = request.song_name.trim();
+    if song_name.is_empty() {
+        return Err(bad_request("`song_name` is required"));
+    }
+    if song_name.chars().count() > 200 {
+        return Err(bad_request("`song_name` must be <= 200 chars"));
+    }
+    let wish_message = request.wish_message.trim();
+    if wish_message.is_empty() {
+        return Err(bad_request("`wish_message` is required"));
+    }
+    if wish_message.chars().count() > 2000 {
+        return Err(bad_request("`wish_message` must be <= 2000 chars"));
+    }
+    let nickname = request.nickname.trim();
+    if nickname.is_empty() {
+        return Err(bad_request("`nickname` is required"));
+    }
+    if nickname.chars().count() > 50 {
+        return Err(bad_request("`nickname` must be <= 50 chars"));
+    }
+
+    let ip = extract_client_ip(&headers);
+    let fingerprint = build_client_fingerprint(&headers);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    enforce_comment_submit_rate_limit(
+        state.music_wish_submit_guard.as_ref(),
+        &fingerprint,
+        now_ms,
+        60,
+    )
+    .await?;
+
+    let ip_region = state.geoip.resolve_region(&ip).await;
+    let wish_id = generate_task_id("mw");
+    let wish = state
+        .music_wish_store
+        .create_wish(NewMusicWishInput {
+            wish_id: wish_id.clone(),
+            song_name: song_name.to_string(),
+            artist_hint: request.artist_hint,
+            wish_message: wish_message.to_string(),
+            nickname: nickname.to_string(),
+            fingerprint,
+            client_ip: ip,
+            ip_region,
+        })
+        .await
+        .map_err(|e| internal_error("Failed to create music wish", e))?;
+
+    Ok(Json(SubmitMusicWishResponse {
+        wish_id: wish.wish_id,
+        status: WISH_STATUS_PENDING.to_string(),
+    }))
+}
+
+pub async fn list_music_wishes(
+    State(state): State<AppState>,
+    Query(query): Query<MusicWishListQuery>,
+) -> Result<Json<MusicWishListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(50).min(200);
+    let wishes = state
+        .music_wish_store
+        .list_wishes_public(Some(limit))
+        .await
+        .map_err(|e| internal_error("Failed to list music wishes", e))?;
+    Ok(Json(MusicWishListResponse {
+        wishes,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminMusicWishListQuery {
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+}
+
+pub async fn admin_list_music_wishes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminMusicWishListQuery>,
+) -> Result<Json<Vec<MusicWishRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let limit = query.limit.unwrap_or(100).min(500);
+    let wishes = state
+        .music_wish_store
+        .list_wishes(query.status.as_deref(), Some(limit))
+        .await
+        .map_err(|e| internal_error("Failed to list music wishes", e))?;
+    Ok(Json(wishes))
+}
+
+pub async fn admin_get_music_wish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+) -> Result<Json<MusicWishRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let wish = state
+        .music_wish_store
+        .get_wish(&wish_id)
+        .await
+        .map_err(|e| internal_error("Failed to get music wish", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Music wish not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+    Ok(Json(wish))
+}
+
+pub async fn admin_approve_and_run_music_wish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<MusicWishRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let before = state
+        .music_wish_store
+        .get_wish(&wish_id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch music wish", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Music wish not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+
+    if before.status == WISH_STATUS_RUNNING {
+        return Err(conflict_error("Music wish is already running"));
+    }
+    if before.status == WISH_STATUS_DONE || before.status == WISH_STATUS_REJECTED {
+        return Err(conflict_error("Music wish is finalized"));
+    }
+
+    let wish = state
+        .music_wish_store
+        .transition_wish(&wish_id, WISH_STATUS_RUNNING, request.admin_note.as_deref(), None, None, None)
+        .await
+        .map_err(|e| internal_error("Failed to transition music wish", e))?;
+
+    if let Err(err) = state.music_wish_worker_tx.send(wish_id.clone()).await {
+        let _ = state
+            .music_wish_store
+            .transition_wish(&wish_id, WISH_STATUS_FAILED, None, Some(&err.to_string()), None, None)
+            .await;
+        return Err(internal_error("Failed to enqueue music wish worker", err));
+    }
+
+    Ok(Json(wish))
+}
+
+pub async fn admin_reject_music_wish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<MusicWishRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let wish = state
+        .music_wish_store
+        .transition_wish(&wish_id, WISH_STATUS_REJECTED, request.admin_note.as_deref(), None, None, None)
+        .await
+        .map_err(|e| internal_error("Failed to reject music wish", e))?;
+    Ok(Json(wish))
+}
+
+pub async fn admin_retry_music_wish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+) -> Result<Json<MusicWishRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let wish = state
+        .music_wish_store
+        .transition_wish(&wish_id, WISH_STATUS_RUNNING, None, None, None, None)
+        .await
+        .map_err(|e| internal_error("Failed to retry music wish", e))?;
+
+    if let Err(err) = state.music_wish_worker_tx.send(wish_id.clone()).await {
+        let _ = state
+            .music_wish_store
+            .transition_wish(&wish_id, WISH_STATUS_FAILED, None, Some(&err.to_string()), None, None)
+            .await;
+        return Err(internal_error("Failed to enqueue music wish worker", err));
+    }
+
+    Ok(Json(wish))
+}
+
+pub async fn admin_delete_music_wish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    state
+        .music_wish_store
+        .delete_wish(&wish_id)
+        .await
+        .map_err(|e| internal_error("Failed to delete music wish", e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminMusicWishAiOutputResponse {
+    pub runs: Vec<MusicWishAiRunRecord>,
+    pub chunks: Vec<MusicWishAiRunChunkRecord>,
+}
+
+pub async fn admin_music_wish_ai_output(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+) -> Result<Json<AdminMusicWishAiOutputResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let runs = state
+        .music_wish_store
+        .list_ai_runs(&wish_id, Some(20))
+        .await
+        .map_err(|e| internal_error("Failed to list AI runs", e))?;
+    let mut chunks = Vec::new();
+    for run in &runs {
+        let mut run_chunks = state
+            .music_wish_store
+            .list_ai_run_chunks(&run.run_id, Some(4096))
+            .await
+            .map_err(|e| internal_error("Failed to list AI run chunks", e))?;
+        chunks.append(&mut run_chunks);
+    }
+    Ok(Json(AdminMusicWishAiOutputResponse {
+        runs,
+        chunks,
+    }))
+}
+
+pub async fn admin_music_wish_ai_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wish_id): Path<String>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    ensure_admin_access(&state, &headers)?;
+    let store = state.music_wish_store.clone();
+
+    let stream = stream! {
+        let mut last_batch_index: i32 = -1;
+        let mut consecutive_errors: u32 = 0;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+        loop {
+            let runs = match store.list_ai_runs(&wish_id, Some(1)).await {
+                Ok(r) => { consecutive_errors = 0; r }
+                Err(_) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        yield Ok(Event::default().event("error").data(
+                            serde_json::json!({"status":"error","failure_reason":"DB query failed after retries"}).to_string()
+                        ));
+                        break;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+            let run = match runs.into_iter().last() {
+                Some(r) => r,
+                None => {
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            let chunks = match store.list_ai_run_chunks(&run.run_id, Some(4096)).await {
+                Ok(c) => { consecutive_errors = 0; c }
+                Err(_) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        yield Ok(Event::default().event("error").data(
+                            serde_json::json!({"status":"error","failure_reason":"DB query failed after retries"}).to_string()
+                        ));
+                        break;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            for chunk in &chunks {
+                if chunk.batch_index > last_batch_index {
+                    last_batch_index = chunk.batch_index;
+                    let data = serde_json::json!({
+                        "stream": chunk.stream,
+                        "batch_index": chunk.batch_index,
+                        "content": chunk.content,
+                    });
+                    yield Ok(Event::default().event("chunk").data(data.to_string()));
+                }
+            }
+
+            if run.status != "running" {
+                let event_name = if run.status == "success" { "done" } else { "error" };
+                let data = serde_json::json!({
+                    "status": run.status,
+                    "exit_code": run.exit_code,
+                    "failure_reason": run.failure_reason,
+                    "final_reply_markdown": run.final_reply_markdown,
+                });
+                yield Ok(Event::default().event(event_name).data(data.to_string()));
+                break;
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new().interval(Duration::from_secs(15)).text("keep-alive"),
+    ))
 }
 
 #[cfg(test)]

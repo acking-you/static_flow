@@ -2142,7 +2142,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     "gap-5",
                                     "md:grid-cols-2"
                                 )}>
-                                    { for related_articles.iter().cloned().map(|article| {
+                                    { for related_articles.iter().map(|article| {
                                         html! { <ArticleCard key={article.id.clone()} article={article.clone()} /> }
                                     }) }
                                 </div>
@@ -2738,7 +2738,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             </div>
             {
                 if !is_overlay_open {
-                    if let (Some((left, top)), Some(_)) = ((*selection_button_pos).clone(), (*selection_draft).clone()) {
+                    if let (Some((left, top)), Some(_)) = (*selection_button_pos, (*selection_draft).clone()) {
                         html! {
                             <button
                                 type="button"

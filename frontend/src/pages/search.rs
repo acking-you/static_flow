@@ -17,6 +17,7 @@ use crate::{
     },
     hooks::use_pagination,
     i18n::{current::search as t, fill_one},
+    music_context::{MusicAction, MusicPlayerContext},
     router::Route,
     utils::image_url,
 };
@@ -34,6 +35,7 @@ const IMAGE_GRID_CHUNK_SIZE: usize = 8;
 const LIGHTBOX_MIN_ZOOM: f64 = 0.5;
 const LIGHTBOX_MAX_ZOOM: f64 = 3.0;
 const LIGHTBOX_ZOOM_STEP: f64 = 0.25;
+const MUSIC_SEARCH_RESULT_LIMIT: usize = 50;
 
 #[function_component(SearchPage)]
 pub fn search_page() -> Html {
@@ -47,8 +49,11 @@ pub fn search_page() -> Html {
         .and_then(|q| q.mode.clone())
         .unwrap_or_else(|| "keyword".to_string())
         .to_lowercase();
-    let mode =
-        if matches!(mode.as_str(), "semantic" | "image" | "music") { mode } else { "keyword".to_string() };
+    let mode = if matches!(mode.as_str(), "semantic" | "image" | "music") {
+        mode
+    } else {
+        "keyword".to_string()
+    };
     let music_sub_mode = query
         .as_ref()
         .and_then(|q| q.music_sub_mode.clone())
@@ -115,6 +120,7 @@ pub fn search_page() -> Html {
     let semantic_advanced_open = use_state(|| hybrid);
     let music_results = use_state(Vec::<crate::api::SongSearchResult>::new);
     let music_loading = use_state(|| false);
+    let player_ctx = use_context::<MusicPlayerContext>();
     let hybrid_rrf_k_input = use_state(|| hybrid_rrf_k.to_string());
     let hybrid_vector_limit_input = use_state(|| {
         hybrid_vector_limit
@@ -132,7 +138,6 @@ pub fn search_page() -> Html {
     {
         let mode = mode.clone();
         let keyword = keyword.clone();
-        let current_page = current_page;
         let image_catalog_visible = *image_catalog_visible;
         let image_text_visible = *image_text_visible;
         let image_similar_visible = *image_similar_visible;
@@ -214,7 +219,6 @@ pub fn search_page() -> Html {
         let image_results = image_results.clone();
         let image_loading = image_loading.clone();
         let image_similar_has_more = image_similar_has_more.clone();
-        let max_distance = max_distance;
         let results_len = results.len();
         let image_catalog_len = image_catalog.len();
         let image_text_results_len = image_text_results.len();
@@ -327,12 +331,6 @@ pub fn search_page() -> Html {
         let loading = loading.clone();
         let keyword = keyword.clone();
         let mode = mode.clone();
-        let active_limit = active_limit;
-        let max_distance = max_distance;
-        let hybrid = hybrid;
-        let hybrid_rrf_k = hybrid_rrf_k;
-        let hybrid_vector_limit = hybrid_vector_limit;
-        let hybrid_fts_limit = hybrid_fts_limit;
 
         use_effect_with(
             (
@@ -435,12 +433,50 @@ pub fn search_page() -> Html {
                     };
 
                     wasm_bindgen_futures::spawn_local(async move {
-                        match crate::api::search_songs(&q, Some(20), api_mode).await {
+                        match crate::api::search_songs(
+                            &q,
+                            Some(MUSIC_SEARCH_RESULT_LIMIT),
+                            api_mode,
+                        )
+                        .await
+                        {
                             Ok(data) => music_results.set(data),
                             Err(_) => music_results.set(vec![]),
                         }
                         music_loading.set(false);
                     });
+                }
+                || ()
+            },
+        );
+    }
+
+    // Keep global playlist synced with music-search results on this page.
+    {
+        let player_ctx = player_ctx.clone();
+        let keyword = keyword.clone();
+        let mode = mode.clone();
+        let music_sub_mode = music_sub_mode.clone();
+        let music_results_snapshot = (*music_results).clone();
+        use_effect_with(
+            (mode.clone(), keyword.clone(), music_sub_mode.clone(), music_results_snapshot.clone()),
+            move |(mode, keyword, music_sub_mode, results)| {
+                if let Some(ctx) = player_ctx.as_ref() {
+                    if mode == "music" {
+                        let ids = if keyword.trim().is_empty() {
+                            vec![]
+                        } else {
+                            results
+                                .iter()
+                                .map(|item| item.id.clone())
+                                .collect::<Vec<_>>()
+                        };
+                        let source = format!("search-music:{}:{}", music_sub_mode, keyword);
+                        ctx.dispatch(MusicAction::SetPlaylist {
+                            source,
+                            ids,
+                        });
+                    }
                 }
                 || ()
             },
@@ -504,7 +540,6 @@ pub fn search_page() -> Html {
         let image_text_visible = image_text_visible.clone();
         let image_text_has_more = image_text_has_more.clone();
         let image_text_loading = image_text_loading.clone();
-        let max_distance = max_distance;
 
         use_effect_with(
             (mode.clone(), keyword.clone(), max_distance),
@@ -729,7 +764,6 @@ pub fn search_page() -> Html {
         let image_similar_has_more = image_similar_has_more.clone();
         let image_loading = image_loading.clone();
         let selected_image_id = selected_image_id.clone();
-        let max_distance = max_distance;
 
         Callback::from(move |id: String| {
             selected_image_id.set(Some(id.clone()));
@@ -771,7 +805,6 @@ pub fn search_page() -> Html {
         let image_text_visible = image_text_visible.clone();
         let image_text_has_more = image_text_has_more.clone();
         let image_scroll_loading = image_scroll_loading.clone();
-        let max_distance = max_distance;
         Callback::from(move |event: MouseEvent| {
             event.prevent_default();
             if *image_scroll_loading || !*image_text_has_more || keyword.trim().is_empty() {
@@ -857,7 +890,6 @@ pub fn search_page() -> Html {
         let image_similar_visible = image_similar_visible.clone();
         let image_similar_has_more = image_similar_has_more.clone();
         let image_scroll_loading = image_scroll_loading.clone();
-        let max_distance = max_distance;
         Callback::from(move |event: MouseEvent| {
             event.prevent_default();
             if *image_scroll_loading || !*image_similar_has_more {
@@ -3002,6 +3034,7 @@ struct SearchPageQuery {
     max_distance: Option<f32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_search_href(
     mode: Option<&str>,
     keyword: &str,

@@ -1299,7 +1299,7 @@ async fn query_comment_tasks(
 ) -> Result<Vec<CommentTaskRecord>> {
     let mut query = table.query();
     if let Some(filter) = filter {
-        query = query.only_if(filter.to_string());
+        query = query.only_if(filter);
     }
     if let Some(limit) = limit {
         query = query.limit(limit.max(1));
@@ -1416,7 +1416,7 @@ async fn query_published_comments(
 ) -> Result<Vec<PublishedCommentRecord>> {
     let mut query = table.query();
     if let Some(filter) = filter {
-        query = query.only_if(filter.to_string());
+        query = query.only_if(filter);
     }
     if let Some(limit) = limit {
         query = query.limit(limit.max(1));
@@ -1500,7 +1500,7 @@ async fn query_comment_audit_logs(
 ) -> Result<Vec<CommentAuditRecord>> {
     let mut query = table.query();
     if let Some(filter) = filter {
-        query = query.only_if(filter.to_string());
+        query = query.only_if(filter);
     }
     if let Some(limit) = limit {
         query = query.limit(limit.max(1));
@@ -1554,7 +1554,7 @@ async fn query_comment_ai_runs(
 ) -> Result<Vec<CommentAiRunRecord>> {
     let mut query = table.query();
     if let Some(filter) = filter {
-        query = query.only_if(filter.to_string());
+        query = query.only_if(filter);
     }
     if let Some(limit) = limit {
         query = query.limit(limit.max(1));
@@ -1623,7 +1623,7 @@ async fn query_comment_ai_chunks(
 ) -> Result<Vec<CommentAiRunChunkRecord>> {
     let mut query = table.query();
     if let Some(filter) = filter {
-        query = query.only_if(filter.to_string());
+        query = query.only_if(filter);
     }
     if let Some(limit) = limit {
         query = query.limit(limit.max(1));

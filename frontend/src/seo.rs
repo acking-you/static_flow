@@ -62,13 +62,11 @@ fn normalize_whitespace(value: &str) -> String {
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut out = String::new();
-    let mut count = 0usize;
-    for ch in value.chars() {
-        if count >= max_chars {
+    for (i, ch) in value.chars().enumerate() {
+        if i >= max_chars {
             break;
         }
         out.push(ch);
-        count += 1;
     }
     if value.chars().count() > max_chars {
         out.push_str("...");
@@ -287,6 +285,12 @@ fn route_path_for(route: &Route) -> String {
         Route::AdminCommentRuns {
             task_id,
         } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
+        Route::AdminMusicWishRuns {
+            wish_id,
+        } => config::route_path(&format!(
+            "/admin/music-wishes/runs/{}",
+            urlencoding::encode(wish_id)
+        )),
         Route::NotFound => config::route_path("/404"),
         Route::MediaVideo => config::route_path("/media/video"),
         Route::MediaAudio => config::route_path("/media/audio"),
@@ -466,6 +470,9 @@ pub fn apply_route_seo(route: Option<&Route>) {
         Route::Admin
         | Route::AdminCommentRuns {
             ..
+        }
+        | Route::AdminMusicWishRuns {
+            ..
         } => {
             apply_common_seo(
                 "Admin · StaticFlow",
@@ -490,7 +497,11 @@ pub fn apply_route_seo(route: Option<&Route>) {
             );
             apply_default_hreflang(&canonical_url);
         },
-        Route::MediaVideo | Route::MediaAudio | Route::MusicPlayer { .. } => {
+        Route::MediaVideo
+        | Route::MediaAudio
+        | Route::MusicPlayer {
+            ..
+        } => {
             apply_common_seo(
                 "Music Hub · StaticFlow",
                 "音乐库 — 探索和播放音乐收藏。",

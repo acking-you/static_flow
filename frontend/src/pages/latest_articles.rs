@@ -29,7 +29,11 @@ pub fn latest_articles_page() -> Html {
 
     let total_pages = {
         let t = *total;
-        if t == 0 { 1 } else { (t + PAGE_SIZE - 1) / PAGE_SIZE }
+        if t == 0 {
+            1
+        } else {
+            t.div_ceil(PAGE_SIZE)
+        }
     };
     let current_page_num = *current_page;
 
@@ -49,7 +53,7 @@ pub fn latest_articles_page() -> Html {
                     Ok(data) => {
                         total.set(data.total);
                         articles.set(data.articles);
-                    }
+                    },
                     Err(e) => {
                         web_sys::console::error_1(
                             &format!("Failed to fetch articles: {}", e).into(),
@@ -64,7 +68,6 @@ pub fn latest_articles_page() -> Html {
 
     let save_scroll_position = {
         let location = route_location.clone();
-        let current_page_num = current_page_num;
         Callback::from(move |_| {
             if crate::navigation_context::is_return_armed() {
                 return;
@@ -80,7 +83,6 @@ pub fn latest_articles_page() -> Html {
 
     {
         let location = route_location.clone();
-        let current_page_num = current_page_num;
         use_effect_with((location, current_page_num), move |_| {
             let mut on_scroll_opt: Option<wasm_bindgen::closure::Closure<dyn FnMut(Event)>> = None;
 
@@ -158,7 +160,9 @@ pub fn latest_articles_page() -> Html {
 
     let go_to_page = {
         let current_page = current_page.clone();
-        Callback::from(move |page: usize| { current_page.set(page); })
+        Callback::from(move |page: usize| {
+            current_page.set(page);
+        })
     };
 
     let pagination_controls = if total_pages > 1 {

@@ -129,6 +129,33 @@ pub fn create_router(state: AppState) -> Router {
             "/admin/music-config",
             get(handlers::get_music_config).post(handlers::update_music_config),
         )
+        .route("/api/music/wishes/submit", post(handlers::submit_music_wish))
+        .route("/api/music/wishes/list", get(handlers::list_music_wishes))
+        .route("/admin/music-wishes/tasks", get(handlers::admin_list_music_wishes))
+        .route(
+            "/admin/music-wishes/tasks/:wish_id",
+            get(handlers::admin_get_music_wish).delete(handlers::admin_delete_music_wish),
+        )
+        .route(
+            "/admin/music-wishes/tasks/:wish_id/approve-and-run",
+            post(handlers::admin_approve_and_run_music_wish),
+        )
+        .route(
+            "/admin/music-wishes/tasks/:wish_id/reject",
+            post(handlers::admin_reject_music_wish),
+        )
+        .route(
+            "/admin/music-wishes/tasks/:wish_id/retry",
+            post(handlers::admin_retry_music_wish),
+        )
+        .route(
+            "/admin/music-wishes/tasks/:wish_id/ai-output",
+            get(handlers::admin_music_wish_ai_output),
+        )
+        .route(
+            "/admin/music-wishes/tasks/:wish_id/ai-output/stream",
+            get(handlers::admin_music_wish_ai_stream),
+        )
         .with_state(state)
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(

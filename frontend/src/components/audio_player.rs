@@ -1,11 +1,11 @@
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::HtmlAudioElement;
 use yew::prelude::*;
 
 use super::icons::{Icon, IconName};
 
 #[derive(Properties, PartialEq)]
+#[allow(dead_code)]
 pub struct AudioPlayerProps {
     pub src: AttrValue,
     #[prop_or_default]
@@ -33,8 +33,7 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
         let seeking = seeking.clone();
 
         use_effect_with(props.src.clone(), move |_| {
-            let audio: Option<HtmlAudioElement> = audio_ref
-                .cast::<HtmlAudioElement>();
+            let audio: Option<HtmlAudioElement> = audio_ref.cast::<HtmlAudioElement>();
             let closures: Vec<Closure<dyn FnMut()>> = Vec::new();
             let closures = std::rc::Rc::new(std::cell::RefCell::new(closures));
 
@@ -55,25 +54,31 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
                         }
                     }
                 });
-                let _ = audio.add_event_listener_with_callback(
-                    "timeupdate", c1.as_ref().unchecked_ref());
+                let _ = audio
+                    .add_event_listener_with_callback("timeupdate", c1.as_ref().unchecked_ref());
                 closures.borrow_mut().push(c1);
 
                 // loadedmetadata
                 let dur = duration.clone();
                 let c2 = Closure::<dyn FnMut()>::new({
                     let audio = audio.clone();
-                    move || { dur.set(audio.duration()); }
+                    move || {
+                        dur.set(audio.duration());
+                    }
                 });
                 let _ = audio.add_event_listener_with_callback(
-                    "loadedmetadata", c2.as_ref().unchecked_ref());
+                    "loadedmetadata",
+                    c2.as_ref().unchecked_ref(),
+                );
                 closures.borrow_mut().push(c2);
 
                 // ended
                 let pl = playing.clone();
-                let c3 = Closure::<dyn FnMut()>::new(move || { pl.set(false); });
-                let _ = audio.add_event_listener_with_callback(
-                    "ended", c3.as_ref().unchecked_ref());
+                let c3 = Closure::<dyn FnMut()>::new(move || {
+                    pl.set(false);
+                });
+                let _ =
+                    audio.add_event_listener_with_callback("ended", c3.as_ref().unchecked_ref());
                 closures.borrow_mut().push(c3);
 
                 // progress (buffered)
@@ -89,13 +94,15 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
                         }
                     }
                 });
-                let _ = audio.add_event_listener_with_callback(
-                    "progress", c4.as_ref().unchecked_ref());
+                let _ =
+                    audio.add_event_listener_with_callback("progress", c4.as_ref().unchecked_ref());
                 closures.borrow_mut().push(c4);
             }
 
             // prevent closures from being dropped
-            move || { drop(closures); }
+            move || {
+                drop(closures);
+            }
         });
     }
 
@@ -121,7 +128,10 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
         let seeking = seeking.clone();
         let on_time_update = props.on_time_update.clone();
         Callback::from(move |e: InputEvent| {
-            if let Some(input) = e.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+            if let Some(input) = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
                 if let Ok(v) = input.value().parse::<f64>() {
                     seeking.set(false);
                     current_time.set(v);
@@ -138,14 +148,19 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
 
     let on_seek_start = {
         let seeking = seeking.clone();
-        Callback::from(move |_: MouseEvent| { seeking.set(true); })
+        Callback::from(move |_: MouseEvent| {
+            seeking.set(true);
+        })
     };
 
     let on_volume = {
         let audio_ref = audio_ref.clone();
         let volume = volume.clone();
         Callback::from(move |e: InputEvent| {
-            if let Some(input) = e.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+            if let Some(input) = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
                 if let Ok(v) = input.value().parse::<f64>() {
                     volume.set(v);
                     if let Some(audio) = audio_ref.cast::<HtmlAudioElement>() {
@@ -240,6 +255,7 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
     }
 }
 
+#[allow(dead_code)]
 fn format_time(secs: f64) -> String {
     if secs.is_nan() || secs.is_infinite() {
         return "00:00".to_string();

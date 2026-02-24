@@ -468,14 +468,10 @@ impl StaticFlowDataStore {
             fetch_article_view_day_counts(&table, article_id, Some(&since_day)),
         );
 
-        let total_views = total_views_result? as usize;
+        let total_views = total_views_result?;
         let today_views = today_views_result? as u32;
         let day_counts = day_counts_result?;
-        let daily_points = build_recent_day_points(
-            &day_counts,
-            &day_bucket,
-            window,
-        )?;
+        let daily_points = build_recent_day_points(&day_counts, &day_bucket, window)?;
 
         Ok(ArticleViewTrackResponse {
             article_id: article_id.to_string(),
@@ -500,12 +496,9 @@ impl StaticFlowDataStore {
         let window = normalize_daily_window(days, max_days);
         let since_date = now_local.date_naive() - ChronoDuration::days(window as i64);
         let since_day = since_date.format("%Y-%m-%d").to_string();
-        let day_counts = fetch_article_view_day_counts(&table, article_id, Some(&since_day)).await?;
-        let points = build_recent_day_points(
-            &day_counts,
-            &today_bucket,
-            window,
-        )?;
+        let day_counts =
+            fetch_article_view_day_counts(&table, article_id, Some(&since_day)).await?;
+        let points = build_recent_day_points(&day_counts, &today_bucket, window)?;
         let total_views = table
             .count_rows(Some(format!("article_id = '{}'", escape_literal(article_id))))
             .await
@@ -579,14 +572,20 @@ impl StaticFlowDataStore {
                 let page: Vec<_> = all_articles.into_iter().skip(off).take(l).collect();
                 let has_more = off + l < total;
                 (page, l, has_more)
-            }
+            },
             None => {
                 let len = all_articles.len();
                 (all_articles, len, false)
-            }
+            },
         };
 
-        Ok(ArticleListResponse { articles, total, offset: off, limit: lim, has_more })
+        Ok(ArticleListResponse {
+            articles,
+            total,
+            offset: off,
+            limit: lim,
+            has_more,
+        })
     }
 
     pub async fn get_article(&self, id: &str) -> Result<Option<Article>> {
@@ -854,6 +853,7 @@ impl StaticFlowDataStore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn semantic_search(
         &self,
         keyword: &str,

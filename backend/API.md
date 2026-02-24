@@ -568,7 +568,7 @@ curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31
 
 查询参数：
 - `limit`（可选）返回结果上限；不传则不限制，尽可能返回全部召回结果
-- `max_distance`（可选）向量距离上界，作用于 `_distance` 字段；越小越严格，不传则不过滤距离（见上文“`max_distance` 参数原理与示例”）
+- `max_distance`（可选）向量距离上界，作用于 `_distance` 字段；越小越严格，不传则不过滤距离（见上文”`max_distance` 参数原理与示例”）
 
 实现说明：
 - 文本 query 使用 CLIP 文本编码器生成向量，再在 `images.vector` 上执行最近邻检索。
@@ -577,10 +577,158 @@ curl "http://localhost:3000/api/image-search?id=1a31f145e050ecfdd6f6ec2a4dbf4f31
 示例：
 
 ```bash
-curl "http://localhost:3000/api/image-search-text?q=rust mascot"
-curl "http://localhost:3000/api/image-search-text?q=database architecture&limit=24"
-curl "http://localhost:3000/api/image-search-text?q=clickhouse execution pipeline&limit=24&max_distance=0.8"
+curl “http://localhost:3000/api/image-search-text?q=rust mascot”
+curl “http://localhost:3000/api/image-search-text?q=database architecture&limit=24”
+curl “http://localhost:3000/api/image-search-text?q=clickhouse execution pipeline&limit=24&max_distance=0.8”
 ```
+
+### 12) 音乐播放 API
+
+> 对应 `routes.rs:68-79`
+
+#### 12.1 歌曲列表
+
+`GET /api/music`
+
+查询参数：
+- `limit`（可选）返回结果上限
+- `offset`（可选）分页偏移
+
+#### 12.2 搜索歌曲
+
+`GET /api/music/search`
+
+查询参数：
+- `q`（必填）搜索关键词
+- `mode`（可选）搜索模式：`fts`（关键词）、`semantic`（向量）、`hybrid`（混合 RRF 融合），默认 `fts`
+- `limit`（可选）返回结果上限
+
+#### 12.3 歌手列表
+
+`GET /api/music/artists`
+
+#### 12.4 专辑列表
+
+`GET /api/music/albums`
+
+#### 12.5 歌曲详情
+
+`GET /api/music/:id`
+
+#### 12.6 音频流
+
+`GET /api/music/:id/audio`
+
+说明：
+- 返回音频二进制流，`Content-Type` 根据歌曲格式自动设置
+- 支持 `Range` 请求头（断点续传）
+
+#### 12.7 歌词
+
+`GET /api/music/:id/lyrics`
+
+返回 LRC 格式歌词文本。
+
+#### 12.8 相关歌曲
+
+`GET /api/music/:id/related`
+
+基于向量相似度返回相关歌曲。
+
+#### 12.9 记录播放
+
+`POST /api/music/:id/play`
+
+记录一次播放事件到 `music_plays` 表。
+
+#### 12.10 音乐评论
+
+- `POST /api/music/comments/submit` — 提交音乐评论
+- `GET /api/music/comments/list` — 音乐评论列表
+
+示例：
+
+```bash
+curl “http://localhost:3000/api/music?limit=20”
+curl “http://localhost:3000/api/music/search?q=周杰伦&mode=fts”
+curl “http://localhost:3000/api/music/search?q=romantic ballad&mode=semantic&limit=10”
+curl “http://localhost:3000/api/music/artists”
+curl “http://localhost:3000/api/music/albums”
+curl “http://localhost:3000/api/music/song-001”
+curl “http://localhost:3000/api/music/song-001/audio”
+curl “http://localhost:3000/api/music/song-001/lyrics”
+curl “http://localhost:3000/api/music/song-001/related”
+curl -X POST “http://localhost:3000/api/music/song-001/play”
+```
+
+### 13) 音乐心愿 API
+
+> 对应 `routes.rs:132-158`
+
+#### 13.1 公开接口
+
+**提交心愿**
+
+`POST /api/music/wishes/submit`
+
+说明：
+- 默认频率限制：同一用户指纹每 60 秒最多提交 1 条
+- 提交后状态为 `pending`，等待管理员审核
+
+请求体示例：
+
+```json
+{
+  “song_name”: “晴天”,
+  “artist_hint”: “周杰伦”,
+  “wish_message”: “想听这首歌，很有回忆”,
+  “nickname”: “Listener-abc”
+}
+```
+
+响应示例：
+
+```json
+{
+  “wish_id”: “mw-1760112233445-abc123”,
+  “status”: “pending”
+}
+```
+
+**心愿列表**
+
+`GET /api/music/wishes/list`
+
+查询参数：
+- `limit`（可选）返回结果上限
+
+说明：
+- 返回公开心愿列表（排除 `rejected` 状态）
+- 包含 `ai_reply` 字段（AI 对歌曲的评价和对许愿的回应，完成后填充）
+
+#### 13.2 Admin 接口
+
+> 需要 admin 权限（`x-admin-token` 或本地访问）
+
+- `GET /admin/music-wishes/tasks[?status=&limit=]` — 心愿任务列表
+- `GET /admin/music-wishes/tasks/:wish_id` — 心愿详情
+- `POST /admin/music-wishes/tasks/:wish_id/approve-and-run` — 审批并触发 AI worker
+- `POST /admin/music-wishes/tasks/:wish_id/reject` — 拒绝心愿
+- `POST /admin/music-wishes/tasks/:wish_id/retry` — 失败后重试
+- `DELETE /admin/music-wishes/tasks/:wish_id` — 删除心愿（含关联 AI 运行记录）
+- `GET /admin/music-wishes/tasks/:wish_id/ai-output` — AI 执行输出（拼接）
+- `GET /admin/music-wishes/tasks/:wish_id/ai-output/stream` — AI 执行输出（SSE 实时流）
+
+状态流转：
+
+`pending → approved → running → done/failed`
+
+`pending → rejected`
+
+`failed → approved/running/rejected/done`
+
+> `failed → done` 用于 admin 手动标记完成（歌曲已通过其他途径入库）。
+> CLI: `sf-cli complete-wish --db-path <music-db> --wish-id <id> [--ai-reply <msg>] [--ingested-song-id <id>] [--admin-note <note>]`
 
 ---
 
@@ -607,6 +755,12 @@ curl "http://localhost:3000/api/image-search-text?q=clickhouse execution pipelin
 - `comment_audit_logs` 表（`COMMENTS_LANCEDB_URI`）：审核动作审计日志（patch/approve/retry/reject）
 - `comment_ai_runs` 表（`COMMENTS_LANCEDB_URI`）：每次 Codex/AI 执行批次元数据（状态、退出码、最终回复）
 - `comment_ai_run_chunks` 表（`COMMENTS_LANCEDB_URI`）：AI 运行输出分片（stdout/stderr 批次），用于后台拼接和排障
+- `songs` 表（`MUSIC_LANCEDB_URI`）：歌曲元数据、音频二进制、歌词、向量
+- `music_plays` 表（`MUSIC_LANCEDB_URI`）：播放事件
+- `music_comments` 表（`MUSIC_LANCEDB_URI`）：音乐评论
+- `music_wishes` 表（`MUSIC_LANCEDB_URI`）：心愿任务队列
+- `music_wish_ai_runs` 表（`MUSIC_LANCEDB_URI`）：AI 执行批次元数据
+- `music_wish_ai_run_chunks` 表（`MUSIC_LANCEDB_URI`）：AI 运行输出分片
 
 图片内容由 API 从 `images.data`（或 `images.thumbnail`）读取并返回。`thumb=true` 时优先 `thumbnail`，为空则回退 `data`。
 
@@ -624,6 +778,7 @@ make bin-all
 # 开发环境
 LANCEDB_URI=../data/lancedb \
 COMMENTS_LANCEDB_URI=../data/lancedb-comments \
+MUSIC_LANCEDB_URI=../data/lancedb-music \
 PORT=3000 \
 ./target/release/static-flow-backend
 
@@ -633,6 +788,7 @@ BIND_ADDR=127.0.0.1 \
 PORT=9999 \
 LANCEDB_URI=/opt/staticflow/data/lancedb \
 COMMENTS_LANCEDB_URI=/opt/staticflow/data/lancedb-comments \
+MUSIC_LANCEDB_URI=/opt/staticflow/data/lancedb-music \
 ALLOWED_ORIGINS=https://acking-you.github.io \
 ./target/release/static-flow-backend
 ```

@@ -263,7 +263,7 @@ async fn ensure_table(db: &Connection, table_name: &str, schema: Arc<Schema>) ->
                 .execute()
                 .await
                 .with_context(|| format!("failed to open table {table_name}"))
-        }
+        },
     }
 }
 
@@ -304,16 +304,12 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
     let mut source_id = StringBuilder::new();
     let mut tags = StringBuilder::new();
     let mut searchable_text = StringBuilder::new();
-    let mut vector_en_builder = FixedSizeListBuilder::new(
-        Float32Builder::new(),
-        TEXT_VECTOR_DIM_EN as i32,
-    )
-    .with_field(Field::new("item", DataType::Float32, false));
-    let mut vector_zh_builder = FixedSizeListBuilder::new(
-        Float32Builder::new(),
-        TEXT_VECTOR_DIM_ZH as i32,
-    )
-    .with_field(Field::new("item", DataType::Float32, false));
+    let mut vector_en_builder =
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32)
+            .with_field(Field::new("item", DataType::Float32, false));
+    let mut vector_zh_builder =
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_ZH as i32)
+            .with_field(Field::new("item", DataType::Float32, false));
     let mut created_at = TimestampMillisecondBuilder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
 
@@ -341,13 +337,13 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
                 vector_en_builder.values().append_value(*val);
             }
             vector_en_builder.append(true);
-        }
+        },
         _ => {
             for _ in 0..TEXT_VECTOR_DIM_EN {
                 vector_en_builder.values().append_value(0.0);
             }
             vector_en_builder.append(false);
-        }
+        },
     }
 
     // vector_zh
@@ -357,13 +353,13 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
                 vector_zh_builder.values().append_value(*val);
             }
             vector_zh_builder.append(true);
-        }
+        },
         _ => {
             for _ in 0..TEXT_VECTOR_DIM_ZH {
                 vector_zh_builder.values().append_value(0.0);
             }
             vector_zh_builder.append(false);
-        }
+        },
     }
 
     created_at.append_value(record.created_at);
@@ -546,7 +542,9 @@ impl MusicDataStore {
             .execute()
             .await
             .context("failed to connect music LanceDB")?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+        })
     }
 
     async fn songs_table(&self) -> Result<Table> {
@@ -649,8 +647,17 @@ impl MusicDataStore {
         let table = self.songs_table().await?;
         let escaped = escape_literal(id);
         let cols = &[
-            "id", "title", "artist", "album", "cover_image", "duration_ms",
-            "format", "bitrate", "tags", "source", "created_at",
+            "id",
+            "title",
+            "artist",
+            "album",
+            "cover_image",
+            "duration_ms",
+            "format",
+            "bitrate",
+            "tags",
+            "source",
+            "created_at",
         ];
         let batches = table
             .query()
@@ -729,8 +736,15 @@ impl MusicDataStore {
     ) -> Result<SongListResponse> {
         let table = self.songs_table().await?;
         let cols = &[
-            "id", "title", "artist", "album", "cover_image",
-            "duration_ms", "format", "tags", "created_at",
+            "id",
+            "title",
+            "artist",
+            "album",
+            "cover_image",
+            "duration_ms",
+            "format",
+            "tags",
+            "created_at",
         ];
 
         let mut filters = Vec::new();
@@ -740,18 +754,14 @@ impl MusicDataStore {
         if let Some(a) = album {
             filters.push(format!("album = '{}'", escape_literal(a)));
         }
-        let filter_expr = if filters.is_empty() {
-            None
-        } else {
-            Some(filters.join(" AND "))
-        };
+        let filter_expr = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
 
         let total = table
             .count_rows(filter_expr.clone())
             .await
             .context("failed to count songs")? as usize;
 
-        let effective_limit = limit.min(100).max(1);
+        let effective_limit = limit.clamp(1, 100);
         let mut query = table.query();
         if let Some(f) = &filter_expr {
             query = query.only_if(f.clone());
@@ -782,8 +792,8 @@ impl MusicDataStore {
             Some("random") => {
                 use rand::seq::SliceRandom;
                 songs.shuffle(&mut rand::thread_rng());
-            }
-            _ => songs.reverse(),   // latest first (default insert order)
+            },
+            _ => songs.reverse(), // latest first (default insert order)
         }
 
         Ok(SongListResponse {
@@ -802,7 +812,7 @@ impl MusicDataStore {
     ) -> Result<Vec<SongSearchResult>> {
         let table = self.songs_table().await?;
         let cols = &["id", "title", "artist", "album", "cover_image"];
-        let effective_limit = limit.min(50).max(1);
+        let effective_limit = limit.clamp(1, 50);
 
         let fts_query = lancedb::index::scalar::FullTextSearchQuery::new(query_text.to_string());
         let batches = table
@@ -838,7 +848,7 @@ impl MusicDataStore {
     ) -> Result<Vec<SongSearchResult>> {
         let table = self.songs_table().await?;
         let cols = &["id", "title", "artist", "album", "cover_image"];
-        let effective_limit = limit.min(50).max(1);
+        let effective_limit = limit.clamp(1, 50);
 
         let lang = detect_language(query_text);
         let (primary_col, fallback_col) = match lang {
@@ -862,8 +872,15 @@ impl MusicDataStore {
             TextEmbeddingLanguage::English => TextEmbeddingLanguage::Chinese,
         };
         let fallback_vector = embed_text_with_language(query_text, fallback_lang);
-        self.run_vector_search(&table, cols, &fallback_vector, fallback_col, effective_limit, max_distance)
-            .await
+        self.run_vector_search(
+            &table,
+            cols,
+            &fallback_vector,
+            fallback_col,
+            effective_limit,
+            max_distance,
+        )
+        .await
     }
 
     async fn run_vector_search(
@@ -926,7 +943,7 @@ impl MusicDataStore {
         vector_limit: Option<usize>,
         fts_limit: Option<usize>,
     ) -> Result<Vec<SongSearchResult>> {
-        let effective_limit = limit.min(50).max(1);
+        let effective_limit = limit.clamp(1, 50);
         let vec_limit = vector_limit.unwrap_or(effective_limit * 2);
         let lex_limit = fts_limit.unwrap_or(effective_limit * 2);
 
@@ -946,7 +963,11 @@ impl MusicDataStore {
 
     // -- Related songs (vector similarity) --
 
-    async fn fetch_song_vector(&self, table: &Table, id: &str) -> Result<Option<(Vec<f32>, &'static str)>> {
+    async fn fetch_song_vector(
+        &self,
+        table: &Table,
+        id: &str,
+    ) -> Result<Option<(Vec<f32>, &'static str)>> {
         let filter = format!("id = '{}'", escape_literal(id));
         let batches = table
             .query()
@@ -968,19 +989,32 @@ impl MusicDataStore {
 
     fn extract_fsl_vector(batches: &[RecordBatch], column: &str) -> Option<Vec<f32>> {
         for batch in batches {
-            if batch.num_rows() == 0 { continue; }
+            if batch.num_rows() == 0 {
+                continue;
+            }
             let arr = batch.schema().index_of(column).ok().and_then(|idx| {
-                batch.column(idx).as_any().downcast_ref::<FixedSizeListArray>()
+                batch
+                    .column(idx)
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
             })?;
-            if arr.is_null(0) { return None; }
+            if arr.is_null(0) {
+                return None;
+            }
             let values = arr.value(0);
-            let float_arr = values.as_any().downcast_ref::<arrow_array::Float32Array>()?;
+            let float_arr = values
+                .as_any()
+                .downcast_ref::<arrow_array::Float32Array>()?;
             return Some(float_arr.values().to_vec());
         }
         None
     }
 
-    pub async fn related_songs(&self, song_id: &str, limit: usize) -> Result<Vec<SongSearchResult>> {
+    pub async fn related_songs(
+        &self,
+        song_id: &str,
+        limit: usize,
+    ) -> Result<Vec<SongSearchResult>> {
         let table = self.songs_table().await?;
         let vector_info = self.fetch_song_vector(&table, song_id).await?;
         let (vector, col) = match vector_info {
@@ -990,7 +1024,7 @@ impl MusicDataStore {
 
         let filter = format!("{col} IS NOT NULL AND id != '{}'", escape_literal(song_id));
         let cols = &["id", "title", "artist", "album", "cover_image"];
-        let effective_limit = limit.min(20).max(1);
+        let effective_limit = limit.clamp(1, 20);
 
         let query = table
             .query()
@@ -1047,7 +1081,10 @@ impl MusicDataStore {
         }
         let mut artists: Vec<ArtistInfo> = counts
             .into_iter()
-            .map(|(name, song_count)| ArtistInfo { name, song_count })
+            .map(|(name, song_count)| ArtistInfo {
+                name,
+                song_count,
+            })
             .collect();
         artists.sort_by(|a, b| b.song_count.cmp(&a.song_count));
         Ok(artists)
@@ -1182,7 +1219,7 @@ impl MusicDataStore {
             .await
             .context("failed to count music comments")? as usize;
 
-        let effective_limit = limit.min(100).max(1);
+        let effective_limit = limit.clamp(1, 100);
         let batches = table
             .query()
             .only_if(filter)
@@ -1218,7 +1255,7 @@ impl MusicDataStore {
         // Read songs missing vectors
         let batches = table
             .query()
-            .only_if("vector_en IS NULL".to_string())
+            .only_if("vector_en IS NULL")
             .select(Select::columns(&["id", "searchable_text"]))
             .execute()
             .await?;
@@ -1277,8 +1314,7 @@ impl MusicDataStore {
 
             match lang {
                 TextEmbeddingLanguage::Chinese => {
-                    let en_vector =
-                        embed_text_with_language(text, TextEmbeddingLanguage::English);
+                    let en_vector = embed_text_with_language(text, TextEmbeddingLanguage::English);
                     let en_vals = vec_en_builder.values();
                     for v in &en_vector {
                         en_vals.append_value(*v);
@@ -1290,7 +1326,7 @@ impl MusicDataStore {
                         zh_vals.append_value(*v);
                     }
                     vec_zh_builder.append(true);
-                }
+                },
                 TextEmbeddingLanguage::English => {
                     let en_vals = vec_en_builder.values();
                     for v in &primary_vector {
@@ -1304,7 +1340,7 @@ impl MusicDataStore {
                         zh_vals.append_value(0.0);
                     }
                     vec_zh_builder.append(false);
-                }
+                },
             }
 
             if (i + 1) % 10 == 0 || i + 1 == total {
@@ -1319,8 +1355,7 @@ impl MusicDataStore {
         ])
         .context("failed to build vector backfill batch")?;
 
-        let batches =
-            RecordBatchIterator::new(vec![Ok(batch)].into_iter(), partial_schema);
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), partial_schema);
         let mut merge = table.merge_insert(&["id"]);
         merge.when_matched_update_all(None);
         merge
@@ -1388,9 +1423,12 @@ fn fuse_song_rrf(
             .then_with(|| a.best_rank.cmp(&b.best_rank))
     });
 
-    results.into_iter().map(|a| {
-        let mut row = a.row;
-        row.score = a.score;
-        row
-    }).collect()
+    results
+        .into_iter()
+        .map(|a| {
+            let mut row = a.row;
+            row.score = a.score;
+            row
+        })
+        .collect()
 }

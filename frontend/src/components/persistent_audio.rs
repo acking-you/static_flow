@@ -1,13 +1,16 @@
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::HtmlAudioElement;
 use yew::prelude::*;
 
-use crate::api;
-use crate::music_context::{MusicAction, MusicPlayerContext, NextSongMode};
+use crate::{
+    api,
+    music_context::{MusicAction, MusicPlayerContext, NextSongMode},
+};
 
-/// Pick next song from pre-fetched candidates (semantic) or random.
-pub(crate) async fn resolve_next_song(ctx: &MusicPlayerContext) -> Option<(api::SongDetail, String)> {
+/// Pick next song from playlist order, semantic candidates, or random.
+pub(crate) async fn resolve_next_song(
+    ctx: &MusicPlayerContext,
+) -> Option<(api::SongDetail, String)> {
     // If there's forward history, reducer handles it
     if let Some(idx) = ctx.history_index {
         if idx + 1 < ctx.history.len() {
@@ -16,16 +19,21 @@ pub(crate) async fn resolve_next_song(ctx: &MusicPlayerContext) -> Option<(api::
     }
 
     // Collect recent 3 song IDs to avoid repeats
-    let recent_ids: Vec<&str> = ctx.history.iter()
+    let recent_ids: Vec<&str> = ctx
+        .history
+        .iter()
         .rev()
         .take(3)
         .map(|(id, _)| id.as_str())
         .collect();
 
     match ctx.next_mode {
+        NextSongMode::PlaylistSequential => pick_playlist_next(ctx).await,
         NextSongMode::Semantic => {
             // Pick from pre-fetched candidates, excluding recent 3
-            let filtered: Vec<_> = ctx.candidates.iter()
+            let filtered: Vec<_> = ctx
+                .candidates
+                .iter()
                 .filter(|c| !recent_ids.contains(&c.id.as_str()))
                 .collect();
             if !filtered.is_empty() {
@@ -37,14 +45,38 @@ pub(crate) async fn resolve_next_song(ctx: &MusicPlayerContext) -> Option<(api::
             }
             // Fallback to random if no candidates
             pick_random_song(&recent_ids).await
-        }
+        },
         NextSongMode::Random => pick_random_song(&recent_ids).await,
+    }
+}
+
+async fn pick_playlist_next(ctx: &MusicPlayerContext) -> Option<(api::SongDetail, String)> {
+    if ctx.playlist_ids.is_empty() {
+        return None;
+    }
+
+    let next_id = match ctx.song_id.as_deref() {
+        Some(current_id) => ctx
+            .playlist_ids
+            .iter()
+            .position(|id| id == current_id)
+            .and_then(|idx| ctx.playlist_ids.get(idx + 1).cloned())
+            .or_else(|| ctx.playlist_ids.first().cloned()),
+        None => ctx.playlist_ids.first().cloned(),
+    }?;
+
+    if let Ok(Some(detail)) = api::fetch_song_detail(&next_id).await {
+        Some((detail, next_id))
+    } else {
+        None
     }
 }
 
 async fn pick_random_song(recent_ids: &[&str]) -> Option<(api::SongDetail, String)> {
     if let Ok(resp) = api::fetch_songs(Some(20), None, None, None, Some("random")).await {
-        let candidates: Vec<_> = resp.songs.into_iter()
+        let candidates: Vec<_> = resp
+            .songs
+            .into_iter()
             .filter(|s| !recent_ids.contains(&s.id.as_str()))
             .collect();
         if !candidates.is_empty() {
@@ -104,16 +136,13 @@ pub fn persistent_audio() -> Html {
                     wasm_bindgen_futures::spawn_local(async move {
                         match api::fetch_related_songs(&id).await {
                             Ok(related) => {
-                                let filtered: Vec<_> = related
-                                    .into_iter()
-                                    .filter(|r| r.id != id)
-                                    .take(4)
-                                    .collect();
+                                let filtered: Vec<_> =
+                                    related.into_iter().filter(|r| r.id != id).take(4).collect();
                                 ctx.dispatch(MusicAction::SetCandidates(filtered));
-                            }
+                            },
                             Err(_) => {
                                 ctx.dispatch(MusicAction::SetCandidates(vec![]));
-                            }
+                            },
                         }
                     });
                 }
@@ -170,9 +199,8 @@ pub fn persistent_audio() -> Html {
                         ctx_c.dispatch(MusicAction::SetTime(audio.current_time()));
                     }
                 });
-                let _ = audio.add_event_listener_with_callback(
-                    "timeupdate", c1.as_ref().unchecked_ref(),
-                );
+                let _ = audio
+                    .add_event_listener_with_callback("timeupdate", c1.as_ref().unchecked_ref());
                 closures.borrow_mut().push(c1);
 
                 let ctx_c = ctx.clone();
@@ -183,7 +211,8 @@ pub fn persistent_audio() -> Html {
                     }
                 });
                 let _ = audio.add_event_listener_with_callback(
-                    "loadedmetadata", c2.as_ref().unchecked_ref(),
+                    "loadedmetadata",
+                    c2.as_ref().unchecked_ref(),
                 );
                 closures.borrow_mut().push(c2);
 
@@ -193,16 +222,19 @@ pub fn persistent_audio() -> Html {
                     let ctx_inner = ctx_c.clone();
                     wasm_bindgen_futures::spawn_local(async move {
                         let fallback = resolve_next_song(&ctx_inner).await;
-                        ctx_inner.dispatch(MusicAction::PlayNext { fallback });
+                        ctx_inner.dispatch(MusicAction::PlayNext {
+                            fallback,
+                        });
                     });
                 });
-                let _ = audio.add_event_listener_with_callback(
-                    "ended", c3.as_ref().unchecked_ref(),
-                );
+                let _ =
+                    audio.add_event_listener_with_callback("ended", c3.as_ref().unchecked_ref());
                 closures.borrow_mut().push(c3);
             }
 
-            move || { drop(closures); }
+            move || {
+                drop(closures);
+            }
         });
     }
 
@@ -210,4 +242,3 @@ pub fn persistent_audio() -> Html {
         <audio ref={audio_ref} preload="metadata" style="display:none;" />
     }
 }
-

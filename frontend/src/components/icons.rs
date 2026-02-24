@@ -84,7 +84,10 @@ impl IconName {
                 "M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"
             },
             IconName::VolumeX => "M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6",
-            IconName::Music => "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
+            IconName::Music => {
+                "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 \
+                 0z"
+            },
             IconName::Download => "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
             IconName::Minimize2 => "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
             IconName::Shuffle => "M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5",

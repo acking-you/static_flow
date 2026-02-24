@@ -33,12 +33,12 @@ pub async fn run(db_path: &Path) -> Result<()> {
     }
 
     // Music DB: songs FTS index on searchable_text
-    let music_db_path = db_path
-        .parent()
-        .unwrap_or(db_path)
-        .join("lancedb-music");
+    let music_db_path = db_path.parent().unwrap_or(db_path).join("lancedb-music");
     if music_db_path.exists() {
-        tracing::info!("Found music DB at {}, ensuring songs FTS index...", music_db_path.display());
+        tracing::info!(
+            "Found music DB at {}, ensuring songs FTS index...",
+            music_db_path.display()
+        );
         let music_db = connect_db(&music_db_path).await?;
         if let Ok(songs_table) = music_db.open_table("songs").execute().await {
             if let Err(err) = ensure_fts_index(&songs_table, "searchable_text").await {

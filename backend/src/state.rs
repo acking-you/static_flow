@@ -6,12 +6,14 @@ use static_flow_shared::{
     comments_store::CommentDataStore,
     lancedb_api::{CategoryInfo, StaticFlowDataStore, StatsResponse, TagInfo},
     music_store::MusicDataStore,
+    music_wish_store::MusicWishStore,
 };
 use tokio::sync::{mpsc, RwLock};
 
 use crate::{
     comment_worker::{self, CommentAiWorkerConfig},
     geoip::GeoIpResolver,
+    music_wish_worker::{self, MusicWishWorkerConfig},
 };
 
 type ListCacheEntry<T> = Option<(Vec<T>, Instant)>;
@@ -128,13 +130,21 @@ pub struct AppState {
     pub(crate) music_play_dedupe_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) music_comment_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) music_runtime_config: Arc<RwLock<MusicRuntimeConfig>>,
+    pub(crate) music_wish_store: Arc<MusicWishStore>,
+    pub(crate) music_wish_worker_tx: mpsc::Sender<String>,
+    pub(crate) music_wish_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 impl AppState {
-    pub async fn new(content_db_uri: &str, comments_db_uri: &str, music_db_uri: &str) -> Result<Self> {
+    pub async fn new(
+        content_db_uri: &str,
+        comments_db_uri: &str,
+        music_db_uri: &str,
+    ) -> Result<Self> {
         let store = StaticFlowDataStore::connect(content_db_uri).await?;
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
         let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
+        let music_wish_store = Arc::new(MusicWishStore::connect(music_db_uri).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
 
@@ -144,6 +154,10 @@ impl AppState {
         let comment_worker_tx = comment_worker::spawn_comment_worker(
             comment_store.clone(),
             CommentAiWorkerConfig::from_env(content_db_uri.to_string()),
+        );
+        let music_wish_worker_tx = music_wish_worker::spawn_music_wish_worker(
+            music_wish_store.clone(),
+            MusicWishWorkerConfig::from_env(music_db_uri.to_string()),
         );
         let admin_access = AdminAccessConfig {
             local_only: parse_bool_env("ADMIN_LOCAL_ONLY", true),
@@ -170,6 +184,9 @@ impl AppState {
             music_play_dedupe_guard: Arc::new(RwLock::new(HashMap::new())),
             music_comment_guard: Arc::new(RwLock::new(HashMap::new())),
             music_runtime_config: Arc::new(RwLock::new(MusicRuntimeConfig::default())),
+            music_wish_store,
+            music_wish_worker_tx,
+            music_wish_submit_guard: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 }

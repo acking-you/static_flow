@@ -1,10 +1,16 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-use crate::api;
-use crate::components::icons::{Icon, IconName};
-use crate::components::pagination::Pagination;
-use crate::router::Route;
+use crate::{
+    api,
+    components::{
+        icons::{Icon, IconName},
+        pagination::Pagination,
+    },
+    i18n::current::music_wish as wish_t,
+    music_context::{MusicAction, MusicPlayerContext},
+    router::Route,
+};
 
 const PAGE_SIZE: usize = 20;
 
@@ -17,12 +23,19 @@ struct MusicLibraryQuery {
 #[function_component(MusicLibraryPage)]
 pub fn music_library_page() -> Html {
     let location = use_location();
-    let query_string = location.as_ref().map(|l| l.query_str().to_string()).unwrap_or_default();
+    let query_string = location
+        .as_ref()
+        .map(|l| l.query_str().to_string())
+        .unwrap_or_default();
 
     // Initialize filter state directly from URL to avoid double-fetch on mount
-    let initial_query = location.as_ref()
+    let initial_query = location
+        .as_ref()
         .and_then(|loc| loc.query::<MusicLibraryQuery>().ok())
-        .unwrap_or(MusicLibraryQuery { artist: None, album: None });
+        .unwrap_or(MusicLibraryQuery {
+            artist: None,
+            album: None,
+        });
 
     let page_songs = use_state(Vec::<api::SongListItem>::new);
     let loading = use_state(|| true);
@@ -31,6 +44,18 @@ pub fn music_library_page() -> Html {
     let active_album = use_state(|| initial_query.album.clone());
     let current_page = use_state(|| 1_usize);
     let total = use_state(|| 0_usize);
+    let player_ctx = use_context::<MusicPlayerContext>();
+
+    // Wish board state
+    let wishes = use_state(Vec::<api::MusicWishItem>::new);
+    let wish_loading = use_state(|| false);
+    let wish_form_song = use_state(String::new);
+    let wish_form_artist = use_state(String::new);
+    let wish_form_message = use_state(String::new);
+    let wish_form_nickname = use_state(String::new);
+    let wish_submitting = use_state(|| false);
+    let wish_submit_msg = use_state(|| None::<String>);
+    let wish_submit_err = use_state(|| None::<String>);
 
     // Sync URL query params → state on subsequent navigation
     {
@@ -56,11 +81,7 @@ pub fn music_library_page() -> Html {
         let loading = loading.clone();
         let error = error.clone();
         let total = total.clone();
-        let deps = (
-            (*active_artist).clone(),
-            (*active_album).clone(),
-            *current_page,
-        );
+        let deps = ((*active_artist).clone(), (*active_album).clone(), *current_page);
         use_effect_with(deps, move |deps| {
             let (artist, album, page) = deps.clone();
             let offset = (page - 1) * PAGE_SIZE;
@@ -68,16 +89,21 @@ pub fn music_library_page() -> Html {
             error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match api::fetch_songs(
-                    Some(PAGE_SIZE), Some(offset),
-                    artist.as_deref(), album.as_deref(), None,
-                ).await {
+                    Some(PAGE_SIZE),
+                    Some(offset),
+                    artist.as_deref(),
+                    album.as_deref(),
+                    None,
+                )
+                .await
+                {
                     Ok(resp) => {
                         total.set(resp.total);
                         page_songs.set(resp.songs);
-                    }
+                    },
                     Err(e) => {
                         error.set(Some(e));
-                    }
+                    },
                 }
                 loading.set(false);
             });
@@ -86,7 +112,7 @@ pub fn music_library_page() -> Html {
     }
 
     let total_val = *total;
-    let total_pages = if total_val == 0 { 1 } else { (total_val + PAGE_SIZE - 1) / PAGE_SIZE };
+    let total_pages = if total_val == 0 { 1 } else { total_val.div_ceil(PAGE_SIZE) };
 
     let on_artist_click = {
         let active_artist = active_artist.clone();
@@ -136,7 +162,104 @@ pub fn music_library_page() -> Html {
 
     let on_page_change = {
         let current_page = current_page.clone();
-        Callback::from(move |page: usize| { current_page.set(page); })
+        Callback::from(move |page: usize| {
+            current_page.set(page);
+        })
+    };
+
+    // Keep global playlist synced with current Music Library page results.
+    {
+        let player_ctx = player_ctx.clone();
+        let active_artist = (*active_artist).clone();
+        let active_album = (*active_album).clone();
+        let current_page = *current_page;
+        let ids: Vec<String> = page_songs.iter().map(|song| song.id.clone()).collect();
+        use_effect_with(
+            (ids.clone(), active_artist.clone(), active_album.clone(), current_page),
+            move |(ids, artist, album, page)| {
+                if let Some(ctx) = player_ctx.as_ref() {
+                    let source = format!(
+                        "music-library:artist={}:album={}:page={}",
+                        artist.clone().unwrap_or_default(),
+                        album.clone().unwrap_or_default(),
+                        page
+                    );
+                    ctx.dispatch(MusicAction::SetPlaylist {
+                        source,
+                        ids: ids.clone(),
+                    });
+                }
+                || ()
+            },
+        );
+    }
+
+    // Fetch wishes on mount
+    {
+        let wishes = wishes.clone();
+        let wish_loading = wish_loading.clone();
+        use_effect_with((), move |_| {
+            wish_loading.set(true);
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
+                    wishes.set(list);
+                }
+                wish_loading.set(false);
+            });
+            || ()
+        });
+    }
+
+    let on_wish_submit = {
+        let wish_form_song = wish_form_song.clone();
+        let wish_form_artist = wish_form_artist.clone();
+        let wish_form_message = wish_form_message.clone();
+        let wish_form_nickname = wish_form_nickname.clone();
+        let wish_submitting = wish_submitting.clone();
+        let wish_submit_msg = wish_submit_msg.clone();
+        let wish_submit_err = wish_submit_err.clone();
+        let wishes = wishes.clone();
+        Callback::from(move |e: SubmitEvent| {
+            e.prevent_default();
+            let song = (*wish_form_song).trim().to_string();
+            let artist = (*wish_form_artist).trim().to_string();
+            let message = (*wish_form_message).trim().to_string();
+            let nickname = (*wish_form_nickname).trim().to_string();
+            if song.is_empty() || message.is_empty() || nickname.is_empty() {
+                return;
+            }
+            let artist_opt = if artist.is_empty() { None } else { Some(artist.clone()) };
+            let wish_submitting = wish_submitting.clone();
+            let wish_submit_msg = wish_submit_msg.clone();
+            let wish_submit_err = wish_submit_err.clone();
+            let wishes = wishes.clone();
+            let wish_form_song = wish_form_song.clone();
+            let wish_form_artist = wish_form_artist.clone();
+            let wish_form_message = wish_form_message.clone();
+            wish_submitting.set(true);
+            wish_submit_msg.set(None);
+            wish_submit_err.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match api::submit_music_wish(&song, artist_opt.as_deref(), &message, &nickname)
+                    .await
+                {
+                    Ok(_) => {
+                        wish_submit_msg.set(Some(wish_t::SUBMIT_SUCCESS.to_string()));
+                        wish_form_song.set(String::new());
+                        wish_form_artist.set(String::new());
+                        wish_form_message.set(String::new());
+                        // Refresh list
+                        if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
+                            wishes.set(list);
+                        }
+                    },
+                    Err(e) => {
+                        wish_submit_err.set(Some(e));
+                    },
+                }
+                wish_submitting.set(false);
+            });
+        })
     };
 
     html! {
@@ -203,6 +326,92 @@ pub fn music_library_page() -> Html {
                     </div>
                 }
             }
+
+            // Wish board section
+            <div class="mt-16 border-t border-[var(--border)] pt-10">
+                <h2 class="text-2xl font-bold text-[var(--text)] mb-1" style="font-family: 'Fraunces', serif;">
+                    {wish_t::SECTION_TITLE}
+                </h2>
+                <p class="text-[var(--muted)] text-sm mb-6">{wish_t::SECTION_SUBTITLE}</p>
+
+                <form onsubmit={on_wish_submit}
+                    class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-5 mb-8 \
+                           grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::SONG_NAME_LABEL}</label>
+                        <input type="text" placeholder={wish_t::SONG_NAME_PLACEHOLDER}
+                            value={(*wish_form_song).clone()}
+                            oninput={let s = wish_form_song.clone(); Callback::from(move |e: InputEvent| {
+                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+                                s.set(input.value());
+                            })}
+                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
+                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]"
+                            required=true />
+                    </div>
+                    <div>
+                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::ARTIST_LABEL}</label>
+                        <input type="text" placeholder={wish_t::ARTIST_PLACEHOLDER}
+                            value={(*wish_form_artist).clone()}
+                            oninput={let s = wish_form_artist.clone(); Callback::from(move |e: InputEvent| {
+                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+                                s.set(input.value());
+                            })}
+                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
+                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]" />
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::MESSAGE_LABEL}</label>
+                        <textarea placeholder={wish_t::MESSAGE_PLACEHOLDER}
+                            value={(*wish_form_message).clone()}
+                            oninput={let s = wish_form_message.clone(); Callback::from(move |e: InputEvent| {
+                                let input: web_sys::HtmlTextAreaElement = e.target_unchecked_into();
+                                s.set(input.value());
+                            })}
+                            rows="3"
+                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
+                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)] resize-none"
+                            required=true />
+                    </div>
+                    <div>
+                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::NICKNAME_LABEL}</label>
+                        <input type="text" placeholder={wish_t::NICKNAME_PLACEHOLDER}
+                            value={(*wish_form_nickname).clone()}
+                            oninput={let s = wish_form_nickname.clone(); Callback::from(move |e: InputEvent| {
+                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+                                s.set(input.value());
+                            })}
+                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
+                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]"
+                            required=true />
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" disabled={*wish_submitting}
+                            class="px-5 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium \
+                                   hover:opacity-90 transition-opacity disabled:opacity-50">
+                            {if *wish_submitting { wish_t::SUBMITTING } else { wish_t::SUBMIT_BTN }}
+                        </button>
+                    </div>
+                    if let Some(ref msg) = *wish_submit_msg {
+                        <div class="sm:col-span-2 text-green-500 text-sm">{msg}</div>
+                    }
+                    if let Some(ref err) = *wish_submit_err {
+                        <div class="sm:col-span-2 text-red-500 text-sm">{err}</div>
+                    }
+                </form>
+
+                if *wish_loading {
+                    <div class="flex justify-center py-8">
+                        <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--primary)]" />
+                    </div>
+                } else if wishes.is_empty() {
+                    <p class="text-center text-[var(--muted)] py-8">{wish_t::EMPTY_LIST}</p>
+                } else {
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        { for wishes.iter().map(render_wish_card) }
+                    </div>
+                }
+            </div>
         </div>
     }
 }
@@ -274,3 +483,69 @@ fn format_duration(ms: u64) -> String {
     format!("{:02}:{:02}", minutes, seconds)
 }
 
+fn render_wish_card(w: &api::MusicWishItem) -> Html {
+    let status_class = match w.status.as_str() {
+        "pending" => "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
+        "approved" | "running" => "bg-blue-500/10 text-blue-600 border-blue-500/20",
+        "done" => "bg-green-500/10 text-green-600 border-green-500/20",
+        "failed" => "bg-red-500/10 text-red-600 border-red-500/20",
+        _ => "bg-gray-500/10 text-gray-600 border-gray-500/20",
+    };
+    let status_text = match w.status.as_str() {
+        "pending" => wish_t::STATUS_PENDING,
+        "approved" => wish_t::STATUS_APPROVED,
+        "running" => wish_t::STATUS_RUNNING,
+        "done" => wish_t::STATUS_DONE,
+        "failed" => wish_t::STATUS_FAILED,
+        other => other,
+    };
+
+    let ts = format_ts_ms(w.created_at);
+
+    html! {
+        <div class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-4 \
+                    flex flex-col gap-2">
+            <div class="flex items-start justify-between gap-2">
+                <h3 class="text-sm font-semibold text-[var(--text)] truncate">{&w.song_name}</h3>
+                <span class={classes!("text-[10px]", "px-2", "py-0.5", "rounded-full", "border",
+                    "whitespace-nowrap", "shrink-0", status_class)}>
+                    {status_text}
+                </span>
+            </div>
+            if let Some(ref artist) = w.artist_hint {
+                <p class="text-xs text-[var(--muted)]">{format!("🎤 {}", artist)}</p>
+            }
+            <p class="text-xs text-[var(--text)] line-clamp-3">{&w.wish_message}</p>
+            <div class="flex items-center justify-between text-[10px] text-[var(--muted)] mt-auto pt-1 \
+                        border-t border-[var(--border)]">
+                <span>{format!("{} · {}", w.nickname, w.ip_region)}</span>
+                <span>{&ts}</span>
+            </div>
+            if w.status == "done" {
+                if let Some(ref song_id) = w.ingested_song_id {
+                    <Link<Route> to={Route::MusicPlayer { id: song_id.clone() }}
+                        classes="text-xs text-[var(--primary)] hover:underline">
+                        {wish_t::LISTEN_NOW}
+                    </Link<Route>>
+                }
+            }
+            if let Some(ref reply) = w.ai_reply {
+                <div class="mt-2 p-2 bg-[var(--surface-alt)] rounded-lg border border-[var(--border)] \
+                            text-xs text-[var(--text)] whitespace-pre-wrap">
+                    <span class="text-[10px] text-[var(--muted)] block mb-1">{"🤖 AI"}</span>
+                    {reply}
+                </div>
+            }
+        </div>
+    }
+}
+
+fn format_ts_ms(ms: i64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms as f64));
+    let y = date.get_full_year();
+    let m = date.get_month() + 1;
+    let d = date.get_date();
+    let h = date.get_hours();
+    let min = date.get_minutes();
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}")
+}

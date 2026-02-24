@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod admin_ai_stream;
+pub mod admin_music_wish_stream;
 pub mod article_detail;
 pub mod article_raw;
 pub mod categories;

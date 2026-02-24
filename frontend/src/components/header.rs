@@ -198,6 +198,7 @@ pub fn header() -> Html {
         (t::NAV_POSTS, Route::Posts, "fa-file-lines"),
         (t::NAV_TAGS, Route::Tags, "fa-tag"),
         (t::NAV_CATEGORIES, Route::Categories, "fa-folder-open"),
+        (t::NAV_MUSIC, Route::MediaAudio, "fa-music"),
     ];
     let image_search_href = crate::config::route_path("/search?mode=image");
 
@@ -611,17 +612,14 @@ fn build_search_url(
 ) -> String {
     let mut params = vec![format!("q={encoded_query}")];
 
-    let is_music_context = matches!(
-        route,
-        Some(Route::MediaAudio) | Some(Route::MusicPlayer { .. })
-    );
+    let is_music_context =
+        matches!(route, Some(Route::MediaAudio) | Some(Route::MusicPlayer { .. }));
 
     if matches!(route, Some(Route::Search)) {
         if let Some(current) = location.and_then(|loc| loc.query::<HeaderSearchQuery>().ok()) {
-            if let Some(mode) = current
-                .mode
-                .filter(|value| matches!(value.as_str(), "keyword" | "semantic" | "image" | "music"))
-            {
+            if let Some(mode) = current.mode.filter(|value| {
+                matches!(value.as_str(), "keyword" | "semantic" | "image" | "music")
+            }) {
                 if mode != "keyword" {
                     params.push(format!("mode={}", urlencoding::encode(&mode)));
                 }

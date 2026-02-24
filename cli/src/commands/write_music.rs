@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use static_flow_shared::embedding::text::{
-    detect_language, embed_text_with_language, TextEmbeddingLanguage,
+use static_flow_shared::{
+    embedding::text::{detect_language, embed_text_with_language, TextEmbeddingLanguage},
+    music_store::{MusicDataStore, SongRecord},
 };
-use static_flow_shared::music_store::{MusicDataStore, SongRecord};
 
 pub struct WriteMusicOptions {
     pub id: Option<String>,
@@ -41,7 +41,8 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
         .with_context(|| format!("failed to read audio file: {}", file.display()))?;
 
     // Extract metadata from audio tags using lofty
-    let (tag_title, tag_artist, tag_album, tag_duration_ms, tag_bitrate) = extract_audio_tags(file)?;
+    let (tag_title, tag_artist, tag_album, tag_duration_ms, tag_bitrate) =
+        extract_audio_tags(file)?;
 
     let title = opts.title.unwrap_or(tag_title);
     let artist = opts.artist.unwrap_or(tag_artist);
@@ -51,21 +52,27 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
-    let id = opts.id.unwrap_or_else(|| format!("{}-{}", opts.source, file_stem));
+    let id = opts
+        .id
+        .unwrap_or_else(|| format!("{}-{}", opts.source, file_stem));
 
     // Read lyrics files if provided
     let lyrics_lrc = if let Some(ref path) = opts.lyrics {
-        Some(std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read lyrics: {}", path.display()))?)
+        Some(
+            std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read lyrics: {}", path.display()))?,
+        )
     } else {
         None
     };
-    let lyrics_translation = if let Some(ref path) = opts.lyrics_translation {
-        Some(std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read lyrics translation: {}", path.display()))?)
-    } else {
-        None
-    };
+    let lyrics_translation =
+        if let Some(ref path) = opts.lyrics_translation {
+            Some(std::fs::read_to_string(path).with_context(|| {
+                format!("failed to read lyrics translation: {}", path.display())
+            })?)
+        } else {
+            None
+        };
 
     // Build searchable text
     let lyrics_plain = lyrics_lrc
@@ -79,9 +86,10 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
     let primary_vector = embed_text_with_language(&searchable_text, lang);
     let (vector_en, vector_zh) = match lang {
         TextEmbeddingLanguage::Chinese => {
-            let en_vector = embed_text_with_language(&searchable_text, TextEmbeddingLanguage::English);
+            let en_vector =
+                embed_text_with_language(&searchable_text, TextEmbeddingLanguage::English);
             (Some(en_vector), Some(primary_vector))
-        }
+        },
         TextEmbeddingLanguage::English => (Some(primary_vector), None),
     };
 
@@ -100,7 +108,11 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
         .tags
         .as_deref()
         .map(|t| {
-            let tags: Vec<&str> = t.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+            let tags: Vec<&str> = t
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
             serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string())
         })
         .unwrap_or_else(|| "[]".to_string());
@@ -150,7 +162,9 @@ fn extract_audio_tags(path: &Path) -> Result<(String, String, String, u64, u64)>
     let tagged_file = lofty::read_from_path(path)
         .with_context(|| format!("failed to read audio tags from: {}", path.display()))?;
 
-    let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag());
 
     let title = tag
         .and_then(|t| t.title().map(|s| s.to_string()))

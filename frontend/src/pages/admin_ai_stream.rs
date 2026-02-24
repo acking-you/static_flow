@@ -199,9 +199,20 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
 
                         let stream_status_setter = stream_status.clone();
                         let stream_error_setter = stream_error.clone();
+                        let source_ref = source.clone();
                         let onerror = Closure::<dyn FnMut(Event)>::new(move |_| {
-                            stream_status_setter.set("error".to_string());
-                            stream_error_setter.set(Some("Stream connection closed".to_string()));
+                            // Guard: ignore onerror if we already reached a terminal state
+                            let current = (*stream_status_setter).clone();
+                            if current == "done" || current == "success" || current == "error" {
+                                return;
+                            }
+                            // readyState: 0=CONNECTING (browser auto-reconnecting), 2=CLOSED
+                            if source_ref.ready_state() == 2 {
+                                stream_status_setter.set("error".to_string());
+                                stream_error_setter
+                                    .set(Some("Stream connection closed".to_string()));
+                            }
+                            // CONNECTING (0) → browser is retrying, don't overwrite status
                         });
                         source.set_onerror(Some(onerror.as_ref().unchecked_ref()));
 
