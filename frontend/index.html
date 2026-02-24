@@ -73,6 +73,62 @@
     <meta name="msapplication-TileColor" content="#161209" />
     <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
 
+    <!-- Cache compiled WASM Module in IndexedDB to survive V8 code-cache eviction.
+         After long idle the browser discards compiled code; without this patch the
+         1.9 MB module must be recompiled from disk-cached bytes (pure CPU, zero
+         network requests, blank page for seconds). IndexedDB stores the compiled
+         Module persistently and is not subject to the same eviction policy. -->
+    <script>
+      (function () {
+        var DB = 'sf-wasm-cache', STORE = 'compiled';
+        function openDB() {
+          return new Promise(function (ok, fail) {
+            var r = indexedDB.open(DB, 1);
+            r.onupgradeneeded = function () { r.result.createObjectStore(STORE); };
+            r.onsuccess = function () { ok(r.result); };
+            r.onerror = function () { fail(r.error); };
+          });
+        }
+        var _is = WebAssembly.instantiateStreaming;
+        if (!_is) return;
+        WebAssembly.instantiateStreaming = function (source, imports) {
+          var resp;
+          return Promise.resolve(source)
+            .then(function (r) { resp = r; return r.url || ''; })
+            .then(function (url) {
+              if (!url.includes('.wasm')) return _is.call(WebAssembly, resp, imports);
+              return openDB()
+                .then(function (db) {
+                  return new Promise(function (ok) {
+                    var tx = db.transaction(STORE, 'readonly');
+                    var rq = tx.objectStore(STORE).get(url);
+                    rq.onsuccess = function () { ok(rq.result || null); };
+                    rq.onerror = function () { ok(null); };
+                  });
+                })
+                .then(function (cached) {
+                  if (cached instanceof WebAssembly.Module) {
+                    return WebAssembly.instantiate(cached, imports)
+                      .then(function (instance) { return { instance: instance, module: cached }; });
+                  }
+                  return _is.call(WebAssembly, resp, imports)
+                    .then(function (result) {
+                      openDB().then(function (db) {
+                        var tx = db.transaction(STORE, 'readwrite');
+                        var st = tx.objectStore(STORE);
+                        st.clear();
+                        st.put(result.module, url);
+                      }).catch(function () {});
+                      return result;
+                    });
+                })
+                .catch(function () { return _is.call(WebAssembly, resp, imports); });
+            })
+            .catch(function () { return _is.call(WebAssembly, source, imports); });
+        };
+      })();
+    </script>
+
     <!-- Trunk will compile Rust to WASM -->
     <!-- Disable built-in wasm-opt, we'll optimize manually in post_build hook -->
     <link data-trunk rel="rust" data-wasm-opt="0" />
@@ -123,6 +179,26 @@
     <div class="spotlight" id="global-spotlight" aria-hidden="true"></div>
     <!-- WASM app will render here -->
     <noscript>本应用需要启用 JavaScript。</noscript>
+
+    <!-- Loading indicator shown while WASM compiles; removed once app mounts -->
+    <div id="sf-loading" style="position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg,#fafafa);transition:opacity .3s ease">
+      <style>
+        @keyframes sf-spin{to{transform:rotate(360deg)}}
+        #sf-loading-ring{width:36px;height:36px;border:3px solid #e5e7eb;border-top-color:#0078d4;border-radius:50%;animation:sf-spin .8s linear infinite}
+        #sf-loading-text{margin-top:12px;font:500 14px/1 system-ui,sans-serif;color:#6b7280;letter-spacing:.02em}
+        [data-theme="dark"] #sf-loading{background:#0d1117}
+        [data-theme="dark"] #sf-loading-ring{border-color:#30363d;border-top-color:#58a6ff}
+        [data-theme="dark"] #sf-loading-text{color:#8b949e}
+      </style>
+      <div id="sf-loading-ring"></div>
+      <div id="sf-loading-text">Loading…</div>
+    </div>
+    <script>
+      addEventListener('TrunkApplicationStarted', function () {
+        var el = document.getElementById('sf-loading');
+        if (el) { el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 320); }
+      });
+    </script>
 
     <!-- KaTeX and Highlight.js scripts -->
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>

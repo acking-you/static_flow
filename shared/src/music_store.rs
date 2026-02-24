@@ -609,17 +609,21 @@ impl MusicDataStore {
 
     pub async fn upsert_song(&self, record: &SongRecord) -> Result<()> {
         let table = self.songs_table().await?;
-        let row_count = table.count_rows(None).await.unwrap_or(0);
+        let escaped_id = escape_literal(&record.id);
+        let existing_count = table
+            .count_rows(Some(format!("id = '{escaped_id}'")))
+            .await
+            .unwrap_or(0);
         let batch = build_song_batch(record)?;
         let schema = batch.schema();
-        if row_count == 0 {
-            // Empty table: merge_insert is unreliable, use plain add
+        if existing_count == 0 {
+            // New ID: plain add avoids merge edge cases observed on large tables.
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
             table
                 .add(Box::new(batches))
                 .execute()
                 .await
-                .context("failed to add song to empty table")?;
+                .context("failed to add new song record")?;
         } else {
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
             let mut merge = table.merge_insert(&["id"]);
