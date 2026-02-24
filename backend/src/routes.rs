@@ -92,6 +92,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/admin/api-behavior/overview", get(handlers::admin_api_behavior_overview))
         .route("/admin/api-behavior/events", get(handlers::admin_list_api_behavior_events))
         .route("/admin/api-behavior/cleanup", post(handlers::admin_cleanup_api_behavior))
+        .route("/admin/api-behavior/compact", post(handlers::admin_compact_api_behavior))
         .route("/admin/geoip/status", get(handlers::get_geoip_status))
         .route("/admin/comments/tasks", get(handlers::admin_list_comment_tasks))
         .route("/admin/comments/tasks/grouped", get(handlers::admin_list_comment_tasks_grouped))

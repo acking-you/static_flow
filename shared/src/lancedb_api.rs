@@ -17,6 +17,7 @@ use lancedb::{
     connect,
     index::scalar::FullTextSearchQuery,
     query::{ExecutableQuery, QueryBase, Select},
+    table::OptimizeAction,
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
@@ -353,10 +354,29 @@ impl StaticFlowDataStore {
     pub async fn list_api_behavior_events(
         &self,
         since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: Option<usize>,
     ) -> Result<Vec<ApiBehaviorEvent>> {
         let table = self.api_behavior_table().await?;
-        let batches = table
-            .query()
+        let mut q = table.query();
+        let mut filters = Vec::new();
+        if let Some(min) = since_ms {
+            filters.push(format!(
+                "occurred_at >= arrow_cast({min}, 'Timestamp(Millisecond, None)')"
+            ));
+        }
+        if let Some(max) = until_ms {
+            filters.push(format!(
+                "occurred_at < arrow_cast({max}, 'Timestamp(Millisecond, None)')"
+            ));
+        }
+        if !filters.is_empty() {
+            q = q.only_if(filters.join(" AND "));
+        }
+        if let Some(lim) = limit {
+            q = q.limit(lim.max(1));
+        }
+        let batches = q
             .select(Select::columns(&[
                 "event_id",
                 "occurred_at",
@@ -382,16 +402,15 @@ impl StaticFlowDataStore {
             .try_collect::<Vec<_>>()
             .await?;
         let mut events = batches_to_api_behavior_events(&batches)?;
-        if let Some(min_ms) = since_ms {
-            events.retain(|item| item.occurred_at >= min_ms);
-        }
         events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
         Ok(events)
     }
 
     pub async fn cleanup_api_behavior_before(&self, before_ms: i64) -> Result<usize> {
         let table = self.api_behavior_table().await?;
-        let filter = format!("occurred_at < {before_ms}");
+        let filter = format!(
+            "occurred_at < arrow_cast({before_ms}, 'Timestamp(Millisecond, None)')"
+        );
         let deleted = table
             .count_rows(Some(filter.clone()))
             .await
@@ -406,6 +425,25 @@ impl StaticFlowDataStore {
             .await
             .context("failed to cleanup api behavior rows")?;
         Ok(deleted)
+    }
+
+    /// Compact the api_behavior_events table to merge small fragments.
+    /// This reduces the number of open file descriptors and improves query performance.
+    pub async fn compact_api_behavior_table(&self) -> Result<()> {
+        let table = self.api_behavior_table().await?;
+        table
+            .optimize(OptimizeAction::All)
+            .await
+            .context("failed to compact api_behavior_events table")?;
+        table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(ChronoDuration::zero()),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await
+            .context("failed to prune api_behavior_events table")?;
+        Ok(())
     }
 
     pub async fn track_article_view(

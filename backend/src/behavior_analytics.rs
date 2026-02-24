@@ -20,6 +20,8 @@ use crate::{
 const CLIENT_SOURCE_HEADER: &str = "x-sf-client";
 const PAGE_PATH_HEADER: &str = "x-sf-page";
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+/// Compact the api_behavior_events table every N appends to prevent fragment accumulation.
+const COMPACT_EVERY_N_EVENTS: u64 = 500;
 
 pub async fn behavior_analytics_middleware(
     State(state): State<AppState>,
@@ -39,6 +41,12 @@ pub async fn behavior_analytics_middleware(
         return response;
     }
 
+    // Skip local/loopback requests to avoid polluting analytics
+    let client_ip = extract_client_ip(&headers);
+    if is_local_request(&client_ip) {
+        return response;
+    }
+
     let status_code = response.status().as_u16() as i32;
     let latency_ms = started_at.elapsed().as_millis().min(i32::MAX as u128) as i32;
     let response_headers = response.headers().clone();
@@ -46,7 +54,6 @@ pub async fn behavior_analytics_middleware(
     // Fire-and-forget: GeoIP + DB write run in background, don't block response
     tokio::spawn(async move {
         let occurred_at = chrono::Utc::now().timestamp_millis();
-        let client_ip = extract_client_ip(&headers);
         let ip_region = state.geoip.resolve_region(&client_ip).await;
         let ua_raw = header_value(&headers, header::USER_AGENT.as_str());
         let (device_type, os_family, browser_family) = parse_user_agent(ua_raw.as_deref());
@@ -87,6 +94,15 @@ pub async fn behavior_analytics_middleware(
         if let Err(err) = state.store.append_api_behavior_event(input).await {
             tracing::warn!("failed to append api behavior event: {err}");
         }
+
+        // Periodic compaction to merge small fragments
+        let count = EVENT_COUNTER.load(Ordering::Relaxed);
+        if count % COMPACT_EVERY_N_EVENTS == 0 {
+            tracing::info!("auto-compacting api_behavior_events (event #{count})");
+            if let Err(err) = state.store.compact_api_behavior_table().await {
+                tracing::warn!("auto-compact api_behavior_events failed: {err}");
+            }
+        }
     });
 
     response
@@ -117,6 +133,18 @@ fn extract_client_ip(headers: &HeaderMap) -> String {
         .or_else(|| parse_first_ip_from_header(headers.get("x-client-ip")))
         .or_else(|| parse_ip_from_forwarded_header(headers.get("forwarded")))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn is_local_request(client_ip: &str) -> bool {
+    // No proxy headers → direct local connection
+    if client_ip == "unknown" {
+        return true;
+    }
+    // Explicit loopback check
+    if let Ok(ip) = client_ip.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+    false
 }
 
 fn parse_first_ip_from_header(value: Option<&axum::http::HeaderValue>) -> Option<String> {

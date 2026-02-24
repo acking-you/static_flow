@@ -52,7 +52,7 @@ impl MusicWishWorkerConfig {
         let timeout_seconds = env::var("MUSIC_WISH_TIMEOUT_SECONDS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(300)
+            .unwrap_or(3600)
             .max(30);
         let workdir = env::var("MUSIC_WISH_WORKDIR")
             .map(PathBuf::from)
@@ -165,6 +165,56 @@ async fn process_one_wish(
         Ok(output) => output,
         Err(err) => {
             let reason = err.to_string();
+            let is_timeout = reason.contains("timed out");
+
+            // On timeout, check if the result file was already written before giving up.
+            // The runner may have completed the actual work (e.g. song ingestion) but
+            // exceeded the wall-clock limit during post-verification steps.
+            if is_timeout {
+                let result_path = build_result_file_path(&config.result_dir, wish_id);
+                if let Ok(result_json) = read_result_json(&result_path).await {
+                    tracing::info!(
+                        "music wish runner timed out but result file exists for {wish_id}, treating as success"
+                    );
+                    let ingested_song_id = result_json
+                        .get("ingested_song_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let reply_markdown = result_json
+                        .get("reply_markdown")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    if let Err(e) = store
+                        .transition_wish(
+                            wish_id,
+                            WISH_STATUS_DONE,
+                            None,
+                            None,
+                            ingested_song_id.as_deref(),
+                            Some(&reply_markdown),
+                        )
+                        .await
+                    {
+                        tracing::warn!("failed to mark timed-out wish as done: {e}");
+                    }
+                    let _ = store
+                        .finalize_ai_run(
+                            &run_id,
+                            WISH_AI_RUN_STATUS_SUCCESS,
+                            None,
+                            None,
+                            Some(&reply_markdown),
+                        )
+                        .await;
+                    if config.cleanup_result_file_on_success {
+                        let _ = tokio::fs::remove_file(&result_path).await;
+                    }
+                    return Ok(());
+                }
+            }
+
             let _ = store
                 .finalize_ai_run(&run_id, WISH_AI_RUN_STATUS_FAILED, None, Some(&reason), None)
                 .await;

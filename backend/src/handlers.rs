@@ -411,6 +411,8 @@ pub struct AdminCommentTasksQuery {
     pub status: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,6 +436,8 @@ pub struct AdminCommentTaskGroupedResponse {
     pub total_tasks: usize,
     pub total_articles: usize,
     pub status_counts: HashMap<String, usize>,
+    pub offset: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,12 +448,16 @@ pub struct AdminCommentPublishedQuery {
     pub task_id: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct AdminCommentPublishedResponse {
     pub comments: Vec<PublicCommentItem>,
     pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -470,12 +478,16 @@ pub struct AdminCommentAuditQuery {
     pub action: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct AdminCommentAuditResponse {
     pub logs: Vec<CommentAuditRecord>,
     pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -801,7 +813,7 @@ pub async fn admin_api_behavior_overview(
     let since_ms = behavior_window_start_ms(days);
     let events = state
         .store
-        .list_api_behavior_events(Some(since_ms))
+        .list_api_behavior_events(Some(since_ms), None, Some(50000))
         .await
         .map_err(|e| internal_error("Failed to list api behavior events", e))?;
     let overview = build_api_behavior_overview(events, days, top_limit);
@@ -854,14 +866,9 @@ pub async fn admin_list_api_behavior_events(
 
     let mut events = state
         .store
-        .list_api_behavior_events(Some(since_ms))
+        .list_api_behavior_events(Some(since_ms), until_ms, None)
         .await
         .map_err(|e| internal_error("Failed to list api behavior events", e))?;
-
-    // Apply upper bound when filtering by specific date
-    if let Some(end) = until_ms {
-        events.retain(|event| event.occurred_at < end);
-    }
 
     let path_filter = normalize_filter(query.path_contains);
     let page_filter = normalize_filter(query.page_contains);
@@ -952,11 +959,31 @@ pub async fn admin_cleanup_api_behavior(
         .await
         .map_err(|e| internal_error("Failed to cleanup api behavior events", e))?;
 
+    // Compact after cleanup to merge fragments and reduce open file descriptors
+    if deleted > 0 {
+        if let Err(e) = state.store.compact_api_behavior_table().await {
+            tracing::warn!("Failed to compact api_behavior_events after cleanup: {e}");
+        }
+    }
+
     Ok(Json(AdminApiBehaviorCleanupResponse {
         deleted_events: deleted,
         before_ms,
         retention_days,
     }))
+}
+
+pub async fn admin_compact_api_behavior(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    state
+        .store
+        .compact_api_behavior_table()
+        .await
+        .map_err(|e| internal_error("Failed to compact api_behavior_events table", e))?;
+    Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
 pub async fn get_geoip_status(
@@ -1222,12 +1249,17 @@ pub async fn admin_list_comment_tasks_grouped(
 
     let total_tasks = groups.iter().map(|group| group.total).sum::<usize>();
     let total_articles = groups.len();
+    let offset = query.offset.unwrap_or(0);
+    let paged = groups.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+    let has_more = offset.saturating_add(paged.len()) < total_articles;
 
     Ok(Json(AdminCommentTaskGroupedResponse {
-        groups,
+        groups: paged,
         total_tasks,
         total_articles,
         status_counts,
+        offset,
+        has_more,
     }))
 }
 
@@ -1625,12 +1657,22 @@ pub async fn admin_list_published_comments(
         rows.retain(|row| row.task_id == task_id);
     }
 
-    Ok(Json(AdminCommentPublishedResponse {
-        total: rows.len(),
-        comments: rows
+    Ok(Json({
+        let total = rows.len();
+        let offset = query.offset.unwrap_or(0);
+        let paged: Vec<_> = rows
             .into_iter()
+            .skip(offset)
+            .take(limit)
             .map(|row| public_comment_from_published(row, None))
-            .collect(),
+            .collect();
+        let has_more = offset.saturating_add(paged.len()) < total;
+        AdminCommentPublishedResponse {
+            comments: paged,
+            total,
+            offset,
+            has_more,
+        }
     }))
 }
 
@@ -1805,9 +1847,16 @@ pub async fn admin_list_comment_audit_logs(
         .await
         .map_err(|e| internal_error("Failed to list comment audit logs", e))?;
 
+    let total = logs.len();
+    let offset = query.offset.unwrap_or(0);
+    let paged: Vec<_> = logs.into_iter().skip(offset).take(limit).collect();
+    let has_more = offset.saturating_add(paged.len()) < total;
+
     Ok(Json(AdminCommentAuditResponse {
-        total: logs.len(),
-        logs,
+        total,
+        offset,
+        has_more,
+        logs: paged,
     }))
 }
 
@@ -3642,13 +3691,23 @@ pub async fn list_music_wishes(
 pub struct AdminMusicWishListQuery {
     pub status: Option<String>,
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminMusicWishListResponse {
+    pub wishes: Vec<MusicWishRecord>,
+    pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
 }
 
 pub async fn admin_list_music_wishes(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<AdminMusicWishListQuery>,
-) -> Result<Json<Vec<MusicWishRecord>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<AdminMusicWishListResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let limit = query.limit.unwrap_or(100).min(500);
     let wishes = state
@@ -3656,7 +3715,16 @@ pub async fn admin_list_music_wishes(
         .list_wishes(query.status.as_deref(), Some(limit))
         .await
         .map_err(|e| internal_error("Failed to list music wishes", e))?;
-    Ok(Json(wishes))
+    let total = wishes.len();
+    let offset = query.offset.unwrap_or(0);
+    let paged: Vec<_> = wishes.into_iter().skip(offset).take(limit).collect();
+    let has_more = offset.saturating_add(paged.len()) < total;
+    Ok(Json(AdminMusicWishListResponse {
+        wishes: paged,
+        total,
+        offset,
+        has_more,
+    }))
 }
 
 pub async fn admin_get_music_wish(

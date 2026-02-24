@@ -1203,12 +1203,20 @@ pub struct AdminCommentTaskGroupedResponse {
     pub total_tasks: usize,
     pub total_articles: usize,
     pub status_counts: std::collections::HashMap<String, usize>,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AdminCommentPublishedResponse {
     pub comments: Vec<ArticleComment>,
     pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1262,6 +1270,10 @@ pub struct AdminCommentAuditLog {
 pub struct AdminCommentAuditResponse {
     pub logs: Vec<AdminCommentAuditLog>,
     pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1869,6 +1881,7 @@ pub async fn update_admin_comment_runtime_config(
 pub async fn fetch_admin_comment_tasks_grouped(
     status: Option<&str>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<AdminCommentTaskGroupedResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -1877,6 +1890,8 @@ pub async fn fetch_admin_comment_tasks_grouped(
             total_tasks: 0,
             total_articles: 0,
             status_counts: std::collections::HashMap::new(),
+            offset: 0,
+            has_more: false,
         });
     }
 
@@ -1889,6 +1904,9 @@ pub async fn fetch_admin_comment_tasks_grouped(
         }
         if let Some(limit) = limit {
             params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            params.push(format!("offset={offset}"));
         }
         if !params.is_empty() {
             url.push('?');
@@ -2076,12 +2094,15 @@ pub async fn fetch_admin_published_comments(
     article_id: Option<&str>,
     task_id: Option<&str>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<AdminCommentPublishedResponse, String> {
     #[cfg(feature = "mock")]
     {
         return Ok(AdminCommentPublishedResponse {
             comments: vec![],
             total: 0,
+            offset: 0,
+            has_more: false,
         });
     }
 
@@ -2097,6 +2118,9 @@ pub async fn fetch_admin_published_comments(
         }
         if let Some(limit) = limit {
             params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            params.push(format!("offset={offset}"));
         }
         if !params.is_empty() {
             url.push('?');
@@ -2187,12 +2211,15 @@ pub async fn fetch_admin_comment_audit_logs(
     task_id: Option<&str>,
     action: Option<&str>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<AdminCommentAuditResponse, String> {
     #[cfg(feature = "mock")]
     {
         return Ok(AdminCommentAuditResponse {
             logs: vec![],
             total: 0,
+            offset: 0,
+            has_more: false,
         });
     }
 
@@ -2208,6 +2235,9 @@ pub async fn fetch_admin_comment_audit_logs(
         }
         if let Some(limit) = limit {
             params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            params.push(format!("offset={offset}"));
         }
         if !params.is_empty() {
             url.push('?');
@@ -2703,6 +2733,16 @@ pub struct MusicWishListResponse {
     pub wishes: Vec<MusicWishItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminMusicWishListResponse {
+    pub wishes: Vec<MusicWishItem>,
+    pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitMusicWishResponse {
     pub wish_id: String,
@@ -2816,10 +2856,16 @@ pub async fn fetch_music_wishes(limit: Option<usize>) -> Result<Vec<MusicWishIte
 pub async fn fetch_admin_music_wishes(
     status: Option<&str>,
     limit: Option<usize>,
-) -> Result<Vec<MusicWishItem>, String> {
+    offset: Option<usize>,
+) -> Result<AdminMusicWishListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        return Ok(AdminMusicWishListResponse {
+            wishes: vec![],
+            total: 0,
+            offset: 0,
+            has_more: false,
+        });
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2831,6 +2877,9 @@ pub async fn fetch_admin_music_wishes(
         }
         if let Some(l) = limit {
             url.push_str(&format!("limit={l}&"));
+        }
+        if let Some(o) = offset {
+            url.push_str(&format!("offset={o}&"));
         }
         let response = api_get(&url)
             .send()
