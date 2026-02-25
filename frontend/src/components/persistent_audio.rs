@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::HtmlAudioElement;
 use yew::prelude::*;
@@ -35,35 +37,29 @@ pub(crate) async fn resolve_next_song(
         }
     }
 
-    // Collect recent 3 song IDs to avoid repeats
-    let recent_ids: Vec<&str> = ctx
-        .history
-        .iter()
-        .rev()
-        .take(3)
-        .map(|(id, _)| id.as_str())
-        .collect();
+    match ctx.next_mode {
+        NextSongMode::PlaylistSequential => pick_playlist_next(ctx).await,
+        NextSongMode::Semantic => pick_backend_next(ctx, api::NextSongResolveMode::Semantic).await,
+        NextSongMode::Random => pick_backend_next(ctx, api::NextSongResolveMode::Random).await,
+    }
+}
+
+/// Resolve what the next song preview card should show.
+/// Different from `resolve_next_song`, this includes forward history.
+pub(crate) async fn preview_next_song(
+    ctx: &MusicPlayerContext,
+) -> Option<(api::SongDetail, String)> {
+    if let Some(idx) = ctx.history_index {
+        if idx + 1 < ctx.history.len() {
+            let (id, song) = ctx.history[idx + 1].clone();
+            return Some((song, id));
+        }
+    }
 
     match ctx.next_mode {
         NextSongMode::PlaylistSequential => pick_playlist_next(ctx).await,
-        NextSongMode::Semantic => {
-            // Pick from pre-fetched candidates, excluding recent 3
-            let filtered: Vec<_> = ctx
-                .candidates
-                .iter()
-                .filter(|c| !recent_ids.contains(&c.id.as_str()))
-                .collect();
-            if !filtered.is_empty() {
-                let idx = (js_sys::Math::random() * filtered.len() as f64) as usize;
-                let pick = &filtered[idx.min(filtered.len() - 1)];
-                if let Ok(Some(detail)) = api::fetch_song_detail(&pick.id).await {
-                    return Some((detail, pick.id.clone()));
-                }
-            }
-            // Fallback to random if no candidates
-            pick_random_song(&recent_ids).await
-        },
-        NextSongMode::Random => pick_random_song(&recent_ids).await,
+        NextSongMode::Semantic => pick_backend_next(ctx, api::NextSongResolveMode::Semantic).await,
+        NextSongMode::Random => pick_backend_next(ctx, api::NextSongResolveMode::Random).await,
     }
 }
 
@@ -89,20 +85,34 @@ async fn pick_playlist_next(ctx: &MusicPlayerContext) -> Option<(api::SongDetail
     }
 }
 
-async fn pick_random_song(recent_ids: &[&str]) -> Option<(api::SongDetail, String)> {
-    if let Ok(resp) = api::fetch_songs(Some(20), None, None, None, Some("random")).await {
-        let candidates: Vec<_> = resp
-            .songs
-            .into_iter()
-            .filter(|s| !recent_ids.contains(&s.id.as_str()))
-            .collect();
-        if !candidates.is_empty() {
-            let idx = (js_sys::Math::random() * candidates.len() as f64) as usize;
-            let pick = &candidates[idx.min(candidates.len() - 1)];
-            if let Ok(Some(detail)) = api::fetch_song_detail(&pick.id).await {
-                return Some((detail, pick.id.clone()));
-            }
+fn collect_recent_song_ids(ctx: &MusicPlayerContext, max: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut ids = Vec::new();
+    for (id, _) in ctx.history.iter().rev() {
+        let normalized = id.trim();
+        if normalized.is_empty() {
+            continue;
         }
+        if !seen.insert(normalized.to_string()) {
+            continue;
+        }
+        ids.push(normalized.to_string());
+        if ids.len() >= max {
+            break;
+        }
+    }
+    ids
+}
+
+async fn pick_backend_next(
+    ctx: &MusicPlayerContext,
+    mode: api::NextSongResolveMode,
+) -> Option<(api::SongDetail, String)> {
+    let recent_ids = collect_recent_song_ids(ctx, 10);
+    let current_song_id = ctx.song_id.as_deref();
+    if let Ok(Some(detail)) = api::fetch_next_song(mode, current_song_id, &recent_ids).await {
+        let id = detail.id.clone();
+        return Some((detail, id));
     }
     None
 }
@@ -136,35 +146,6 @@ pub fn persistent_audio() -> Html {
                         let _ = audio.pause();
                     }
                 }
-            }
-            || ()
-        });
-    }
-
-    // Fetch semantic candidates when song or mode changes
-    {
-        let ctx = ctx.clone();
-        let song_id = ctx.song_id.clone();
-        let next_mode = ctx.next_mode.clone();
-        use_effect_with((song_id, next_mode), move |(song_id, next_mode)| {
-            if *next_mode == NextSongMode::Semantic {
-                if let Some(id) = song_id.clone() {
-                    let ctx = ctx.clone();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        match api::fetch_related_songs(&id).await {
-                            Ok(related) => {
-                                let filtered: Vec<_> =
-                                    related.into_iter().filter(|r| r.id != id).take(4).collect();
-                                ctx.dispatch(MusicAction::SetCandidates(filtered));
-                            },
-                            Err(_) => {
-                                ctx.dispatch(MusicAction::SetCandidates(vec![]));
-                            },
-                        }
-                    });
-                }
-            } else {
-                ctx.dispatch(MusicAction::SetCandidates(vec![]));
             }
             || ()
         });

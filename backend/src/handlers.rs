@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     net::IpAddr,
     time::{Duration, Instant},
@@ -116,6 +116,28 @@ pub struct ListSongsQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub sort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RandomRecommendationSongsQuery {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub exclude_ids: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NextSongRequest {
+    pub mode: String,
+    #[serde(default)]
+    pub current_song_id: Option<String>,
+    #[serde(default)]
+    pub recent_song_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NextSongResponse {
+    pub song: Option<SongDetail>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -869,12 +891,6 @@ pub async fn admin_list_api_behavior_events(
         (behavior_window_start_ms(days), None)
     };
 
-    let mut events = state
-        .store
-        .list_api_behavior_events(Some(since_ms), until_ms, None)
-        .await
-        .map_err(|e| internal_error("Failed to list api behavior events", e))?;
-
     let path_filter = normalize_filter(query.path_contains);
     let page_filter = normalize_filter(query.page_contains);
     let device_filter = normalize_filter(query.device_type);
@@ -884,42 +900,54 @@ pub async fn admin_list_api_behavior_events(
         .status_code
         .filter(|value| *value >= 100 && *value <= 599);
 
-    events.retain(|event| {
-        if let Some(filter) = path_filter.as_deref() {
-            if !event.path.to_ascii_lowercase().contains(filter) {
-                return false;
-            }
-        }
-        if let Some(filter) = page_filter.as_deref() {
-            if !event.page_path.to_ascii_lowercase().contains(filter) {
-                return false;
-            }
-        }
-        if let Some(filter) = device_filter.as_deref() {
-            if event.device_type.to_ascii_lowercase() != filter {
-                return false;
-            }
-        }
-        if let Some(filter) = method_filter.as_deref() {
-            if event.method.to_ascii_lowercase() != filter {
-                return false;
-            }
-        }
-        if let Some(filter) = ip_filter.as_deref() {
-            if !event.client_ip.to_ascii_lowercase().contains(filter) {
-                return false;
-            }
-        }
-        if let Some(code) = status_filter {
-            if event.status_code != code {
-                return false;
-            }
-        }
-        true
-    });
+    let mut filters = vec![format!(
+        "occurred_at >= arrow_cast({since_ms}, 'Timestamp(Millisecond, None)')"
+    )];
+    if let Some(until_ms) = until_ms {
+        filters.push(format!(
+            "occurred_at < arrow_cast({until_ms}, 'Timestamp(Millisecond, None)')"
+        ));
+    }
+    if let Some(filter) = path_filter.as_deref() {
+        filters.push(format!(
+            "lower(path) LIKE '%{}%'",
+            escape_filter_literal(filter)
+        ));
+    }
+    if let Some(filter) = page_filter.as_deref() {
+        filters.push(format!(
+            "lower(page_path) LIKE '%{}%'",
+            escape_filter_literal(filter)
+        ));
+    }
+    if let Some(filter) = device_filter.as_deref() {
+        filters.push(format!(
+            "lower(device_type) = '{}'",
+            escape_filter_literal(filter)
+        ));
+    }
+    if let Some(filter) = method_filter.as_deref() {
+        filters.push(format!(
+            "lower(method) = '{}'",
+            escape_filter_literal(filter)
+        ));
+    }
+    if let Some(filter) = ip_filter.as_deref() {
+        filters.push(format!(
+            "lower(client_ip) LIKE '%{}%'",
+            escape_filter_literal(filter)
+        ));
+    }
+    if let Some(code) = status_filter {
+        filters.push(format!("status_code = {code}"));
+    }
+    let filter_expr = Some(filters.join(" AND "));
 
-    events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
-    let total = events.len();
+    let total = state
+        .store
+        .count_api_behavior_events_with_filter(filter_expr.clone())
+        .await
+        .map_err(|e| internal_error("Failed to count api behavior events", e))?;
     let offset = query.offset.unwrap_or(0);
     let limit = if query.date.is_some() {
         // Date-specific queries allow up to 2000 to avoid truncation
@@ -927,19 +955,35 @@ pub async fn admin_list_api_behavior_events(
     } else {
         normalize_behavior_events_limit(query.limit)
     };
-    let paged = events
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect::<Vec<_>>();
-    let has_more = offset.saturating_add(paged.len()) < total;
+
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminApiBehaviorEventsResponse {
+            total,
+            offset,
+            limit,
+            has_more: false,
+            events: vec![],
+        }));
+    }
+
+    let fetch_count = (total - offset).min(limit);
+    // We cannot ORDER BY in LanceDB query builder today. Fetch from the tail in
+    // table order and sort in-memory for a stable "newest first" page view.
+    let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
+    let mut events = state
+        .store
+        .query_api_behavior_events(filter_expr, Some(fetch_count), Some(reverse_offset))
+        .await
+        .map_err(|e| internal_error("Failed to query api behavior events", e))?;
+    events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+    let has_more = offset.saturating_add(events.len()) < total;
 
     Ok(Json(AdminApiBehaviorEventsResponse {
         total,
         offset,
         limit,
         has_more,
-        events: paged,
+        events,
     }))
 }
 
@@ -2846,6 +2890,35 @@ fn normalize_comment_list_limit(limit: Option<usize>, default_limit: usize) -> u
         .unwrap_or(fallback)
 }
 
+fn normalize_song_id_csv_list(raw: Option<&str>, max: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .filter_map(|id| {
+            let normalized = id.to_string();
+            if seen.insert(normalized.clone()) {
+                Some(normalized)
+            } else {
+                None
+            }
+        })
+        .take(max.max(1))
+        .collect()
+}
+
+fn normalize_song_id_vec_list(raw: Option<Vec<String>>, max: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    raw.unwrap_or_default()
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .filter_map(|id| if seen.insert(id.clone()) { Some(id) } else { None })
+        .take(max.max(1))
+        .collect()
+}
+
 fn generate_task_id(prefix: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now_ms = SystemTime::now()
@@ -2989,6 +3062,10 @@ fn normalize_filter(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_ascii_lowercase())
         .filter(|item| !item.is_empty())
+}
+
+fn escape_filter_literal(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 fn build_api_behavior_overview(
@@ -3221,6 +3298,64 @@ pub async fn list_songs(
         .await
         .map_err(|e| internal_error("Failed to list songs", e))?;
     Ok(Json(result))
+}
+
+pub async fn random_recommended_songs(
+    State(state): State<AppState>,
+    Query(query): Query<RandomRecommendationSongsQuery>,
+) -> Result<
+    Json<Vec<static_flow_shared::music_store::SongListItem>>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    let limit = query.limit.unwrap_or(10).clamp(1, 50);
+    let exclude_ids = normalize_song_id_csv_list(query.exclude_ids.as_deref(), 10);
+    let songs = state
+        .music_store
+        .list_random_recommendations(limit, &exclude_ids)
+        .await
+        .map_err(|e| internal_error("Failed to list random recommended songs", e))?;
+    Ok(Json(songs))
+}
+
+pub async fn resolve_next_song(
+    State(state): State<AppState>,
+    Json(request): Json<NextSongRequest>,
+) -> Result<Json<NextSongResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mode = request.mode.trim().to_ascii_lowercase();
+    if mode != "random" && mode != "semantic" {
+        return Err(bad_request("`mode` must be `random` or `semantic`"));
+    }
+
+    let mut recent_song_ids = normalize_song_id_vec_list(request.recent_song_ids, 10);
+    if let Some(current) = request.current_song_id.as_deref().map(str::trim) {
+        if !current.is_empty() && !recent_song_ids.iter().any(|id| id == current) {
+            recent_song_ids.push(current.to_string());
+        }
+    }
+
+    let song = if mode == "semantic" {
+        let current_song_id = request
+            .current_song_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| bad_request("`current_song_id` is required for semantic mode"))?;
+        state
+            .music_store
+            .resolve_next_semantic_song(current_song_id, &recent_song_ids, 10)
+            .await
+            .map_err(|e| internal_error("Failed to resolve semantic next song", e))?
+    } else {
+        state
+            .music_store
+            .resolve_next_random_song(&recent_song_ids)
+            .await
+            .map_err(|e| internal_error("Failed to resolve random next song", e))?
+    };
+
+    Ok(Json(NextSongResponse {
+        song,
+    }))
 }
 
 pub async fn get_song(
@@ -3609,11 +3744,16 @@ pub struct SubmitMusicWishResponse {
 #[derive(Debug, Deserialize)]
 pub struct MusicWishListQuery {
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct MusicWishListResponse {
     pub wishes: Vec<MusicWishRecord>,
+    pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
 }
 
 pub async fn submit_music_wish(
@@ -3698,14 +3838,33 @@ pub async fn list_music_wishes(
     State(state): State<AppState>,
     Query(query): Query<MusicWishListQuery>,
 ) -> Result<Json<MusicWishListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = query.limit.unwrap_or(50).min(200);
+    let limit = query.limit.filter(|value| *value > 0).unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0);
+    let total = state
+        .music_wish_store
+        .count_wishes_public()
+        .await
+        .map_err(|e| internal_error("Failed to count music wishes", e))?;
+    if total == 0 || offset >= total {
+        return Ok(Json(MusicWishListResponse {
+            wishes: vec![],
+            total,
+            offset,
+            has_more: false,
+        }));
+    }
+
     let wishes = state
         .music_wish_store
-        .list_wishes_public(Some(limit))
+        .list_wishes_public_page(limit, offset)
         .await
         .map_err(|e| internal_error("Failed to list music wishes", e))?;
+    let has_more = offset.saturating_add(wishes.len()) < total;
     Ok(Json(MusicWishListResponse {
         wishes,
+        total,
+        offset,
+        has_more,
     }))
 }
 
@@ -3731,15 +3890,27 @@ pub async fn admin_list_music_wishes(
     Query(query): Query<AdminMusicWishListQuery>,
 ) -> Result<Json<AdminMusicWishListResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let limit = query.limit.unwrap_or(100).min(500);
-    let wishes = state
+    let limit = query.limit.filter(|value| *value > 0).unwrap_or(100).min(500);
+    let offset = query.offset.unwrap_or(0);
+    let total = state
         .music_wish_store
-        .list_wishes(query.status.as_deref(), Some(limit))
+        .count_wishes(query.status.as_deref())
+        .await
+        .map_err(|e| internal_error("Failed to count music wishes", e))?;
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminMusicWishListResponse {
+            wishes: vec![],
+            total,
+            offset,
+            has_more: false,
+        }));
+    }
+
+    let paged = state
+        .music_wish_store
+        .list_wishes_page(query.status.as_deref(), limit, offset)
         .await
         .map_err(|e| internal_error("Failed to list music wishes", e))?;
-    let total = wishes.len();
-    let offset = query.offset.unwrap_or(0);
-    let paged: Vec<_> = wishes.into_iter().skip(offset).take(limit).collect();
     let has_more = offset.saturating_add(paged.len()) < total;
     Ok(Json(AdminMusicWishListResponse {
         wishes: paged,

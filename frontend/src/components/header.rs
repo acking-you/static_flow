@@ -19,11 +19,7 @@ fn spa_search_click(href: String) -> Callback<MouseEvent> {
         e.prevent_default();
         if let Some(window) = web_sys::window() {
             if let Ok(history) = window.history() {
-                let _ = history.push_state_with_url(
-                    &wasm_bindgen::JsValue::NULL,
-                    "",
-                    Some(&href),
-                );
+                let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&href));
                 if let Ok(event) = web_sys::Event::new("popstate") {
                     let _ = window.dispatch_event(&event);
                 }

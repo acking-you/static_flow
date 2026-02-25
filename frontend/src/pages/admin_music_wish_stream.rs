@@ -181,7 +181,8 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
                             stream_status.set("disconnected".to_string());
                             stream_error.set(Some("Stream connection closed".to_string()));
                         }
-                        // CONNECTING (0) → browser is retrying, don't overwrite status
+                        // CONNECTING (0) → browser is retrying, don't overwrite
+                        // status
                     })
                 };
 

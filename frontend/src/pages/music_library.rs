@@ -14,11 +14,19 @@ use crate::{
 };
 
 const PAGE_SIZE: usize = 20;
+const RANDOM_RECOMMEND_LIMIT: usize = 10;
+const WISH_PAGE_SIZE: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct MusicLibraryQuery {
     artist: Option<String>,
     album: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LibraryDisplayMode {
+    RandomRecommended,
+    AllSongs,
 }
 
 #[function_component(MusicLibraryPage)]
@@ -41,15 +49,27 @@ pub fn music_library_page() -> Html {
     let page_songs = use_state(Vec::<api::SongListItem>::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
+    let random_songs = use_state(Vec::<api::SongListItem>::new);
+    let random_loading = use_state(|| true);
+    let random_error = use_state(|| None::<String>);
+    let random_refresh_tick = use_state(|| 0_u64);
+    let display_mode = use_state(|| LibraryDisplayMode::RandomRecommended);
     let active_artist = use_state(|| initial_query.artist.clone());
     let active_album = use_state(|| initial_query.album.clone());
     let current_page = use_state(|| 1_usize);
     let total = use_state(|| 0_usize);
+    let all_songs_request_seq = use_mut_ref(|| 0_u64);
+    let random_request_seq = use_mut_ref(|| 0_u64);
     let player_ctx = use_context::<MusicPlayerContext>();
 
     // Wish board state
     let wishes = use_state(Vec::<api::MusicWishItem>::new);
     let wish_loading = use_state(|| false);
+    let wish_list_error = use_state(|| None::<String>);
+    let wish_page = use_state(|| 1_usize);
+    let wish_total = use_state(|| 0_usize);
+    let wish_refresh_tick = use_state(|| 0_u64);
+    let wish_request_seq = use_mut_ref(|| 0_u64);
     let wish_form_song = use_state(String::new);
     let wish_form_artist = use_state(String::new);
     let wish_form_message = use_state(String::new);
@@ -83,11 +103,8 @@ pub fn music_library_page() -> Html {
             let url = crate::config::route_path(&format!("/search?q={encoded}&mode=music"));
             if let Some(window) = web_sys::window() {
                 if let Ok(history) = window.history() {
-                    let _ = history.push_state_with_url(
-                        &wasm_bindgen::JsValue::NULL,
-                        "",
-                        Some(&url),
-                    );
+                    let _ =
+                        history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
                     if let Ok(event) = web_sys::Event::new("popstate") {
                         let _ = window.dispatch_event(&event);
                     }
@@ -125,12 +142,17 @@ pub fn music_library_page() -> Html {
         let active_artist = active_artist.clone();
         let active_album = active_album.clone();
         let current_page = current_page.clone();
+        let display_mode = display_mode.clone();
         let location = location.clone();
         use_effect_with(query_string, move |_| {
             if let Some(ref loc) = location {
                 if let Ok(q) = loc.query::<MusicLibraryQuery>() {
+                    let has_filter = q.artist.is_some() || q.album.is_some();
                     active_artist.set(q.artist);
                     active_album.set(q.album);
+                    if has_filter {
+                        display_mode.set(LibraryDisplayMode::AllSongs);
+                    }
                     current_page.set(1);
                 }
             }
@@ -144,49 +166,128 @@ pub fn music_library_page() -> Html {
         let loading = loading.clone();
         let error = error.clone();
         let total = total.clone();
-        let deps = ((*active_artist).clone(), (*active_album).clone(), *current_page);
+        let all_songs_request_seq = all_songs_request_seq.clone();
+        let deps =
+            (*display_mode, (*active_artist).clone(), (*active_album).clone(), *current_page);
         use_effect_with(deps, move |deps| {
-            let (artist, album, page) = deps.clone();
-            let offset = (page - 1) * PAGE_SIZE;
-            loading.set(true);
-            error.set(None);
-            wasm_bindgen_futures::spawn_local(async move {
-                match api::fetch_songs(
-                    Some(PAGE_SIZE),
-                    Some(offset),
-                    artist.as_deref(),
-                    album.as_deref(),
-                    None,
-                )
-                .await
-                {
-                    Ok(resp) => {
-                        total.set(resp.total);
-                        page_songs.set(resp.songs);
-                    },
-                    Err(e) => {
-                        error.set(Some(e));
-                    },
-                }
+            let request_id = {
+                let mut seq = all_songs_request_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
+            let (mode, artist, album, page) = deps.clone();
+            if mode != LibraryDisplayMode::AllSongs {
                 loading.set(false);
-            });
+                error.set(None);
+            } else {
+                let offset = (page - 1) * PAGE_SIZE;
+                loading.set(true);
+                error.set(None);
+                let all_songs_request_seq = all_songs_request_seq.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_songs(
+                        Some(PAGE_SIZE),
+                        Some(offset),
+                        artist.as_deref(),
+                        album.as_deref(),
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(resp) => {
+                            if *all_songs_request_seq.borrow() != request_id {
+                                return;
+                            }
+                            total.set(resp.total);
+                            page_songs.set(resp.songs);
+                        },
+                        Err(e) => {
+                            if *all_songs_request_seq.borrow() != request_id {
+                                return;
+                            }
+                            error.set(Some(e));
+                        },
+                    }
+                    if *all_songs_request_seq.borrow() != request_id {
+                        return;
+                    }
+                    loading.set(false);
+                });
+            }
+            || ()
+        });
+    }
+
+    // Fetch default random recommendations.
+    {
+        let display_mode = *display_mode;
+        let random_songs = random_songs.clone();
+        let random_loading = random_loading.clone();
+        let random_error = random_error.clone();
+        let random_request_seq = random_request_seq.clone();
+        let refresh_tick = *random_refresh_tick;
+        use_effect_with((display_mode, refresh_tick), move |(mode, _)| {
+            let request_id = {
+                let mut seq = random_request_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
+            if *mode != LibraryDisplayMode::RandomRecommended {
+                random_loading.set(false);
+                random_error.set(None);
+            } else {
+                random_loading.set(true);
+                random_error.set(None);
+                let random_request_seq = random_request_seq.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_random_recommended_songs(Some(RANDOM_RECOMMEND_LIMIT), &[])
+                        .await
+                    {
+                        Ok(songs) => {
+                            if *random_request_seq.borrow() != request_id {
+                                return;
+                            }
+                            random_songs.set(songs);
+                        },
+                        Err(err) => {
+                            if *random_request_seq.borrow() != request_id {
+                                return;
+                            }
+                            random_error.set(Some(err));
+                        },
+                    }
+                    if *random_request_seq.borrow() != request_id {
+                        return;
+                    }
+                    random_loading.set(false);
+                });
+            }
             || ()
         });
     }
 
     let total_val = *total;
     let total_pages = if total_val == 0 { 1 } else { total_val.div_ceil(PAGE_SIZE) };
+    let wish_total_val = *wish_total;
+    let wish_total_pages = if wish_total_val == 0 {
+        1
+    } else {
+        wish_total_val.div_ceil(WISH_PAGE_SIZE)
+    };
 
     let on_artist_click = {
         let active_artist = active_artist.clone();
         let current_page = current_page.clone();
+        let display_mode = display_mode.clone();
         move |artist: String| {
             let active_artist = active_artist.clone();
             let current_page = current_page.clone();
+            let display_mode = display_mode.clone();
             Callback::from(move |e: MouseEvent| {
                 e.prevent_default();
                 active_artist.set(Some(artist.clone()));
                 current_page.set(1);
+                display_mode.set(LibraryDisplayMode::AllSongs);
             })
         }
     };
@@ -194,13 +295,16 @@ pub fn music_library_page() -> Html {
     let on_album_click = {
         let active_album = active_album.clone();
         let current_page = current_page.clone();
+        let display_mode = display_mode.clone();
         move |album: String| {
             let active_album = active_album.clone();
             let current_page = current_page.clone();
+            let display_mode = display_mode.clone();
             Callback::from(move |e: MouseEvent| {
                 e.prevent_default();
                 active_album.set(Some(album.clone()));
                 current_page.set(1);
+                display_mode.set(LibraryDisplayMode::AllSongs);
             })
         }
     };
@@ -230,23 +334,68 @@ pub fn music_library_page() -> Html {
         })
     };
 
+    let on_wish_page_change = {
+        let wish_page = wish_page.clone();
+        Callback::from(move |page: usize| {
+            wish_page.set(page);
+        })
+    };
+
+    let on_switch_random = {
+        let display_mode = display_mode.clone();
+        Callback::from(move |_: MouseEvent| {
+            display_mode.set(LibraryDisplayMode::RandomRecommended);
+        })
+    };
+
+    let on_switch_all = {
+        let display_mode = display_mode.clone();
+        Callback::from(move |_: MouseEvent| {
+            display_mode.set(LibraryDisplayMode::AllSongs);
+        })
+    };
+
+    let on_refresh_random = {
+        let random_refresh_tick = random_refresh_tick.clone();
+        Callback::from(move |_: MouseEvent| {
+            random_refresh_tick.set(*random_refresh_tick + 1);
+        })
+    };
+
     // Keep global playlist synced with current Music Library page results.
     {
         let player_ctx = player_ctx.clone();
+        let mode = *display_mode;
         let active_artist = (*active_artist).clone();
         let active_album = (*active_album).clone();
         let current_page = *current_page;
-        let ids: Vec<String> = page_songs.iter().map(|song| song.id.clone()).collect();
+        let random_tick = *random_refresh_tick;
+        let ids: Vec<String> = if mode == LibraryDisplayMode::RandomRecommended {
+            random_songs.iter().map(|song| song.id.clone()).collect()
+        } else {
+            page_songs.iter().map(|song| song.id.clone()).collect()
+        };
         use_effect_with(
-            (ids.clone(), active_artist.clone(), active_album.clone(), current_page),
-            move |(ids, artist, album, page)| {
+            (
+                ids.clone(),
+                mode,
+                active_artist.clone(),
+                active_album.clone(),
+                current_page,
+                random_tick,
+            ),
+            move |(ids, mode, artist, album, page, tick)| {
                 if let Some(ctx) = player_ctx.as_ref() {
-                    let source = format!(
-                        "music-library:artist={}:album={}:page={}",
-                        artist.clone().unwrap_or_default(),
-                        album.clone().unwrap_or_default(),
-                        page
-                    );
+                    let source = if *mode == LibraryDisplayMode::RandomRecommended {
+                        format!("music-library:random:tick={tick}")
+                    } else {
+                        format!(
+                            "music-library:all:artist={}:album={}:page={}",
+                            artist.clone().unwrap_or_default(),
+                            album.clone().unwrap_or_default(),
+                            page
+                        )
+                    };
                     ctx.dispatch(MusicAction::SetPlaylist {
                         source,
                         ids: ids.clone(),
@@ -257,15 +406,46 @@ pub fn music_library_page() -> Html {
         );
     }
 
-    // Fetch wishes on mount
+    // Fetch wishes when page changes or manual refresh is triggered.
     {
         let wishes = wishes.clone();
         let wish_loading = wish_loading.clone();
-        use_effect_with((), move |_| {
+        let wish_list_error = wish_list_error.clone();
+        let wish_total = wish_total.clone();
+        let wish_request_seq = wish_request_seq.clone();
+        let deps = (*wish_page, *wish_refresh_tick);
+        use_effect_with(deps, move |(page, _)| {
+            let request_id = {
+                let mut seq = wish_request_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
+            let wishes = wishes.clone();
+            let wish_loading = wish_loading.clone();
+            let wish_list_error = wish_list_error.clone();
+            let wish_total = wish_total.clone();
+            let wish_request_seq = wish_request_seq.clone();
+            let offset = ((*page).saturating_sub(1)) * WISH_PAGE_SIZE;
             wish_loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
-                if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
-                    wishes.set(list);
+                match api::fetch_music_wishes(Some(WISH_PAGE_SIZE), Some(offset)).await {
+                    Ok(resp) => {
+                        if *wish_request_seq.borrow() != request_id {
+                            return;
+                        }
+                        wishes.set(resp.wishes);
+                        wish_total.set(resp.total);
+                        wish_list_error.set(None);
+                    },
+                    Err(err) => {
+                        if *wish_request_seq.borrow() != request_id {
+                            return;
+                        }
+                        wish_list_error.set(Some(err));
+                    },
+                }
+                if *wish_request_seq.borrow() != request_id {
+                    return;
                 }
                 wish_loading.set(false);
             });
@@ -275,18 +455,9 @@ pub fn music_library_page() -> Html {
 
     // Manual refresh wishes callback
     let on_refresh_wishes = {
-        let wishes = wishes.clone();
-        let wish_loading = wish_loading.clone();
+        let wish_refresh_tick = wish_refresh_tick.clone();
         Callback::from(move |_: MouseEvent| {
-            let wishes = wishes.clone();
-            let wish_loading = wish_loading.clone();
-            wish_loading.set(true);
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
-                    wishes.set(list);
-                }
-                wish_loading.set(false);
-            });
+            wish_refresh_tick.set(*wish_refresh_tick + 1);
         })
     };
 
@@ -299,7 +470,8 @@ pub fn music_library_page() -> Html {
         let wish_submitting = wish_submitting.clone();
         let wish_submit_msg = wish_submit_msg.clone();
         let wish_submit_err = wish_submit_err.clone();
-        let wishes = wishes.clone();
+        let wish_page = wish_page.clone();
+        let wish_refresh_tick = wish_refresh_tick.clone();
         Callback::from(move |e: SubmitEvent| {
             e.prevent_default();
             let song = (*wish_form_song).trim().to_string();
@@ -317,7 +489,8 @@ pub fn music_library_page() -> Html {
             let wish_submitting = wish_submitting.clone();
             let wish_submit_msg = wish_submit_msg.clone();
             let wish_submit_err = wish_submit_err.clone();
-            let wishes = wishes.clone();
+            let wish_page = wish_page.clone();
+            let wish_refresh_tick = wish_refresh_tick.clone();
             let wish_form_song = wish_form_song.clone();
             let wish_form_artist = wish_form_artist.clone();
             let wish_form_message = wish_form_message.clone();
@@ -342,10 +515,8 @@ pub fn music_library_page() -> Html {
                         wish_form_artist.set(String::new());
                         wish_form_message.set(String::new());
                         wish_form_email.set(String::new());
-                        // Refresh list
-                        if let Ok(list) = api::fetch_music_wishes(Some(50)).await {
-                            wishes.set(list);
-                        }
+                        wish_page.set(1);
+                        wish_refresh_tick.set(*wish_refresh_tick + 1);
                     },
                     Err(e) => {
                         wish_submit_err.set(Some(e));
@@ -365,6 +536,40 @@ pub fn music_library_page() -> Html {
                 <p class="text-[var(--muted)] mt-1">
                     {"Explore and play the music collection"}
                 </p>
+            </div>
+
+            <div class="mb-5 flex flex-wrap items-center gap-2">
+                <button type="button"
+                    onclick={on_switch_random}
+                    class={classes!(
+                        "px-4", "py-2", "rounded-lg", "text-sm", "font-medium", "transition-colors",
+                        if *display_mode == LibraryDisplayMode::RandomRecommended {
+                            "bg-[var(--primary)] text-white"
+                        } else {
+                            "bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface-alt)]"
+                        }
+                    )}>
+                    {"Random 10 Picks"}
+                </button>
+                <button type="button"
+                    onclick={on_switch_all}
+                    class={classes!(
+                        "px-4", "py-2", "rounded-lg", "text-sm", "font-medium", "transition-colors",
+                        if *display_mode == LibraryDisplayMode::AllSongs {
+                            "bg-[var(--primary)] text-white"
+                        } else {
+                            "bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface-alt)]"
+                        }
+                    )}>
+                    {"View All Songs"}
+                </button>
+                if *display_mode == LibraryDisplayMode::RandomRecommended {
+                    <button type="button"
+                        onclick={on_refresh_random}
+                        class="px-3 py-2 rounded-lg text-xs font-medium bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-alt)] transition-colors">
+                        {"Refresh Random"}
+                    </button>
+                }
             </div>
 
             // Hero search box
@@ -389,7 +594,7 @@ pub fn music_library_page() -> Html {
                 </div>
             </div>
 
-            if active_artist.is_some() || active_album.is_some() {
+            if *display_mode == LibraryDisplayMode::AllSongs && (active_artist.is_some() || active_album.is_some()) {
                 <div class="flex flex-wrap gap-2 mb-4">
                     if let Some(ref artist) = *active_artist {
                         <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs \
@@ -414,32 +619,57 @@ pub fn music_library_page() -> Html {
                 </div>
             }
 
-            if *loading {
-                <div class="flex justify-center py-20">
-                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
-                </div>
-            } else if let Some(ref err) = *error {
-                <div class="text-center py-20 text-red-500">
-                    {format!("Failed to load: {}", err)}
-                </div>
-            } else if page_songs.is_empty() {
-                <div class="text-center py-20 text-[var(--muted)]">
-                    {"No music found"}
-                </div>
-            } else {
-                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
-                    { for page_songs.iter().map(|song| {
-                        render_song_card(song, &on_artist_click, &on_album_click)
-                    })}
-                </div>
-                if total_pages > 1 {
-                    <div class="flex justify-center mt-8">
-                        <Pagination
-                            current_page={*current_page}
-                            total_pages={total_pages}
-                            on_page_change={on_page_change.clone()}
-                        />
+            if *display_mode == LibraryDisplayMode::RandomRecommended {
+                if *random_loading {
+                    <div class="flex justify-center py-20">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
                     </div>
+                } else if let Some(ref err) = *random_error {
+                    <div class="text-center py-20 text-red-500">
+                        {format!("Failed to load random picks: {}", err)}
+                    </div>
+                } else if random_songs.is_empty() {
+                    <div class="text-center py-20 text-[var(--muted)]">
+                        {"No random picks available"}
+                    </div>
+                } else {
+                    <p class="text-xs text-[var(--muted)] mb-4">
+                        {"Showing 10 random recommendations. Click \"Refresh Random\" for a different set."}
+                    </p>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+                        { for random_songs.iter().map(|song| {
+                            render_song_card(song, &on_artist_click, &on_album_click)
+                        })}
+                    </div>
+                }
+            } else {
+                if *loading {
+                    <div class="flex justify-center py-20">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
+                    </div>
+                } else if let Some(ref err) = *error {
+                    <div class="text-center py-20 text-red-500">
+                        {format!("Failed to load: {}", err)}
+                    </div>
+                } else if page_songs.is_empty() {
+                    <div class="text-center py-20 text-[var(--muted)]">
+                        {"No music found"}
+                    </div>
+                } else {
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+                        { for page_songs.iter().map(|song| {
+                            render_song_card(song, &on_artist_click, &on_album_click)
+                        })}
+                    </div>
+                    if total_pages > 1 {
+                        <div class="flex justify-center mt-8">
+                            <Pagination
+                                current_page={*current_page}
+                                total_pages={total_pages}
+                                on_page_change={on_page_change.clone()}
+                            />
+                        </div>
+                    }
                 }
             }
 
@@ -550,15 +780,34 @@ pub fn music_library_page() -> Html {
                     </button>
                 </div>
 
-                if *wish_loading {
+                if *wish_loading && wishes.is_empty() {
                     <div class="flex justify-center py-8">
                         <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--primary)]" />
                     </div>
+                } else if let Some(err) = (*wish_list_error).clone() {
+                    <p class="text-center text-red-500 py-8">{format!("Failed to load wishes: {err}")}</p>
                 } else if wishes.is_empty() {
                     <p class="text-center text-[var(--muted)] py-8">{wish_t::EMPTY_LIST}</p>
                 } else {
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        { for wishes.iter().map(render_wish_card) }
+                    <>
+                        if *wish_loading {
+                            <div class="mb-3 inline-flex items-center gap-2 text-xs text-[var(--muted)]">
+                                <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-[var(--primary)]" />
+                                <span>{"Loading wishes..."}</span>
+                            </div>
+                        }
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            { for wishes.iter().map(render_wish_card) }
+                        </div>
+                    </>
+                }
+                if wish_total_pages > 1 {
+                    <div class="flex justify-center mt-6">
+                        <Pagination
+                            current_page={*wish_page}
+                            total_pages={wish_total_pages}
+                            on_page_change={on_wish_page_change.clone()}
+                        />
                     </div>
                 }
             </div>

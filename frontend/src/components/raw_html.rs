@@ -8,8 +8,9 @@ pub struct RawHtmlProps {
     pub class: Classes,
 }
 
-/// Render trusted HTML into a host element without letting Yew diff its children.
-/// This avoids VDOM/removeChild panics when external JS enhances/mutates the DOM.
+/// Render trusted HTML into a host element without letting Yew diff its
+/// children. This avoids VDOM/removeChild panics when external JS
+/// enhances/mutates the DOM.
 #[function_component(RawHtml)]
 pub fn raw_html(props: &RawHtmlProps) -> Html {
     let host_ref = use_node_ref();

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use arrow_array::{
@@ -807,6 +810,162 @@ impl MusicDataStore {
             limit: effective_limit,
             has_more,
         })
+    }
+
+    pub async fn list_random_recommendations(
+        &self,
+        limit: usize,
+        exclude_ids: &[String],
+    ) -> Result<Vec<SongListItem>> {
+        let table = self.songs_table().await?;
+        let cols =
+            &["id", "title", "artist", "album", "cover_image", "duration_ms", "format", "tags"];
+        let effective_limit = limit.clamp(1, 50);
+        let excluded: HashSet<String> = exclude_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string())
+            .collect();
+
+        let batches = table
+            .query()
+            .select(Select::columns(cols))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let mut songs = Vec::new();
+        for batch in &batch_list {
+            for row in 0..batch.num_rows() {
+                let item = row_to_song_list_item(batch, row);
+                if excluded.contains(&item.id) {
+                    continue;
+                }
+                songs.push(item);
+            }
+        }
+
+        use rand::seq::SliceRandom;
+        songs.shuffle(&mut rand::thread_rng());
+        if songs.len() > effective_limit {
+            songs.truncate(effective_limit);
+        }
+        Ok(songs)
+    }
+
+    pub async fn resolve_next_random_song(
+        &self,
+        exclude_ids: &[String],
+    ) -> Result<Option<SongDetail>> {
+        let table = self.songs_table().await?;
+        let cols = &[
+            "id",
+            "title",
+            "artist",
+            "album",
+            "cover_image",
+            "duration_ms",
+            "format",
+            "bitrate",
+            "tags",
+            "source",
+            "created_at",
+        ];
+        let excluded: HashSet<String> = exclude_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string())
+            .collect();
+
+        let batches = table
+            .query()
+            .select(Select::columns(cols))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let mut songs = Vec::new();
+        for batch in &batch_list {
+            for row in 0..batch.num_rows() {
+                let item = row_to_song_detail(batch, row);
+                if excluded.contains(&item.id) {
+                    continue;
+                }
+                songs.push(item);
+            }
+        }
+        if songs.is_empty() {
+            return Ok(None);
+        }
+
+        use rand::seq::SliceRandom;
+        songs.shuffle(&mut rand::thread_rng());
+        Ok(songs.into_iter().next())
+    }
+
+    pub async fn resolve_next_semantic_song(
+        &self,
+        current_song_id: &str,
+        exclude_ids: &[String],
+        top_k: usize,
+    ) -> Result<Option<SongDetail>> {
+        let table = self.songs_table().await?;
+        let escaped = escape_literal(current_song_id);
+        let batches = table
+            .query()
+            .only_if(format!("id = '{escaped}'"))
+            .limit(1)
+            .select(Select::columns(&["title", "artist", "album", "tags", "searchable_text"]))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+
+        let mut query_text = String::new();
+        for batch in &batch_list {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let searchable = extract_string(batch, "searchable_text", 0);
+            if !searchable.trim().is_empty() {
+                query_text = searchable;
+            } else {
+                query_text = format!(
+                    "{} {} {} {}",
+                    extract_string(batch, "title", 0),
+                    extract_string(batch, "artist", 0),
+                    extract_string(batch, "album", 0),
+                    extract_string(batch, "tags", 0)
+                );
+            }
+            break;
+        }
+
+        if query_text.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let mut excluded: HashSet<String> = exclude_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string())
+            .collect();
+        excluded.insert(current_song_id.to_string());
+
+        let effective_top_k = top_k.clamp(1, 20);
+        let candidates = self
+            .search_songs_hybrid(&query_text, effective_top_k, None, None, None)
+            .await?;
+
+        for candidate in candidates {
+            if excluded.contains(&candidate.id) {
+                continue;
+            }
+            if let Some(song) = self.get_song(&candidate.id).await? {
+                return Ok(Some(song));
+            }
+        }
+        Ok(None)
     }
 
     pub async fn search_songs_fts(

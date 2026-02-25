@@ -12,14 +12,7 @@ pub async fn run(
 ) -> Result<()> {
     let store = MusicWishStore::connect(db_path.to_str().unwrap_or(".")).await?;
     let record = store
-        .transition_wish(
-            wish_id,
-            WISH_STATUS_DONE,
-            admin_note,
-            None,
-            ingested_song_id,
-            ai_reply,
-        )
+        .transition_wish(wish_id, WISH_STATUS_DONE, admin_note, None, ingested_song_id, ai_reply)
         .await?;
     println!("Wish {} -> status={}", record.wish_id, record.status);
     if let Some(sid) = &record.ingested_song_id {

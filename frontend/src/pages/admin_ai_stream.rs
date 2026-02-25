@@ -212,7 +212,8 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                                 stream_error_setter
                                     .set(Some("Stream connection closed".to_string()));
                             }
-                            // CONNECTING (0) → browser is retrying, don't overwrite status
+                            // CONNECTING (0) → browser is retrying, don't
+                            // overwrite status
                         });
                         source.set_onerror(Some(onerror.as_ref().unchecked_ref()));
 

@@ -1,11 +1,11 @@
 #[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};

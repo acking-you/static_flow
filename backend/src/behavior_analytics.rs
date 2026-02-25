@@ -20,7 +20,8 @@ use crate::{
 const CLIENT_SOURCE_HEADER: &str = "x-sf-client";
 const PAGE_PATH_HEADER: &str = "x-sf-page";
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
-/// Compact the api_behavior_events table every N appends to prevent fragment accumulation.
+/// Compact the api_behavior_events table every N appends to prevent fragment
+/// accumulation.
 const COMPACT_EVERY_N_EVENTS: u64 = 500;
 
 pub async fn behavior_analytics_middleware(

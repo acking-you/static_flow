@@ -2398,6 +2398,27 @@ pub struct SongListResponse {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextSongResolveMode {
+    Random,
+    Semantic,
+}
+
+impl NextSongResolveMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Random => "random",
+            Self::Semantic => "semantic",
+        }
+    }
+}
+
+#[cfg(not(feature = "mock"))]
+#[derive(Debug, Deserialize)]
+struct NextSongApiResponse {
+    song: Option<SongDetail>,
+}
+
 #[cfg(not(feature = "mock"))]
 #[derive(Debug, Deserialize)]
 struct MusicCommentListApiResponse {
@@ -2490,6 +2511,115 @@ pub async fn fetch_songs(
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
         Ok(r)
+    }
+}
+
+pub async fn fetch_random_recommended_songs(
+    limit: Option<usize>,
+    exclude_ids: &[String],
+) -> Result<Vec<SongListItem>, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (limit, exclude_ids);
+        return Ok(vec![]);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/music/recommendations/random", API_BASE);
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+
+        let mut normalized_exclude = Vec::new();
+        for id in exclude_ids {
+            let trimmed = id.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            normalized_exclude.push(trimmed.to_string());
+            if normalized_exclude.len() >= 10 {
+                break;
+            }
+        }
+        if !normalized_exclude.is_empty() {
+            params.push(format!(
+                "exclude_ids={}",
+                urlencoding::encode(&normalized_exclude.join(","))
+            ));
+        }
+
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_next_song(
+    mode: NextSongResolveMode,
+    current_song_id: Option<&str>,
+    recent_song_ids: &[String],
+) -> Result<Option<SongDetail>, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (mode, current_song_id, recent_song_ids);
+        return Ok(None);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut normalized_recent = Vec::new();
+        for id in recent_song_ids {
+            let trimmed = id.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            normalized_recent.push(trimmed.to_string());
+            if normalized_recent.len() >= 10 {
+                break;
+            }
+        }
+
+        let current = current_song_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string());
+
+        let body = serde_json::json!({
+            "mode": mode.as_str(),
+            "current_song_id": current,
+            "recent_song_ids": normalized_recent,
+        });
+        let url = format!("{}/music/next", API_BASE);
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let parsed: NextSongApiResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(parsed.song)
     }
 }
 
@@ -2739,6 +2869,12 @@ pub struct MusicWishItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MusicWishListResponse {
     pub wishes: Vec<MusicWishItem>,
+    #[serde(default)]
+    pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2847,17 +2983,33 @@ pub async fn submit_music_wish(
     }
 }
 
-pub async fn fetch_music_wishes(limit: Option<usize>) -> Result<Vec<MusicWishItem>, String> {
+pub async fn fetch_music_wishes(
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<MusicWishListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        return Ok(MusicWishListResponse {
+            wishes: vec![],
+            total: 0,
+            offset: 0,
+            has_more: false,
+        });
     }
 
     #[cfg(not(feature = "mock"))]
     {
         let mut url = format!("{}/music/wishes/list", API_BASE);
+        let mut params = Vec::new();
         if let Some(l) = limit {
-            url.push_str(&format!("?limit={l}"));
+            params.push(format!("limit={l}"));
+        }
+        if let Some(o) = offset {
+            params.push(format!("offset={o}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
         }
         let response = api_get(&url)
             .send()
@@ -2870,7 +3022,7 @@ pub async fn fetch_music_wishes(limit: Option<usize>) -> Result<Vec<MusicWishIte
             .json()
             .await
             .map_err(|e| format!("Parse error: {:?}", e))?;
-        Ok(r.wishes)
+        Ok(r)
     }
 }
 

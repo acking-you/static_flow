@@ -26,6 +26,7 @@ pub fn latest_articles_page() -> Html {
     let loading = use_state(|| true);
     let current_page = use_state(|| 1_usize);
     let total = use_state(|| 0_usize);
+    let fetch_seq = use_mut_ref(|| 0_u64);
 
     let total_pages = {
         let t = *total;
@@ -41,24 +42,40 @@ pub fn latest_articles_page() -> Html {
         let articles = articles.clone();
         let loading = loading.clone();
         let total = total.clone();
+        let fetch_seq = fetch_seq.clone();
         let page = *current_page;
         use_effect_with(page, move |page| {
             let offset = (*page - 1) * PAGE_SIZE;
+            let request_id = {
+                let mut seq = fetch_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
             loading.set(true);
             let articles = articles.clone();
             let loading = loading.clone();
             let total = total.clone();
+            let fetch_seq = fetch_seq.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_articles(None, None, Some(PAGE_SIZE), Some(offset)).await {
                     Ok(data) => {
+                        if *fetch_seq.borrow() != request_id {
+                            return;
+                        }
                         total.set(data.total);
                         articles.set(data.articles);
                     },
                     Err(e) => {
+                        if *fetch_seq.borrow() != request_id {
+                            return;
+                        }
                         web_sys::console::error_1(
                             &format!("Failed to fetch articles: {}", e).into(),
                         );
                     },
+                }
+                if *fetch_seq.borrow() != request_id {
+                    return;
                 }
                 loading.set(false);
             });

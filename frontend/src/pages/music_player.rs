@@ -1,5 +1,5 @@
 use wasm_bindgen::JsCast;
-use web_sys::HtmlInputElement;
+use web_sys::{window, Event, HtmlInputElement};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -8,7 +8,7 @@ use crate::{
     components::{
         icons::{Icon, IconName},
         image_with_loading::ImageWithLoading,
-        persistent_audio::resolve_next_song,
+        persistent_audio::{preview_next_song, resolve_next_song},
         synced_lyrics::SyncedLyrics,
     },
     music_context::{MusicAction, MusicPlayerContext, NextSongMode},
@@ -34,6 +34,11 @@ pub fn music_player_page(props: &Props) -> Html {
     let comment_text = use_state(String::new);
     let submitting = use_state(|| false);
     let submit_error = use_state(|| None::<String>);
+    let next_hint = use_state(|| None::<api::SongDetail>);
+    let next_hint_loading = use_state(|| false);
+    let bottom_recommendations = use_state(Vec::<api::SongSearchResult>::new);
+    let bottom_recs_loading = use_state(|| false);
+    let bottom_recs_ready = use_state(|| false);
     let player_ctx = use_context::<MusicPlayerContext>();
     let navigator = use_navigator();
     let current_time = player_ctx.as_ref().map(|c| c.current_time).unwrap_or(0.0);
@@ -154,6 +159,131 @@ pub fn music_player_page(props: &Props) -> Html {
         });
     }
 
+    // Prefetch next-song hint when playback context changes.
+    {
+        let next_hint = next_hint.clone();
+        let next_hint_loading = next_hint_loading.clone();
+        let player_ctx = player_ctx.clone();
+        let deps = (
+            player_ctx.as_ref().and_then(|ctx| ctx.song_id.clone()),
+            player_ctx.as_ref().map(|ctx| ctx.next_mode.clone()),
+            player_ctx
+                .as_ref()
+                .map(|ctx| {
+                    ctx.history
+                        .iter()
+                        .rev()
+                        .take(10)
+                        .map(|(song_id, _)| song_id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        );
+        use_effect_with(deps, move |_| {
+            if let Some(ctx) = player_ctx.clone() {
+                if ctx.song_id.is_none() {
+                    next_hint.set(None);
+                    next_hint_loading.set(false);
+                } else {
+                    next_hint_loading.set(true);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let next = preview_next_song(&ctx).await.map(|(song, _)| song);
+                        next_hint.set(next);
+                        next_hint_loading.set(false);
+                    });
+                }
+            } else {
+                next_hint.set(None);
+                next_hint_loading.set(false);
+            }
+            || ()
+        });
+    }
+
+    // Bottom recommendations are lazy-loaded when user scrolls near page end.
+    {
+        let id = id.clone();
+        let bottom_recommendations = bottom_recommendations.clone();
+        let bottom_recs_loading = bottom_recs_loading.clone();
+        let bottom_recs_ready = bottom_recs_ready.clone();
+        use_effect_with(id, move |_| {
+            bottom_recommendations.set(Vec::new());
+            bottom_recs_loading.set(false);
+            bottom_recs_ready.set(false);
+            || ()
+        });
+    }
+    {
+        let bottom_recs_ready = bottom_recs_ready.clone();
+        let ready = *bottom_recs_ready;
+        let id = id.clone();
+        use_effect_with((id, ready), move |_| {
+            let mut on_scroll_opt: Option<wasm_bindgen::closure::Closure<dyn FnMut(Event)>> = None;
+            if !ready {
+                if should_load_bottom_recommendations() {
+                    bottom_recs_ready.set(true);
+                } else if let Some(win) = window() {
+                    let ready_setter = bottom_recs_ready.clone();
+                    let on_scroll =
+                        wasm_bindgen::closure::Closure::wrap(Box::new(move |_: Event| {
+                            if should_load_bottom_recommendations() {
+                                ready_setter.set(true);
+                            }
+                        })
+                            as Box<dyn FnMut(_)>);
+                    let _ = win.add_event_listener_with_callback(
+                        "scroll",
+                        on_scroll.as_ref().unchecked_ref(),
+                    );
+                    let _ = win.add_event_listener_with_callback(
+                        "resize",
+                        on_scroll.as_ref().unchecked_ref(),
+                    );
+                    on_scroll_opt = Some(on_scroll);
+                } else {
+                    bottom_recs_ready.set(true);
+                }
+            }
+            move || {
+                if let Some(on_scroll) = on_scroll_opt {
+                    if let Some(win) = window() {
+                        let _ = win.remove_event_listener_with_callback(
+                            "scroll",
+                            on_scroll.as_ref().unchecked_ref(),
+                        );
+                        let _ = win.remove_event_listener_with_callback(
+                            "resize",
+                            on_scroll.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+            }
+        });
+    }
+    {
+        let id = id.clone();
+        let bottom_recommendations = bottom_recommendations.clone();
+        let bottom_recs_loading = bottom_recs_loading.clone();
+        let ready = *bottom_recs_ready;
+        use_effect_with((id, ready), move |(id, ready)| {
+            if *ready {
+                let id = id.clone();
+                bottom_recs_loading.set(true);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let items = api::fetch_related_songs(&id).await.unwrap_or_default();
+                    let filtered = items
+                        .into_iter()
+                        .filter(|item| item.id != id)
+                        .take(4)
+                        .collect::<Vec<_>>();
+                    bottom_recommendations.set(filtered);
+                    bottom_recs_loading.set(false);
+                });
+            }
+            || ()
+        });
+    }
+
     let on_submit_comment = {
         let id = id.clone();
         let nickname = nickname.clone();
@@ -255,33 +385,33 @@ pub fn music_player_page(props: &Props) -> Html {
         .as_ref()
         .map(|c| c.next_mode.clone())
         .unwrap_or(NextSongMode::Random);
-    let on_toggle_mode = {
+    let on_set_random_mode = {
         let ctx = player_ctx.clone();
         Callback::from(move |_: MouseEvent| {
             if let Some(ref c) = ctx {
-                let m = match c.next_mode {
-                    NextSongMode::Random => NextSongMode::Semantic,
-                    NextSongMode::Semantic => NextSongMode::PlaylistSequential,
-                    NextSongMode::PlaylistSequential => NextSongMode::Random,
-                };
-                c.dispatch(MusicAction::SetNextMode(m));
+                c.dispatch(MusicAction::SetNextMode(NextSongMode::Random));
             }
         })
     };
-    let mode_icon = match next_mode {
-        NextSongMode::PlaylistSequential => IconName::List,
-        _ => IconName::Shuffle,
+    let on_set_playlist_mode = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::SetNextMode(NextSongMode::PlaylistSequential));
+            }
+        })
     };
-    let mode_title = match next_mode {
-        NextSongMode::Random => "Mode: Random",
-        NextSongMode::Semantic => "Mode: Semantic",
-        NextSongMode::PlaylistSequential => "Mode: Playlist Sequential",
+    let on_set_semantic_mode = {
+        let ctx = player_ctx.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(ref c) = ctx {
+                c.dispatch(MusicAction::SetNextMode(NextSongMode::Semantic));
+            }
+        })
     };
-    let mode_active = !matches!(next_mode, NextSongMode::Random);
-    let candidates = player_ctx
-        .as_ref()
-        .map(|c| c.candidates.clone())
-        .unwrap_or_default();
+    let is_random_mode = matches!(next_mode, NextSongMode::Random);
+    let is_playlist_mode = matches!(next_mode, NextSongMode::PlaylistSequential);
+    let is_semantic_mode = matches!(next_mode, NextSongMode::Semantic);
     let on_seek = {
         let ctx = player_ctx.clone();
         Callback::from(move |e: InputEvent| {
@@ -480,10 +610,44 @@ pub fn music_player_page(props: &Props) -> Html {
                         class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" aria-label="Seek" />
                 </div>
                 <div class="flex items-center gap-3">
-                    <button onclick={on_toggle_mode} type="button"
-                        class={classes!("transition-colors", if mode_active { "text-[var(--primary)]" } else { "text-[var(--muted)] hover:text-[var(--text)]" })}
-                        aria-label="Toggle next-song mode" title={mode_title}>
-                        <Icon name={mode_icon} size={18} />
+                    <button onclick={on_set_random_mode} type="button"
+                        class={classes!(
+                            "transition-colors",
+                            if is_random_mode {
+                                "text-[var(--primary)]"
+                            } else {
+                                "text-[var(--muted)] hover:text-[var(--text)]"
+                            }
+                        )}
+                        aria-label="Random mode"
+                        title="Mode: Random">
+                        <Icon name={IconName::Shuffle} size={18} />
+                    </button>
+                    <button onclick={on_set_playlist_mode} type="button"
+                        class={classes!(
+                            "transition-colors",
+                            if is_playlist_mode {
+                                "text-[var(--primary)]"
+                            } else {
+                                "text-[var(--muted)] hover:text-[var(--text)]"
+                            }
+                        )}
+                        aria-label="Playlist sequential mode"
+                        title="Mode: Playlist Sequential">
+                        <Icon name={IconName::List} size={18} />
+                    </button>
+                    <button onclick={on_set_semantic_mode} type="button"
+                        class={classes!(
+                            "transition-colors",
+                            if is_semantic_mode {
+                                "text-red-500"
+                            } else {
+                                "text-[var(--muted)] hover:text-red-500"
+                            }
+                        )}
+                        aria-label="Semantic mode"
+                        title="Mode: Semantic">
+                        <Icon name={IconName::Heart} size={18} />
                     </button>
                     <button onclick={on_prev} type="button" disabled={!can_prev}
                         class="text-[var(--muted)] hover:text-[var(--text)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed" aria-label="Previous song">
@@ -497,6 +661,15 @@ pub fn music_player_page(props: &Props) -> Html {
                     <button onclick={on_next} type="button" class="text-[var(--muted)] hover:text-[var(--text)] transition-colors" aria-label="Next song">
                         <Icon name={IconName::SkipForward} size={18} />
                     </button>
+                    <span class="text-[10px] text-[var(--muted)] px-2 py-0.5 rounded-full border border-[var(--border)] bg-[var(--surface-alt)]">
+                        {if is_random_mode {
+                            "Random"
+                        } else if is_semantic_mode {
+                            "Semantic"
+                        } else {
+                            "Playlist"
+                        }}
+                    </span>
                     <span class="text-xs text-[var(--muted)] tabular-nums whitespace-nowrap min-w-[80px]">
                         {format!("{} / {}", format_time(current_time), format_time(duration))}
                     </span>
@@ -531,15 +704,30 @@ pub fn music_player_page(props: &Props) -> Html {
                 </div>
             </div>
 
-            // Semantic candidates (Up Next)
-            if matches!(next_mode, NextSongMode::Semantic) && !candidates.is_empty() {
-                <div class="mb-8">
-                    <h2 class="text-sm font-semibold text-[var(--muted)] mb-3">{"Up Next (Semantic)"}</h2>
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        { for candidates.iter().map(render_candidate_card) }
+            <div class="mb-8">
+                if *next_hint_loading {
+                    <div class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 text-sm text-[var(--muted)]">
+                        {"Prefetching next song..."}
                     </div>
-                </div>
-            }
+                } else if let Some(next) = (*next_hint).as_ref() {
+                    <div class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <p class="text-[10px] uppercase tracking-wide text-[var(--muted)]">{"Up Next"}</p>
+                            <p class="text-sm text-[var(--text)] font-medium truncate">{&next.title}</p>
+                            <p class="text-xs text-[var(--muted)] truncate">{format!("{} · {}", next.artist, next.album)}</p>
+                        </div>
+                        <Link<Route>
+                            to={Route::MusicPlayer { id: next.id.clone() }}
+                            classes="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity">
+                            {"Play next"}
+                        </Link<Route>>
+                    </div>
+                } else {
+                    <div class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 text-sm text-[var(--muted)]">
+                        {"No available next song for current mode."}
+                    </div>
+                }
+            </div>
 
             if *lyrics_loading {
                 <div class="mb-8 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 space-y-2">
@@ -620,6 +808,22 @@ pub fn music_player_page(props: &Props) -> Html {
                 }
                 } // comments_loading else
             </div>
+
+            <div class="mt-10">
+                if *bottom_recs_loading {
+                    <h2 class="text-sm font-semibold text-[var(--muted)] mb-3">{"Recommended for You"}</h2>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        { for (0..4).map(|_| html! {
+                            <div class="bg-[var(--surface)] border border-[var(--border)] rounded-lg aspect-[3/4] animate-pulse" />
+                        })}
+                    </div>
+                } else if !bottom_recommendations.is_empty() {
+                    <h2 class="text-sm font-semibold text-[var(--muted)] mb-3">{"Recommended for You"}</h2>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        { for bottom_recommendations.iter().map(render_candidate_card) }
+                    </div>
+                }
+            </div>
         </div>
     }
 }
@@ -659,6 +863,28 @@ fn render_candidate_card(c: &api::SongSearchResult) -> Html {
             </div>
         </Link<Route>>
     }
+}
+
+fn should_load_bottom_recommendations() -> bool {
+    let Some(win) = window() else {
+        return true;
+    };
+    let scroll_y = win.scroll_y().ok().unwrap_or(0.0);
+    let viewport_h = win
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let doc_h = win
+        .document()
+        .and_then(|doc| doc.document_element())
+        .map(|el| el.scroll_height() as f64)
+        .unwrap_or(0.0);
+
+    if doc_h <= 0.0 || viewport_h <= 0.0 {
+        return true;
+    }
+    scroll_y + viewport_h + 320.0 >= doc_h
 }
 
 fn format_duration(ms: u64) -> String {

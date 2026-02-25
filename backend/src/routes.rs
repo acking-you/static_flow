@@ -66,6 +66,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/image-search-text", get(handlers::search_images_by_text))
         // Music API (read-only)
         .route("/api/music", get(handlers::list_songs))
+        .route(
+            "/api/music/recommendations/random",
+            get(handlers::random_recommended_songs),
+        )
         .route("/api/music/search", get(handlers::search_songs))
         .route("/api/music/artists", get(handlers::list_music_artists))
         .route("/api/music/albums", get(handlers::list_music_albums))
@@ -73,6 +77,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/music/:id/audio", get(handlers::stream_song_audio))
         .route("/api/music/:id/lyrics", get(handlers::get_song_lyrics))
         .route("/api/music/:id/related", get(handlers::related_songs))
+        .route("/api/music/next", post(handlers::resolve_next_song))
         // Music API (write, rate-limited)
         .route("/api/music/:id/play", post(handlers::track_song_play))
         .route("/api/music/comments/submit", post(handlers::submit_music_comment))

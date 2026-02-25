@@ -709,17 +709,25 @@ curl -X POST “http://localhost:3000/api/music/song-001/play”
 `GET /api/music/wishes/list`
 
 查询参数：
-- `limit`（可选）返回结果上限
+- `limit`（可选）分页大小。默认 `50`，最大 `200`；传 `0` 按默认值处理
+- `offset`（可选）分页偏移。默认 `0`
 
 说明：
 - 返回公开心愿列表（排除 `rejected` 状态）
 - 包含 `ai_reply` 字段（AI 对歌曲的评价和对许愿的回应，完成后填充）
+- 返回结构包含分页元信息：`total`、`offset`、`has_more`
+
+响应结构：
+- `wishes`: `MusicWishRecord[]`
+- `total`: `usize`（公开可见心愿总数）
+- `offset`: `usize`（本次查询偏移）
+- `has_more`: `bool`（是否还有下一页）
 
 #### 13.2 Admin 接口
 
 > 需要 admin 权限（`x-admin-token` 或本地访问）
 
-- `GET /admin/music-wishes/tasks[?status=&limit=]` — 心愿任务列表
+- `GET /admin/music-wishes/tasks[?status=&limit=&offset=]` — 心愿任务列表
 - `GET /admin/music-wishes/tasks/:wish_id` — 心愿详情
 - `POST /admin/music-wishes/tasks/:wish_id/approve-and-run` — 审批并触发 AI worker
 - `POST /admin/music-wishes/tasks/:wish_id/reject` — 拒绝心愿
@@ -727,6 +735,17 @@ curl -X POST “http://localhost:3000/api/music/song-001/play”
 - `DELETE /admin/music-wishes/tasks/:wish_id` — 删除心愿（含关联 AI 运行记录）
 - `GET /admin/music-wishes/tasks/:wish_id/ai-output` — AI 执行输出（拼接）
 - `GET /admin/music-wishes/tasks/:wish_id/ai-output/stream` — AI 执行输出（SSE 实时流）
+
+`GET /admin/music-wishes/tasks` 查询参数：
+- `status`（可选）按任务状态过滤（如 `pending` / `approved` / `running` / `done` / `failed` / `rejected`）
+- `limit`（可选）分页大小。默认 `100`，最大 `500`；传 `0` 按默认值处理
+- `offset`（可选）分页偏移。默认 `0`
+
+`GET /admin/music-wishes/tasks` 响应结构：
+- `wishes`: `MusicWishRecord[]`
+- `total`: `usize`（满足当前过滤条件的总数）
+- `offset`: `usize`（本次查询偏移）
+- `has_more`: `bool`（是否还有下一页）
 
 状态流转：
 

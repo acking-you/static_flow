@@ -40,6 +40,7 @@ pub enum IconName {
     Download,
     Minimize2,
     Shuffle,
+    Heart,
 }
 
 impl IconName {
@@ -91,6 +92,10 @@ impl IconName {
             IconName::Download => "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
             IconName::Minimize2 => "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
             IconName::Shuffle => "M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
+            IconName::Heart => {
+                "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.54 0-3.04.79-4 2.09A5.53 \
+                 5.53 0 0 0 8.5 3A5.5 5.5 0 0 0 3 8.5c0 2.3 1.51 4.04 3 5.5l6.5 6.5z"
+            },
         }
     }
 

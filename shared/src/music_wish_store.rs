@@ -206,7 +206,7 @@ impl MusicWishStore {
     pub async fn get_wish(&self, wish_id: &str) -> Result<Option<MusicWishRecord>> {
         let table = self.wishes_table().await?;
         let filter = format!("wish_id = '{}'", escape_literal(wish_id));
-        let rows = query_wishes(&table, Some(&filter), Some(1)).await?;
+        let rows = query_wishes(&table, Some(&filter), Some(1), None).await?;
         Ok(rows.into_iter().next())
     }
 
@@ -215,15 +215,52 @@ impl MusicWishStore {
         status: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<MusicWishRecord>> {
+        self.list_wishes_page(status, limit.unwrap_or(100), 0).await
+    }
+
+    pub async fn list_wishes_page(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<MusicWishRecord>> {
         let table = self.wishes_table().await?;
         let filter = status.map(|s| format!("status = '{}'", escape_literal(s)));
-        query_wishes(&table, filter.as_deref(), limit).await
+        query_wishes(&table, filter.as_deref(), Some(limit), Some(offset)).await
     }
 
     pub async fn list_wishes_public(&self, limit: Option<usize>) -> Result<Vec<MusicWishRecord>> {
+        self.list_wishes_public_page(limit.unwrap_or(50), 0).await
+    }
+
+    pub async fn list_wishes_public_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<MusicWishRecord>> {
         let table = self.wishes_table().await?;
         let filter = format!("status != '{}'", escape_literal(WISH_STATUS_REJECTED));
-        query_wishes(&table, Some(&filter), limit).await
+        query_wishes(&table, Some(&filter), Some(limit), Some(offset)).await
+    }
+
+    pub async fn count_wishes(&self, status: Option<&str>) -> Result<usize> {
+        let table = self.wishes_table().await?;
+        let filter = status.map(|s| format!("status = '{}'", escape_literal(s)));
+        let total = table
+            .count_rows(filter)
+            .await
+            .context("failed to count wishes")?;
+        Ok(total as usize)
+    }
+
+    pub async fn count_wishes_public(&self) -> Result<usize> {
+        let table = self.wishes_table().await?;
+        let filter = format!("status != '{}'", escape_literal(WISH_STATUS_REJECTED));
+        let total = table
+            .count_rows(Some(filter))
+            .await
+            .context("failed to count public wishes")?;
+        Ok(total as usize)
     }
 
     pub async fn transition_wish(
@@ -631,10 +668,14 @@ async fn query_wishes(
     table: &Table,
     filter: Option<&str>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<Vec<MusicWishRecord>> {
     let mut query = table.query();
     if let Some(f) = filter {
         query = query.only_if(f);
+    }
+    if let Some(o) = offset {
+        query = query.offset(o);
     }
     if let Some(l) = limit {
         query = query.limit(l.max(1));

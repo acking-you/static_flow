@@ -53,9 +53,15 @@ impl Default for MusicPlayerState {
 }
 
 pub enum MusicAction {
-    PlaySong { song: SongDetail, id: String },
+    PlaySong {
+        song: SongDetail,
+        id: String,
+    },
     /// Load song info into context without auto-playing (e.g. page refresh).
-    LoadSong { song: SongDetail, id: String },
+    LoadSong {
+        song: SongDetail,
+        id: String,
+    },
     TogglePlay,
     Pause,
     SetTime(f64),
@@ -65,10 +71,15 @@ pub enum MusicAction {
     Expand,
     Close,
     PlayPrev,
-    PlayNext { fallback: Option<(SongDetail, String)> },
+    PlayNext {
+        fallback: Option<(SongDetail, String)>,
+    },
     SetNextMode(NextSongMode),
     SetCandidates(Vec<SongSearchResult>),
-    SetPlaylist { source: String, ids: Vec<String> },
+    SetPlaylist {
+        source: String,
+        ids: Vec<String>,
+    },
     SetLyricsOffset(f64),
 }
 

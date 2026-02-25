@@ -357,21 +357,48 @@ impl StaticFlowDataStore {
         until_ms: Option<i64>,
         limit: Option<usize>,
     ) -> Result<Vec<ApiBehaviorEvent>> {
-        let table = self.api_behavior_table().await?;
-        let mut q = table.query();
         let mut filters = Vec::new();
         if let Some(min) = since_ms {
-            filters.push(format!(
-                "occurred_at >= arrow_cast({min}, 'Timestamp(Millisecond, None)')"
-            ));
+            filters
+                .push(format!("occurred_at >= arrow_cast({min}, 'Timestamp(Millisecond, None)')"));
         }
         if let Some(max) = until_ms {
-            filters.push(format!(
-                "occurred_at < arrow_cast({max}, 'Timestamp(Millisecond, None)')"
-            ));
+            filters
+                .push(format!("occurred_at < arrow_cast({max}, 'Timestamp(Millisecond, None)')"));
         }
-        if !filters.is_empty() {
-            q = q.only_if(filters.join(" AND "));
+
+        let filter = if filters.is_empty() {
+            None
+        } else {
+            Some(filters.join(" AND "))
+        };
+        let mut events = self.query_api_behavior_events(filter, limit, None).await?;
+        events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+        Ok(events)
+    }
+
+    pub async fn count_api_behavior_events_with_filter(&self, filter: Option<String>) -> Result<usize> {
+        let table = self.api_behavior_table().await?;
+        let total = table
+            .count_rows(filter)
+            .await
+            .context("failed to count api behavior events")?;
+        Ok(total as usize)
+    }
+
+    pub async fn query_api_behavior_events(
+        &self,
+        filter: Option<String>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<ApiBehaviorEvent>> {
+        let table = self.api_behavior_table().await?;
+        let mut q = table.query();
+        if let Some(filter) = filter {
+            q = q.only_if(filter);
+        }
+        if let Some(off) = offset {
+            q = q.offset(off);
         }
         if let Some(lim) = limit {
             q = q.limit(lim.max(1));
@@ -401,16 +428,13 @@ impl StaticFlowDataStore {
             .await?
             .try_collect::<Vec<_>>()
             .await?;
-        let mut events = batches_to_api_behavior_events(&batches)?;
-        events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
-        Ok(events)
+        batches_to_api_behavior_events(&batches)
     }
 
     pub async fn cleanup_api_behavior_before(&self, before_ms: i64) -> Result<usize> {
         let table = self.api_behavior_table().await?;
-        let filter = format!(
-            "occurred_at < arrow_cast({before_ms}, 'Timestamp(Millisecond, None)')"
-        );
+        let filter =
+            format!("occurred_at < arrow_cast({before_ms}, 'Timestamp(Millisecond, None)')");
         let deleted = table
             .count_rows(Some(filter.clone()))
             .await
@@ -428,7 +452,8 @@ impl StaticFlowDataStore {
     }
 
     /// Compact the api_behavior_events table to merge small fragments.
-    /// This reduces the number of open file descriptors and improves query performance.
+    /// This reduces the number of open file descriptors and improves query
+    /// performance.
     pub async fn compact_api_behavior_table(&self) -> Result<()> {
         let table = self.api_behavior_table().await?;
         table

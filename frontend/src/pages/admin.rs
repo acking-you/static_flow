@@ -132,6 +132,11 @@ pub fn admin_page() -> Html {
     let saving = use_state(|| false);
     let loaded_tabs = use_state(HashSet::<AdminTab>::new);
     let tab_loading = use_state(HashSet::<AdminTab>::new);
+    // Request sequence guards to avoid stale async responses overriding newer pages.
+    let refresh_all_seq = use_mut_ref(|| 0_u64);
+    let refresh_audit_seq = use_mut_ref(|| 0_u64);
+    let refresh_behavior_seq = use_mut_ref(|| 0_u64);
+    let refresh_music_wishes_seq = use_mut_ref(|| 0_u64);
 
     // Per-tab pagination state
     const PAGE_SIZE: usize = 50;
@@ -160,13 +165,20 @@ pub fn admin_page() -> Html {
         let music_wish_page = music_wish_page.clone();
         let music_wish_total = music_wish_total.clone();
         let music_wish_has_more = music_wish_has_more.clone();
-        Callback::from(move |_| {
+        let refresh_music_wishes_seq = refresh_music_wishes_seq.clone();
+        Callback::from(move |requested_page: Option<usize>| {
             let music_wishes = music_wishes.clone();
             let load_error = load_error.clone();
             let tab_loading = tab_loading.clone();
-            let page = *music_wish_page;
+            let page = requested_page.unwrap_or(*music_wish_page).max(1);
             let music_wish_total = music_wish_total.clone();
             let music_wish_has_more = music_wish_has_more.clone();
+            let refresh_music_wishes_seq = refresh_music_wishes_seq.clone();
+            let request_id = {
+                let mut seq = refresh_music_wishes_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
             {
                 let mut s = (*tab_loading).clone();
                 s.insert(AdminTab::MusicWishes);
@@ -176,14 +188,23 @@ pub fn admin_page() -> Html {
                 let offset = (page - 1) * PAGE_SIZE;
                 match fetch_admin_music_wishes(None, Some(PAGE_SIZE), Some(offset)).await {
                     Ok(resp) => {
+                        if *refresh_music_wishes_seq.borrow() != request_id {
+                            return;
+                        }
                         music_wishes.set(resp.wishes);
                         music_wish_total.set(resp.total);
                         music_wish_has_more.set(resp.has_more);
                         load_error.set(None);
                     },
                     Err(err) => {
+                        if *refresh_music_wishes_seq.borrow() != request_id {
+                            return;
+                        }
                         load_error.set(Some(format!("Failed to load music wishes: {}", err)));
                     },
+                }
+                if *refresh_music_wishes_seq.borrow() != request_id {
+                    return;
                 }
                 let mut s = (*tab_loading).clone();
                 s.remove(&AdminTab::MusicWishes);
@@ -201,15 +222,22 @@ pub fn admin_page() -> Html {
         let audit_page = audit_page.clone();
         let audit_total = audit_total.clone();
         let audit_has_more = audit_has_more.clone();
-        Callback::from(move |_| {
+        let refresh_audit_seq = refresh_audit_seq.clone();
+        Callback::from(move |requested_page: Option<usize>| {
             let load_error = load_error.clone();
             let audit_logs = audit_logs.clone();
             let task_filter = (*audit_task_filter).trim().to_string();
             let action_filter = (*audit_action_filter).trim().to_string();
             let tab_loading = tab_loading.clone();
-            let page = *audit_page;
+            let page = requested_page.unwrap_or(*audit_page).max(1);
             let audit_total = audit_total.clone();
             let audit_has_more = audit_has_more.clone();
+            let refresh_audit_seq = refresh_audit_seq.clone();
+            let request_id = {
+                let mut seq = refresh_audit_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
             {
                 let mut s = (*tab_loading).clone();
                 s.insert(AdminTab::Audit);
@@ -226,14 +254,23 @@ pub fn admin_page() -> Html {
                 .await
                 {
                     Ok(resp) => {
+                        if *refresh_audit_seq.borrow() != request_id {
+                            return;
+                        }
                         audit_logs.set(resp.logs);
                         audit_total.set(resp.total);
                         audit_has_more.set(resp.has_more);
                         load_error.set(None);
                     },
                     Err(err) => {
+                        if *refresh_audit_seq.borrow() != request_id {
+                            return;
+                        }
                         load_error.set(Some(format!("Failed to load audit logs: {}", err)));
                     },
+                }
+                if *refresh_audit_seq.borrow() != request_id {
+                    return;
                 }
                 let mut s = (*tab_loading).clone();
                 s.remove(&AdminTab::Audit);
@@ -243,8 +280,12 @@ pub fn admin_page() -> Html {
     };
 
     let on_refresh_audit_click = {
+        let audit_page = audit_page.clone();
         let refresh_audit = refresh_audit.clone();
-        Callback::from(move |_| refresh_audit.emit(()))
+        Callback::from(move |_| {
+            audit_page.set(1);
+            refresh_audit.emit(Some(1));
+        })
     };
 
     let refresh_behavior = {
@@ -265,8 +306,9 @@ pub fn admin_page() -> Html {
         let behavior_page = behavior_page.clone();
         let behavior_overview_loading = behavior_overview_loading.clone();
         let behavior_events_loading = behavior_events_loading.clone();
+        let refresh_behavior_seq = refresh_behavior_seq.clone();
 
-        Callback::from(move |_| {
+        Callback::from(move |requested_page: Option<usize>| {
             let load_error = load_error.clone();
             let behavior_config = behavior_config.clone();
             let behavior_overview = behavior_overview.clone();
@@ -285,15 +327,18 @@ pub fn admin_page() -> Html {
             let device_filter = (*behavior_device_filter).trim().to_string();
             let status_filter = (*behavior_status_filter).trim().parse::<i32>().ok();
             let tab_loading = tab_loading.clone();
-            let page = *behavior_page;
+            let page = requested_page.unwrap_or(*behavior_page).max(1);
             let behavior_overview_loading = behavior_overview_loading.clone();
             let behavior_events_loading = behavior_events_loading.clone();
-
-            let (query_days, query_date) = if date_val.is_empty() {
-                (days, None)
-            } else {
-                (None, Some(date_val))
+            let refresh_behavior_seq = refresh_behavior_seq.clone();
+            let request_id = {
+                let mut seq = refresh_behavior_seq.borrow_mut();
+                *seq += 1;
+                *seq
             };
+
+            let (query_days, query_date) =
+                if date_val.is_empty() { (days, None) } else { (None, Some(date_val)) };
 
             {
                 let mut s = (*tab_loading).clone();
@@ -308,22 +353,33 @@ pub fn admin_page() -> Html {
                 let load_error = load_error.clone();
                 let behavior_overview_loading = behavior_overview_loading.clone();
                 let query_days = query_days;
+                let refresh_behavior_seq = refresh_behavior_seq.clone();
                 behavior_overview_loading.set(true);
                 wasm_bindgen_futures::spawn_local(async move {
                     let config_result = fetch_admin_api_behavior_config().await;
-                    let overview_result = fetch_admin_api_behavior_overview(query_days, Some(20)).await;
+                    let overview_result =
+                        fetch_admin_api_behavior_overview(query_days, Some(20)).await;
                     match (config_result, overview_result) {
                         (Ok(config), Ok(overview)) => {
+                            if *refresh_behavior_seq.borrow() != request_id {
+                                return;
+                            }
                             behavior_config.set(Some(config));
                             behavior_overview.set(Some(overview));
                         },
                         (cfg_err, over_err) => {
+                            if *refresh_behavior_seq.borrow() != request_id {
+                                return;
+                            }
                             load_error.set(Some(format!(
                                 "Behavior overview unavailable. config={:?}, overview={:?}",
                                 cfg_err.err(),
                                 over_err.err()
                             )));
                         },
+                    }
+                    if *refresh_behavior_seq.borrow() != request_id {
+                        return;
                     }
                     behavior_overview_loading.set(false);
                     // Remove tab loading if events also done
@@ -341,33 +397,56 @@ pub fn admin_page() -> Html {
                 let tab_loading = tab_loading.clone();
                 let behavior_events_loading = behavior_events_loading.clone();
                 let query_date = query_date.clone();
+                let refresh_behavior_seq = refresh_behavior_seq.clone();
                 behavior_events_loading.set(true);
                 wasm_bindgen_futures::spawn_local(async move {
                     let offset = (page - 1) * PAGE_SIZE;
-                    let events_result = fetch_admin_api_behavior_events(&AdminApiBehaviorEventsQuery {
-                        days: query_days,
-                        limit: Some(PAGE_SIZE),
-                        offset: Some(offset),
-                        path_contains: if path_filter.is_empty() { None } else { Some(path_filter) },
-                        page_contains: if page_filter.is_empty() { None } else { Some(page_filter) },
-                        device_type: if device_filter.is_empty() { None } else { Some(device_filter) },
-                        method: None,
-                        status_code: status_filter,
-                        ip: None,
-                        date: query_date,
-                    })
-                    .await;
+                    let events_result =
+                        fetch_admin_api_behavior_events(&AdminApiBehaviorEventsQuery {
+                            days: query_days,
+                            limit: Some(PAGE_SIZE),
+                            offset: Some(offset),
+                            path_contains: if path_filter.is_empty() {
+                                None
+                            } else {
+                                Some(path_filter)
+                            },
+                            page_contains: if page_filter.is_empty() {
+                                None
+                            } else {
+                                Some(page_filter)
+                            },
+                            device_type: if device_filter.is_empty() {
+                                None
+                            } else {
+                                Some(device_filter)
+                            },
+                            method: None,
+                            status_code: status_filter,
+                            ip: None,
+                            date: query_date,
+                        })
+                        .await;
 
                     match events_result {
                         Ok(events) => {
+                            if *refresh_behavior_seq.borrow() != request_id {
+                                return;
+                            }
                             behavior_has_more.set(events.has_more);
                             behavior_total.set(events.total);
-                            behavior_offset.set(events.events.len());
+                            behavior_offset.set(events.offset);
                             behavior_events.set(events.events);
                         },
                         Err(err) => {
+                            if *refresh_behavior_seq.borrow() != request_id {
+                                return;
+                            }
                             load_error.set(Some(format!("Behavior events unavailable: {:?}", err)));
                         },
+                    }
+                    if *refresh_behavior_seq.borrow() != request_id {
+                        return;
                     }
                     behavior_events_loading.set(false);
                     let mut s = (*tab_loading).clone();
@@ -399,8 +478,9 @@ pub fn admin_page() -> Html {
         let published_total = published_total.clone();
         let tasks_has_more = tasks_has_more.clone();
         let published_has_more = published_has_more.clone();
+        let refresh_all_seq = refresh_all_seq.clone();
 
-        Callback::from(move |_| {
+        Callback::from(move |requested_pages: (Option<usize>, Option<usize>)| {
             let load_error = load_error.clone();
             let view_config = view_config.clone();
             let comment_config = comment_config.clone();
@@ -418,10 +498,16 @@ pub fn admin_page() -> Html {
             let published_total = published_total.clone();
             let tasks_has_more = tasks_has_more.clone();
             let published_has_more = published_has_more.clone();
+            let refresh_all_seq = refresh_all_seq.clone();
+            let request_id = {
+                let mut seq = refresh_all_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
 
             let status = (*status_filter).trim().to_string();
-            let t_page = *tasks_page;
-            let p_page = *published_page;
+            let t_page = requested_pages.0.unwrap_or(*tasks_page).max(1);
+            let p_page = requested_pages.1.unwrap_or(*published_page).max(1);
             loading.set(true);
             {
                 let mut s = (*tab_loading).clone();
@@ -440,10 +526,19 @@ pub fn admin_page() -> Html {
                     Some(t_offset),
                 )
                 .await;
-                let published_result = fetch_admin_published_comments(None, None, Some(PAGE_SIZE), Some(p_offset)).await;
+                let published_result =
+                    fetch_admin_published_comments(None, None, Some(PAGE_SIZE), Some(p_offset))
+                        .await;
+
+                if *refresh_all_seq.borrow() != request_id {
+                    return;
+                }
 
                 match (view_result, comment_result, grouped_result, published_result) {
                     (Ok(view), Ok(comment), Ok(grouped), Ok(published)) => {
+                        if *refresh_all_seq.borrow() != request_id {
+                            return;
+                        }
                         view_config.set(Some(view));
                         comment_config.set(Some(comment));
                         grouped_status_counts.set(grouped.status_counts);
@@ -468,8 +563,16 @@ pub fn admin_page() -> Html {
                             match fetch_admin_comment_task_ai_output(&task_id, None, Some(1200))
                                 .await
                             {
-                                Ok(output) => selected_task_ai_output.set(Some(output)),
+                                Ok(output) => {
+                                    if *refresh_all_seq.borrow() != request_id {
+                                        return;
+                                    }
+                                    selected_task_ai_output.set(Some(output));
+                                },
                                 Err(err) => {
+                                    if *refresh_all_seq.borrow() != request_id {
+                                        return;
+                                    }
                                     selected_task_ai_output.set(None);
                                     load_error.set(Some(format!(
                                         "Failed to load task AI output: {}",
@@ -478,10 +581,16 @@ pub fn admin_page() -> Html {
                                 },
                             }
                         } else {
+                            if *refresh_all_seq.borrow() != request_id {
+                                return;
+                            }
                             selected_task_ai_output.set(None);
                         }
 
                         if let Some(comment_id) = (*selected_published_id).clone() {
+                            if *refresh_all_seq.borrow() != request_id {
+                                return;
+                            }
                             let found = published
                                 .comments
                                 .into_iter()
@@ -489,9 +598,15 @@ pub fn admin_page() -> Html {
                             selected_published.set(found);
                         }
 
+                        if *refresh_all_seq.borrow() != request_id {
+                            return;
+                        }
                         load_error.set(None);
                     },
                     (view_err, comment_err, grouped_err, published_err) => {
+                        if *refresh_all_seq.borrow() != request_id {
+                            return;
+                        }
                         load_error.set(Some(format!(
                             "Admin API unavailable. view={:?}, comment={:?}, grouped={:?}, \
                              published={:?}",
@@ -501,6 +616,9 @@ pub fn admin_page() -> Html {
                             published_err.err()
                         )));
                     },
+                }
+                if *refresh_all_seq.borrow() != request_id {
+                    return;
                 }
                 loading.set(false);
                 let mut s = (*tab_loading).clone();
@@ -522,10 +640,10 @@ pub fn admin_page() -> Html {
             if let Some(tab) = tab {
                 if !loaded_tabs.contains(tab) {
                     match *tab {
-                        AdminTab::Tasks | AdminTab::Published => refresh_all.emit(()),
-                        AdminTab::Audit => refresh_audit.emit(()),
-                        AdminTab::Behavior => refresh_behavior.emit(()),
-                        AdminTab::MusicWishes => refresh_music_wishes.emit(()),
+                        AdminTab::Tasks | AdminTab::Published => refresh_all.emit((None, None)),
+                        AdminTab::Audit => refresh_audit.emit(None),
+                        AdminTab::Behavior => refresh_behavior.emit(None),
+                        AdminTab::MusicWishes => refresh_music_wishes.emit(None),
                     }
                     let mut set = (*loaded_tabs).clone();
                     set.insert(*tab);
@@ -545,6 +663,15 @@ pub fn admin_page() -> Html {
         })
     };
 
+    let on_tasks_apply = {
+        let tasks_page = tasks_page.clone();
+        let refresh_all = refresh_all.clone();
+        Callback::from(move |_| {
+            tasks_page.set(1);
+            refresh_all.emit((Some(1), None));
+        })
+    };
+
     let on_reload_click = {
         let active_tab = active_tab.clone();
         let refresh_all = refresh_all.clone();
@@ -554,10 +681,10 @@ pub fn admin_page() -> Html {
         Callback::from(move |_| {
             if let Some(tab) = *active_tab {
                 match tab {
-                    AdminTab::Tasks | AdminTab::Published => refresh_all.emit(()),
-                    AdminTab::Audit => refresh_audit.emit(()),
-                    AdminTab::Behavior => refresh_behavior.emit(()),
-                    AdminTab::MusicWishes => refresh_music_wishes.emit(()),
+                    AdminTab::Tasks | AdminTab::Published => refresh_all.emit((None, None)),
+                    AdminTab::Audit => refresh_audit.emit(None),
+                    AdminTab::Behavior => refresh_behavior.emit(None),
+                    AdminTab::MusicWishes => refresh_music_wishes.emit(None),
                 }
             }
         })
@@ -596,8 +723,8 @@ pub fn admin_page() -> Html {
                 match (view_result, comment_result, behavior_result) {
                     (Ok(_), Ok(_), Ok(_)) => {
                         load_error.set(None);
-                        refresh_all.emit(());
-                        refresh_behavior.emit(());
+                        refresh_all.emit((None, None));
+                        refresh_behavior.emit(None);
                     },
                     (view_err, comment_err, behavior_err) => {
                         load_error.set(Some(format!(
@@ -719,7 +846,7 @@ pub fn admin_page() -> Html {
                 match patch_admin_comment_task(&task.task_id, &request).await {
                     Ok(updated) => {
                         selected_task.set(Some(updated));
-                        refresh_all.emit(());
+                        refresh_all.emit((None, None));
                     },
                     Err(err) => load_error.set(Some(format!("Patch task failed: {}", err))),
                 }
@@ -781,7 +908,7 @@ pub fn admin_page() -> Html {
                             selected_task.set(None);
                             selected_task_ai_output.set(None);
                         }
-                        refresh_all.emit(());
+                        refresh_all.emit((None, None));
                     },
                     Err(err) => load_error.set(Some(format!("Task action failed: {}", err))),
                 }
@@ -847,7 +974,7 @@ pub fn admin_page() -> Html {
                 match patch_admin_published_comment(&comment.comment_id, &request).await {
                     Ok(updated) => {
                         selected_published.set(Some(updated));
-                        refresh_all.emit(());
+                        refresh_all.emit((None, None));
                     },
                     Err(err) => load_error.set(Some(format!("Patch published failed: {}", err))),
                 }
@@ -878,7 +1005,7 @@ pub fn admin_page() -> Html {
                         {
                             selected_published.set(None);
                         }
-                        refresh_all.emit(());
+                        refresh_all.emit((None, None));
                     },
                     Err(err) => {
                         load_error.set(Some(format!("Delete published failed: {}", err)));
@@ -902,7 +1029,7 @@ pub fn admin_page() -> Html {
             let refresh_all = refresh_all.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match admin_cleanup_comments(&request).await {
-                    Ok(_) => refresh_all.emit(()),
+                    Ok(_) => refresh_all.emit((None, None)),
                     Err(err) => load_error.set(Some(format!("Cleanup failed: {}", err))),
                 }
             });
@@ -991,12 +1118,20 @@ pub fn admin_page() -> Html {
     };
 
     let on_behavior_apply = {
+        let behavior_page = behavior_page.clone();
+        let behavior_events_loading = behavior_events_loading.clone();
         let refresh_behavior = refresh_behavior.clone();
-        Callback::from(move |_| refresh_behavior.emit(()))
+        Callback::from(move |_| {
+            behavior_page.set(1);
+            behavior_events_loading.set(true);
+            refresh_behavior.emit(Some(1));
+        })
     };
 
     let on_behavior_cleanup = {
         let behavior_config = behavior_config.clone();
+        let behavior_page = behavior_page.clone();
+        let behavior_events_loading = behavior_events_loading.clone();
         let refresh_behavior = refresh_behavior.clone();
         let load_error = load_error.clone();
         Callback::from(move |_| {
@@ -1008,9 +1143,15 @@ pub fn admin_page() -> Html {
             };
             let refresh_behavior = refresh_behavior.clone();
             let load_error = load_error.clone();
+            let behavior_page = behavior_page.clone();
+            let behavior_events_loading = behavior_events_loading.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match admin_cleanup_api_behavior(&request).await {
-                    Ok(_) => refresh_behavior.emit(()),
+                    Ok(_) => {
+                        behavior_page.set(1);
+                        behavior_events_loading.set(true);
+                        refresh_behavior.emit(Some(1));
+                    },
                     Err(err) => {
                         load_error.set(Some(format!("Behavior cleanup failed: {}", err)));
                     },
@@ -1046,27 +1187,44 @@ pub fn admin_page() -> Html {
     let on_tasks_page_change = {
         let page = tasks_page.clone();
         let refresh = refresh_all.clone();
-        Callback::from(move |p: usize| { page.set(p); refresh.emit(()); })
+        Callback::from(move |p: usize| {
+            page.set(p);
+            refresh.emit((Some(p), None));
+        })
     };
     let on_published_page_change = {
         let page = published_page.clone();
         let refresh = refresh_all.clone();
-        Callback::from(move |p: usize| { page.set(p); refresh.emit(()); })
+        Callback::from(move |p: usize| {
+            page.set(p);
+            refresh.emit((None, Some(p)));
+        })
     };
     let on_audit_page_change = {
         let page = audit_page.clone();
         let refresh = refresh_audit.clone();
-        Callback::from(move |p: usize| { page.set(p); refresh.emit(()); })
+        Callback::from(move |p: usize| {
+            page.set(p);
+            refresh.emit(Some(p));
+        })
     };
     let on_behavior_page_change = {
         let page = behavior_page.clone();
         let refresh = refresh_behavior.clone();
-        Callback::from(move |p: usize| { page.set(p); refresh.emit(()); })
+        let behavior_events_loading = behavior_events_loading.clone();
+        Callback::from(move |p: usize| {
+            page.set(p);
+            behavior_events_loading.set(true);
+            refresh.emit(Some(p));
+        })
     };
     let on_music_wish_page_change = {
         let page = music_wish_page.clone();
         let refresh = refresh_music_wishes.clone();
-        Callback::from(move |p: usize| { page.set(p); refresh.emit(()); })
+        Callback::from(move |p: usize| {
+            page.set(p);
+            refresh.emit(Some(p));
+        })
     };
 
     // Compute total pages
@@ -1406,9 +1564,15 @@ pub fn admin_page() -> Html {
                                     placeholder="status filter: pending/approved/failed"
                                     class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[280px]")}
                                 />
-                                <button class={classes!("btn-fluent-secondary")} onclick={on_reload_click.clone()}>{ "Apply" }</button>
+                                <button class={classes!("btn-fluent-secondary")} onclick={on_tasks_apply}>{ "Apply" }</button>
                             </div>
                         </div>
+                        if tab_loading.contains(&AdminTab::Tasks) {
+                            <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading tasks..." }</span>
+                            </div>
+                        }
 
                         <div class={classes!("mb-4", "text-sm", "text-[var(--muted)]", "flex", "gap-2", "flex-wrap")}>
                             { for grouped_status_counts.iter().map(|(status, count)| html! {
@@ -1624,6 +1788,12 @@ pub fn admin_page() -> Html {
                         <h2 class={classes!("m-0", "mb-3", "text-lg", "font-semibold")}>
                             { format!("Published Comments ({})", published_comments.len()) }
                         </h2>
+                        if tab_loading.contains(&AdminTab::Published) {
+                            <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading published comments..." }</span>
+                            </div>
+                        }
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
                                 <thead>
@@ -1724,6 +1894,12 @@ pub fn admin_page() -> Html {
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_refresh_audit_click}>{ "Apply" }</button>
                             </div>
                         </div>
+                        if tab_loading.contains(&AdminTab::Audit) {
+                            <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading audit logs..." }</span>
+                            </div>
+                        }
 
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
@@ -1931,6 +2107,12 @@ pub fn admin_page() -> Html {
                                 }
                             }
                         </h3>
+                        if *behavior_events_loading {
+                            <div class={classes!("mb-2", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading events..." }</span>
+                            </div>
+                        }
                         if *behavior_events_loading && behavior_events.is_empty() {
                             <div class={classes!("flex", "justify-center", "py-8")}>
                                 <LoadingSpinner size={SpinnerSize::Small} />
@@ -1987,9 +2169,15 @@ pub fn admin_page() -> Html {
                             </h2>
                             <button class={classes!("btn-fluent-secondary")} onclick={
                                 let r = refresh_music_wishes.clone();
-                                Callback::from(move |_| r.emit(()))
+                                Callback::from(move |_| r.emit(None))
                             }>{ "Refresh" }</button>
                         </div>
+                        if tab_loading.contains(&AdminTab::MusicWishes) {
+                            <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading music wishes..." }</span>
+                            </div>
+                        }
                         if music_wishes.is_empty() {
                             <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No wishes yet." }</p>
                         } else {

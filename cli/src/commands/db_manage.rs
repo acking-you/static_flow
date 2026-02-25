@@ -10,7 +10,7 @@ use chrono::Duration as ChronoDuration;
 use futures::TryStreamExt;
 use lancedb::{
     query::{ExecutableQuery, QueryBase, Select},
-    table::{OptimizeAction, OptimizeOptions},
+    table::{CompactionOptions, OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
 use static_flow_shared::embedding::{
@@ -28,6 +28,9 @@ use crate::{
 };
 
 const CLEANUP_TARGET_TABLES: [&str; 4] = ["articles", "images", "taxonomies", "article_views"];
+const SAFE_COMPACTION_BATCH_SIZE: usize = 8;
+const SAFE_COMPACTION_MAX_ROWS_PER_GROUP: usize = 8;
+const SAFE_COMPACTION_MAX_BYTES_PER_FILE: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct QueryRowsOptions {
@@ -371,10 +374,36 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
     let db = connect_db(db_path).await?;
     let table = open_table(&db, table).await?;
 
-    let action =
-        if all { OptimizeAction::All } else { OptimizeAction::Index(OptimizeOptions::default()) };
-
-    let _ = table.optimize(action).await?;
+    if all {
+        if let Err(err) = table.optimize(OptimizeAction::All).await {
+            let message = err.to_string();
+            if message.contains("Offset overflow error") {
+                tracing::warn!(
+                    "Full optimize failed for `{}` with offset overflow, retrying with safe compaction settings",
+                    table.name()
+                );
+                let mut options = CompactionOptions::default();
+                options.batch_size = Some(SAFE_COMPACTION_BATCH_SIZE);
+                options.max_rows_per_group = SAFE_COMPACTION_MAX_ROWS_PER_GROUP;
+                options.max_bytes_per_file = Some(SAFE_COMPACTION_MAX_BYTES_PER_FILE);
+                let _ = table
+                    .optimize(OptimizeAction::Compact {
+                        options,
+                        remap_options: None,
+                    })
+                    .await?;
+                let _ = table
+                    .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+                    .await?;
+            } else {
+                return Err(err.into());
+            }
+        }
+    } else {
+        let _ = table
+            .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+            .await?;
+    }
 
     if prune_now {
         let _ = table

@@ -12,8 +12,7 @@ use crate::{
         semantic_search_articles, ImageInfo, SearchResult,
     },
     components::{
-        image_with_loading::ImageWithLoading, pagination::Pagination,
-        raw_html::RawHtml,
+        image_with_loading::ImageWithLoading, pagination::Pagination, raw_html::RawHtml,
         scroll_to_top_button::ScrollToTopButton,
     },
     hooks::use_pagination,
@@ -24,15 +23,12 @@ use crate::{
 };
 
 /// SPA-navigate to `href` without a full page reload.
-/// Use as `onclick` on `<a>` tags that would otherwise trigger a browser navigation.
+/// Use as `onclick` on `<a>` tags that would otherwise trigger a browser
+/// navigation.
 fn spa_navigate(href: &str) {
     if let Some(window) = web_sys::window() {
         if let Ok(history) = window.history() {
-            let _ = history.push_state_with_url(
-                &wasm_bindgen::JsValue::NULL,
-                "",
-                Some(href),
-            );
+            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(href));
             if let Ok(event) = Event::new("popstate") {
                 let _ = window.dispatch_event(&event);
             }
@@ -40,13 +36,15 @@ fn spa_navigate(href: &str) {
     }
 }
 
-/// Event-delegation handler: intercept clicks on `<a href="/search...">` inside the
-/// search page and convert them to SPA pushState navigation so music playback and
-/// other in-memory state survive mode switches.
+/// Event-delegation handler: intercept clicks on `<a href="/search...">` inside
+/// the search page and convert them to SPA pushState navigation so music
+/// playback and other in-memory state survive mode switches.
 fn intercept_search_links(e: MouseEvent) {
     let search_prefix = crate::config::route_path("/search");
     // Walk up from the click target to find the nearest <a>
-    let mut node = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    let mut node = e
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
     while let Some(el) = node {
         if el.tag_name().eq_ignore_ascii_case("A") {
             if let Some(href) = el.get_attribute("href") {
