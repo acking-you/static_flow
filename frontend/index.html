@@ -1,1495 +1,1594 @@
 <!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>StaticFlow · AI + Skill 驱动的本地优先技术博客</title>
-    <meta name="description" content="可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。" />
-    <meta name="robots" content="index,follow,max-image-preview:large" />
-    <meta name="googlebot" content="index,follow,max-image-preview:large" />
-    <meta name="author" content="ackingliu" />
-    <meta name="referrer" content="strict-origin-when-cross-origin" />
-    <meta name="theme-color" content="#0078d4" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#3aa0ff" media="(prefers-color-scheme: dark)" />
-    <link rel="canonical" href="https://acking-you.github.io/" data-sf-seo="canonical" />
 
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="StaticFlow" />
-    <meta property="og:title" content="StaticFlow · AI + Skill 驱动的本地优先技术博客" />
-    <meta property="og:description" content="可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。" />
-    <meta property="og:url" content="https://acking-you.github.io/" />
-    <meta property="og:locale" content="zh_CN" />
-    <meta property="og:locale:alternate" content="en_US" />
-    <meta property="og:image" content="https://acking-you.github.io/static/android-chrome-512x512.png" />
-    <meta property="og:image:alt" content="StaticFlow" />
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StaticFlow · AI + Skill 驱动的本地优先技术博客</title>
+  <meta name="description"
+    content="可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。" />
+  <meta name="robots" content="index,follow,max-image-preview:large" />
+  <meta name="googlebot" content="index,follow,max-image-preview:large" />
+  <meta name="author" content="ackingliu" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="theme-color" content="#0078d4" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#3aa0ff" media="(prefers-color-scheme: dark)" />
+  <link rel="canonical" href="https://acking-you.github.io/" data-sf-seo="canonical" />
 
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="StaticFlow · AI + Skill 驱动的本地优先技术博客" />
-    <meta name="twitter:description" content="可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。" />
-    <meta name="twitter:image" content="https://acking-you.github.io/static/android-chrome-512x512.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="StaticFlow" />
+  <meta property="og:title" content="StaticFlow · AI + Skill 驱动的本地优先技术博客" />
+  <meta property="og:description"
+    content="可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。" />
+  <meta property="og:url" content="https://acking-you.github.io/" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta property="og:image" content="https://acking-you.github.io/static/android-chrome-512x512.png" />
+  <meta property="og:image:alt" content="StaticFlow" />
 
-    <!-- GitHub Pages SPA Router: Restore original URL after 404 redirect -->
-    <script>
-      (function() {
-        var redirectPath = sessionStorage.getItem('redirectPath');
-        if (redirectPath) {
-          sessionStorage.removeItem('redirectPath');
-          history.replaceState(null, '', redirectPath);
-        }
-      })();
-    </script>
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="StaticFlow · AI + Skill 驱动的本地优先技术博客" />
+  <meta name="twitter:description"
+    content="可视化博客 + Skill 工作流：一键完成创作、分类、标签化、发布与部署；基于 LanceDB 统一存储文章与图片，支持全文语义、混合检索与 AI 评论自动回复。" />
+  <meta name="twitter:image" content="https://acking-you.github.io/static/android-chrome-512x512.png" />
 
-    <link rel="stylesheet" href="/static/styles.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <!-- GitHub Pages SPA Router: Restore original URL after 404 redirect -->
+  <script>
+    (function () {
+      var redirectPath = sessionStorage.getItem('redirectPath');
+      if (redirectPath) {
+        sessionStorage.removeItem('redirectPath');
+        history.replaceState(null, '', redirectPath);
+      }
+    })();
+  </script>
 
-    <!-- Google Fonts: Fraunces for editorial headlines -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
-    <!-- KaTeX for math rendering -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous" />
+  <!-- Google Fonts: Fraunces for editorial headlines -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap"
+    rel="stylesheet" />
 
-    <!-- Highlight.js for syntax highlighting -->
-    <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" />
-    <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" disabled />
+  <!-- KaTeX for math rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
+    integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous" />
 
-    <!-- Mermaid for diagrams -->
-    <script type="module">
-      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-      window.mermaid = mermaid;
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
-      });
-    </script>
+  <!-- Highlight.js for syntax highlighting -->
+  <link id="hljs-light" rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" />
+  <link id="hljs-dark" rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" disabled />
 
-    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
-    <link rel="icon" href="/static/favicon.ico" />
-    <link rel="manifest" href="/static/site.webmanifest" />
-    <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2d96bd" />
-    <meta name="msapplication-TileColor" content="#161209" />
-    <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
+  <!-- Mermaid for diagrams -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    window.mermaid = mermaid;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+    });
+  </script>
 
-    <!-- Cache compiled WASM Module in IndexedDB to survive V8 code-cache eviction.
-         After long idle the browser discards compiled code; without this patch the
-         1.9 MB module must be recompiled from disk-cached bytes (pure CPU, zero
-         network requests, blank page for seconds). IndexedDB stores the compiled
-         Module persistently and is not subject to the same eviction policy. -->
-    <script>
-      (function () {
-        var DB = 'sf-wasm-cache', STORE = 'compiled';
-        function openDB() {
-          return new Promise(function (ok, fail) {
-            var r = indexedDB.open(DB, 1);
-            r.onupgradeneeded = function () { r.result.createObjectStore(STORE); };
-            r.onsuccess = function () { ok(r.result); };
-            r.onerror = function () { fail(r.error); };
-          });
-        }
-        var _is = WebAssembly.instantiateStreaming;
-        if (!_is) return;
-        WebAssembly.instantiateStreaming = function (source, imports) {
-          var resp;
-          return Promise.resolve(source)
-            .then(function (r) { resp = r; return r.url || ''; })
-            .then(function (url) {
-              if (!url.includes('.wasm')) return _is.call(WebAssembly, resp, imports);
-              return openDB()
-                .then(function (db) {
-                  return new Promise(function (ok) {
-                    var tx = db.transaction(STORE, 'readonly');
-                    var rq = tx.objectStore(STORE).get(url);
-                    rq.onsuccess = function () { ok(rq.result || null); };
-                    rq.onerror = function () { ok(null); };
-                  });
-                })
-                .then(function (cached) {
-                  if (cached instanceof WebAssembly.Module) {
-                    return WebAssembly.instantiate(cached, imports)
-                      .then(function (instance) { return { instance: instance, module: cached }; });
-                  }
-                  return _is.call(WebAssembly, resp, imports)
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
+  <link rel="icon" href="/static/favicon.ico" />
+  <link rel="manifest" href="/static/site.webmanifest" />
+  <link rel="mask-icon" href="/static/safari-pinned-tab.svg" color="#2d96bd" />
+  <meta name="msapplication-TileColor" content="#161209" />
+  <meta name="msapplication-TileImage" content="/static/mstile-150x150.png" />
+
+  <!-- Cache WASM bytes in IndexedDB to survive HTTP/V8 code-cache eviction.
+         After long idle the browser may discard both compiled code and disk cache;
+         IndexedDB persists the raw bytes so we skip the network round-trip and let
+         V8's internal compile cache (keyed on identical bytes) accelerate startup. -->
+  <script>
+    (function () {
+      var DB = 'sf-wasm-cache', STORE = 'compiled', SCHEMA = 2;
+      var log = function (msg) { console.log('[WASM-Cache] ' + msg); };
+      function openDB() {
+        return new Promise(function (ok, fail) {
+          var r = indexedDB.open(DB, SCHEMA);
+          r.onupgradeneeded = function () {
+            var db = r.result;
+            if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
+            db.createObjectStore(STORE);
+            log('IndexedDB upgrade to v' + SCHEMA);
+          };
+          r.onsuccess = function () { log('IndexedDB opened OK'); ok(r.result); };
+          r.onerror = function () { log('IndexedDB open FAILED: ' + r.error); fail(r.error); };
+        });
+      }
+      var _is = WebAssembly.instantiateStreaming;
+      if (!_is) { log('instantiateStreaming not available, skipping'); return; }
+      log('Monkey-patching WebAssembly.instantiateStreaming');
+      WebAssembly.instantiateStreaming = function (source, imports) {
+        var resp;
+        return Promise.resolve(source)
+          .then(function (r) {
+            resp = r;
+            var url = r.url || '';
+            log('source resolved — url=' + (url || '(empty)'));
+            return url;
+          })
+          .then(function (url) {
+            if (!url.includes('.wasm')) {
+              log('URL has no .wasm, falling back to native');
+              return _is.call(WebAssembly, resp, imports);
+            }
+            log('Checking IndexedDB cache for: ' + url);
+            return openDB()
+              .then(function (db) {
+                return new Promise(function (ok) {
+                  var tx = db.transaction(STORE, 'readonly');
+                  var rq = tx.objectStore(STORE).get(url);
+                  rq.onsuccess = function () {
+                    var val = rq.result;
+                    log('IndexedDB get: ' + (val == null ? 'null' : val.constructor.name + ' (' + val.byteLength + ' bytes)'));
+                    ok(val || null);
+                  };
+                  rq.onerror = function () { log('IndexedDB get FAILED: ' + rq.error); ok(null); };
+                });
+              })
+              .then(function (cached) {
+                if (cached instanceof ArrayBuffer && cached.byteLength > 0) {
+                  log('CACHE HIT — compiling+instantiating from ' + cached.byteLength + ' cached bytes');
+                  var t0 = performance.now();
+                  return WebAssembly.instantiate(cached, imports)
                     .then(function (result) {
-                      openDB().then(function (db) {
+                      log('Instantiated from cache OK in ' + (performance.now() - t0).toFixed(0) + 'ms');
+                      return result;
+                    });
+                }
+                log('CACHE MISS — calling native instantiateStreaming');
+                var t1 = performance.now();
+                // Clone the response so we can both stream-compile and read bytes
+                var cloned = resp.clone();
+                return _is.call(WebAssembly, resp, imports)
+                  .then(function (result) {
+                    log('Native instantiateStreaming OK in ' + (performance.now() - t1).toFixed(0) + 'ms');
+                    // Read bytes from the cloned response and store in IndexedDB
+                    cloned.arrayBuffer().then(function (bytes) {
+                      log('Fetched ' + bytes.byteLength + ' bytes, storing in IndexedDB ...');
+                      return openDB().then(function (db) {
                         var tx = db.transaction(STORE, 'readwrite');
                         var st = tx.objectStore(STORE);
                         st.clear();
-                        st.put(result.module, url);
-                      }).catch(function () {});
-                      return result;
-                    });
-                })
-                .catch(function () { return _is.call(WebAssembly, resp, imports); });
-            })
-            .catch(function () { return _is.call(WebAssembly, source, imports); });
+                        var putReq = st.put(bytes, url);
+                        putReq.onsuccess = function () { log('Bytes stored OK (' + bytes.byteLength + ' bytes, key=' + url + ')'); };
+                        putReq.onerror = function () { log('Bytes store FAILED: ' + putReq.error); };
+                        tx.oncomplete = function () { log('Write transaction committed'); };
+                        tx.onerror = function () { log('Write transaction FAILED: ' + tx.error); };
+                      });
+                    }).catch(function (e) { log('arrayBuffer/store error: ' + e); });
+                    return result;
+                  });
+              })
+              .catch(function (e) { log('Cache path error, falling back: ' + e); return _is.call(WebAssembly, resp, imports); });
+          })
+          .catch(function (e) { log('Outer error, falling back: ' + e); return _is.call(WebAssembly, source, imports); });
+      };
+    })();
+  </script>
+
+  <!-- Trunk will compile Rust to WASM -->
+  <!-- Disable built-in wasm-opt; post_build hook runs it with correct feature flags -->
+  <link data-trunk rel="rust" data-wasm-opt="0" />
+
+  <!-- Copy entire static directory -->
+  <link data-trunk rel="copy-dir" href="static" />
+
+  <script>
+    // Theme bootstrap: set initial theme from localStorage or prefers-color-scheme
+    (function () {
+      var setHighlightTheme = function (theme) {
+        var lightTheme = document.getElementById('hljs-light');
+        var darkTheme = document.getElementById('hljs-dark');
+        var useDark = theme === 'dark';
+        if (lightTheme) lightTheme.disabled = useDark;
+        if (darkTheme) darkTheme.disabled = !useDark;
+      };
+
+      try {
+        var stored = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var theme = stored || (prefersDark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+        setHighlightTheme(theme);
+        // expose a tiny toggle helper for quick demos
+        window.__toggleTheme = function () {
+          var current = document.documentElement.getAttribute('data-theme') || 'light';
+          var next = current === 'dark' ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', next);
+          setHighlightTheme(next);
+          try { localStorage.setItem('theme', next); } catch (_) { }
         };
-      })();
-    </script>
+      } catch (_) {
+        // noop
+      }
+    })();
+  </script>
+</head>
 
-    <!-- Trunk will compile Rust to WASM -->
-    <!-- Disable built-in wasm-opt, we'll optimize manually in post_build hook -->
-    <link data-trunk rel="rust" data-wasm-opt="0" />
+<body>
+  <svg width="0" height="0" style="position:absolute;">
+    <defs>
+      <filter id="wave-filter">
+        <feTurbulence type="fractalNoise" baseFrequency="0.01" numOctaves="1" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="5" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </defs>
+  </svg>
+  <div class="spotlight" id="global-spotlight" aria-hidden="true"></div>
+  <!-- WASM app will render here -->
+  <noscript>本应用需要启用 JavaScript。</noscript>
 
-    <!-- Copy entire static directory -->
-    <link data-trunk rel="copy-dir" href="static" />
-
-    <script>
-      // Theme bootstrap: set initial theme from localStorage or prefers-color-scheme
-      (function () {
-        var setHighlightTheme = function (theme) {
-          var lightTheme = document.getElementById('hljs-light');
-          var darkTheme = document.getElementById('hljs-dark');
-          var useDark = theme === 'dark';
-          if (lightTheme) lightTheme.disabled = useDark;
-          if (darkTheme) darkTheme.disabled = !useDark;
-        };
-
-        try {
-          var stored = localStorage.getItem('theme');
-          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-          var theme = stored || (prefersDark ? 'dark' : 'light');
-          document.documentElement.setAttribute('data-theme', theme);
-          setHighlightTheme(theme);
-          // expose a tiny toggle helper for quick demos
-          window.__toggleTheme = function () {
-            var current = document.documentElement.getAttribute('data-theme') || 'light';
-            var next = current === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', next);
-            setHighlightTheme(next);
-            try { localStorage.setItem('theme', next); } catch (_) {}
-          };
-        } catch (_) {
-          // noop
+  <!-- Loading indicator shown while WASM compiles; removed once app mounts -->
+  <div id="sf-loading"
+    style="position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg,#fafafa);transition:opacity .3s ease">
+    <style>
+      @keyframes sf-spin {
+        to {
+          transform: rotate(360deg)
         }
-      })();
-    </script>
-  </head>
-  <body>
-    <svg width="0" height="0" style="position:absolute;">
-      <defs>
-        <filter id="wave-filter">
-          <feTurbulence type="fractalNoise" baseFrequency="0.01" numOctaves="1" result="noise"/>
-          <feDisplacementMap in="SourceGraphic" in2="noise" scale="5" xChannelSelector="R" yChannelSelector="G"/>
-        </filter>
-      </defs>
-    </svg>
-    <div class="spotlight" id="global-spotlight" aria-hidden="true"></div>
-    <!-- WASM app will render here -->
-    <noscript>本应用需要启用 JavaScript。</noscript>
+      }
 
-    <!-- Loading indicator shown while WASM compiles; removed once app mounts -->
-    <div id="sf-loading" style="position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg,#fafafa);transition:opacity .3s ease">
-      <style>
-        @keyframes sf-spin{to{transform:rotate(360deg)}}
-        #sf-loading-ring{width:40px;height:40px;border:3px solid #e5e7eb;border-top-color:#0078d4;border-radius:50%;animation:sf-spin .8s linear infinite}
-        #sf-loading-main{margin-top:16px;font:600 15px/1.2 system-ui,sans-serif;color:var(--text,#1f2937);letter-spacing:.01em}
-        #sf-loading-sub{margin-top:6px;font:400 12.5px/1.4 system-ui,sans-serif;color:#9ca3af;max-width:300px;text-align:center}
-        #sf-loading-hint{margin-top:14px;font:400 11.5px/1.3 system-ui,sans-serif;color:#b0b8c4;max-width:320px;text-align:center}
-        [data-theme="dark"] #sf-loading{background:#0d1117}
-        [data-theme="dark"] #sf-loading-ring{border-color:#30363d;border-top-color:#58a6ff}
-        [data-theme="dark"] #sf-loading-main{color:#e6edf3}
-        [data-theme="dark"] #sf-loading-sub{color:#8b949e}
-        [data-theme="dark"] #sf-loading-hint{color:#6e7681}
-      </style>
-      <div id="sf-loading-ring"></div>
-      <div id="sf-loading-main">正在初始化 WebAssembly 引擎…</div>
-      <div id="sf-loading-sub">首次编译原生模块可能需要数秒</div>
-      <div id="sf-loading-hint">就绪后，页面交互将以接近原生的速度运行</div>
-    </div>
-    <script>
-      addEventListener('TrunkApplicationStarted', function () {
-        var el = document.getElementById('sf-loading');
-        if (el) { el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 320); }
+      #sf-loading-ring {
+        width: 40px;
+        height: 40px;
+        border: 3px solid #e5e7eb;
+        border-top-color: #0078d4;
+        border-radius: 50%;
+        animation: sf-spin .8s linear infinite
+      }
+
+      #sf-loading-main {
+        margin-top: 16px;
+        font: 600 15px/1.2 system-ui, sans-serif;
+        color: var(--text, #1f2937);
+        letter-spacing: .01em
+      }
+
+      #sf-loading-sub {
+        margin-top: 6px;
+        font: 400 12.5px/1.4 system-ui, sans-serif;
+        color: #9ca3af;
+        max-width: 300px;
+        text-align: center
+      }
+
+      #sf-loading-hint {
+        margin-top: 14px;
+        font: 400 11.5px/1.3 system-ui, sans-serif;
+        color: #b0b8c4;
+        max-width: 320px;
+        text-align: center
+      }
+
+      [data-theme="dark"] #sf-loading {
+        background: #0d1117
+      }
+
+      [data-theme="dark"] #sf-loading-ring {
+        border-color: #30363d;
+        border-top-color: #58a6ff
+      }
+
+      [data-theme="dark"] #sf-loading-main {
+        color: #e6edf3
+      }
+
+      [data-theme="dark"] #sf-loading-sub {
+        color: #8b949e
+      }
+
+      [data-theme="dark"] #sf-loading-hint {
+        color: #6e7681
+      }
+    </style>
+    <div id="sf-loading-ring"></div>
+    <div id="sf-loading-main">正在初始化 WebAssembly 引擎…</div>
+    <div id="sf-loading-sub">首次编译原生模块可能需要数秒</div>
+    <div id="sf-loading-hint">就绪后，页面交互将以接近原生的速度运行</div>
+  </div>
+  <script>
+    addEventListener('TrunkApplicationStarted', function () {
+      var el = document.getElementById('sf-loading');
+      if (el) { el.style.opacity = '0'; setTimeout(function () { el.remove(); }, 320); }
+    });
+  </script>
+
+  <!-- KaTeX and Highlight.js scripts -->
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
+    integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8"
+    crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05"
+    crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+  <!-- Common languages for highlight.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/toml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
+
+  <script>
+    function slugifyHeadingText(text) {
+      return (text || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[`~!@#$%^&*()+=[\]{}|\\:;"'<>,.?/！？。；：、“”‘’【】（）《》]/g, '')
+        .replace(/_/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+
+    function assignHeadingIds(articleContent) {
+      const headings = articleContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
+      const seen = new Map();
+
+      headings.forEach((heading, index) => {
+        const existingId = (heading.getAttribute('id') || '').trim();
+        const baseId = existingId || slugifyHeadingText(heading.textContent || '') || `heading-${index + 1}`;
+        const count = (seen.get(baseId) || 0) + 1;
+        seen.set(baseId, count);
+        heading.id = count === 1 ? baseId : `${baseId}-${count}`;
       });
-    </script>
 
-    <!-- KaTeX and Highlight.js scripts -->
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+      return headings;
+    }
 
-    <!-- Common languages for highlight.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/toml.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/markdown.min.js"></script>
+    function assignArticleBlockIds(articleContent) {
+      if (!articleContent) return;
 
-    <script>
-      function slugifyHeadingText(text) {
-        return (text || '')
-          .trim()
-          .toLowerCase()
-          .replace(/[`~!@#$%^&*()+=[\]{}|\\:;"'<>,.?/！？。；：、“”‘’【】（）《》]/g, '')
-          .replace(/_/g, '-')
-          .replace(/\s+/g, '-')
-          .replace(/-+/g, '-')
-          .replace(/^-|-$/g, '');
+      const blockSelector = [
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'p',
+        'li',
+        'blockquote',
+        'pre',
+        'table',
+        'img',
+        '.sf-math-block',
+        'hr'
+      ].join(',');
+      const seen = new Map();
+
+      articleContent.querySelectorAll(blockSelector).forEach((block, index) => {
+        const tag = (block.tagName || 'node').toLowerCase();
+        const raw =
+          (block.textContent || '').trim() ||
+          block.getAttribute('alt') ||
+          block.getAttribute('src') ||
+          `${tag}-${index + 1}`;
+        const slug = slugifyHeadingText(raw).slice(0, 42) || `${tag}-${index + 1}`;
+        const base = `blk-${tag}-${slug}`;
+        const count = (seen.get(base) || 0) + 1;
+        seen.set(base, count);
+        const blockId = count === 1 ? base : `${base}-${count}`;
+        block.setAttribute('data-sf-block-id', blockId);
+      });
+    }
+
+    function findHashTarget(rawHash) {
+      const hash = (rawHash || '').replace(/^#/, '');
+      if (!hash) return null;
+
+      let decodedHash = hash;
+      try {
+        decodedHash = decodeURIComponent(hash);
+      } catch (_) {
+        // keep original hash if decode fails
       }
 
-      function assignHeadingIds(articleContent) {
-        const headings = articleContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
-        const seen = new Map();
+      return document.getElementById(decodedHash) || document.getElementById(hash);
+    }
 
-        headings.forEach((heading, index) => {
-          const existingId = (heading.getAttribute('id') || '').trim();
-          const baseId = existingId || slugifyHeadingText(heading.textContent || '') || `heading-${index + 1}`;
-          const count = (seen.get(baseId) || 0) + 1;
-          seen.set(baseId, count);
-          heading.id = count === 1 ? baseId : `${baseId}-${count}`;
-        });
-
-        return headings;
+    function getHeadingScrollOffset() {
+      const header = document.querySelector('header');
+      if (header) {
+        const rect = header.getBoundingClientRect();
+        if (rect.height > 0) {
+          return rect.height + 12;
+        }
       }
 
-      function assignArticleBlockIds(articleContent) {
-        if (!articleContent) return;
+      const rootStyle = window.getComputedStyle(document.documentElement);
+      const isDesktop = window.matchMedia('(min-width: 48rem)').matches;
+      const cssValue = rootStyle
+        .getPropertyValue(isDesktop ? '--header-height-desktop' : '--header-height-mobile')
+        .trim();
 
-        const blockSelector = [
-          'h1',
-          'h2',
-          'h3',
-          'h4',
-          'h5',
-          'h6',
-          'p',
-          'li',
-          'blockquote',
-          'pre',
-          'table',
-          'img',
-          '.sf-math-block',
-          'hr'
-        ].join(',');
-        const seen = new Map();
-
-        articleContent.querySelectorAll(blockSelector).forEach((block, index) => {
-          const tag = (block.tagName || 'node').toLowerCase();
-          const raw =
-            (block.textContent || '').trim() ||
-            block.getAttribute('alt') ||
-            block.getAttribute('src') ||
-            `${tag}-${index + 1}`;
-          const slug = slugifyHeadingText(raw).slice(0, 42) || `${tag}-${index + 1}`;
-          const base = `blk-${tag}-${slug}`;
-          const count = (seen.get(base) || 0) + 1;
-          seen.set(base, count);
-          const blockId = count === 1 ? base : `${base}-${count}`;
-          block.setAttribute('data-sf-block-id', blockId);
-        });
+      const parsed = Number.parseFloat(cssValue);
+      if (!Number.isFinite(parsed)) {
+        return 80;
       }
 
-      function findHashTarget(rawHash) {
-        const hash = (rawHash || '').replace(/^#/, '');
-        if (!hash) return null;
+      if (cssValue.endsWith('rem')) {
+        const fontSize = Number.parseFloat(rootStyle.fontSize || '16') || 16;
+        return parsed * fontSize + 12;
+      }
 
-        let decodedHash = hash;
-        try {
-          decodedHash = decodeURIComponent(hash);
-        } catch (_) {
-          // keep original hash if decode fails
+      return parsed + 12;
+    }
+
+    function scrollToHeading(target, behavior) {
+      if (!target) return;
+      const offset = getHeadingScrollOffset();
+      const targetTop = window.scrollY + target.getBoundingClientRect().top - offset;
+      window.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: behavior || 'smooth'
+      });
+    }
+
+    function bindArticleAnchorLinks(articleContent) {
+      articleContent.querySelectorAll('a[href^="#"]').forEach((link) => {
+        if (link.dataset.sfAnchorBound === 'true') {
+          return;
         }
 
-        return document.getElementById(decodedHash) || document.getElementById(hash);
+        link.dataset.sfAnchorBound = 'true';
+        link.addEventListener('click', (event) => {
+          const href = link.getAttribute('href') || '';
+          const target = findHashTarget(href);
+          if (!target) return;
+
+          event.preventDefault();
+          scrollToHeading(target, 'smooth');
+          history.replaceState(null, '', `#${encodeURIComponent(target.id)}`);
+        });
+      });
+    }
+
+    function runMarkdownRenderPipeline(articleContent) {
+      if (!articleContent) return;
+
+      function escapeMermaidLabel(label) {
+        return String(label || '')
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .trim();
       }
 
-      function getHeadingScrollOffset() {
-        const header = document.querySelector('header');
-        if (header) {
-          const rect = header.getBoundingClientRect();
-          if (rect.height > 0) {
-            return rect.height + 12;
-          }
+      function shouldNormalizeFlowchartLabels(source) {
+        const lines = String(source || '').split('\n');
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          // Skip Mermaid directives/comments when detecting diagram type.
+          if (line.startsWith('%%{') && line.endsWith('}%%')) continue;
+          if (line.startsWith('%%')) continue;
+          return /^(graph|flowchart)\b/i.test(line);
         }
+        return false;
+      }
 
-        const rootStyle = window.getComputedStyle(document.documentElement);
-        const isDesktop = window.matchMedia('(min-width: 48rem)').matches;
-        const cssValue = rootStyle
-          .getPropertyValue(isDesktop ? '--header-height-desktop' : '--header-height-mobile')
+      // Mermaid 10.x is strict for some tokens in unquoted labels
+      // (e.g. `malloc(size)` in `A[malloc(size)]`).
+      // Normalize common node labels into quoted forms:
+      //   A[text]   -> A["text"]
+      //   A{text}   -> A{"text"}
+      function normalizeMermaidDefinition(source) {
+        let text = String(source || '').replace(/\r\n?/g, '\n').trim();
+        if (!text) return text;
+
+        // Strip accidental fence remnants if they leaked into code content.
+        text = text
+          .replace(/^```mermaid\s*/i, '')
+          .replace(/```$/g, '')
           .trim();
 
-        const parsed = Number.parseFloat(cssValue);
-        if (!Number.isFinite(parsed)) {
-          return 80;
+        // Only normalize flowchart/graph diagrams.
+        // Other Mermaid dialects (e.g. stateDiagram) use different token rules.
+        if (!shouldNormalizeFlowchartLabels(text)) {
+          return text;
         }
 
-        if (cssValue.endsWith('rem')) {
-          const fontSize = Number.parseFloat(rootStyle.fontSize || '16') || 16;
-          return parsed * fontSize + 12;
-        }
-
-        return parsed + 12;
-      }
-
-      function scrollToHeading(target, behavior) {
-        if (!target) return;
-        const offset = getHeadingScrollOffset();
-        const targetTop = window.scrollY + target.getBoundingClientRect().top - offset;
-        window.scrollTo({
-          top: Math.max(0, targetTop),
-          behavior: behavior || 'smooth'
+        text = text.replace(/(\b[A-Za-z][\w-]*)\s*\[([^\]\n"]+)\]/g, (match, id, label) => {
+          const normalized = escapeMermaidLabel(label);
+          return normalized ? `${id}["${normalized}"]` : match;
         });
-      }
 
-      function bindArticleAnchorLinks(articleContent) {
-        articleContent.querySelectorAll('a[href^="#"]').forEach((link) => {
-          if (link.dataset.sfAnchorBound === 'true') {
-            return;
-          }
-
-          link.dataset.sfAnchorBound = 'true';
-          link.addEventListener('click', (event) => {
-            const href = link.getAttribute('href') || '';
-            const target = findHashTarget(href);
-            if (!target) return;
-
-            event.preventDefault();
-            scrollToHeading(target, 'smooth');
-            history.replaceState(null, '', `#${encodeURIComponent(target.id)}`);
-          });
+        text = text.replace(/(\b[A-Za-z][\w-]*)\s*\{([^}\n"]+)\}/g, (match, id, label) => {
+          const normalized = escapeMermaidLabel(label);
+          return normalized ? `${id}{"${normalized}"}` : match;
         });
+
+        return text;
       }
 
-        function runMarkdownRenderPipeline(articleContent) {
-          if (!articleContent) return;
-
-        function escapeMermaidLabel(label) {
-          return String(label || '')
-            .replace(/\\/g, '\\\\')
-            .replace(/"/g, '\\"')
-            .trim();
+      function markMermaidPending(node) {
+        if (!node) return;
+        node.classList.add('mermaid-pending');
+        node.setAttribute('aria-busy', 'true');
+        if (node._sfMermaidPendingTimer) {
+          clearTimeout(node._sfMermaidPendingTimer);
         }
+        // Failsafe: if Mermaid rendering is stuck, fallback to code block so users never see a permanent blank state.
+        node._sfMermaidPendingTimer = setTimeout(() => {
+          if (!node.isConnected || !node.classList.contains('mermaid-pending')) return;
+          const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+          node.dataset.sfMermaidRendered = 'true';
+          clearMermaidPending(node);
+          replaceMermaidWithCodeBlock(node, source);
+        }, 6000);
+      }
 
-        function shouldNormalizeFlowchartLabels(source) {
-          const lines = String(source || '').split('\n');
-          for (const rawLine of lines) {
-            const line = rawLine.trim();
-            if (!line) continue;
-            // Skip Mermaid directives/comments when detecting diagram type.
-            if (line.startsWith('%%{') && line.endsWith('}%%')) continue;
-            if (line.startsWith('%%')) continue;
-            return /^(graph|flowchart)\b/i.test(line);
-          }
+      function clearMermaidPending(node) {
+        if (!node) return;
+        node.classList.remove('mermaid-pending');
+        node.removeAttribute('aria-busy');
+        if (node._sfMermaidPendingTimer) {
+          clearTimeout(node._sfMermaidPendingTimer);
+          node._sfMermaidPendingTimer = null;
+        }
+      }
+
+      function replaceMermaidWithCodeBlock(node, source) {
+        if (!node || !node.parentNode) return;
+        clearMermaidPending(node);
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.className = 'language-mermaid';
+        code.textContent = String(source || '').trim();
+        pre.appendChild(code);
+        node.parentNode.replaceChild(pre, node);
+      }
+
+      function finalizeCodeEnhancements() {
+        // Add copy buttons to code blocks
+        addCopyButtonsToCodeBlocks(articleContent);
+        // Add collapsible functionality to long code blocks
+        makeCodeBlocksCollapsible(articleContent);
+      }
+
+      // Convert mermaid code blocks to mermaid divs
+      articleContent.querySelectorAll('pre code.language-mermaid').forEach((block) => {
+        const pre = block.parentElement;
+        const mermaidDiv = document.createElement('div');
+        const source = normalizeMermaidDefinition(block.textContent || '');
+        mermaidDiv.className = 'mermaid mermaid-pending';
+        mermaidDiv.dataset.sfMermaidSource = source;
+        mermaidDiv.dataset.sfMermaidRendered = 'false';
+        mermaidDiv.setAttribute('aria-busy', 'true');
+        mermaidDiv.textContent = source;
+        pre.replaceWith(mermaidDiv);
+      });
+
+      // Syntax highlighting for code blocks (skip mermaid)
+      articleContent.querySelectorAll('pre code:not(.language-mermaid)').forEach((block) => {
+        hljs.highlightElement(block);
+      });
+
+      // Render Mermaid diagrams
+      articleContent.querySelectorAll('.mermaid').forEach((node) => {
+        // Existing rendered diagrams should not be parsed again.
+        if (node.querySelector('svg')) {
+          node.dataset.sfMermaidRendered = 'true';
+          clearMermaidPending(node);
+        }
+      });
+      const mermaidNodes = Array.from(articleContent.querySelectorAll('.mermaid')).filter((node) => {
+        if (node.dataset.sfMermaidRendered === 'true') return false;
+        if (node.querySelector('svg')) {
+          node.dataset.sfMermaidRendered = 'true';
+          clearMermaidPending(node);
           return false;
         }
-
-        // Mermaid 10.x is strict for some tokens in unquoted labels
-        // (e.g. `malloc(size)` in `A[malloc(size)]`).
-        // Normalize common node labels into quoted forms:
-        //   A[text]   -> A["text"]
-        //   A{text}   -> A{"text"}
-          function normalizeMermaidDefinition(source) {
-            let text = String(source || '').replace(/\r\n?/g, '\n').trim();
-            if (!text) return text;
-
-          // Strip accidental fence remnants if they leaked into code content.
-          text = text
-            .replace(/^```mermaid\s*/i, '')
-            .replace(/```$/g, '')
-            .trim();
-
-          // Only normalize flowchart/graph diagrams.
-          // Other Mermaid dialects (e.g. stateDiagram) use different token rules.
-          if (!shouldNormalizeFlowchartLabels(text)) {
-            return text;
-          }
-
-          text = text.replace(/(\b[A-Za-z][\w-]*)\s*\[([^\]\n"]+)\]/g, (match, id, label) => {
-            const normalized = escapeMermaidLabel(label);
-            return normalized ? `${id}["${normalized}"]` : match;
-          });
-
-          text = text.replace(/(\b[A-Za-z][\w-]*)\s*\{([^}\n"]+)\}/g, (match, id, label) => {
-            const normalized = escapeMermaidLabel(label);
-            return normalized ? `${id}{"${normalized}"}` : match;
-          });
-
-            return text;
-          }
-
-          function markMermaidPending(node) {
-            if (!node) return;
-            node.classList.add('mermaid-pending');
-            node.setAttribute('aria-busy', 'true');
-            if (node._sfMermaidPendingTimer) {
-              clearTimeout(node._sfMermaidPendingTimer);
-            }
-            // Failsafe: if Mermaid rendering is stuck, fallback to code block so users never see a permanent blank state.
-            node._sfMermaidPendingTimer = setTimeout(() => {
-              if (!node.isConnected || !node.classList.contains('mermaid-pending')) return;
+        const normalized = normalizeMermaidDefinition(node.textContent || '');
+        node.textContent = normalized;
+        node.dataset.sfMermaidSource = normalized;
+        markMermaidPending(node);
+        return true;
+      });
+      if (window.mermaid && mermaidNodes.length > 0) {
+        Promise.resolve()
+          .then(async () => {
+            const validNodes = [];
+            for (const node of mermaidNodes) {
               const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
-              node.dataset.sfMermaidRendered = 'true';
-              clearMermaidPending(node);
-              replaceMermaidWithCodeBlock(node, source);
-            }, 6000);
-          }
+              node.dataset.sfMermaidSource = source;
+              node.textContent = source;
+              markMermaidPending(node);
 
-          function clearMermaidPending(node) {
-            if (!node) return;
-            node.classList.remove('mermaid-pending');
-            node.removeAttribute('aria-busy');
-            if (node._sfMermaidPendingTimer) {
-              clearTimeout(node._sfMermaidPendingTimer);
-              node._sfMermaidPendingTimer = null;
-            }
-          }
-
-          function replaceMermaidWithCodeBlock(node, source) {
-            if (!node || !node.parentNode) return;
-            clearMermaidPending(node);
-            const pre = document.createElement('pre');
-            const code = document.createElement('code');
-            code.className = 'language-mermaid';
-          code.textContent = String(source || '').trim();
-          pre.appendChild(code);
-          node.parentNode.replaceChild(pre, node);
-        }
-
-        function finalizeCodeEnhancements() {
-          // Add copy buttons to code blocks
-          addCopyButtonsToCodeBlocks(articleContent);
-          // Add collapsible functionality to long code blocks
-          makeCodeBlocksCollapsible(articleContent);
-        }
-
-          // Convert mermaid code blocks to mermaid divs
-          articleContent.querySelectorAll('pre code.language-mermaid').forEach((block) => {
-            const pre = block.parentElement;
-            const mermaidDiv = document.createElement('div');
-            const source = normalizeMermaidDefinition(block.textContent || '');
-            mermaidDiv.className = 'mermaid mermaid-pending';
-            mermaidDiv.dataset.sfMermaidSource = source;
-            mermaidDiv.dataset.sfMermaidRendered = 'false';
-            mermaidDiv.setAttribute('aria-busy', 'true');
-            mermaidDiv.textContent = source;
-            pre.replaceWith(mermaidDiv);
-          });
-
-        // Syntax highlighting for code blocks (skip mermaid)
-        articleContent.querySelectorAll('pre code:not(.language-mermaid)').forEach((block) => {
-          hljs.highlightElement(block);
-        });
-
-        // Render Mermaid diagrams
-        articleContent.querySelectorAll('.mermaid').forEach((node) => {
-          // Existing rendered diagrams should not be parsed again.
-          if (node.querySelector('svg')) {
-            node.dataset.sfMermaidRendered = 'true';
-            clearMermaidPending(node);
-          }
-        });
-        const mermaidNodes = Array.from(articleContent.querySelectorAll('.mermaid')).filter((node) => {
-          if (node.dataset.sfMermaidRendered === 'true') return false;
-          if (node.querySelector('svg')) {
-            node.dataset.sfMermaidRendered = 'true';
-            clearMermaidPending(node);
-            return false;
-          }
-          const normalized = normalizeMermaidDefinition(node.textContent || '');
-          node.textContent = normalized;
-          node.dataset.sfMermaidSource = normalized;
-          markMermaidPending(node);
-          return true;
-        });
-        if (window.mermaid && mermaidNodes.length > 0) {
-          Promise.resolve()
-            .then(async () => {
-              const validNodes = [];
-              for (const node of mermaidNodes) {
-                const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
-                node.dataset.sfMermaidSource = source;
-                node.textContent = source;
-                markMermaidPending(node);
-
-                if (typeof window.mermaid.parse === 'function') {
-                  try {
-                    await window.mermaid.parse(source);
-                    validNodes.push(node);
-                  } catch (_) {
-                    node.dataset.sfMermaidRendered = 'true';
-                    clearMermaidPending(node);
-                    replaceMermaidWithCodeBlock(node, source);
-                  }
-                } else {
+              if (typeof window.mermaid.parse === 'function') {
+                try {
+                  await window.mermaid.parse(source);
                   validNodes.push(node);
-                }
-              }
-              return validNodes;
-            })
-            .then((validNodes) => {
-              if (!validNodes || validNodes.length === 0) return;
-              return window.mermaid.run({
-                nodes: validNodes,
-                suppressErrors: true
-              }).then(() => {
-                validNodes.forEach((node) => {
-                  const renderedText = String(node.textContent || '').toLowerCase();
-                  if (renderedText.includes('syntax error in text')) {
-                    const source = node.dataset.sfMermaidSource || '';
-                    clearMermaidPending(node);
-                    node.dataset.sfMermaidRendered = 'true';
-                    replaceMermaidWithCodeBlock(node, source);
-                    return;
-                  }
+                } catch (_) {
                   node.dataset.sfMermaidRendered = 'true';
                   clearMermaidPending(node);
-                });
-              });
-            })
-            .catch(() => {
-              mermaidNodes.forEach((node) => {
-                const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+                  replaceMermaidWithCodeBlock(node, source);
+                }
+              } else {
+                validNodes.push(node);
+              }
+            }
+            return validNodes;
+          })
+          .then((validNodes) => {
+            if (!validNodes || validNodes.length === 0) return;
+            return window.mermaid.run({
+              nodes: validNodes,
+              suppressErrors: true
+            }).then(() => {
+              validNodes.forEach((node) => {
+                const renderedText = String(node.textContent || '').toLowerCase();
+                if (renderedText.includes('syntax error in text')) {
+                  const source = node.dataset.sfMermaidSource || '';
+                  clearMermaidPending(node);
+                  node.dataset.sfMermaidRendered = 'true';
+                  replaceMermaidWithCodeBlock(node, source);
+                  return;
+                }
                 node.dataset.sfMermaidRendered = 'true';
                 clearMermaidPending(node);
-                replaceMermaidWithCodeBlock(node, source);
               });
-            })
-            .finally(() => {
-              // Add copy buttons to mermaid diagrams after rendering
-              addCopyButtonsToMermaid(articleContent);
-              finalizeCodeEnhancements();
             });
-        } else {
-          if (mermaidNodes.length > 0) {
+          })
+          .catch(() => {
             mermaidNodes.forEach((node) => {
               const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
               node.dataset.sfMermaidRendered = 'true';
               clearMermaidPending(node);
               replaceMermaidWithCodeBlock(node, source);
             });
-          }
-          addCopyButtonsToMermaid(articleContent);
-          finalizeCodeEnhancements();
-        }
-
-        // Math formula rendering with KaTeX
-        if (window.renderMathInElement) {
-          renderMathInElement(articleContent, {
-            delimiters: [
-              {left: '$$', right: '$$', display: true},
-              {left: '$', right: '$', display: false},
-              {left: '\\[', right: '\\]', display: true},
-              {left: '\\(', right: '\\)', display: false}
-            ],
-            throwOnError: false,
-            strict: false
+          })
+          .finally(() => {
+            // Add copy buttons to mermaid diagrams after rendering
+            addCopyButtonsToMermaid(articleContent);
+            finalizeCodeEnhancements();
+          });
+      } else {
+        if (mermaidNodes.length > 0) {
+          mermaidNodes.forEach((node) => {
+            const source = node.dataset.sfMermaidSource || normalizeMermaidDefinition(node.textContent || '');
+            node.dataset.sfMermaidRendered = 'true';
+            clearMermaidPending(node);
+            replaceMermaidWithCodeBlock(node, source);
           });
         }
+        addCopyButtonsToMermaid(articleContent);
+        finalizeCodeEnhancements();
+      }
 
-        // Improve markdown wide-content UX on small screens and dense layouts
-        enhanceMarkdownWideBlocks(articleContent);
+      // Math formula rendering with KaTeX
+      if (window.renderMathInElement) {
+        renderMathInElement(articleContent, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\[', right: '\\]', display: true },
+            { left: '\\(', right: '\\)', display: false }
+          ],
+          throwOnError: false,
+          strict: false
+        });
+      }
 
-        // Assign stable anchor ids for paragraph-level comments and quote jumps.
-        assignArticleBlockIds(articleContent);
+      // Improve markdown wide-content UX on small screens and dense layouts
+      enhanceMarkdownWideBlocks(articleContent);
 
-        // Add loading animation to images
-        articleContent.querySelectorAll('img').forEach((img) => {
-          if (img.complete && img.naturalHeight !== 0) {
-            // Image already loaded
+      // Assign stable anchor ids for paragraph-level comments and quote jumps.
+      assignArticleBlockIds(articleContent);
+
+      // Add loading animation to images
+      articleContent.querySelectorAll('img').forEach((img) => {
+        if (img.complete && img.naturalHeight !== 0) {
+          // Image already loaded
+          img.classList.add('loaded');
+        } else {
+          // Add load event listener
+          img.addEventListener('load', () => {
             img.classList.add('loaded');
-          } else {
-            // Add load event listener
-            img.addEventListener('load', () => {
-              img.classList.add('loaded');
-            });
-            // Handle error case
-            img.addEventListener('error', () => {
-              img.classList.add('loaded');
-            });
-          }
-        });
-      }
-
-      // Initialize markdown rendering features for article body (includes TOC + block anchors)
-      window.initMarkdownRendering = function(root) {
-        const articleContent =
-          root && root.nodeType === Node.ELEMENT_NODE
-            ? root
-            : document.querySelector('.article-content');
-        if (!articleContent) return;
-
-        runMarkdownRenderPipeline(articleContent);
-
-        assignHeadingIds(articleContent);
-        bindArticleAnchorLinks(articleContent);
-
-        // Generate table of contents
-        generateTOC(articleContent);
-
-        if (window.location.hash) {
-          const target = findHashTarget(window.location.hash);
-          if (target) {
-            scrollToHeading(target, 'auto');
-          }
-        }
-
-        // Back to top button is now managed by Yew ScrollToTopButton component
-      };
-
-      // Initialize markdown rendering features for dynamic markdown fragments.
-      // Used by comment AI replies. This must NOT mutate TOC or article block anchors.
-      window.initMarkdownFragmentRendering = function(root) {
-        const fragmentRoot =
-          root && root.nodeType === Node.ELEMENT_NODE
-            ? root
-            : document.querySelector('.comment-ai-markdown');
-        if (!fragmentRoot) return;
-        runMarkdownRenderPipeline(fragmentRoot);
-      };
-
-      // Add copy buttons to code blocks
-      function addCopyButtonsToCodeBlocks(root) {
-        (root || document).querySelectorAll('pre:not(.code-wrapper)').forEach((pre) => {
-          // Skip if already wrapped
-          if (pre.parentElement.classList.contains('code-wrapper')) {
-            return;
-          }
-
-          // Create wrapper
-          const wrapper = document.createElement('div');
-          wrapper.className = 'code-wrapper';
-          pre.parentNode.insertBefore(wrapper, pre);
-          wrapper.appendChild(pre);
-
-          // Create copy button
-          const copyBtn = document.createElement('button');
-          copyBtn.className = 'copy-button';
-          copyBtn.innerHTML = '<i class="far fa-copy"></i>';
-          copyBtn.title = '复制代码';
-
-          copyBtn.addEventListener('click', async () => {
-            const code = pre.querySelector('code');
-            const text = code ? code.textContent : pre.textContent;
-
-            try {
-              await navigator.clipboard.writeText(text);
-              copyBtn.innerHTML = '<i class="fas fa-check"></i>';
-              copyBtn.classList.add('copied');
-              setTimeout(() => {
-                copyBtn.innerHTML = '<i class="far fa-copy"></i>';
-                copyBtn.classList.remove('copied');
-              }, 2000);
-            } catch (err) {
-              console.error('Failed to copy:', err);
-              copyBtn.innerHTML = '<i class="fas fa-times"></i>';
-              setTimeout(() => {
-                copyBtn.innerHTML = '<i class="far fa-copy"></i>';
-              }, 2000);
-            }
           });
-
-          wrapper.appendChild(copyBtn);
-        });
-      }
-
-      function wrapMarkdownNodeOnce(target, wrapperClassName) {
-        if (!target || !target.parentNode) return null;
-        const classNames = String(wrapperClassName)
-          .split(/\s+/)
-          .map((name) => name.trim())
-          .filter(Boolean);
-
-        if (
-          target.parentElement &&
-          classNames.length > 0 &&
-          classNames.every((name) => target.parentElement.classList.contains(name))
-        ) {
-          return target.parentElement;
-        }
-
-        const wrapper = document.createElement('div');
-        wrapper.className = wrapperClassName;
-        target.parentNode.insertBefore(wrapper, target);
-        wrapper.appendChild(target);
-        return wrapper;
-      }
-
-      function enhanceMarkdownWideBlocks(articleContent) {
-        if (!articleContent) return;
-
-        // Tables: horizontal rail like code blocks
-        articleContent.querySelectorAll('table').forEach((table) => {
-          wrapMarkdownNodeOnce(table, 'md-scroll-wrap md-table-wrap');
-        });
-
-        // Math blocks: keep full formula readable with horizontal scroll
-        articleContent.querySelectorAll('.sf-math-block').forEach((mathBlock) => {
-          wrapMarkdownNodeOnce(mathBlock, 'md-scroll-wrap md-math-wrap');
-        });
-
-        // Images: wide images can pan horizontally instead of shrinking aggressively
-        articleContent.querySelectorAll('img').forEach((img) => {
-          const parent = img.parentElement;
-          const imageHost =
-            parent && parent.tagName === 'A' && parent.childElementCount === 1
-              ? parent
-              : img;
-          wrapMarkdownNodeOnce(imageHost, 'md-scroll-wrap md-media-wrap');
-        });
-
-        // Blockquotes: provide overflow protection for long unbroken content
-        articleContent.querySelectorAll('blockquote').forEach((blockquote) => {
-          wrapMarkdownNodeOnce(blockquote, 'md-scroll-wrap md-quote-wrap');
-        });
-      }
-
-      // Make long code blocks collapsible
-      function makeCodeBlocksCollapsible(root) {
-        const MIN_LINES_TO_COLLAPSE = 15; // 最少行数才启用折叠
-
-        (root || document).querySelectorAll('.code-wrapper').forEach((wrapper) => {
-          // Skip if already processed
-          if (wrapper.classList.contains('code-block-wrapper')) {
-            return;
-          }
-
-          const pre = wrapper.querySelector('pre');
-          if (!pre) return;
-
-          const code = pre.querySelector('code');
-          if (!code) return;
-
-          // Count lines in code block
-          const text = code.textContent || '';
-          const lineCount = text.split('\n').length;
-
-          // Only make collapsible if it has enough lines
-          if (lineCount < MIN_LINES_TO_COLLAPSE) {
-            return;
-          }
-
-          // Add collapsible wrapper class
-          wrapper.classList.add('code-block-wrapper', 'collapsed');
-
-          // Create toggle button
-          const toggleBtn = document.createElement('button');
-          toggleBtn.className = 'code-toggle-btn';
-          toggleBtn.setAttribute('type', 'button');
-          toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> 展开代码 (' + lineCount + ' 行)';
-
-          // Toggle collapse state
-          toggleBtn.addEventListener('click', () => {
-            const isCollapsed = wrapper.classList.contains('collapsed');
-
-            if (isCollapsed) {
-              wrapper.classList.remove('collapsed');
-              toggleBtn.innerHTML = '<i class="fas fa-chevron-up"></i> 收起代码';
-            } else {
-              wrapper.classList.add('collapsed');
-              toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> 展开代码 (' + lineCount + ' 行)';
-            }
+          // Handle error case
+          img.addEventListener('error', () => {
+            img.classList.add('loaded');
           });
-
-          wrapper.appendChild(toggleBtn);
-        });
-      }
-
-      // Ensure TOC is removed when leaving article pages (for SPA navigation)
-      document.addEventListener('DOMContentLoaded', () => {
-        const removeOnNav = () => {
-          // Delay check so routing state updates first
-          setTimeout(() => {
-            const stillOnArticle = document.querySelector('.article-content');
-            if (!stillOnArticle) {
-              window.cleanupMarkdownRendering?.();
-            }
-          }, 40);
-        };
-        window.addEventListener('popstate', removeOnNav);
-        window.addEventListener('hashchange', removeOnNav);
+        }
       });
+    }
 
-      // Add copy buttons to mermaid diagrams
-      function addCopyButtonsToMermaid(root) {
-        const copyTextToClipboard = async (text) => {
-          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    // Initialize markdown rendering features for article body (includes TOC + block anchors)
+    window.initMarkdownRendering = function (root) {
+      const articleContent =
+        root && root.nodeType === Node.ELEMENT_NODE
+          ? root
+          : document.querySelector('.article-content');
+      if (!articleContent) return;
+
+      runMarkdownRenderPipeline(articleContent);
+
+      assignHeadingIds(articleContent);
+      bindArticleAnchorLinks(articleContent);
+
+      // Generate table of contents
+      generateTOC(articleContent);
+
+      if (window.location.hash) {
+        const target = findHashTarget(window.location.hash);
+        if (target) {
+          scrollToHeading(target, 'auto');
+        }
+      }
+
+      // Back to top button is now managed by Yew ScrollToTopButton component
+    };
+
+    // Initialize markdown rendering features for dynamic markdown fragments.
+    // Used by comment AI replies. This must NOT mutate TOC or article block anchors.
+    window.initMarkdownFragmentRendering = function (root) {
+      const fragmentRoot =
+        root && root.nodeType === Node.ELEMENT_NODE
+          ? root
+          : document.querySelector('.comment-ai-markdown');
+      if (!fragmentRoot) return;
+      runMarkdownRenderPipeline(fragmentRoot);
+    };
+
+    // Add copy buttons to code blocks
+    function addCopyButtonsToCodeBlocks(root) {
+      (root || document).querySelectorAll('pre:not(.code-wrapper)').forEach((pre) => {
+        // Skip if already wrapped
+        if (pre.parentElement.classList.contains('code-wrapper')) {
+          return;
+        }
+
+        // Create wrapper
+        const wrapper = document.createElement('div');
+        wrapper.className = 'code-wrapper';
+        pre.parentNode.insertBefore(wrapper, pre);
+        wrapper.appendChild(pre);
+
+        // Create copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-button';
+        copyBtn.innerHTML = '<i class="far fa-copy"></i>';
+        copyBtn.title = '复制代码';
+
+        copyBtn.addEventListener('click', async () => {
+          const code = pre.querySelector('code');
+          const text = code ? code.textContent : pre.textContent;
+
+          try {
             await navigator.clipboard.writeText(text);
-            return;
-          }
-
-          // Fallback for environments where Clipboard API is unavailable.
-          const textarea = document.createElement('textarea');
-          textarea.value = text;
-          textarea.setAttribute('readonly', 'readonly');
-          textarea.style.position = 'fixed';
-          textarea.style.top = '-9999px';
-          textarea.style.left = '-9999px';
-          document.body.appendChild(textarea);
-          textarea.select();
-          const copied = document.execCommand('copy');
-          document.body.removeChild(textarea);
-          if (!copied) {
-            throw new Error('execCommand copy failed');
-          }
-        };
-
-        const getMermaidSourceText = (mermaidDiv) => {
-          const datasetSource = (mermaidDiv.dataset.sfMermaidSource || '').trim();
-          if (datasetSource) {
-            return datasetSource;
-          }
-
-          if (!mermaidDiv.querySelector('svg')) {
-            return String(mermaidDiv.textContent || '').trim();
-          }
-
-          return '';
-        };
-
-        (root || document).querySelectorAll('.mermaid').forEach((mermaidDiv) => {
-          // Skip if already has a wrapper with button
-          if (mermaidDiv.parentElement && mermaidDiv.parentElement.classList.contains('mermaid-wrapper')) {
-            return;
-          }
-
-          // Create wrapper
-          const wrapper = document.createElement('div');
-          wrapper.className = 'mermaid-wrapper';
-          mermaidDiv.parentNode.insertBefore(wrapper, mermaidDiv);
-          wrapper.appendChild(mermaidDiv);
-
-          // Create source-copy button
-          const copySourceBtn = document.createElement('button');
-          copySourceBtn.className = 'copy-button mermaid-source-button';
-          copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
-          copySourceBtn.title = '复制 Mermaid 原文';
-          copySourceBtn.setAttribute('type', 'button');
-          copySourceBtn.setAttribute('aria-label', '复制 Mermaid 原文');
-
-          copySourceBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-
-            const sourceText = getMermaidSourceText(mermaidDiv);
-            if (!sourceText) {
-              copySourceBtn.innerHTML = '<i class="fas fa-times"></i>';
-              copySourceBtn.title = '未找到 Mermaid 原文';
-              setTimeout(() => {
-                copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
-                copySourceBtn.title = '复制 Mermaid 原文';
-              }, 2000);
-              return;
-            }
-
-            try {
-              await copyTextToClipboard(sourceText);
-              copySourceBtn.innerHTML = '<i class="fas fa-check"></i>';
-              copySourceBtn.classList.add('copied');
-              copySourceBtn.title = '已复制 Mermaid 原文';
-              setTimeout(() => {
-                copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
-                copySourceBtn.classList.remove('copied');
-                copySourceBtn.title = '复制 Mermaid 原文';
-              }, 2000);
-            } catch (err) {
-              console.error('Failed to copy Mermaid source:', err);
-              copySourceBtn.innerHTML = '<i class="fas fa-times"></i>';
-              copySourceBtn.title = '复制失败';
-              setTimeout(() => {
-                copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
-                copySourceBtn.title = '复制 Mermaid 原文';
-              }, 2000);
-            }
-          });
-
-          wrapper.appendChild(copySourceBtn);
-
-          // Create download button
-          const downloadBtn = document.createElement('button');
-          downloadBtn.className = 'copy-button';
-          downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
-          downloadBtn.title = '下载图表';
-          downloadBtn.setAttribute('type', 'button');
-
-          downloadBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-
-            const svg = mermaidDiv.querySelector('svg');
-            if (!svg) {
-              console.error('No SVG found in mermaid diagram');
-              downloadBtn.innerHTML = '<i class="fas fa-times"></i>';
-              setTimeout(() => {
-                downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
-              }, 2000);
-              return;
-            }
-
-            try {
-              // Clone SVG and set white background
-              const svgClone = svg.cloneNode(true);
-              const svgData = new XMLSerializer().serializeToString(svgClone);
-
-              // Create canvas and draw
-              const canvas = document.createElement('canvas');
-              const ctx = canvas.getContext('2d');
-
-              // Get SVG dimensions
-              const svgWidth = svg.width.baseVal.value || svg.viewBox.baseVal.width || 800;
-              const svgHeight = svg.height.baseVal.value || svg.viewBox.baseVal.height || 600;
-
-              canvas.width = svgWidth;
-              canvas.height = svgHeight;
-
-              // Draw white background
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-              // Create image from SVG
-              const img = new Image();
-              const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-              const url = URL.createObjectURL(svgBlob);
-
-              img.onload = () => {
-                try {
-                  ctx.drawImage(img, 0, 0);
-                  URL.revokeObjectURL(url);
-
-                  // Convert canvas to blob and download
-                  canvas.toBlob((blob) => {
-                    if (!blob) {
-                      console.error('Failed to create blob');
-                      downloadSvgDirectly(svgData);
-                      return;
-                    }
-
-                    // Create download link
-                    const downloadUrl = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = downloadUrl;
-                    a.download = `mermaid-diagram-${Date.now()}.png`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(downloadUrl);
-
-                    // Success feedback
-                    downloadBtn.innerHTML = '<i class="fas fa-check"></i>';
-                    downloadBtn.classList.add('copied');
-                    setTimeout(() => {
-                      downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
-                      downloadBtn.classList.remove('copied');
-                    }, 2000);
-                  }, 'image/png');
-                } catch (err) {
-                  console.error('Canvas tainted, falling back to SVG download:', err);
-                  URL.revokeObjectURL(url);
-                  downloadSvgDirectly(svgData);
-                }
-              };
-
-              img.onerror = () => {
-                console.error('Failed to load image, falling back to SVG download');
-                URL.revokeObjectURL(url);
-                downloadSvgDirectly(svgData);
-              };
-
-              img.src = url;
-            } catch (err) {
-              console.error('Failed to download diagram:', err);
-              downloadBtn.innerHTML = '<i class="fas fa-times"></i>';
-              setTimeout(() => {
-                downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
-              }, 2000);
-            }
-          });
-
-          // Helper function: download SVG directly
-          function downloadSvgDirectly(svgData) {
-            const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `mermaid-diagram-${Date.now()}.svg`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-
-            downloadBtn.innerHTML = '<i class="fas fa-check"></i>';
-            downloadBtn.classList.add('copied');
-            downloadBtn.title = '已下载 SVG';
+            copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+            copyBtn.classList.add('copied');
             setTimeout(() => {
-              downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
-              downloadBtn.classList.remove('copied');
-              downloadBtn.title = '下载图表';
+              copyBtn.innerHTML = '<i class="far fa-copy"></i>';
+              copyBtn.classList.remove('copied');
+            }, 2000);
+          } catch (err) {
+            console.error('Failed to copy:', err);
+            copyBtn.innerHTML = '<i class="fas fa-times"></i>';
+            setTimeout(() => {
+              copyBtn.innerHTML = '<i class="far fa-copy"></i>';
             }, 2000);
           }
-
-          wrapper.appendChild(downloadBtn);
-
-          // Create fullscreen button
-          const fullscreenBtn = document.createElement('button');
-          fullscreenBtn.className = 'copy-button fullscreen-button';
-          fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i>';
-          fullscreenBtn.title = '全屏查看';
-          fullscreenBtn.setAttribute('type', 'button');
-
-          fullscreenBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openMermaidFullscreen(mermaidDiv);
-          });
-
-          wrapper.appendChild(fullscreenBtn);
         });
+
+        wrapper.appendChild(copyBtn);
+      });
+    }
+
+    function wrapMarkdownNodeOnce(target, wrapperClassName) {
+      if (!target || !target.parentNode) return null;
+      const classNames = String(wrapperClassName)
+        .split(/\s+/)
+        .map((name) => name.trim())
+        .filter(Boolean);
+
+      if (
+        target.parentElement &&
+        classNames.length > 0 &&
+        classNames.every((name) => target.parentElement.classList.contains(name))
+      ) {
+        return target.parentElement;
       }
 
-      // Fullscreen view for Mermaid diagrams
-      function openMermaidFullscreen(mermaidDiv) {
-        const svg = mermaidDiv.querySelector('svg');
-        if (!svg) {
-          console.error('No SVG found in mermaid div');
+      const wrapper = document.createElement('div');
+      wrapper.className = wrapperClassName;
+      target.parentNode.insertBefore(wrapper, target);
+      wrapper.appendChild(target);
+      return wrapper;
+    }
+
+    function enhanceMarkdownWideBlocks(articleContent) {
+      if (!articleContent) return;
+
+      // Tables: horizontal rail like code blocks
+      articleContent.querySelectorAll('table').forEach((table) => {
+        wrapMarkdownNodeOnce(table, 'md-scroll-wrap md-table-wrap');
+      });
+
+      // Math blocks: keep full formula readable with horizontal scroll
+      articleContent.querySelectorAll('.sf-math-block').forEach((mathBlock) => {
+        wrapMarkdownNodeOnce(mathBlock, 'md-scroll-wrap md-math-wrap');
+      });
+
+      // Images: wide images can pan horizontally instead of shrinking aggressively
+      articleContent.querySelectorAll('img').forEach((img) => {
+        const parent = img.parentElement;
+        const imageHost =
+          parent && parent.tagName === 'A' && parent.childElementCount === 1
+            ? parent
+            : img;
+        wrapMarkdownNodeOnce(imageHost, 'md-scroll-wrap md-media-wrap');
+      });
+
+      // Blockquotes: provide overflow protection for long unbroken content
+      articleContent.querySelectorAll('blockquote').forEach((blockquote) => {
+        wrapMarkdownNodeOnce(blockquote, 'md-scroll-wrap md-quote-wrap');
+      });
+    }
+
+    // Make long code blocks collapsible
+    function makeCodeBlocksCollapsible(root) {
+      const MIN_LINES_TO_COLLAPSE = 15; // 最少行数才启用折叠
+
+      (root || document).querySelectorAll('.code-wrapper').forEach((wrapper) => {
+        // Skip if already processed
+        if (wrapper.classList.contains('code-block-wrapper')) {
           return;
         }
 
-        // Remove stale fullscreen instance first to avoid duplicated listeners/state
-        if (typeof window.__sfCloseMermaidFullscreen === 'function') {
-          try {
-            window.__sfCloseMermaidFullscreen(true);
-          } catch (_) {}
+        const pre = wrapper.querySelector('pre');
+        if (!pre) return;
+
+        const code = pre.querySelector('code');
+        if (!code) return;
+
+        // Count lines in code block
+        const text = code.textContent || '';
+        const lineCount = text.split('\n').length;
+
+        // Only make collapsible if it has enough lines
+        if (lineCount < MIN_LINES_TO_COLLAPSE) {
+          return;
         }
 
-        const overlay = document.createElement('div');
-        overlay.className = 'mermaid-fullscreen-overlay';
+        // Add collapsible wrapper class
+        wrapper.classList.add('code-block-wrapper', 'collapsed');
 
-        const content = document.createElement('div');
-        content.className = 'mermaid-fullscreen-content';
+        // Create toggle button
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'code-toggle-btn';
+        toggleBtn.setAttribute('type', 'button');
+        toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> 展开代码 (' + lineCount + ' 行)';
 
-        const toolbar = document.createElement('div');
-        toolbar.className = 'mermaid-fullscreen-toolbar';
+        // Toggle collapse state
+        toggleBtn.addEventListener('click', () => {
+          const isCollapsed = wrapper.classList.contains('collapsed');
 
-        const zoomOutBtn = document.createElement('button');
-        zoomOutBtn.className = 'mermaid-fullscreen-tool-btn';
-        zoomOutBtn.innerHTML = '<i class="fas fa-search-minus"></i>';
-        zoomOutBtn.title = '缩小';
-        zoomOutBtn.setAttribute('type', 'button');
-        zoomOutBtn.setAttribute('aria-label', '缩小图表');
-
-        const zoomInBtn = document.createElement('button');
-        zoomInBtn.className = 'mermaid-fullscreen-tool-btn';
-        zoomInBtn.innerHTML = '<i class="fas fa-search-plus"></i>';
-        zoomInBtn.title = '放大';
-        zoomInBtn.setAttribute('type', 'button');
-        zoomInBtn.setAttribute('aria-label', '放大图表');
-
-        const resetZoomBtn = document.createElement('button');
-        resetZoomBtn.className = 'mermaid-fullscreen-tool-btn';
-        resetZoomBtn.innerHTML = '<i class="fas fa-rotate-left"></i>';
-        resetZoomBtn.title = '重置缩放';
-        resetZoomBtn.setAttribute('type', 'button');
-        resetZoomBtn.setAttribute('aria-label', '重置缩放');
-
-        const zoomValue = document.createElement('span');
-        zoomValue.className = 'mermaid-fullscreen-zoom-value';
-        zoomValue.textContent = '100%';
-        zoomValue.setAttribute('aria-live', 'polite');
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'mermaid-fullscreen-tool-btn close-btn';
-        closeBtn.innerHTML = '<i class="fas fa-times"></i>';
-        closeBtn.title = '关闭';
-        closeBtn.setAttribute('type', 'button');
-        closeBtn.setAttribute('aria-label', '关闭全屏图表');
-
-        toolbar.appendChild(zoomOutBtn);
-        toolbar.appendChild(zoomInBtn);
-        toolbar.appendChild(resetZoomBtn);
-        toolbar.appendChild(zoomValue);
-        toolbar.appendChild(closeBtn);
-
-        const viewport = document.createElement('div');
-        viewport.className = 'mermaid-fullscreen-viewport';
-
-        const canvas = document.createElement('div');
-        canvas.className = 'mermaid-fullscreen-canvas';
-
-        const clonedMermaid = document.createElement('div');
-        clonedMermaid.className = 'mermaid mermaid-fullscreen';
-        const clonedSvg = svg.cloneNode(true);
-        clonedMermaid.appendChild(clonedSvg);
-
-        canvas.appendChild(clonedMermaid);
-        viewport.appendChild(canvas);
-
-        content.appendChild(toolbar);
-        content.appendChild(viewport);
-        overlay.appendChild(content);
-        document.body.appendChild(overlay);
-
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-
-        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-        const parseSvgLength = (value) => {
-          const parsed = Number.parseFloat(String(value || ''));
-          return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
-        };
-
-        const getSvgNaturalSize = (svgElement) => {
-          const viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
-          if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
-            return { width: viewBox.width, height: viewBox.height };
-          }
-
-          const widthAttr = parseSvgLength(svgElement.getAttribute('width'));
-          const heightAttr = parseSvgLength(svgElement.getAttribute('height'));
-          if (!Number.isNaN(widthAttr) && !Number.isNaN(heightAttr)) {
-            return { width: widthAttr, height: heightAttr };
-          }
-
-          try {
-            const box = svgElement.getBBox();
-            if (box && box.width > 0 && box.height > 0) {
-              return { width: box.width, height: box.height };
-            }
-          } catch (_) {}
-
-          const rect = svgElement.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            return { width: rect.width, height: rect.height };
-          }
-
-          return { width: 800, height: 600 };
-        };
-
-        const ZOOM_STEP = 1.2;
-        const FIT_SCALE_EPSILON = 0.985;
-        const PAN_ENABLED_SCALE_RATIO = 1.02;
-        let fitScale = 1;
-        let currentScale = 1;
-        let minScale = 0.2;
-        let maxScale = 6;
-        let naturalSize = getSvgNaturalSize(clonedSvg);
-        let panX = 0;
-        let panY = 0;
-        let dragging = false;
-        let dragStartX = 0;
-        let dragStartY = 0;
-        let dragOriginX = 0;
-        let dragOriginY = 0;
-
-        const updateScaleLabel = () => {
-          const relativeScale = fitScale > 0 ? currentScale / fitScale : 1;
-          zoomValue.textContent = `${Math.round(relativeScale * 100)}%`;
-        };
-
-        const updatePanMode = () => {
-          const canPan = currentScale > fitScale * PAN_ENABLED_SCALE_RATIO;
-          viewport.classList.toggle('can-pan', canPan);
-          if (!canPan) {
-            panX = 0;
-            panY = 0;
-          }
-        };
-
-        const applyTransform = () => {
-          canvas.style.transform = `translate(${panX.toFixed(2)}px, ${panY.toFixed(2)}px) scale(${currentScale.toFixed(4)})`;
-        };
-
-        const applyScale = (nextScale) => {
-          currentScale = clamp(nextScale, minScale, maxScale);
-          updatePanMode();
-          applyTransform();
-          updateScaleLabel();
-        };
-
-        const recalcScaleBounds = () => {
-          naturalSize = getSvgNaturalSize(clonedSvg);
-          // Use layout dimensions (clientWidth/clientHeight) to avoid transform animation
-          // affecting fit calculations during open/resize transitions.
-          const availableWidth = Math.max(180, viewport.clientWidth - 6);
-          const availableHeight = Math.max(160, viewport.clientHeight - 6);
-          const measuredWidth = clonedMermaid.offsetWidth;
-          const measuredHeight = clonedMermaid.offsetHeight;
-          const baseWidth = Math.max(1, Number.isFinite(measuredWidth) && measuredWidth > 0 ? measuredWidth : naturalSize.width);
-          const baseHeight = Math.max(1, Number.isFinite(measuredHeight) && measuredHeight > 0 ? measuredHeight : naturalSize.height);
-
-          fitScale = Math.min(availableWidth / baseWidth, availableHeight / baseHeight) * FIT_SCALE_EPSILON;
-          if (!Number.isFinite(fitScale) || fitScale <= 0) {
-            fitScale = 1;
-          }
-
-          minScale = Math.max(0.2, fitScale * 0.4);
-          maxScale = Math.max(6, fitScale * 8);
-        };
-
-        let closed = false;
-        const closeFullscreen = (immediate) => {
-          if (closed) return;
-          closed = true;
-          dragging = false;
-          overlay.classList.remove('open');
-          document.removeEventListener('keydown', handleKeydown);
-          viewport.removeEventListener('wheel', handleWheel);
-          viewport.removeEventListener('pointerdown', handlePointerDown);
-          window.removeEventListener('pointermove', handlePointerMove);
-          window.removeEventListener('pointerup', handlePointerUp);
-          window.removeEventListener('pointercancel', handlePointerUp);
-          window.removeEventListener('resize', handleResize);
-          const finalize = () => {
-            if (overlay.parentNode) {
-              overlay.parentNode.removeChild(overlay);
-            }
-            document.body.style.overflow = previousOverflow;
-            if (window.__sfCloseMermaidFullscreen === closeFullscreenHandle) {
-              window.__sfCloseMermaidFullscreen = null;
-            }
-          };
-          if (immediate) {
-            finalize();
-            return;
-          }
-          setTimeout(finalize, 220);
-        };
-        const closeFullscreenHandle = (immediate) => closeFullscreen(!!immediate);
-        window.__sfCloseMermaidFullscreen = closeFullscreenHandle;
-
-        const handleKeydown = (event) => {
-          if (event.key === 'Escape') {
-            closeFullscreen(false);
-            return;
-          }
-
-          if (event.key === '+' || event.key === '=' || event.key === 'Add') {
-            event.preventDefault();
-            applyScale(currentScale * ZOOM_STEP);
-            return;
-          }
-
-          if (event.key === '-' || event.key === '_' || event.key === 'Subtract') {
-            event.preventDefault();
-            applyScale(currentScale / ZOOM_STEP);
-            return;
-          }
-
-          if (event.key === '0') {
-            event.preventDefault();
-            applyScale(fitScale);
-          }
-        };
-
-        const handleWheel = (event) => {
-          if (event.ctrlKey || event.metaKey) {
-            event.preventDefault();
-            const direction = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-            applyScale(currentScale * direction);
-            return;
-          }
-
-          if (currentScale > fitScale * PAN_ENABLED_SCALE_RATIO) {
-            event.preventDefault();
-            panX -= event.deltaX;
-            panY -= event.deltaY;
-            applyTransform();
-          }
-        };
-
-        const handleResize = () => {
-          const ratioToFit = fitScale > 0 ? currentScale / fitScale : 1;
-          recalcScaleBounds();
-          applyScale(fitScale * ratioToFit);
-        };
-
-        const handlePointerDown = (event) => {
-          if (event.button !== 0) return;
-          if (!(currentScale > fitScale * PAN_ENABLED_SCALE_RATIO)) return;
-          dragging = true;
-          dragStartX = event.clientX;
-          dragStartY = event.clientY;
-          dragOriginX = panX;
-          dragOriginY = panY;
-          viewport.classList.add('is-dragging');
-          event.preventDefault();
-        };
-
-        const handlePointerMove = (event) => {
-          if (!dragging) return;
-          panX = dragOriginX + (event.clientX - dragStartX);
-          panY = dragOriginY + (event.clientY - dragStartY);
-          applyTransform();
-        };
-
-        const handlePointerUp = () => {
-          if (!dragging) return;
-          dragging = false;
-          viewport.classList.remove('is-dragging');
-        };
-
-        zoomInBtn.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          applyScale(currentScale * ZOOM_STEP);
-        });
-
-        zoomOutBtn.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          applyScale(currentScale / ZOOM_STEP);
-        });
-
-        resetZoomBtn.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          applyScale(fitScale);
-        });
-
-        closeBtn.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          closeFullscreen(false);
-        });
-
-        overlay.addEventListener('click', (e) => {
-          if (e.target === overlay) {
-            closeFullscreen(false);
+          if (isCollapsed) {
+            wrapper.classList.remove('collapsed');
+            toggleBtn.innerHTML = '<i class="fas fa-chevron-up"></i> 收起代码';
+          } else {
+            wrapper.classList.add('collapsed');
+            toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> 展开代码 (' + lineCount + ' 行)';
           }
         });
 
-        document.addEventListener('keydown', handleKeydown);
-        viewport.addEventListener('wheel', handleWheel, { passive: false });
-        viewport.addEventListener('pointerdown', handlePointerDown);
-        window.addEventListener('pointermove', handlePointerMove);
-        window.addEventListener('pointerup', handlePointerUp);
-        window.addEventListener('pointercancel', handlePointerUp);
-        window.addEventListener('resize', handleResize);
+        wrapper.appendChild(toggleBtn);
+      });
+    }
 
-        recalcScaleBounds();
-        applyScale(fitScale);
-
+    // Ensure TOC is removed when leaving article pages (for SPA navigation)
+    document.addEventListener('DOMContentLoaded', () => {
+      const removeOnNav = () => {
+        // Delay check so routing state updates first
         setTimeout(() => {
-          overlay.classList.add('open');
-        }, 10);
-      }
-
-      // Generate table of contents from article headings
-      const DESKTOP_TOC_BREAKPOINT = 1280;
-      const TOC_SLIDEOUT_BREAKPOINT = 2560;
-      const TOC_LAYOUT_CLASSES = [
-        'has-desktop-toc',
-        'has-desktop-toc-collapsed',
-        'has-desktop-toc-left',
-        'has-desktop-toc-right',
-        'toc-mode-fixed-right',
-        'toc-mode-slideout',
-        'toc-slideout-open'
-      ];
-
-      function isDesktopTOCViewport() {
-        return window.innerWidth > DESKTOP_TOC_BREAKPOINT;
-      }
-
-      function isSlideoutTOCViewport() {
-        return window.innerWidth >= TOC_SLIDEOUT_BREAKPOINT;
-      }
-
-      function detachTOCBindings(tocContainer) {
-        if (!tocContainer) return;
-
-        const resizeHandler = tocContainer.__tocResizeHandler;
-        if (typeof resizeHandler === 'function') {
-          window.removeEventListener('resize', resizeHandler);
-          delete tocContainer.__tocResizeHandler;
-        }
-
-        const tabClickHandler = tocContainer.__tocTabClickHandler;
-        const tabBtn = tocContainer.querySelector('.toc-slideout-tab');
-        if (typeof tabClickHandler === 'function' && tabBtn) {
-          tabBtn.removeEventListener('click', tabClickHandler);
-          delete tocContainer.__tocTabClickHandler;
-        }
-
-        const keydownHandler = tocContainer.__tocKeydownHandler;
-        if (typeof keydownHandler === 'function') {
-          document.removeEventListener('keydown', keydownHandler);
-          delete tocContainer.__tocKeydownHandler;
-        }
-
-        const scrollHandler = tocContainer.__tocScrollHandler;
-        if (typeof scrollHandler === 'function') {
-          window.removeEventListener('scroll', scrollHandler);
-          delete tocContainer.__tocScrollHandler;
-        }
-      }
-
-      function clearDesktopTOCReservation() {
-        TOC_LAYOUT_CLASSES.forEach((className) => document.body.classList.remove(className));
-      }
-
-      function setSlideoutOpen(tocContainer, isOpen) {
-        if (!tocContainer || !isSlideoutTOCViewport()) return;
-        tocContainer.classList.toggle('slideout-open', !!isOpen);
-        syncDesktopTOCReservation(tocContainer);
-      }
-
-      function syncDesktopTOCReservation(tocContainer) {
-        clearDesktopTOCReservation();
-        if (!tocContainer || !isDesktopTOCViewport()) return;
-
-        document.body.classList.add('has-desktop-toc');
-
-        if (isSlideoutTOCViewport()) {
-          document.body.classList.add('toc-mode-slideout');
-          tocContainer.classList.add('toc-slideout');
-          if (tocContainer.classList.contains('slideout-open')) {
-            document.body.classList.add('toc-slideout-open');
+          const stillOnArticle = document.querySelector('.article-content');
+          if (!stillOnArticle) {
+            window.cleanupMarkdownRendering?.();
           }
+        }, 40);
+      };
+      window.addEventListener('popstate', removeOnNav);
+      window.addEventListener('hashchange', removeOnNav);
+    });
+
+    // Add copy buttons to mermaid diagrams
+    function addCopyButtonsToMermaid(root) {
+      const copyTextToClipboard = async (text) => {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(text);
           return;
         }
 
-        document.body.classList.add('toc-mode-fixed-right');
-        tocContainer.classList.remove('toc-slideout', 'slideout-open');
-        if (tocContainer.classList.contains('collapsed')) {
-          document.body.classList.add('has-desktop-toc-collapsed');
+        // Fallback for environments where Clipboard API is unavailable.
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.top = '-9999px';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error('execCommand copy failed');
         }
+      };
+
+      const getMermaidSourceText = (mermaidDiv) => {
+        const datasetSource = (mermaidDiv.dataset.sfMermaidSource || '').trim();
+        if (datasetSource) {
+          return datasetSource;
+        }
+
+        if (!mermaidDiv.querySelector('svg')) {
+          return String(mermaidDiv.textContent || '').trim();
+        }
+
+        return '';
+      };
+
+      (root || document).querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+        // Skip if already has a wrapper with button
+        if (mermaidDiv.parentElement && mermaidDiv.parentElement.classList.contains('mermaid-wrapper')) {
+          return;
+        }
+
+        // Create wrapper
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mermaid-wrapper';
+        mermaidDiv.parentNode.insertBefore(wrapper, mermaidDiv);
+        wrapper.appendChild(mermaidDiv);
+
+        // Create source-copy button
+        const copySourceBtn = document.createElement('button');
+        copySourceBtn.className = 'copy-button mermaid-source-button';
+        copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+        copySourceBtn.title = '复制 Mermaid 原文';
+        copySourceBtn.setAttribute('type', 'button');
+        copySourceBtn.setAttribute('aria-label', '复制 Mermaid 原文');
+
+        copySourceBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          const sourceText = getMermaidSourceText(mermaidDiv);
+          if (!sourceText) {
+            copySourceBtn.innerHTML = '<i class="fas fa-times"></i>';
+            copySourceBtn.title = '未找到 Mermaid 原文';
+            setTimeout(() => {
+              copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+              copySourceBtn.title = '复制 Mermaid 原文';
+            }, 2000);
+            return;
+          }
+
+          try {
+            await copyTextToClipboard(sourceText);
+            copySourceBtn.innerHTML = '<i class="fas fa-check"></i>';
+            copySourceBtn.classList.add('copied');
+            copySourceBtn.title = '已复制 Mermaid 原文';
+            setTimeout(() => {
+              copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+              copySourceBtn.classList.remove('copied');
+              copySourceBtn.title = '复制 Mermaid 原文';
+            }, 2000);
+          } catch (err) {
+            console.error('Failed to copy Mermaid source:', err);
+            copySourceBtn.innerHTML = '<i class="fas fa-times"></i>';
+            copySourceBtn.title = '复制失败';
+            setTimeout(() => {
+              copySourceBtn.innerHTML = '<i class="fas fa-code"></i>';
+              copySourceBtn.title = '复制 Mermaid 原文';
+            }, 2000);
+          }
+        });
+
+        wrapper.appendChild(copySourceBtn);
+
+        // Create download button
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'copy-button';
+        downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+        downloadBtn.title = '下载图表';
+        downloadBtn.setAttribute('type', 'button');
+
+        downloadBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          const svg = mermaidDiv.querySelector('svg');
+          if (!svg) {
+            console.error('No SVG found in mermaid diagram');
+            downloadBtn.innerHTML = '<i class="fas fa-times"></i>';
+            setTimeout(() => {
+              downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+            }, 2000);
+            return;
+          }
+
+          try {
+            // Clone SVG and set white background
+            const svgClone = svg.cloneNode(true);
+            const svgData = new XMLSerializer().serializeToString(svgClone);
+
+            // Create canvas and draw
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            // Get SVG dimensions
+            const svgWidth = svg.width.baseVal.value || svg.viewBox.baseVal.width || 800;
+            const svgHeight = svg.height.baseVal.value || svg.viewBox.baseVal.height || 600;
+
+            canvas.width = svgWidth;
+            canvas.height = svgHeight;
+
+            // Draw white background
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Create image from SVG
+            const img = new Image();
+            const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(svgBlob);
+
+            img.onload = () => {
+              try {
+                ctx.drawImage(img, 0, 0);
+                URL.revokeObjectURL(url);
+
+                // Convert canvas to blob and download
+                canvas.toBlob((blob) => {
+                  if (!blob) {
+                    console.error('Failed to create blob');
+                    downloadSvgDirectly(svgData);
+                    return;
+                  }
+
+                  // Create download link
+                  const downloadUrl = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = downloadUrl;
+                  a.download = `mermaid-diagram-${Date.now()}.png`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(downloadUrl);
+
+                  // Success feedback
+                  downloadBtn.innerHTML = '<i class="fas fa-check"></i>';
+                  downloadBtn.classList.add('copied');
+                  setTimeout(() => {
+                    downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+                    downloadBtn.classList.remove('copied');
+                  }, 2000);
+                }, 'image/png');
+              } catch (err) {
+                console.error('Canvas tainted, falling back to SVG download:', err);
+                URL.revokeObjectURL(url);
+                downloadSvgDirectly(svgData);
+              }
+            };
+
+            img.onerror = () => {
+              console.error('Failed to load image, falling back to SVG download');
+              URL.revokeObjectURL(url);
+              downloadSvgDirectly(svgData);
+            };
+
+            img.src = url;
+          } catch (err) {
+            console.error('Failed to download diagram:', err);
+            downloadBtn.innerHTML = '<i class="fas fa-times"></i>';
+            setTimeout(() => {
+              downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+            }, 2000);
+          }
+        });
+
+        // Helper function: download SVG directly
+        function downloadSvgDirectly(svgData) {
+          const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `mermaid-diagram-${Date.now()}.svg`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          downloadBtn.innerHTML = '<i class="fas fa-check"></i>';
+          downloadBtn.classList.add('copied');
+          downloadBtn.title = '已下载 SVG';
+          setTimeout(() => {
+            downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
+            downloadBtn.classList.remove('copied');
+            downloadBtn.title = '下载图表';
+          }, 2000);
+        }
+
+        wrapper.appendChild(downloadBtn);
+
+        // Create fullscreen button
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'copy-button fullscreen-button';
+        fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i>';
+        fullscreenBtn.title = '全屏查看';
+        fullscreenBtn.setAttribute('type', 'button');
+
+        fullscreenBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openMermaidFullscreen(mermaidDiv);
+        });
+
+        wrapper.appendChild(fullscreenBtn);
+      });
+    }
+
+    // Fullscreen view for Mermaid diagrams
+    function openMermaidFullscreen(mermaidDiv) {
+      const svg = mermaidDiv.querySelector('svg');
+      if (!svg) {
+        console.error('No SVG found in mermaid div');
+        return;
       }
 
-      function generateTOC(articleRoot) {
-        // Remove existing TOC (avoid duplicates on re-render)
-        const existing = document.querySelector('.article-toc');
-        detachTOCBindings(existing);
-        if (existing && existing.parentNode) {
-          existing.parentNode.removeChild(existing);
+      // Remove stale fullscreen instance first to avoid duplicated listeners/state
+      if (typeof window.__sfCloseMermaidFullscreen === 'function') {
+        try {
+          window.__sfCloseMermaidFullscreen(true);
+        } catch (_) { }
+      }
+
+      const overlay = document.createElement('div');
+      overlay.className = 'mermaid-fullscreen-overlay';
+
+      const content = document.createElement('div');
+      content.className = 'mermaid-fullscreen-content';
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'mermaid-fullscreen-toolbar';
+
+      const zoomOutBtn = document.createElement('button');
+      zoomOutBtn.className = 'mermaid-fullscreen-tool-btn';
+      zoomOutBtn.innerHTML = '<i class="fas fa-search-minus"></i>';
+      zoomOutBtn.title = '缩小';
+      zoomOutBtn.setAttribute('type', 'button');
+      zoomOutBtn.setAttribute('aria-label', '缩小图表');
+
+      const zoomInBtn = document.createElement('button');
+      zoomInBtn.className = 'mermaid-fullscreen-tool-btn';
+      zoomInBtn.innerHTML = '<i class="fas fa-search-plus"></i>';
+      zoomInBtn.title = '放大';
+      zoomInBtn.setAttribute('type', 'button');
+      zoomInBtn.setAttribute('aria-label', '放大图表');
+
+      const resetZoomBtn = document.createElement('button');
+      resetZoomBtn.className = 'mermaid-fullscreen-tool-btn';
+      resetZoomBtn.innerHTML = '<i class="fas fa-rotate-left"></i>';
+      resetZoomBtn.title = '重置缩放';
+      resetZoomBtn.setAttribute('type', 'button');
+      resetZoomBtn.setAttribute('aria-label', '重置缩放');
+
+      const zoomValue = document.createElement('span');
+      zoomValue.className = 'mermaid-fullscreen-zoom-value';
+      zoomValue.textContent = '100%';
+      zoomValue.setAttribute('aria-live', 'polite');
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'mermaid-fullscreen-tool-btn close-btn';
+      closeBtn.innerHTML = '<i class="fas fa-times"></i>';
+      closeBtn.title = '关闭';
+      closeBtn.setAttribute('type', 'button');
+      closeBtn.setAttribute('aria-label', '关闭全屏图表');
+
+      toolbar.appendChild(zoomOutBtn);
+      toolbar.appendChild(zoomInBtn);
+      toolbar.appendChild(resetZoomBtn);
+      toolbar.appendChild(zoomValue);
+      toolbar.appendChild(closeBtn);
+
+      const viewport = document.createElement('div');
+      viewport.className = 'mermaid-fullscreen-viewport';
+
+      const canvas = document.createElement('div');
+      canvas.className = 'mermaid-fullscreen-canvas';
+
+      const clonedMermaid = document.createElement('div');
+      clonedMermaid.className = 'mermaid mermaid-fullscreen';
+      const clonedSvg = svg.cloneNode(true);
+      clonedMermaid.appendChild(clonedSvg);
+
+      canvas.appendChild(clonedMermaid);
+      viewport.appendChild(canvas);
+
+      content.appendChild(toolbar);
+      content.appendChild(viewport);
+      overlay.appendChild(content);
+      document.body.appendChild(overlay);
+
+      const previousOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+
+      const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+      const parseSvgLength = (value) => {
+        const parsed = Number.parseFloat(String(value || ''));
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
+      };
+
+      const getSvgNaturalSize = (svgElement) => {
+        const viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
+        if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+          return { width: viewBox.width, height: viewBox.height };
         }
-        clearDesktopTOCReservation();
 
-        // Check if we're on an article detail page
-        const articleContent =
-          articleRoot && articleRoot.nodeType === Node.ELEMENT_NODE
-            ? articleRoot
-            : document.querySelector('.article-content');
-        if (!articleContent) return;
+        const widthAttr = parseSvgLength(svgElement.getAttribute('width'));
+        const heightAttr = parseSvgLength(svgElement.getAttribute('height'));
+        if (!Number.isNaN(widthAttr) && !Number.isNaN(heightAttr)) {
+          return { width: widthAttr, height: heightAttr };
+        }
 
-        // Find all headings (h1-h6) and ensure stable, link-friendly IDs.
-        const headings = assignHeadingIds(articleContent);
-        if (headings.length === 0) return;
+        try {
+          const box = svgElement.getBBox();
+          if (box && box.width > 0 && box.height > 0) {
+            return { width: box.width, height: box.height };
+          }
+        } catch (_) { }
 
-        // Create TOC container
-        const tocContainer = document.createElement('aside');
-        tocContainer.className = 'article-toc';
-        tocContainer.dataset.side = 'right';
-        tocContainer.setAttribute('role', 'complementary');
-        tocContainer.setAttribute('aria-label', '目录');
+        const rect = svgElement.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          return { width: rect.width, height: rect.height };
+        }
 
-        const slideoutTabBtn = document.createElement('button');
-        slideoutTabBtn.className = 'toc-slideout-tab';
-        slideoutTabBtn.setAttribute('type', 'button');
-        slideoutTabBtn.setAttribute('aria-label', '展开目录面板');
-        slideoutTabBtn.innerHTML = '<i class="fas fa-list-ul"></i><span>目录</span>';
-        tocContainer.appendChild(slideoutTabBtn);
+        return { width: 800, height: 600 };
+      };
 
-        // Create TOC header with close button for mobile
-        const tocHeader = document.createElement('div');
-        tocHeader.className = 'article-toc-header';
-        tocHeader.innerHTML = `
+      const ZOOM_STEP = 1.2;
+      const FIT_SCALE_EPSILON = 0.985;
+      const PAN_ENABLED_SCALE_RATIO = 1.02;
+      let fitScale = 1;
+      let currentScale = 1;
+      let minScale = 0.2;
+      let maxScale = 6;
+      let naturalSize = getSvgNaturalSize(clonedSvg);
+      let panX = 0;
+      let panY = 0;
+      let dragging = false;
+      let dragStartX = 0;
+      let dragStartY = 0;
+      let dragOriginX = 0;
+      let dragOriginY = 0;
+
+      const updateScaleLabel = () => {
+        const relativeScale = fitScale > 0 ? currentScale / fitScale : 1;
+        zoomValue.textContent = `${Math.round(relativeScale * 100)}%`;
+      };
+
+      const updatePanMode = () => {
+        const canPan = currentScale > fitScale * PAN_ENABLED_SCALE_RATIO;
+        viewport.classList.toggle('can-pan', canPan);
+        if (!canPan) {
+          panX = 0;
+          panY = 0;
+        }
+      };
+
+      const applyTransform = () => {
+        canvas.style.transform = `translate(${panX.toFixed(2)}px, ${panY.toFixed(2)}px) scale(${currentScale.toFixed(4)})`;
+      };
+
+      const applyScale = (nextScale) => {
+        currentScale = clamp(nextScale, minScale, maxScale);
+        updatePanMode();
+        applyTransform();
+        updateScaleLabel();
+      };
+
+      const recalcScaleBounds = () => {
+        naturalSize = getSvgNaturalSize(clonedSvg);
+        // Use layout dimensions (clientWidth/clientHeight) to avoid transform animation
+        // affecting fit calculations during open/resize transitions.
+        const availableWidth = Math.max(180, viewport.clientWidth - 6);
+        const availableHeight = Math.max(160, viewport.clientHeight - 6);
+        const measuredWidth = clonedMermaid.offsetWidth;
+        const measuredHeight = clonedMermaid.offsetHeight;
+        const baseWidth = Math.max(1, Number.isFinite(measuredWidth) && measuredWidth > 0 ? measuredWidth : naturalSize.width);
+        const baseHeight = Math.max(1, Number.isFinite(measuredHeight) && measuredHeight > 0 ? measuredHeight : naturalSize.height);
+
+        fitScale = Math.min(availableWidth / baseWidth, availableHeight / baseHeight) * FIT_SCALE_EPSILON;
+        if (!Number.isFinite(fitScale) || fitScale <= 0) {
+          fitScale = 1;
+        }
+
+        minScale = Math.max(0.2, fitScale * 0.4);
+        maxScale = Math.max(6, fitScale * 8);
+      };
+
+      let closed = false;
+      const closeFullscreen = (immediate) => {
+        if (closed) return;
+        closed = true;
+        dragging = false;
+        overlay.classList.remove('open');
+        document.removeEventListener('keydown', handleKeydown);
+        viewport.removeEventListener('wheel', handleWheel);
+        viewport.removeEventListener('pointerdown', handlePointerDown);
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointercancel', handlePointerUp);
+        window.removeEventListener('resize', handleResize);
+        const finalize = () => {
+          if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+          }
+          document.body.style.overflow = previousOverflow;
+          if (window.__sfCloseMermaidFullscreen === closeFullscreenHandle) {
+            window.__sfCloseMermaidFullscreen = null;
+          }
+        };
+        if (immediate) {
+          finalize();
+          return;
+        }
+        setTimeout(finalize, 220);
+      };
+      const closeFullscreenHandle = (immediate) => closeFullscreen(!!immediate);
+      window.__sfCloseMermaidFullscreen = closeFullscreenHandle;
+
+      const handleKeydown = (event) => {
+        if (event.key === 'Escape') {
+          closeFullscreen(false);
+          return;
+        }
+
+        if (event.key === '+' || event.key === '=' || event.key === 'Add') {
+          event.preventDefault();
+          applyScale(currentScale * ZOOM_STEP);
+          return;
+        }
+
+        if (event.key === '-' || event.key === '_' || event.key === 'Subtract') {
+          event.preventDefault();
+          applyScale(currentScale / ZOOM_STEP);
+          return;
+        }
+
+        if (event.key === '0') {
+          event.preventDefault();
+          applyScale(fitScale);
+        }
+      };
+
+      const handleWheel = (event) => {
+        if (event.ctrlKey || event.metaKey) {
+          event.preventDefault();
+          const direction = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+          applyScale(currentScale * direction);
+          return;
+        }
+
+        if (currentScale > fitScale * PAN_ENABLED_SCALE_RATIO) {
+          event.preventDefault();
+          panX -= event.deltaX;
+          panY -= event.deltaY;
+          applyTransform();
+        }
+      };
+
+      const handleResize = () => {
+        const ratioToFit = fitScale > 0 ? currentScale / fitScale : 1;
+        recalcScaleBounds();
+        applyScale(fitScale * ratioToFit);
+      };
+
+      const handlePointerDown = (event) => {
+        if (event.button !== 0) return;
+        if (!(currentScale > fitScale * PAN_ENABLED_SCALE_RATIO)) return;
+        dragging = true;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        dragOriginX = panX;
+        dragOriginY = panY;
+        viewport.classList.add('is-dragging');
+        event.preventDefault();
+      };
+
+      const handlePointerMove = (event) => {
+        if (!dragging) return;
+        panX = dragOriginX + (event.clientX - dragStartX);
+        panY = dragOriginY + (event.clientY - dragStartY);
+        applyTransform();
+      };
+
+      const handlePointerUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        viewport.classList.remove('is-dragging');
+      };
+
+      zoomInBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyScale(currentScale * ZOOM_STEP);
+      });
+
+      zoomOutBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyScale(currentScale / ZOOM_STEP);
+      });
+
+      resetZoomBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyScale(fitScale);
+      });
+
+      closeBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeFullscreen(false);
+      });
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          closeFullscreen(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleKeydown);
+      viewport.addEventListener('wheel', handleWheel, { passive: false });
+      viewport.addEventListener('pointerdown', handlePointerDown);
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerUp);
+      window.addEventListener('resize', handleResize);
+
+      recalcScaleBounds();
+      applyScale(fitScale);
+
+      setTimeout(() => {
+        overlay.classList.add('open');
+      }, 10);
+    }
+
+    // Generate table of contents from article headings
+    const DESKTOP_TOC_BREAKPOINT = 1280;
+    const TOC_SLIDEOUT_BREAKPOINT = 2560;
+    const TOC_LAYOUT_CLASSES = [
+      'has-desktop-toc',
+      'has-desktop-toc-collapsed',
+      'has-desktop-toc-left',
+      'has-desktop-toc-right',
+      'toc-mode-fixed-right',
+      'toc-mode-slideout',
+      'toc-slideout-open'
+    ];
+
+    function isDesktopTOCViewport() {
+      return window.innerWidth > DESKTOP_TOC_BREAKPOINT;
+    }
+
+    function isSlideoutTOCViewport() {
+      return window.innerWidth >= TOC_SLIDEOUT_BREAKPOINT;
+    }
+
+    function detachTOCBindings(tocContainer) {
+      if (!tocContainer) return;
+
+      const resizeHandler = tocContainer.__tocResizeHandler;
+      if (typeof resizeHandler === 'function') {
+        window.removeEventListener('resize', resizeHandler);
+        delete tocContainer.__tocResizeHandler;
+      }
+
+      const tabClickHandler = tocContainer.__tocTabClickHandler;
+      const tabBtn = tocContainer.querySelector('.toc-slideout-tab');
+      if (typeof tabClickHandler === 'function' && tabBtn) {
+        tabBtn.removeEventListener('click', tabClickHandler);
+        delete tocContainer.__tocTabClickHandler;
+      }
+
+      const keydownHandler = tocContainer.__tocKeydownHandler;
+      if (typeof keydownHandler === 'function') {
+        document.removeEventListener('keydown', keydownHandler);
+        delete tocContainer.__tocKeydownHandler;
+      }
+
+      const scrollHandler = tocContainer.__tocScrollHandler;
+      if (typeof scrollHandler === 'function') {
+        window.removeEventListener('scroll', scrollHandler);
+        delete tocContainer.__tocScrollHandler;
+      }
+    }
+
+    function clearDesktopTOCReservation() {
+      TOC_LAYOUT_CLASSES.forEach((className) => document.body.classList.remove(className));
+    }
+
+    function setSlideoutOpen(tocContainer, isOpen) {
+      if (!tocContainer || !isSlideoutTOCViewport()) return;
+      tocContainer.classList.toggle('slideout-open', !!isOpen);
+      syncDesktopTOCReservation(tocContainer);
+    }
+
+    function syncDesktopTOCReservation(tocContainer) {
+      clearDesktopTOCReservation();
+      if (!tocContainer || !isDesktopTOCViewport()) return;
+
+      document.body.classList.add('has-desktop-toc');
+
+      if (isSlideoutTOCViewport()) {
+        document.body.classList.add('toc-mode-slideout');
+        tocContainer.classList.add('toc-slideout');
+        if (tocContainer.classList.contains('slideout-open')) {
+          document.body.classList.add('toc-slideout-open');
+        }
+        return;
+      }
+
+      document.body.classList.add('toc-mode-fixed-right');
+      tocContainer.classList.remove('toc-slideout', 'slideout-open');
+      if (tocContainer.classList.contains('collapsed')) {
+        document.body.classList.add('has-desktop-toc-collapsed');
+      }
+    }
+
+    function generateTOC(articleRoot) {
+      // Remove existing TOC (avoid duplicates on re-render)
+      const existing = document.querySelector('.article-toc');
+      detachTOCBindings(existing);
+      if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
+      }
+      clearDesktopTOCReservation();
+
+      // Check if we're on an article detail page
+      const articleContent =
+        articleRoot && articleRoot.nodeType === Node.ELEMENT_NODE
+          ? articleRoot
+          : document.querySelector('.article-content');
+      if (!articleContent) return;
+
+      // Find all headings (h1-h6) and ensure stable, link-friendly IDs.
+      const headings = assignHeadingIds(articleContent);
+      if (headings.length === 0) return;
+
+      // Create TOC container
+      const tocContainer = document.createElement('aside');
+      tocContainer.className = 'article-toc';
+      tocContainer.dataset.side = 'right';
+      tocContainer.setAttribute('role', 'complementary');
+      tocContainer.setAttribute('aria-label', '目录');
+
+      const slideoutTabBtn = document.createElement('button');
+      slideoutTabBtn.className = 'toc-slideout-tab';
+      slideoutTabBtn.setAttribute('type', 'button');
+      slideoutTabBtn.setAttribute('aria-label', '展开目录面板');
+      slideoutTabBtn.innerHTML = '<i class="fas fa-list-ul"></i><span>目录</span>';
+      tocContainer.appendChild(slideoutTabBtn);
+
+      // Create TOC header with close button for mobile
+      const tocHeader = document.createElement('div');
+      tocHeader.className = 'article-toc-header';
+      tocHeader.innerHTML = `
           <div class="article-toc-heading">
             <h3 class="article-toc-title">目录</h3>
           </div>
@@ -1503,231 +1602,231 @@
           </div>
         `;
 
-        // Create TOC list
-        const tocList = document.createElement('ul');
-        tocList.className = 'article-toc-list';
-        const tocLinkById = new Map();
-        const tocActiveLock = { id: null, until: 0 };
+      // Create TOC list
+      const tocList = document.createElement('ul');
+      tocList.className = 'article-toc-list';
+      const tocLinkById = new Map();
+      const tocActiveLock = { id: null, until: 0 };
 
-        headings.forEach((heading) => {
-          const level = parseInt(heading.tagName.substring(1)); // h1 → 1, h2 → 2, etc.
-          const text = heading.textContent;
-          const id = heading.id;
+      headings.forEach((heading) => {
+        const level = parseInt(heading.tagName.substring(1)); // h1 → 1, h2 → 2, etc.
+        const text = heading.textContent;
+        const id = heading.id;
 
-          const li = document.createElement('li');
-          li.className = `toc-item toc-level-${level}`;
+        const li = document.createElement('li');
+        li.className = `toc-item toc-level-${level}`;
 
-          const a = document.createElement('a');
-          a.href = `#${id}`;
-          a.textContent = text;
-          a.className = 'toc-link';
-          tocLinkById.set(id, a);
+        const a = document.createElement('a');
+        a.href = `#${id}`;
+        a.textContent = text;
+        a.className = 'toc-link';
+        tocLinkById.set(id, a);
 
-          // Smooth scroll on click
-          a.addEventListener('click', (e) => {
-            e.preventDefault();
-            const target = document.getElementById(id);
-            if (target) {
-              scrollToHeading(target, 'smooth');
-              history.replaceState(null, '', `#${encodeURIComponent(id)}`);
-              // Update active state
-              tocContainer.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
-              a.classList.add('active');
-              // Lock active style briefly to avoid first scroll frame snapping back.
-              tocActiveLock.id = id;
-              tocActiveLock.until = performance.now() + 480;
-              // Close mobile TOC drawer
-              tocContainer.classList.remove('mobile-open');
-            }
-          });
-
-          li.appendChild(a);
-          tocList.appendChild(li);
+        // Smooth scroll on click
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          const target = document.getElementById(id);
+          if (target) {
+            scrollToHeading(target, 'smooth');
+            history.replaceState(null, '', `#${encodeURIComponent(id)}`);
+            // Update active state
+            tocContainer.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+            a.classList.add('active');
+            // Lock active style briefly to avoid first scroll frame snapping back.
+            tocActiveLock.id = id;
+            tocActiveLock.until = performance.now() + 480;
+            // Close mobile TOC drawer
+            tocContainer.classList.remove('mobile-open');
+          }
         });
 
-        tocContainer.appendChild(tocHeader);
-        tocContainer.appendChild(tocList);
+        li.appendChild(a);
+        tocList.appendChild(li);
+      });
 
-        // Insert TOC into document (floating, so body is fine)
-        const article = articleContent.closest('.article-detail') || document.querySelector('.article-detail');
-        const mountPoint = (article && article.parentNode) ? article.parentNode : document.body;
-        if (mountPoint) {
-          mountPoint.insertBefore(tocContainer, article || mountPoint.firstChild);
+      tocContainer.appendChild(tocHeader);
+      tocContainer.appendChild(tocList);
+
+      // Insert TOC into document (floating, so body is fine)
+      const article = articleContent.closest('.article-detail') || document.querySelector('.article-detail');
+      const mountPoint = (article && article.parentNode) ? article.parentNode : document.body;
+      if (mountPoint) {
+        mountPoint.insertBefore(tocContainer, article || mountPoint.firstChild);
+      }
+
+      syncDesktopTOCReservation(tocContainer);
+
+      const onResize = () => {
+        if (!isSlideoutTOCViewport()) {
+          tocContainer.classList.remove('slideout-open');
         }
-
         syncDesktopTOCReservation(tocContainer);
+      };
+      tocContainer.__tocResizeHandler = onResize;
+      window.addEventListener('resize', onResize);
 
-        const onResize = () => {
-          if (!isSlideoutTOCViewport()) {
-            tocContainer.classList.remove('slideout-open');
-          }
-          syncDesktopTOCReservation(tocContainer);
-        };
-        tocContainer.__tocResizeHandler = onResize;
-        window.addEventListener('resize', onResize);
+      const collapseBtn = tocContainer.querySelector('.toc-collapse-btn');
+      const syncCollapseState = (collapsed) => {
+        if (!collapseBtn) return;
+        collapseBtn.setAttribute('aria-expanded', String(!collapsed));
+        collapseBtn.setAttribute('aria-label', collapsed ? '展开目录' : '收起目录');
+        collapseBtn.setAttribute('title', collapsed ? '展开目录' : '收起目录');
+        collapseBtn.innerHTML = collapsed
+          ? '<i class="fas fa-chevron-down"></i>'
+          : '<i class="fas fa-chevron-up"></i>';
+      };
 
-        const collapseBtn = tocContainer.querySelector('.toc-collapse-btn');
-        const syncCollapseState = (collapsed) => {
-          if (!collapseBtn) return;
-          collapseBtn.setAttribute('aria-expanded', String(!collapsed));
-          collapseBtn.setAttribute('aria-label', collapsed ? '展开目录' : '收起目录');
-          collapseBtn.setAttribute('title', collapsed ? '展开目录' : '收起目录');
-          collapseBtn.innerHTML = collapsed
-            ? '<i class="fas fa-chevron-down"></i>'
-            : '<i class="fas fa-chevron-up"></i>';
-        };
-
-        if (collapseBtn) {
-          collapseBtn.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (isSlideoutTOCViewport()) return;
-            const collapsed = tocContainer.classList.toggle('collapsed');
-            syncCollapseState(collapsed);
-            syncDesktopTOCReservation(tocContainer);
-          });
-          syncCollapseState(false);
-        }
-
-        // Close button handler
-        const closeBtn = tocContainer.querySelector('.toc-close-btn');
-        if (closeBtn) {
-          closeBtn.addEventListener('click', () => {
-            if (isSlideoutTOCViewport()) {
-              setSlideoutOpen(tocContainer, false);
-              return;
-            }
-            tocContainer.classList.remove('mobile-open');
-          });
-        }
-
-        const onTabClick = (event) => {
+      if (collapseBtn) {
+        collapseBtn.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!isSlideoutTOCViewport()) return;
-          setSlideoutOpen(tocContainer, !tocContainer.classList.contains('slideout-open'));
-        };
-        slideoutTabBtn.addEventListener('click', onTabClick);
-        tocContainer.__tocTabClickHandler = onTabClick;
-
-        const onTocKeydown = (event) => {
-          if (event.key !== 'Escape') return;
-          if (!isSlideoutTOCViewport()) return;
-          setSlideoutOpen(tocContainer, false);
-        };
-        document.addEventListener('keydown', onTocKeydown);
-        tocContainer.__tocKeydownHandler = onTocKeydown;
-
-        // Mobile TOC toggle button is now managed by Yew TocButton component
-        // This prevents the bug where the button persisted after leaving article pages
-
-        // Highlight current section on scroll
-        let ticking = false;
-        const onScroll = () => {
-              if (!ticking) {
-            window.requestAnimationFrame(() => {
-              updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer);
-              ticking = false;
-            });
-            ticking = true;
-          }
-        };
-        window.addEventListener('scroll', onScroll, { passive: true });
-        tocContainer.__tocScrollHandler = onScroll;
-
-        // Initial highlight
-        updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer);
+          if (isSlideoutTOCViewport()) return;
+          const collapsed = tocContainer.classList.toggle('collapsed');
+          syncCollapseState(collapsed);
+          syncDesktopTOCReservation(tocContainer);
+        });
+        syncCollapseState(false);
       }
 
-      // Update active TOC item based on scroll position
-      function updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer) {
-        if (!Array.isArray(headings) || headings.length === 0) return;
-        const scope = tocContainer || document;
-
-        if (tocActiveLock && tocActiveLock.id && performance.now() < tocActiveLock.until) {
-          const lockedLink = tocLinkById?.get(tocActiveLock.id);
-          if (lockedLink) {
-            scope.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
-            lockedLink.classList.add('active');
+      // Close button handler
+      const closeBtn = tocContainer.querySelector('.toc-close-btn');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          if (isSlideoutTOCViewport()) {
+            setSlideoutOpen(tocContainer, false);
             return;
           }
-        } else if (tocActiveLock && tocActiveLock.id) {
-          tocActiveLock.id = null;
-          tocActiveLock.until = 0;
-        }
-
-        // Keep highlight judgment consistent with scrollToHeading offset.
-        const scrollY = window.scrollY + getHeadingScrollOffset();
-
-        let currentHeading = null;
-        headings.forEach((heading) => {
-          const offsetTop = heading.offsetTop;
-          if (scrollY >= offsetTop) {
-            currentHeading = heading;
-          }
+          tocContainer.classList.remove('mobile-open');
         });
-
-        scope.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
-
-        if (currentHeading) {
-          const activeLink = tocLinkById?.get(currentHeading.id);
-          if (activeLink) {
-            activeLink.classList.add('active');
-          }
-        }
       }
 
-      // Back to top button is now managed by Yew ScrollToTopButton component
-
-      // Debug helper - expose to window for testing
-      window.debugMermaidCopy = function() {
-        console.log('=== Mermaid Download Debug ===');
-        console.log('Mermaid elements found:', document.querySelectorAll('.mermaid').length);
-        console.log('Mermaid wrappers found:', document.querySelectorAll('.mermaid-wrapper').length);
-        console.log('Download buttons found:', document.querySelectorAll('.mermaid-wrapper .copy-button').length);
-
-        const firstMermaid = document.querySelector('.mermaid');
-        if (firstMermaid) {
-          const svg = firstMermaid.querySelector('svg');
-          console.log('First mermaid has SVG:', !!svg);
-          if (svg) {
-            console.log('SVG dimensions:', svg.width.baseVal.value, 'x', svg.height.baseVal.value);
-          }
-          console.log('Has wrapper:', firstMermaid.parentElement?.classList.contains('mermaid-wrapper'));
-        }
-        console.log('============================');
+      const onTabClick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!isSlideoutTOCViewport()) return;
+        setSlideoutOpen(tocContainer, !tocContainer.classList.contains('slideout-open'));
       };
+      slideoutTabBtn.addEventListener('click', onTabClick);
+      tocContainer.__tocTabClickHandler = onTabClick;
 
-      // Expose TOC generator for components that may need to trigger it (e.g., mobile toggle)
-      window.generateTOC = generateTOC;
-
-      // Cleanup helper: remove existing TOC
-      window.cleanupTOC = function() {
-        const toc = document.querySelector('.article-toc');
-        detachTOCBindings(toc);
-        if (toc && toc.parentNode) {
-          toc.parentNode.removeChild(toc);
-        }
-        clearDesktopTOCReservation();
+      const onTocKeydown = (event) => {
+        if (event.key !== 'Escape') return;
+        if (!isSlideoutTOCViewport()) return;
+        setSlideoutOpen(tocContainer, false);
       };
+      document.addEventListener('keydown', onTocKeydown);
+      tocContainer.__tocKeydownHandler = onTocKeydown;
 
-      window.cleanupMarkdownRendering = function() {
-        window.cleanupTOC?.();
-        if (typeof window.__sfCloseMermaidFullscreen === 'function') {
-          try {
-            window.__sfCloseMermaidFullscreen(true);
-          } catch (_) {
-            window.__sfCloseMermaidFullscreen = null;
-          }
-        } else {
-          const overlay = document.querySelector('.mermaid-fullscreen-overlay');
-          if (overlay && overlay.parentNode) {
-            overlay.parentNode.removeChild(overlay);
-          }
-          document.body.style.overflow = '';
+      // Mobile TOC toggle button is now managed by Yew TocButton component
+      // This prevents the bug where the button persisted after leaving article pages
+
+      // Highlight current section on scroll
+      let ticking = false;
+      const onScroll = () => {
+        if (!ticking) {
+          window.requestAnimationFrame(() => {
+            updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer);
+            ticking = false;
+          });
+          ticking = true;
         }
       };
-    </script>
-  </body>
-  
+      window.addEventListener('scroll', onScroll, { passive: true });
+      tocContainer.__tocScrollHandler = onScroll;
+
+      // Initial highlight
+      updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer);
+    }
+
+    // Update active TOC item based on scroll position
+    function updateActiveTOC(headings, tocLinkById, tocActiveLock, tocContainer) {
+      if (!Array.isArray(headings) || headings.length === 0) return;
+      const scope = tocContainer || document;
+
+      if (tocActiveLock && tocActiveLock.id && performance.now() < tocActiveLock.until) {
+        const lockedLink = tocLinkById?.get(tocActiveLock.id);
+        if (lockedLink) {
+          scope.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+          lockedLink.classList.add('active');
+          return;
+        }
+      } else if (tocActiveLock && tocActiveLock.id) {
+        tocActiveLock.id = null;
+        tocActiveLock.until = 0;
+      }
+
+      // Keep highlight judgment consistent with scrollToHeading offset.
+      const scrollY = window.scrollY + getHeadingScrollOffset();
+
+      let currentHeading = null;
+      headings.forEach((heading) => {
+        const offsetTop = heading.offsetTop;
+        if (scrollY >= offsetTop) {
+          currentHeading = heading;
+        }
+      });
+
+      scope.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+
+      if (currentHeading) {
+        const activeLink = tocLinkById?.get(currentHeading.id);
+        if (activeLink) {
+          activeLink.classList.add('active');
+        }
+      }
+    }
+
+    // Back to top button is now managed by Yew ScrollToTopButton component
+
+    // Debug helper - expose to window for testing
+    window.debugMermaidCopy = function () {
+      console.log('=== Mermaid Download Debug ===');
+      console.log('Mermaid elements found:', document.querySelectorAll('.mermaid').length);
+      console.log('Mermaid wrappers found:', document.querySelectorAll('.mermaid-wrapper').length);
+      console.log('Download buttons found:', document.querySelectorAll('.mermaid-wrapper .copy-button').length);
+
+      const firstMermaid = document.querySelector('.mermaid');
+      if (firstMermaid) {
+        const svg = firstMermaid.querySelector('svg');
+        console.log('First mermaid has SVG:', !!svg);
+        if (svg) {
+          console.log('SVG dimensions:', svg.width.baseVal.value, 'x', svg.height.baseVal.value);
+        }
+        console.log('Has wrapper:', firstMermaid.parentElement?.classList.contains('mermaid-wrapper'));
+      }
+      console.log('============================');
+    };
+
+    // Expose TOC generator for components that may need to trigger it (e.g., mobile toggle)
+    window.generateTOC = generateTOC;
+
+    // Cleanup helper: remove existing TOC
+    window.cleanupTOC = function () {
+      const toc = document.querySelector('.article-toc');
+      detachTOCBindings(toc);
+      if (toc && toc.parentNode) {
+        toc.parentNode.removeChild(toc);
+      }
+      clearDesktopTOCReservation();
+    };
+
+    window.cleanupMarkdownRendering = function () {
+      window.cleanupTOC?.();
+      if (typeof window.__sfCloseMermaidFullscreen === 'function') {
+        try {
+          window.__sfCloseMermaidFullscreen(true);
+        } catch (_) {
+          window.__sfCloseMermaidFullscreen = null;
+        }
+      } else {
+        const overlay = document.querySelector('.mermaid-fullscreen-overlay');
+        if (overlay && overlay.parentNode) {
+          overlay.parentNode.removeChild(overlay);
+        }
+        document.body.style.overflow = '';
+      }
+    };
+  </script>
+</body>
+
 </html>

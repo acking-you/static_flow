@@ -55,14 +55,17 @@ pub fn posts_page() -> Html {
         .normalized();
 
     let articles = use_state(Vec::<ArticleListItem>::new);
+    let loading = use_state(|| true);
     let expanded_years = use_state(HashMap::<i32, bool>::new);
 
     {
         let articles = articles.clone();
+        let loading = loading.clone();
         let tag = query.tag.clone();
         let category = query.category.clone();
 
         use_effect_with((tag.clone(), category.clone()), move |_| {
+            loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let tag_ref = tag.as_deref();
                 let category_ref = category.as_deref();
@@ -75,6 +78,7 @@ pub fn posts_page() -> Html {
                         );
                     },
                 }
+                loading.set(false);
             });
             || ()
         });
@@ -318,7 +322,38 @@ pub fn posts_page() -> Html {
 
                 // Article Timeline Section
                 {
-                    if grouped_by_year.is_empty() {
+                    if *loading {
+                        html! {
+                            <div class={classes!("editorial-timeline")}>
+                                { for (0..2).map(|_| html! {
+                                    <div class={classes!("timeline-year-section", "mb-16")}>
+                                        <div class={classes!("flex", "items-center", "gap-4", "mb-8")}>
+                                            <div class="h-12 w-24 rounded-lg bg-[var(--surface-alt)] animate-pulse" />
+                                            <div class={classes!("flex-1", "h-[2px]", "bg-[var(--border)]")} />
+                                            <div class="h-7 w-20 rounded-full bg-[var(--surface-alt)] animate-pulse" />
+                                        </div>
+                                        <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3", "gap-6")}>
+                                            { for (0..3).map(|_| html! {
+                                                <div class="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-6 flex flex-col gap-3 animate-pulse">
+                                                    <div class="h-3 w-20 rounded bg-[var(--surface-alt)]" />
+                                                    <div class="h-6 w-3/4 rounded bg-[var(--surface-alt)]" />
+                                                    <div class="space-y-2 flex-1">
+                                                        <div class="h-3 w-full rounded bg-[var(--surface-alt)]" />
+                                                        <div class="h-3 w-5/6 rounded bg-[var(--surface-alt)]" />
+                                                        <div class="h-3 w-2/3 rounded bg-[var(--surface-alt)]" />
+                                                    </div>
+                                                    <div class="flex gap-2 mt-auto">
+                                                        <div class="h-5 w-12 rounded bg-[var(--surface-alt)]" />
+                                                        <div class="h-5 w-16 rounded bg-[var(--surface-alt)]" />
+                                                    </div>
+                                                </div>
+                                            }) }
+                                        </div>
+                                    </div>
+                                }) }
+                            </div>
+                        }
+                    } else if grouped_by_year.is_empty() {
                         html! {
                             <div class={classes!(
                                 "empty-state",

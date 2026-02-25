@@ -15,12 +15,14 @@ pub fn home_page() -> Html {
     let total_tags = use_state(|| 0usize);
     let total_categories = use_state(|| 0usize);
     let total_music = use_state(|| 0usize);
+    let stats_loaded = use_state(|| false);
 
     {
         let total_articles = total_articles.clone();
         let total_tags = total_tags.clone();
         let total_categories = total_categories.clone();
         let total_music = total_music.clone();
+        let stats_loaded = stats_loaded.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_site_stats().await {
@@ -42,6 +44,8 @@ pub fn home_page() -> Html {
                         console::error_1(&format!("Failed to fetch music stats: {}", e).into());
                     },
                 }
+
+                stats_loaded.set(true);
             });
             || ()
         });
@@ -448,7 +452,13 @@ pub fn home_page() -> Html {
                                         let panel_content = html! {
                                             <div class="system-panel">
                                                 <div class="system-panel-label">{ label.clone() }</div>
-                                                <div class="system-panel-value">{ value.clone() }</div>
+                                                <div class="system-panel-value">
+                                                    if *stats_loaded {
+                                                        { value.clone() }
+                                                    } else {
+                                                        <div class="h-8 w-12 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
+                                                    }
+                                                </div>
                                                 <div class="system-panel-unit">{ t::SYSTEM_UNIT_TOTAL }</div>
                                             </div>
                                         };

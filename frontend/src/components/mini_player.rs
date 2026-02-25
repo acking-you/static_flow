@@ -5,6 +5,7 @@ use crate::{
     api,
     components::{
         icons::{Icon, IconName},
+        image_with_loading::ImageWithLoading,
         persistent_audio::resolve_next_song,
     },
     music_context::{MusicAction, MusicPlayerContext},
@@ -110,8 +111,14 @@ pub fn mini_player() -> Html {
                         <Icon name={IconName::Music} size={16} class={classes!("opacity-40")} />
                     </div>
                 } else {
-                    <img src={cover_url} alt={title.clone()} referrerpolicy="no-referrer"
-                        class="w-full h-full object-cover" />
+                    <ImageWithLoading
+                        src={cover_url}
+                        alt={title.clone()}
+                        referrerpolicy={Some(AttrValue::from("no-referrer"))}
+                        loading={Some(AttrValue::from("eager"))}
+                        class="w-full h-full object-cover"
+                        container_class={classes!("w-full", "h-full")}
+                    />
                 }
             </div>
 

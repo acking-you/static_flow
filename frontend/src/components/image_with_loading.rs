@@ -14,6 +14,8 @@ pub struct ImageWithLoadingProps {
     pub decoding: Option<AttrValue>,
     #[prop_or_default]
     pub onclick: Option<Callback<MouseEvent>>,
+    #[prop_or_default]
+    pub referrerpolicy: Option<AttrValue>,
 }
 
 #[function_component(ImageWithLoading)]
@@ -77,6 +79,7 @@ pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
                 class={image_classes}
                 loading={props.loading.clone().unwrap_or(AttrValue::from("lazy"))}
                 decoding={props.decoding.clone()}
+                referrerpolicy={props.referrerpolicy.clone()}
                 onload={on_image_load}
                 onerror={on_image_error}
             />

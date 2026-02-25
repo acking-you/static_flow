@@ -1,7 +1,7 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
-use arrow_array::{Array, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::{DataType, Schema};
 use futures::TryStreamExt;
 use lancedb::{
@@ -163,7 +163,7 @@ pub async fn upsert_articles(table: &Table, records: &[ArticleRecord]) -> Result
     if records.is_empty() {
         return Ok(());
     }
-    let batch = build_article_batch(records)?;
+    let batch = align_batch_to_table_schema(table, build_article_batch(records)?).await?;
     let schema = batch.schema();
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
 
@@ -189,7 +189,9 @@ pub async fn upsert_images(table: &Table, records: &[ImageRecord]) -> Result<()>
             continue;
         }
 
-        let batch = build_image_batch(std::slice::from_ref(record))?;
+        let batch =
+            align_batch_to_table_schema(table, build_image_batch(std::slice::from_ref(record))?)
+                .await?;
         let schema = batch.schema();
         let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
 
@@ -207,7 +209,7 @@ pub async fn upsert_taxonomies(table: &Table, records: &[TaxonomyRecord]) -> Res
         return Ok(());
     }
 
-    let batch = build_taxonomy_batch(records)?;
+    let batch = align_batch_to_table_schema(table, build_taxonomy_batch(records)?).await?;
     let schema = batch.schema();
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
 
@@ -216,6 +218,34 @@ pub async fn upsert_taxonomies(table: &Table, records: &[TaxonomyRecord]) -> Res
     merge.when_not_matched_insert_all();
     merge.execute(Box::new(batches)).await?;
     Ok(())
+}
+
+async fn align_batch_to_table_schema(table: &Table, batch: RecordBatch) -> Result<RecordBatch> {
+    let table_schema = table.schema().await?;
+    let source_schema = batch.schema();
+    let mut fields = Vec::with_capacity(table_schema.fields().len());
+    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(table_schema.fields().len());
+
+    for target_field in table_schema.fields() {
+        if let Some((idx, source_field)) = source_schema.column_with_name(target_field.name()) {
+            fields.push(source_field.clone());
+            arrays.push(batch.column(idx).clone());
+            continue;
+        }
+
+        if !target_field.is_nullable() {
+            anyhow::bail!(
+                "batch is missing required non-nullable column `{}` for table `{}`",
+                target_field.name(),
+                table.name()
+            );
+        }
+
+        fields.push(target_field.as_ref().clone());
+        arrays.push(new_null_array(target_field.data_type(), batch.num_rows()));
+    }
+
+    Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?)
 }
 
 /// Filename prefix for dedicated fallback cover images.

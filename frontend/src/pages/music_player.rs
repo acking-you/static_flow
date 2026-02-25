@@ -7,6 +7,7 @@ use crate::{
     api,
     components::{
         icons::{Icon, IconName},
+        image_with_loading::ImageWithLoading,
         persistent_audio::resolve_next_song,
         synced_lyrics::SyncedLyrics,
     },
@@ -446,7 +447,14 @@ pub fn music_player_page(props: &Props) -> Html {
                             <Icon name={IconName::Music} size={64} class={classes!("opacity-30")} />
                         </div>
                     } else {
-                        <img src={cover_url} alt={detail.title.clone()} referrerpolicy="no-referrer" class="w-full h-full object-cover" />
+                        <ImageWithLoading
+                            src={cover_url}
+                            alt={detail.title.clone()}
+                            referrerpolicy={Some(AttrValue::from("no-referrer"))}
+                            loading={Some(AttrValue::from("eager"))}
+                            class="w-full h-full object-cover"
+                            container_class={classes!("w-full", "h-full")}
+                        />
                     }
                 </div>
                 <h1 class="text-2xl sm:text-3xl font-bold text-[var(--text)] text-center mb-1" style="font-family: 'Fraunces', serif;">{&detail.title}</h1>
@@ -629,8 +637,14 @@ fn render_candidate_card(c: &api::SongSearchResult) -> Html {
                         <Icon name={IconName::Music} size={32} class={classes!("opacity-30")} />
                     </div>
                 } else {
-                    <img src={cover} alt={c.title.clone()} loading="lazy" referrerpolicy="no-referrer"
-                        class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                    <ImageWithLoading
+                        src={cover}
+                        alt={c.title.clone()}
+                        loading={Some(AttrValue::from("lazy"))}
+                        referrerpolicy={Some(AttrValue::from("no-referrer"))}
+                        class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        container_class={classes!("w-full", "h-full")}
+                    />
                 }
                 <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-200 \
                             flex items-center justify-center opacity-0 group-hover:opacity-100">

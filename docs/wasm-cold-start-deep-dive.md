@@ -1,8 +1,8 @@
 # 深入剖析 WASM SPA 冷启动延迟：从浏览器编译缓存驱逐到 IndexedDB 持久化修复
 
-> **项目背景**：StaticFlow — 基于 Yew (Rust) + Trunk + wasm-bindgen 构建的 SPA 技术博客，WASM 产物 1.9 MB。
+> **项目背景**：StaticFlow — 基于 Yew (Rust) + Trunk + wasm-bindgen 构建的 SPA 技术博客，WASM 产物约 1.9 MB（wasm-opt `-Oz --converge` 优化后）。
 >
-> **代码版本**：基于 `master` 分支 `b6b9ca8` 提交。
+> **代码版本**：基于 `master` 分支最新提交。
 
 ---
 
@@ -37,12 +37,15 @@
 
 StaticFlow 使用 [Trunk](https://trunkrs.dev/) 作为构建工具。Trunk 在构建时会将 `index.html` 中的 `<link data-trunk rel="rust" />` 指令替换为一段 `<script type="module">` 胶水代码。
 
-**源码中的 Trunk 指令**（`frontend/index.html:132-134`）：
+**源码中的 Trunk 指令**（`frontend/index.html`）：
 
 ```html
 <!-- Trunk will compile Rust to WASM -->
+<!-- Disable built-in wasm-opt; post_build hook runs it with correct feature flags -->
 <link data-trunk rel="rust" data-wasm-opt="0" />
 ```
+
+> 💡 Trunk 内置的 wasm-opt 不支持传递 `--enable-*` flags。StaticFlow 通过 `data-wasm-opt="0"` 禁用内置 wasm-opt，改用 `Trunk.toml` 中的 `post_build` hook 手动调用 `wasm-opt -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int`，详见第五节。
 
 **构建后生成的模块脚本**（`frontend/dist/index.html:135-145`）：
 
@@ -347,13 +350,13 @@ t=4560ms API 响应返回，页面渲染完成 ← "一瞬间恢复正常"
 
 | 因素 | 影响 | StaticFlow 的情况 |
 |------|------|-------------------|
-| WASM 文件大小 | 线性正相关：文件越大，编译越慢 | 1.9 MB（`data-wasm-opt="0"` 未优化） |
+| WASM 文件大小 | 线性正相关：文件越大，编译越慢 | ~1.9 MB（wasm-opt `-Oz --converge` 优化后） |
 | CPU 性能 | 直接影响编译速度 | 因用户设备而异 |
 | 浏览器内存压力 | 影响 Code Cache 驱逐频率 | WSL2 环境下内存竞争更激烈 |
 | 不活跃时长 | 越久越可能触发 Code Cache 驱逐 | 约 30 分钟以上 |
-| wasm-opt 优化级别 | 优化后文件更小，编译更快 | 当前为 0（未优化） |
+| wasm-opt 优化级别 | 优化后文件更小，编译更快 | `-Oz --converge`（post_build hook） |
 
-> 🤔 **Think About**：`data-wasm-opt="0"` 意味着 Trunk 不会对 WASM 产物运行 wasm-opt 优化。虽然 `Trunk.toml` 中注释说"we'll optimize manually in post_build hook"，但实际上并没有配置 post_build hook。这意味着 1.9 MB 的 WASM 文件可能还有显著的压缩空间。
+> 🤔 **Think About**：`data-wasm-opt="0"` 意味着 Trunk 不会对 WASM 产物运行内置 wasm-opt。StaticFlow 通过 `Trunk.toml` 的 `post_build` hook 手动调用 wasm-opt，传入 `--enable-bulk-memory --enable-nontrapping-float-to-int -Oz --converge`，既解决了 Trunk 内置 wasm-opt 不支持 feature flags 的问题，又实现了多轮收敛优化。
 
 ---
 
@@ -361,16 +364,18 @@ t=4560ms API 响应返回，页面渲染完成 ← "一瞬间恢复正常"
 
 ### 4.1 思路：绕过 V8 Code Cache 的驱逐
 
-既然问题的根因是 V8 Code Cache 被驱逐后需要重新编译，那么解决方案的核心思路就是：**在 V8 Code Cache 之外，维护一份我们自己可控的编译缓存**。
+既然问题的根因是 V8 Code Cache 被驱逐后需要重新编译，那么解决方案的核心思路就是：**在 V8 Code Cache 之外，维护一份我们自己可控的持久化缓存**。
 
-浏览器提供了一个完美的存储方案：**IndexedDB**。
+浏览器提供了一个合适的存储方案：**IndexedDB**。
 
 IndexedDB 有几个关键特性使它适合这个场景：
 
-1. **支持结构化克隆 `WebAssembly.Module`**：从 Chrome 57 / Firefox 53 / Safari 14.1 开始，`WebAssembly.Module` 对象可以直接存入 IndexedDB，浏览器会序列化编译后的机器码
+1. **支持存储 `ArrayBuffer`**：WASM 原始字节可以通过结构化克隆直接存入 IndexedDB
 2. **持久化存储**：不受 V8 Code Cache 的驱逐策略影响，数据持久存在直到被显式删除
 3. **异步 API**：不阻塞主线程
 4. **容量充足**：通常有数百 MB 到数 GB 的配额
+
+> ⚠️ **重要变更**：早期方案尝试直接存储 `WebAssembly.Module` 对象到 IndexedDB。但现代浏览器（Chrome 100+）已经禁止通过结构化克隆序列化 `WebAssembly.Module`，会抛出 `DataCloneError: A WebAssembly.Module can not be serialized for storage.`（参见 [WebAssembly/spec#821](https://github.com/WebAssembly/spec/issues/821)）。因此当前方案改为存储原始 WASM 字节（`ArrayBuffer`），加载时通过 `WebAssembly.instantiate(bytes, imports)` 重新编译。V8 对相同字节有内部编译缓存加速，实测从 IndexedDB 加载+编译仅需 ~32ms。
 
 ```
 修复后的缓存层次：
@@ -380,29 +385,39 @@ IndexedDB 有几个关键特性使它适合这个场景：
 ├─────────────────────────────────────────────┤
 │  Layer 2: V8 Code Cache (compiled code)      │  ← 可能被驱逐
 ├─────────────────────────────────────────────┤
-│  Layer 2.5: IndexedDB (compiled Module) ★    │  ← 新增！持久化
+│  Layer 2.5: IndexedDB (raw bytes) ★          │  ← 新增！持久化
 ├─────────────────────────────────────────────┤
 │  Layer 3: 运行时 Instance                    │  ← 不变
 └─────────────────────────────────────────────┘
 
 查找顺序：Layer 3 → Layer 2 → Layer 2.5 → Layer 1 → 网络
+
+注：Layer 2 的查找由浏览器内部透明处理，对 JS 不可见。
+当 V8 Code Cache 命中时，instantiateStreaming 直接返回（~8ms）；
+当 Code Cache 未命中但 IndexedDB 有缓存时，从字节编译（~32ms）；
+两者都未命中时，走完整的 fetch + compile 路径。
 ```
 
 ### 4.2 实现：Monkey-Patch `WebAssembly.instantiateStreaming`
 
 我们的策略是在 wasm-bindgen 的胶水代码执行之前，拦截 `WebAssembly.instantiateStreaming` 函数，注入 IndexedDB 缓存逻辑。
 
-这段代码放在 `<head>` 中、Trunk 的 `<link data-trunk rel="rust" />` 之前，确保在模块脚本执行前生效（`frontend/index.html:81-129`）：
+这段代码放在 `<head>` 中、Trunk 的 `<link data-trunk rel="rust" />` 之前，确保在模块脚本执行前生效（`frontend/index.html`）：
 
 ```javascript
 (function () {
-  // IndexedDB 配置
-  var DB = 'sf-wasm-cache', STORE = 'compiled';
+  // IndexedDB 配置（SCHEMA=2：从旧版 Module 存储迁移到 ArrayBuffer 存储）
+  var DB = 'sf-wasm-cache', STORE = 'compiled', SCHEMA = 2;
 
   function openDB() {
     return new Promise(function (ok, fail) {
-      var r = indexedDB.open(DB, 1);
-      r.onupgradeneeded = function () { r.result.createObjectStore(STORE); };
+      var r = indexedDB.open(DB, SCHEMA);
+      r.onupgradeneeded = function () {
+        var db = r.result;
+        // 清除旧 schema 的 store（可能包含无法反序列化的 Module 数据）
+        if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
+        db.createObjectStore(STORE);
+      };
       r.onsuccess = function () { ok(r.result); };
       r.onerror = function () { fail(r.error); };
     });
@@ -423,7 +438,7 @@ IndexedDB 有几个关键特性使它适合这个场景：
 
         return openDB()
           .then(function (db) {
-            // Step 1: 尝试从 IndexedDB 读取缓存的 Module
+            // Step 1: 尝试从 IndexedDB 读取缓存的 ArrayBuffer
             return new Promise(function (ok) {
               var tx = db.transaction(STORE, 'readonly');
               var rq = tx.objectStore(STORE).get(url);
@@ -432,23 +447,25 @@ IndexedDB 有几个关键特性使它适合这个场景：
             });
           })
           .then(function (cached) {
-            if (cached instanceof WebAssembly.Module) {
-              // ★ 缓存命中！直接实例化，跳过编译
-              return WebAssembly.instantiate(cached, imports)
-                .then(function (instance) {
-                  return { instance: instance, module: cached };
-                });
+            if (cached instanceof ArrayBuffer && cached.byteLength > 0) {
+              // ★ 缓存命中！从字节编译+实例化
+              // V8 对相同字节有内部编译缓存，实测 ~32ms
+              return WebAssembly.instantiate(cached, imports);
             }
 
             // 缓存未命中，走原始编译路径
+            // clone response：一路给 instantiateStreaming，一路读字节存 IndexedDB
+            var cloned = resp.clone();
             return _is.call(WebAssembly, resp, imports)
               .then(function (result) {
-                // 编译完成后，异步写入 IndexedDB 缓存
-                openDB().then(function (db) {
-                  var tx = db.transaction(STORE, 'readwrite');
-                  var st = tx.objectStore(STORE);
-                  st.clear();  // 清除旧版本缓存
-                  st.put(result.module, url);  // 以 URL 为 key 存储
+                // 异步读取字节并写入 IndexedDB（fire-and-forget）
+                cloned.arrayBuffer().then(function (bytes) {
+                  return openDB().then(function (db) {
+                    var tx = db.transaction(STORE, 'readwrite');
+                    var st = tx.objectStore(STORE);
+                    st.clear();  // 清除旧版本缓存
+                    st.put(bytes, url);  // 以 URL 为 key 存储原始字节
+                  });
                 }).catch(function () {});
                 return result;
               });
@@ -470,10 +487,10 @@ flowchart TD
     B -- 否 --> C["调用原始 _is()"]
     B -- 是 --> D["打开 IndexedDB"]
     D --> E{读取缓存}
-    E -- "命中 (WebAssembly.Module)" --> F["WebAssembly.instantiate(cached, imports)"]
-    F --> G["返回 {instance, module}<br/>★ 跳过编译！"]
-    E -- 未命中 --> H["调用原始 _is() 编译"]
-    H --> I["异步写入 IndexedDB"]
+    E -- "命中 (ArrayBuffer)" --> F["WebAssembly.instantiate(bytes, imports)<br/>V8 内部编译缓存加速 ~32ms"]
+    F --> G["返回 {instance, module}<br/>★ 跳过网络！"]
+    E -- 未命中 --> H["resp.clone() + 调用原始 _is() 编译"]
+    H --> I["cloned.arrayBuffer() → 异步写入 IndexedDB"]
     I --> J["返回 {instance, module}"]
     D -- 出错 --> C
     E -- 出错 --> C
@@ -484,12 +501,15 @@ flowchart TD
 
 **关键设计决策**：
 
-1. **以 URL 为缓存 key**：Trunk 在文件名中嵌入了 content hash（如 `static-flow-frontend-53f92742ae8cdc40_bg.wasm`），每次构建产生不同的 URL，天然实现缓存失效
-2. **`st.clear()` 清除旧条目**：每次写入新缓存前清空整个 store，避免旧版本 Module 堆积
-3. **多层 `.catch()` 降级**：IndexedDB 不可用（如隐私模式）、Module 不兼容（如构建更新后 imports 变化）等任何异常，都 fallback 到原始的 `instantiateStreaming`
-4. **非阻塞写入**：缓存写入是 fire-and-forget 的，不影响首次加载性能
+1. **存储 `ArrayBuffer` 而非 `WebAssembly.Module`**：现代浏览器已禁止通过结构化克隆序列化 `WebAssembly.Module`（抛出 `DataCloneError`）。存储原始字节虽然仍需编译，但 V8 对相同字节有内部编译缓存，实测仅需 ~32ms
+2. **`resp.clone()` 分流**：一路给 `instantiateStreaming` 做流式编译（不阻塞首次加载），一路从 clone 读 `arrayBuffer()` 异步写入 IndexedDB
+3. **以 URL 为缓存 key**：Trunk 在文件名中嵌入了 content hash（如 `static-flow-frontend-ca613c6015850c85_bg.wasm`），每次构建产生不同的 URL，天然实现缓存失效
+4. **`st.clear()` 清除旧条目**：每次写入新缓存前清空整个 store，避免旧版本字节堆积
+5. **IndexedDB schema 升级**：`SCHEMA=2` 自动清理旧版 store 中无法反序列化的 Module 数据
+6. **多层 `.catch()` 降级**：IndexedDB 不可用（如隐私模式）、编译失败等任何异常，都 fallback 到原始的 `instantiateStreaming`
+7. **非阻塞写入**：缓存写入是 fire-and-forget 的，不影响首次加载性能
 
-> ⚠️ **Gotcha**：当缓存的 Module 与当前的 `imports` 不匹配时（例如代码更新后 wasm-bindgen 生成了新的 import 签名），`WebAssembly.instantiate(cached, imports)` 会抛出 `LinkError`。这个错误会被 `.catch()` 捕获，自动降级到重新编译路径。下次加载时，新的 Module 会覆盖旧缓存。
+> ⚠️ **Gotcha**：当缓存的字节与当前的 `imports` 不匹配时（例如代码更新后 wasm-bindgen 生成了新的 import 签名），`WebAssembly.instantiate(bytes, imports)` 会抛出 `LinkError`。但由于 URL 包含 content hash，构建更新后 URL 变化 → IndexedDB 中找不到新 key → 自动走 CACHE MISS 路径 → 新字节覆盖旧缓存。
 
 ### 4.3 Loading Spinner：消除白屏感知
 
@@ -549,13 +569,13 @@ flowchart TD
 
 | 场景 | 修复前 | 修复后 |
 |------|--------|--------|
-| 冷启动（Code Cache 被驱逐） | 3-10s 白屏，无任何反馈 | ~200ms（IndexedDB 读取 + 实例化）+ spinner |
-| 首次访问（无任何缓存） | 正常编译 + 白屏 | 正常编译 + spinner + 写入 IndexedDB |
-| 构建更新后首次访问 | 正常编译 + 白屏 | 正常编译 + spinner + 新 Module 覆盖旧缓存 |
-| 热启动（Code Cache 命中） | ~100ms | ~100ms（IndexedDB 查询被 Code Cache 抢先） |
+| 冷启动（Code Cache 被驱逐） | 3-10s 白屏，无任何反馈 | ~32ms（IndexedDB 读取字节 + V8 内部编译缓存加速）+ spinner |
+| 首次访问（无任何缓存） | 正常编译 + 白屏 | 正常编译 + spinner + 异步写入 IndexedDB |
+| 构建更新后首次访问 | 正常编译 + 白屏 | 正常编译 + spinner + 新字节覆盖旧缓存 |
+| 热启动（Code Cache 命中） | ~8ms | ~8ms（V8 Code Cache 抢先命中，IndexedDB 路径不影响） |
 | IndexedDB 不可用 | N/A | 自动降级，行为与修复前一致 |
 
-> 💡 **Key Point**：修复后的冷启动路径是 `IndexedDB.get()` → `WebAssembly.instantiate(module, imports)`。IndexedDB 读取一个序列化的 Module 通常在 50-150ms，实例化在 10-50ms。相比重新编译 1.9 MB WASM 的 3-10 秒，这是数量级的提升。
+> 💡 **Key Point**：修复后的冷启动路径是 `IndexedDB.get(url)` → `WebAssembly.instantiate(bytes, imports)`。IndexedDB 读取 ~1.9 MB 的 ArrayBuffer 通常在 5-15ms，V8 对相同字节的编译缓存命中后实例化在 15-30ms。相比重新编译 1.9 MB WASM 的 3-10 秒，这是两个数量级的提升。
 
 ---
 
@@ -563,21 +583,50 @@ flowchart TD
 
 ### 5.1 wasm-opt 优化
 
-StaticFlow 当前的 Trunk 配置（`Trunk.toml`）：
+StaticFlow 当前的编译配置（workspace `Cargo.toml`）：
 
 ```toml
-release = true
+[profile.release]
+opt-level = "z"   # 优化体积（WASM 重要）
+lto = true        # 链接时优化
+codegen-units = 1 # 单一代码生成单元，更好的优化
+panic = "abort"   # Panic 时直接中止，减小体积
+strip = true      # 移除调试符号
 ```
 
-配合 `index.html` 中的 `data-wasm-opt="0"`，意味着 Rust 代码以 release 模式编译（启用 LLVM 优化），但 Trunk 不会运行 wasm-opt 后处理。
+配合 `frontend/.cargo/config.toml` 中的 target features：
 
-wasm-opt 可以进一步优化 WASM 二进制：
+```toml
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "-C", "link-arg=--export-table",
+  "-C", "target-feature=+bulk-memory",
+]
+```
 
-- **死代码消除**：移除未使用的函数和数据段
-- **指令合并**：将多条 WASM 指令合并为更高效的形式
-- **内存布局优化**：重排数据段以提高局部性
+以及 `Trunk.toml` 中的 post_build hook：
 
-对于 1.9 MB 的未优化 WASM，wasm-opt `-Oz`（优化大小）通常可以减少 20-40% 的体积。更小的文件意味着更快的编译速度，即使在 Code Cache 未命中的情况下也能显著缩短等待时间。
+```toml
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = ["scripts/wasm-opt-post-build.sh"]
+```
+
+`scripts/wasm-opt-post-build.sh` 调用 wasm-opt 并传入正确的 feature flags：
+
+```bash
+"$WASM_OPT" \
+  --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -Oz \
+  --converge \
+  "$wasm" -o "$wasm"
+```
+
+> 💡 **为什么需要 post_build hook？** Trunk 内置的 `data-wasm-opt="z"` 调用 wasm-opt 时只传 `-Oz`，不传 `--enable-*` flags。而 Rust 编译器默认启用了 `bulk-memory` 和 `nontrapping-fptoint` 特性，生成的 WASM 包含 `memory.copy` 和 `i32.trunc_sat_f64_u` 等指令。wasm-opt 不认识这些指令就会报 `wasm-validator error`。通过 post_build hook 手动调用并传入 feature flags 解决了这个问题。
+>
+> `--converge` 让 wasm-opt 反复运行优化 passes 直到产物不再缩小，通常能额外省 1-3%。
 
 ### 5.2 代码分割的未来
 
@@ -621,29 +670,31 @@ WASM SPA 的冷启动延迟是一个容易被忽视但影响显著的问题。�
 
 这个问题的诊断线索非常明确：**页面卡住但 Network 面板无请求** = CPU 密集的 WASM 重编译。
 
-修复方案是在 V8 Code Cache 之外建立一层 IndexedDB 持久化缓存，通过 monkey-patch `WebAssembly.instantiateStreaming` 实现透明的缓存读写。配合 loading spinner 消除白屏感知，用户体验从"3-10 秒白屏无反馈"提升到"200ms 内完成加载"。
+修复方案是在 V8 Code Cache 之外建立一层 IndexedDB 持久化缓存，通过 monkey-patch `WebAssembly.instantiateStreaming` 实现透明的缓存读写。由于现代浏览器已禁止序列化 `WebAssembly.Module` 到 IndexedDB，方案改为存储原始 WASM 字节（`ArrayBuffer`），利用 V8 对相同字节的内部编译缓存实现 ~32ms 的快速恢复。配合 loading spinner 消除白屏感知，用户体验从"3-10 秒白屏无反馈"提升到"32ms 内完成加载"。
+
+同时，通过 Trunk post_build hook 配置 `wasm-opt -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int`，解决了 Trunk 内置 wasm-opt 不支持 feature flags 的问题，实现了 WASM 产物的极致体积优化。
 
 ---
 
 ## 代码索引
 
-| 文件 | 行号 | 内容 |
-|------|------|------|
-| `frontend/index.html` | 81-129 | IndexedDB WASM 缓存 monkey-patch |
-| `frontend/index.html` | 127-145 | Loading spinner + TrunkApplicationStarted 监听 |
-| `frontend/index.html` | 132-134 | Trunk WASM 构建指令 |
-| `frontend/Trunk.toml` | 1-27 | Trunk 构建配置（release=true, wasm-opt=0） |
-| `frontend/src/main.rs` | 27-29 | Yew 应用入口 `main()` |
-| `frontend/dist/static-flow-frontend-*.js` | 316-347 | wasm-bindgen `__wbg_load()` |
-| `frontend/dist/static-flow-frontend-*.js` | 1545-1569 | wasm-bindgen `__wbg_init()` |
-| `frontend/dist/static-flow-frontend-*.js` | 1511-1520 | wasm-bindgen `__wbg_finalize_init()` |
-| `frontend/dist/index.html` | 135-145 | Trunk 生成的模块脚本 |
-| `frontend/dist/index.html` | 180 | Trunk 生成的 preload 提示 |
+| 文件 | 内容 |
+|------|------|
+| `frontend/index.html` | IndexedDB WASM 字节缓存 monkey-patch |
+| `frontend/index.html` | Loading spinner + TrunkApplicationStarted 监听 |
+| `frontend/index.html` | Trunk WASM 构建指令（`data-wasm-opt="0"`） |
+| `frontend/Trunk.toml` | Trunk 构建配置（release=true, post_build hook） |
+| `frontend/scripts/wasm-opt-post-build.sh` | wasm-opt 优化脚本（`-Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int`） |
+| `frontend/.cargo/config.toml` | WASM target rustflags（`+bulk-memory`） |
+| `Cargo.toml` | workspace release profile（`opt-level="z"`, `lto=true`, `codegen-units=1`, `panic="abort"`, `strip=true`） |
+| `frontend/src/main.rs` | Yew 应用入口 `main()` |
 
 ## 参考资料
 
-- [WebAssembly Compilation Pipeline (V8 Blog)](https://v8.dev/blog/wasm-compilation-pipeline)
-- [WebAssembly Caching (MDN)](https://developer.mozilla.org/en-US/docs/WebAssembly/Caching_modules)
-- [Trunk Documentation](https://trunkrs.dev/)
+- [Code caching for WebAssembly developers (V8 Blog)](https://v8.dev/blog/wasm-code-caching)
+- [WebAssembly compilation pipeline (V8 Docs)](https://v8.dev/docs/wasm-compilation-pipeline)
+- [Don't allow IndexedDB serialization of WebAssembly.Module (spec#821)](https://github.com/WebAssembly/spec/issues/821)
+- [Using IndexedDB (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB)
+- [Trunk Documentation](https://trunkrs.dev/guide/)
 - [wasm-bindgen Guide](https://rustwasm.github.io/wasm-bindgen/)
 
