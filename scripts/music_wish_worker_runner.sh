@@ -70,6 +70,8 @@ Notes:
 - Backend marks task success based on the result file content, not stdout JSON format.
 - Keep normal Codex stdout/stderr streaming; they are used for execution trace/audit.
 - Do not install/copy/remove any skill files at runtime.
+- Before starting work, check if any of these files exist in the working directory
+  and read them for project context: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
 EOF
 
 codex_cmd=(

@@ -3,6 +3,7 @@ use std::{collections::HashMap, env, sync::Arc, time::Instant};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{
+    article_request_store::ArticleRequestStore,
     comments_store::CommentDataStore,
     lancedb_api::{CategoryInfo, StaticFlowDataStore, StatsResponse, TagInfo},
     music_store::MusicDataStore,
@@ -11,6 +12,7 @@ use static_flow_shared::{
 use tokio::sync::{mpsc, RwLock};
 
 use crate::{
+    article_request_worker::{self, ArticleRequestWorkerConfig},
     comment_worker::{self, CommentAiWorkerConfig},
     email::EmailNotifier,
     geoip::GeoIpResolver,
@@ -134,6 +136,9 @@ pub struct AppState {
     pub(crate) music_wish_store: Arc<MusicWishStore>,
     pub(crate) music_wish_worker_tx: mpsc::Sender<String>,
     pub(crate) music_wish_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) article_request_store: Arc<ArticleRequestStore>,
+    pub(crate) article_request_worker_tx: mpsc::Sender<String>,
+    pub(crate) article_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
 }
 
@@ -147,6 +152,7 @@ impl AppState {
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
         let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
         let music_wish_store = Arc::new(MusicWishStore::connect(music_db_uri).await?);
+        let article_request_store = Arc::new(ArticleRequestStore::connect(content_db_uri).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
         let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
@@ -161,6 +167,11 @@ impl AppState {
         let music_wish_worker_tx = music_wish_worker::spawn_music_wish_worker(
             music_wish_store.clone(),
             MusicWishWorkerConfig::from_env(music_db_uri.to_string()),
+            email_notifier.clone(),
+        );
+        let article_request_worker_tx = article_request_worker::spawn_article_request_worker(
+            article_request_store.clone(),
+            ArticleRequestWorkerConfig::from_env(content_db_uri.to_string()),
             email_notifier.clone(),
         );
         let admin_access = AdminAccessConfig {
@@ -191,6 +202,9 @@ impl AppState {
             music_wish_store,
             music_wish_worker_tx,
             music_wish_submit_guard: Arc::new(RwLock::new(HashMap::new())),
+            article_request_store,
+            article_request_worker_tx,
+            article_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             email_notifier,
         })
     }

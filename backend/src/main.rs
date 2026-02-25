@@ -1,3 +1,4 @@
+mod article_request_worker;
 mod behavior_analytics;
 mod comment_worker;
 mod email;

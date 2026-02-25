@@ -53,6 +53,11 @@ Basic (frontmatter complete):
 <cli> write-article --db-path <db_path> --file <post.md>
 ```
 
+With custom id:
+```bash
+<cli> write-article --db-path <db_path> --file <post.md> --id <custom_id>
+```
+
 With explicit metadata (frontmatter incomplete):
 ```bash
 <cli> write-article \
@@ -62,6 +67,11 @@ With explicit metadata (frontmatter incomplete):
   --tags "rust,wasm" \
   --category "Tech" \
   --category-description "Engineering notes for Rust and WASM"
+```
+
+With explicit date:
+```bash
+<cli> write-article --db-path <db_path> --file <post.md> --date 2025-06-15
 ```
 
 With explicit bilingual files (without frontmatter bilingual fields):
@@ -79,19 +89,31 @@ With explicit bilingual files (without frontmatter bilingual fields):
 ```
 `--summary-zh-file` and `--summary-en-file` must be provided together.
 
+With pre-computed vectors:
+```bash
+<cli> write-article --db-path <db_path> --file <post.md> \
+  --vector '[0.1, 0.2, ...]' --vector-en '[...]' --vector-zh '[...]'
+```
+
+With auto-embedding language hint:
+```bash
+<cli> write-article --db-path <db_path> --file <post.md> --language zh
+```
+
 With local image import:
 ```bash
 <cli> write-article \
   --db-path <db_path> \
   --file <post.md> \
-  --summary "Post summary" \
-  --tags "rust,wasm" \
-  --category "Tech" \
-  --category-description "Engineering notes for Rust and WASM" \
   --import-local-images \
   --media-root <assets_dir> \
   --generate-thumbnail \
   --thumbnail-size 256
+```
+
+Disable auto-optimize after write:
+```bash
+<cli> write-article --db-path <db_path> --file <post.md> --no-auto-optimize
 ```
 
 Image syntax supported:
@@ -122,6 +144,11 @@ Check article:
   --where "id='<article_id>'" --limit 1 --format vertical
 ```
 
+Quick article via API:
+```bash
+<cli> api --db-path <db_path> get-article <article_id>
+```
+
 Check taxonomy rows:
 ```bash
 <cli> db --db-path <db_path> query-rows taxonomies --limit 20
@@ -132,11 +159,53 @@ Check images rows:
 <cli> db --db-path <db_path> query-rows images --limit 20
 ```
 
-Optional API-equivalent checks:
+Table info:
+```bash
+<cli> db --db-path <db_path> describe-table articles
+<cli> db --db-path <db_path> count-rows articles
+<cli> db --db-path <db_path> count-rows articles --where "category='Tech'"
+```
+
+API-equivalent checks:
 ```bash
 <cli> api --db-path <db_path> get-article <article_id>
+<cli> api --db-path <db_path> list-articles [--tag "rust"] [--category "Tech"]
+<cli> api --db-path <db_path> related-articles <article_id>
 <cli> api --db-path <db_path> search --q "<keyword>"
 <cli> api --db-path <db_path> semantic-search --q "<keyword>"
+<cli> api --db-path <db_path> list-images
+<cli> api --db-path <db_path> get-image <id-or-filename>
+<cli> api --db-path <db_path> search-images --id <image_id>
+<cli> api --db-path <db_path> search-images-text --q "<keyword>"
+```
+
+## 5b. Upsert and Bilingual Update Commands
+Upsert article from JSON (full row):
+```bash
+<cli> db --db-path <db_path> upsert-article --json '{"id":"...","title":"...",...}'
+```
+
+Upsert image from JSON (full row):
+```bash
+<cli> db --db-path <db_path> upsert-image --json '{"id":"...","filename":"...",...}'
+```
+
+Update bilingual fields from files:
+```bash
+<cli> db --db-path <db_path> update-article-bilingual --id <article_id> \
+  --content-en-file <content_en.md> \
+  --summary-zh-file <summary_zh.md> \
+  --summary-en-file <summary_en.md>
+```
+
+Backfill missing article vectors:
+```bash
+<cli> db --db-path <db_path> backfill-article-vectors [--limit 50] [--dry-run]
+```
+
+Recompute SVG image embeddings:
+```bash
+<cli> db --db-path <db_path> reembed-svg-images [--limit 20] [--dry-run]
 ```
 
 ## 6. Immediate Storage Reclaim (Prune Now)
@@ -173,6 +242,12 @@ Music DB 路径与 content DB 分离，默认 `<db_root>/lancedb-music`。
 批量回填 embedding:
 ```bash
 <cli> embed-songs --db-path <music_db_path>
+```
+
+手动完成音乐许愿:
+```bash
+<cli> complete-wish --db-path <music_db_path> --wish-id <wish_id> \
+  [--ingested-song-id <song_id>] [--ai-reply "..."] [--admin-note "..."]
 ```
 
 索引维护（自动检测 music DB）:

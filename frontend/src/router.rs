@@ -105,6 +105,13 @@ pub enum Route {
     AdminMusicWishRuns { wish_id: String },
 
     #[cfg(not(feature = "mock"))]
+    #[at("/admin/article-requests/runs/:request_id")]
+    AdminArticleRequestRuns { request_id: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/article-requests/runs/:request_id")]
+    AdminArticleRequestRuns { request_id: String },
+
+    #[cfg(not(feature = "mock"))]
     #[at("/media/video")]
     MediaVideo,
     #[cfg(feature = "mock")]
@@ -174,6 +181,11 @@ fn switch(route: Route) -> Html {
             wish_id,
         } => {
             html! { <pages::admin_music_wish_stream::AdminMusicWishRunsPage wish_id={wish_id} /> }
+        },
+        Route::AdminArticleRequestRuns {
+            request_id,
+        } => {
+            html! { <pages::admin_article_request_stream::AdminArticleRequestRunsPage request_id={request_id} /> }
         },
         Route::MediaVideo => html! { <pages::coming_soon::ComingSoonPage feature={"video"} /> },
         Route::MediaAudio => html! { <pages::music_library::MusicLibraryPage /> },

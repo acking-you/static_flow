@@ -9,9 +9,13 @@ use crate::{
     api::{
         admin_approve_and_run_comment_task, admin_approve_and_run_music_wish,
         admin_approve_comment_task, admin_cleanup_api_behavior, admin_cleanup_comments,
-        admin_delete_comment_task, admin_delete_music_wish, admin_reject_comment_task,
-        admin_reject_music_wish, admin_retry_comment_task, admin_retry_music_wish,
-        delete_admin_published_comment, fetch_admin_api_behavior_config,
+        admin_approve_and_run_article_request, admin_delete_article_request,
+        admin_delete_comment_task, admin_delete_music_wish, admin_reject_article_request,
+        admin_reject_comment_task,
+        admin_reject_music_wish, admin_retry_article_request, admin_retry_comment_task,
+        admin_retry_music_wish,
+        delete_admin_published_comment, fetch_admin_article_requests,
+        fetch_admin_api_behavior_config,
         fetch_admin_api_behavior_events, fetch_admin_api_behavior_overview,
         fetch_admin_comment_audit_logs, fetch_admin_comment_runtime_config,
         fetch_admin_comment_task, fetch_admin_comment_task_ai_output,
@@ -23,7 +27,8 @@ use crate::{
         AdminApiBehaviorOverviewResponse, AdminCleanupRequest, AdminCommentAuditLog,
         AdminCommentTask, AdminCommentTaskAiOutputResponse, AdminCommentTaskGroup,
         AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest, AdminTaskActionRequest,
-        ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment, ArticleViewPoint,
+        ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment, ArticleRequestItem,
+        ArticleViewPoint,
         CommentRuntimeConfig, MusicWishItem, ViewAnalyticsConfig,
     },
     components::{
@@ -41,6 +46,7 @@ enum AdminTab {
     Audit,
     Behavior,
     MusicWishes,
+    ArticleRequests,
 }
 
 fn format_ms(ts_ms: i64) -> String {
@@ -129,6 +135,8 @@ pub fn admin_page() -> Html {
 
     let music_wishes = use_state(Vec::<MusicWishItem>::new);
     let music_wish_action_inflight = use_state(HashSet::<String>::new);
+    let article_requests = use_state(Vec::<ArticleRequestItem>::new);
+    let article_request_action_inflight = use_state(HashSet::<String>::new);
     let saving = use_state(|| false);
     let loaded_tabs = use_state(HashSet::<AdminTab>::new);
     let tab_loading = use_state(HashSet::<AdminTab>::new);
@@ -137,6 +145,7 @@ pub fn admin_page() -> Html {
     let refresh_audit_seq = use_mut_ref(|| 0_u64);
     let refresh_behavior_seq = use_mut_ref(|| 0_u64);
     let refresh_music_wishes_seq = use_mut_ref(|| 0_u64);
+    let refresh_article_requests_seq = use_mut_ref(|| 0_u64);
 
     // Per-tab pagination state
     const PAGE_SIZE: usize = 50;
@@ -145,15 +154,18 @@ pub fn admin_page() -> Html {
     let audit_page = use_state(|| 1_usize);
     let behavior_page = use_state(|| 1_usize);
     let music_wish_page = use_state(|| 1_usize);
+    let article_request_page = use_state(|| 1_usize);
     // Per-tab total counts for pagination
     let tasks_total = use_state(|| 0_usize);
     let published_total = use_state(|| 0_usize);
     let audit_total = use_state(|| 0_usize);
     let music_wish_total = use_state(|| 0_usize);
+    let article_request_total = use_state(|| 0_usize);
     let tasks_has_more = use_state(|| false);
     let published_has_more = use_state(|| false);
     let audit_has_more = use_state(|| false);
     let music_wish_has_more = use_state(|| false);
+    let article_request_has_more = use_state(|| false);
     // Split behavior loading flags
     let behavior_overview_loading = use_state(|| false);
     let behavior_events_loading = use_state(|| false);
@@ -208,6 +220,61 @@ pub fn admin_page() -> Html {
                 }
                 let mut s = (*tab_loading).clone();
                 s.remove(&AdminTab::MusicWishes);
+                tab_loading.set(s);
+            });
+        })
+    };
+
+    let refresh_article_requests = {
+        let article_requests = article_requests.clone();
+        let load_error = load_error.clone();
+        let tab_loading = tab_loading.clone();
+        let article_request_page = article_request_page.clone();
+        let article_request_total = article_request_total.clone();
+        let article_request_has_more = article_request_has_more.clone();
+        let refresh_article_requests_seq = refresh_article_requests_seq.clone();
+        Callback::from(move |requested_page: Option<usize>| {
+            let article_requests = article_requests.clone();
+            let load_error = load_error.clone();
+            let tab_loading = tab_loading.clone();
+            let page = requested_page.unwrap_or(*article_request_page).max(1);
+            let article_request_total = article_request_total.clone();
+            let article_request_has_more = article_request_has_more.clone();
+            let refresh_article_requests_seq = refresh_article_requests_seq.clone();
+            let request_id = {
+                let mut seq = refresh_article_requests_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
+            {
+                let mut s = (*tab_loading).clone();
+                s.insert(AdminTab::ArticleRequests);
+                tab_loading.set(s);
+            }
+            wasm_bindgen_futures::spawn_local(async move {
+                let offset = (page - 1) * PAGE_SIZE;
+                match fetch_admin_article_requests(None, Some(PAGE_SIZE), Some(offset)).await {
+                    Ok(resp) => {
+                        if *refresh_article_requests_seq.borrow() != request_id {
+                            return;
+                        }
+                        article_requests.set(resp.requests);
+                        article_request_total.set(resp.total);
+                        article_request_has_more.set(resp.has_more);
+                        load_error.set(None);
+                    },
+                    Err(err) => {
+                        if *refresh_article_requests_seq.borrow() != request_id {
+                            return;
+                        }
+                        load_error.set(Some(format!("Failed to load article requests: {}", err)));
+                    },
+                }
+                if *refresh_article_requests_seq.borrow() != request_id {
+                    return;
+                }
+                let mut s = (*tab_loading).clone();
+                s.remove(&AdminTab::ArticleRequests);
                 tab_loading.set(s);
             });
         })
@@ -636,6 +703,7 @@ pub fn admin_page() -> Html {
         let refresh_audit = refresh_audit.clone();
         let refresh_behavior = refresh_behavior.clone();
         let refresh_music_wishes = refresh_music_wishes.clone();
+        let refresh_article_requests = refresh_article_requests.clone();
         use_effect_with(*active_tab, move |tab| {
             if let Some(tab) = tab {
                 if !loaded_tabs.contains(tab) {
@@ -644,6 +712,7 @@ pub fn admin_page() -> Html {
                         AdminTab::Audit => refresh_audit.emit(None),
                         AdminTab::Behavior => refresh_behavior.emit(None),
                         AdminTab::MusicWishes => refresh_music_wishes.emit(None),
+                        AdminTab::ArticleRequests => refresh_article_requests.emit(None),
                     }
                     let mut set = (*loaded_tabs).clone();
                     set.insert(*tab);
@@ -678,6 +747,7 @@ pub fn admin_page() -> Html {
         let refresh_audit = refresh_audit.clone();
         let refresh_behavior = refresh_behavior.clone();
         let refresh_music_wishes = refresh_music_wishes.clone();
+        let refresh_article_requests = refresh_article_requests.clone();
         Callback::from(move |_| {
             if let Some(tab) = *active_tab {
                 match tab {
@@ -685,6 +755,7 @@ pub fn admin_page() -> Html {
                     AdminTab::Audit => refresh_audit.emit(None),
                     AdminTab::Behavior => refresh_behavior.emit(None),
                     AdminTab::MusicWishes => refresh_music_wishes.emit(None),
+                    AdminTab::ArticleRequests => refresh_article_requests.emit(None),
                 }
             }
         })
@@ -1180,6 +1251,10 @@ pub fn admin_page() -> Html {
         let active_tab = active_tab.clone();
         Callback::from(move |_| active_tab.set(Some(AdminTab::MusicWishes)))
     };
+    let tab_article_requests = {
+        let active_tab = active_tab.clone();
+        Callback::from(move |_| active_tab.set(Some(AdminTab::ArticleRequests)))
+    };
 
     let grouped_total_tasks: usize = task_groups.iter().map(|group| group.total).sum();
 
@@ -1226,6 +1301,14 @@ pub fn admin_page() -> Html {
             refresh.emit(Some(p));
         })
     };
+    let on_article_request_page_change = {
+        let page = article_request_page.clone();
+        let refresh = refresh_article_requests.clone();
+        Callback::from(move |p: usize| {
+            page.set(p);
+            refresh.emit(Some(p));
+        })
+    };
 
     // Compute total pages
     let tasks_total_pages = ((*tasks_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -1233,6 +1316,7 @@ pub fn admin_page() -> Html {
     let audit_total_pages = ((*audit_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
     let behavior_total_pages = ((*behavior_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
     let music_wish_total_pages = ((*music_wish_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
+    let article_request_total_pages = ((*article_request_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
 
     html! {
         <main class={classes!("container", "py-8")}>
@@ -1537,6 +1621,7 @@ pub fn admin_page() -> Html {
                     <button class={if *active_tab == Some(AdminTab::Audit) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_audit}>{ "Audit Logs" }</button>
                     <button class={if *active_tab == Some(AdminTab::Behavior) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_behavior}>{ "API Behavior" }</button>
                     <button class={if *active_tab == Some(AdminTab::MusicWishes) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_music_wishes}>{ "Music Wishes" }</button>
+                    <button class={if *active_tab == Some(AdminTab::ArticleRequests) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_article_requests}>{ "Article Requests" }</button>
                 </div>
 
                 if active_tab.is_none() {
@@ -2361,6 +2446,222 @@ pub fn admin_page() -> Html {
                     }
                     <div class={classes!("mt-4")}>
                         <Pagination current_page={*music_wish_page} total_pages={music_wish_total_pages} on_page_change={on_music_wish_page_change} />
+                    </div>
+                    </div>
+                } else if *active_tab == Some(AdminTab::ArticleRequests) {
+                    <div class="animate-[fadeIn_0.3s_ease]">
+                    if tab_loading.contains(&AdminTab::ArticleRequests) && article_requests.is_empty() {
+                        <div class={classes!("flex", "justify-center", "py-8")}>
+                            <LoadingSpinner size={SpinnerSize::Small} />
+                        </div>
+                    } else {
+                    <>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap", "mb-4")}>
+                            <h2 class={classes!("m-0", "text-lg", "font-semibold")}>
+                                { format!("Article Requests ({})", article_requests.len()) }
+                            </h2>
+                            <button class={classes!("btn-fluent-secondary")} onclick={
+                                let r = refresh_article_requests.clone();
+                                Callback::from(move |_| r.emit(None))
+                            }>{ "Refresh" }</button>
+                        </div>
+                        if tab_loading.contains(&AdminTab::ArticleRequests) {
+                            <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading article requests..." }</span>
+                            </div>
+                        }
+                        if article_requests.is_empty() {
+                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No article requests yet." }</p>
+                        } else {
+                            <div class={classes!("overflow-x-auto")}>
+                                <table class={classes!("w-full", "text-sm")}>
+                                    <thead>
+                                        <tr class={classes!("text-left", "text-[var(--muted)]")}>
+                                            <th class={classes!("py-2", "pr-3")}>{ "URL" }</th>
+                                            <th class={classes!("py-2", "pr-3")}>{ "Title Hint" }</th>
+                                            <th class={classes!("py-2", "pr-3")}>{ "Nickname" }</th>
+                                            <th class={classes!("py-2", "pr-3")}>{ "Status" }</th>
+                                            <th class={classes!("py-2", "pr-3")}>{ "Region" }</th>
+                                            <th class={classes!("py-2", "pr-3")}>{ "Created" }</th>
+                                            <th class={classes!("py-2", "pr-3")}>{ "Actions" }</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        { for (*article_requests).iter().map(|req| {
+                                            let rid = req.request_id.clone();
+                                            let inflight = article_request_action_inflight.contains(&rid);
+                                            let status = req.status.clone();
+
+                                            let on_approve = {
+                                                let rid = rid.clone();
+                                                let article_requests = article_requests.clone();
+                                                let inflight_set = article_request_action_inflight.clone();
+                                                let load_error = load_error.clone();
+                                                Callback::from(move |_| {
+                                                    let rid = rid.clone();
+                                                    let article_requests = article_requests.clone();
+                                                    let inflight_set = inflight_set.clone();
+                                                    let load_error = load_error.clone();
+                                                    let mut s = (*inflight_set).clone();
+                                                    s.insert(rid.clone());
+                                                    inflight_set.set(s);
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        match admin_approve_and_run_article_request(&rid, None).await {
+                                                            Ok(updated) => {
+                                                                let mut list = (*article_requests).clone();
+                                                                if let Some(item) = list.iter_mut().find(|r| r.request_id == updated.request_id) {
+                                                                    *item = updated;
+                                                                }
+                                                                article_requests.set(list);
+                                                                load_error.set(None);
+                                                            },
+                                                            Err(err) => load_error.set(Some(format!("Approve failed: {}", err))),
+                                                        }
+                                                        let mut s = (*inflight_set).clone();
+                                                        s.remove(&rid);
+                                                        inflight_set.set(s);
+                                                    });
+                                                })
+                                            };
+
+                                            let on_reject = {
+                                                let rid = rid.clone();
+                                                let article_requests = article_requests.clone();
+                                                let inflight_set = article_request_action_inflight.clone();
+                                                let load_error = load_error.clone();
+                                                Callback::from(move |_| {
+                                                    let rid = rid.clone();
+                                                    let article_requests = article_requests.clone();
+                                                    let inflight_set = inflight_set.clone();
+                                                    let load_error = load_error.clone();
+                                                    let mut s = (*inflight_set).clone();
+                                                    s.insert(rid.clone());
+                                                    inflight_set.set(s);
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        match admin_reject_article_request(&rid, None).await {
+                                                            Ok(updated) => {
+                                                                let mut list = (*article_requests).clone();
+                                                                if let Some(item) = list.iter_mut().find(|r| r.request_id == updated.request_id) {
+                                                                    *item = updated;
+                                                                }
+                                                                article_requests.set(list);
+                                                                load_error.set(None);
+                                                            },
+                                                            Err(err) => load_error.set(Some(format!("Reject failed: {}", err))),
+                                                        }
+                                                        let mut s = (*inflight_set).clone();
+                                                        s.remove(&rid);
+                                                        inflight_set.set(s);
+                                                    });
+                                                })
+                                            };
+
+                                            let on_retry = {
+                                                let rid = rid.clone();
+                                                let article_requests = article_requests.clone();
+                                                let inflight_set = article_request_action_inflight.clone();
+                                                let load_error = load_error.clone();
+                                                Callback::from(move |_| {
+                                                    let rid = rid.clone();
+                                                    let article_requests = article_requests.clone();
+                                                    let inflight_set = inflight_set.clone();
+                                                    let load_error = load_error.clone();
+                                                    let mut s = (*inflight_set).clone();
+                                                    s.insert(rid.clone());
+                                                    inflight_set.set(s);
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        match admin_retry_article_request(&rid).await {
+                                                            Ok(updated) => {
+                                                                let mut list = (*article_requests).clone();
+                                                                if let Some(item) = list.iter_mut().find(|r| r.request_id == updated.request_id) {
+                                                                    *item = updated;
+                                                                }
+                                                                article_requests.set(list);
+                                                                load_error.set(None);
+                                                            },
+                                                            Err(err) => load_error.set(Some(format!("Retry failed: {}", err))),
+                                                        }
+                                                        let mut s = (*inflight_set).clone();
+                                                        s.remove(&rid);
+                                                        inflight_set.set(s);
+                                                    });
+                                                })
+                                            };
+
+                                            let on_delete = {
+                                                let rid = rid.clone();
+                                                let article_requests = article_requests.clone();
+                                                let inflight_set = article_request_action_inflight.clone();
+                                                let load_error = load_error.clone();
+                                                Callback::from(move |_| {
+                                                    let rid = rid.clone();
+                                                    let article_requests = article_requests.clone();
+                                                    let inflight_set = inflight_set.clone();
+                                                    let load_error = load_error.clone();
+                                                    let mut s = (*inflight_set).clone();
+                                                    s.insert(rid.clone());
+                                                    inflight_set.set(s);
+                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                        match admin_delete_article_request(&rid).await {
+                                                            Ok(()) => {
+                                                                let list: Vec<_> = (*article_requests).iter().filter(|r| r.request_id != rid).cloned().collect();
+                                                                article_requests.set(list);
+                                                                load_error.set(None);
+                                                            },
+                                                            Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
+                                                        }
+                                                        let mut s = (*inflight_set).clone();
+                                                        s.remove(&rid);
+                                                        inflight_set.set(s);
+                                                    });
+                                                })
+                                            };
+
+                                            let url_display: String = if req.article_url.chars().count() > 50 {
+                                                format!("{}...", req.article_url.chars().take(47).collect::<String>())
+                                            } else {
+                                                req.article_url.clone()
+                                            };
+
+                                            html! {
+                                                <tr class={classes!("border-t", "border-[var(--border)]")}>
+                                                    <td class={classes!("py-2", "pr-3", "max-w-[220px]", "truncate")} title={req.article_url.clone()}>
+                                                        <a href={req.article_url.clone()} target="_blank" rel="noopener noreferrer" class="text-[var(--primary)] hover:underline">{ url_display }</a>
+                                                    </td>
+                                                    <td class={classes!("py-2", "pr-3", "max-w-[150px]", "truncate")}>{ req.title_hint.clone().unwrap_or_default() }</td>
+                                                    <td class={classes!("py-2", "pr-3")}>{ req.nickname.clone() }</td>
+                                                    <td class={classes!("py-2", "pr-3")}><span class={status_badge_class(&req.status)}>{ req.status.clone() }</span></td>
+                                                    <td class={classes!("py-2", "pr-3")}>{ req.ip_region.clone() }</td>
+                                                    <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(req.created_at) }</td>
+                                                    <td class={classes!("py-2", "pr-3")}>
+                                                        <div class={classes!("flex", "gap-1", "flex-wrap")}>
+                                                            if status == "pending" {
+                                                                <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_approve}>{ "Approve & Run" }</button>
+                                                                <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_reject}>{ "Reject" }</button>
+                                                            }
+                                                            if status == "failed" {
+                                                                <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_retry}>{ "Retry" }</button>
+                                                            }
+                                                            if status == "done" || status == "running" || status == "failed" {
+                                                                <Link<Route> to={Route::AdminArticleRequestRuns { request_id: rid.clone() }} classes={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")}>
+                                                                    { "AI Output" }
+                                                                </Link<Route>>
+                                                            }
+                                                            <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={on_delete}>{ "Delete" }</button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }) }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </>
+                    }
+                    <div class={classes!("mt-4")}>
+                        <Pagination current_page={*article_request_page} total_pages={article_request_total_pages} on_page_change={on_article_request_page_change} />
                     </div>
                     </div>
                 }

@@ -291,6 +291,12 @@ fn route_path_for(route: &Route) -> String {
             "/admin/music-wishes/runs/{}",
             urlencoding::encode(wish_id)
         )),
+        Route::AdminArticleRequestRuns {
+            request_id,
+        } => config::route_path(&format!(
+            "/admin/article-requests/runs/{}",
+            urlencoding::encode(request_id)
+        )),
         Route::NotFound => config::route_path("/404"),
         Route::MediaVideo => config::route_path("/media/video"),
         Route::MediaAudio => config::route_path("/media/audio"),
@@ -472,6 +478,9 @@ pub fn apply_route_seo(route: Option<&Route>) {
             ..
         }
         | Route::AdminMusicWishRuns {
+            ..
+        }
+        | Route::AdminArticleRequestRuns {
             ..
         } => {
             apply_common_seo(

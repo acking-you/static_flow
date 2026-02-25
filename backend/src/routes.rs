@@ -162,6 +162,34 @@ pub fn create_router(state: AppState) -> Router {
             "/admin/music-wishes/tasks/:wish_id/ai-output/stream",
             get(handlers::admin_music_wish_ai_stream),
         )
+        // Article Request routes
+        .route("/api/article-requests/submit", post(handlers::submit_article_request))
+        .route("/api/article-requests/list", get(handlers::list_article_requests))
+        .route("/admin/article-requests/tasks", get(handlers::admin_list_article_requests))
+        .route(
+            "/admin/article-requests/tasks/:request_id",
+            get(handlers::admin_get_article_request).delete(handlers::admin_delete_article_request),
+        )
+        .route(
+            "/admin/article-requests/tasks/:request_id/approve-and-run",
+            post(handlers::admin_approve_and_run_article_request),
+        )
+        .route(
+            "/admin/article-requests/tasks/:request_id/reject",
+            post(handlers::admin_reject_article_request),
+        )
+        .route(
+            "/admin/article-requests/tasks/:request_id/retry",
+            post(handlers::admin_retry_article_request),
+        )
+        .route(
+            "/admin/article-requests/tasks/:request_id/ai-output",
+            get(handlers::admin_article_request_ai_output),
+        )
+        .route(
+            "/admin/article-requests/tasks/:request_id/ai-output/stream",
+            get(handlers::admin_article_request_ai_stream),
+        )
         .with_state(state)
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(

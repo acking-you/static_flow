@@ -8,6 +8,7 @@ use lettre::{
 };
 use pulldown_cmark::{html, Options, Parser};
 use serde::Deserialize;
+use static_flow_shared::article_request_store::ArticleRequestRecord;
 use static_flow_shared::music_wish_store::MusicWishRecord;
 use url::Url;
 
@@ -165,6 +166,67 @@ impl EmailNotifier {
             wish.artist_hint.as_deref().unwrap_or("-"),
             wish.ingested_song_id.as_deref().unwrap_or("-"),
             wish.ai_reply.as_deref().unwrap_or("-"),
+            link_markdown,
+        );
+        self.send_markdown_email(requester_email, &subject, &body_markdown)
+            .await
+    }
+
+    pub async fn send_admin_new_article_request_notification(
+        &self,
+        req: &ArticleRequestRecord,
+    ) -> Result<()> {
+        let subject = format!(
+            "[StaticFlow] New Article Request {} ({})",
+            truncate_str(&req.article_url, 60),
+            req.request_id
+        );
+        let body_markdown = format!(
+            "## New article request submitted\n\n- Request ID: `{}`\n- URL: {}\n- Title hint: \
+             {}\n- Nickname: {}\n- Requester email: {}\n- Status: `{}`\n- Region: {}\n- Created \
+             at (ms): `{}`\n\n### Message\n\n{}\n",
+            req.request_id,
+            req.article_url,
+            req.title_hint.as_deref().unwrap_or("-"),
+            req.nickname,
+            req.requester_email.as_deref().unwrap_or("-"),
+            req.status,
+            req.ip_region,
+            req.created_at,
+            req.request_message,
+        );
+        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+            .await
+    }
+
+    pub async fn send_user_article_request_done_notification(
+        &self,
+        req: &ArticleRequestRecord,
+        article_detail_url: Option<&str>,
+    ) -> Result<()> {
+        let requester_email = req
+            .requester_email
+            .as_deref()
+            .context("requester email missing for done notification")?;
+        let subject = format!(
+            "[StaticFlow] 你的文章入库请求已完成：{}",
+            truncate_str(&req.article_url, 60)
+        );
+        let link_markdown = match article_detail_url {
+            Some(url) => format!("- 文章链接: [{url}]({url})"),
+            None => "- 文章链接: 暂不可用".to_string(),
+        };
+        let body_markdown = format!(
+            "你好，{}：\n\n你的文章入库请求已完成。\n\n## 请求信息\n- 请求状态: `{}`\n- 请求ID: \
+             `{}`\n- 原文链接: {}\n- 标题提示: {}\n- 入库文章ID: `{}`\n\n## 完成内容\n\n{}\n\n## \
+             查看\n{}\n",
+            req.nickname,
+            req.status,
+            req.request_id,
+            req.article_url,
+            req.title_hint.as_deref().unwrap_or("-"),
+            req.ingested_article_id.as_deref().unwrap_or("-"),
+            req.ai_reply.as_deref().unwrap_or("-"),
             link_markdown,
         );
         self.send_markdown_email(requester_email, &subject, &body_markdown)
@@ -334,6 +396,37 @@ pub fn build_music_player_url(frontend_page_url: &str, song_id: &str) -> Result<
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.into())
+}
+
+pub fn build_article_detail_url(frontend_page_url: &str, article_id: &str) -> Result<String> {
+    if article_id.trim().is_empty() {
+        anyhow::bail!("article_id is required");
+    }
+    validate_frontend_url(frontend_page_url)?;
+
+    let mut url = Url::parse(frontend_page_url).context("invalid frontend_page_url")?;
+    let path = url.path();
+    let has_static_flow_prefix = path == "/static_flow" || path.starts_with("/static_flow/");
+    let encoded_id: String =
+        url::form_urlencoded::byte_serialize(article_id.as_bytes()).collect();
+    let target_path = if has_static_flow_prefix {
+        format!("/static_flow/posts/{encoded_id}")
+    } else {
+        format!("/posts/{encoded_id}")
+    };
+    url.set_path(&target_path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}...")
+    }
 }
 
 fn resolve_email_accounts_file_path() -> PathBuf {

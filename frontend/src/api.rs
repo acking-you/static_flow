@@ -3234,3 +3234,397 @@ pub fn build_admin_music_wish_ai_stream_url(wish_id: &str) -> String {
         format!("{base}/admin/music-wishes/tasks/{}/ai-output/stream", urlencoding::encode(wish_id))
     }
 }
+
+// Article Request types
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArticleRequestItem {
+    pub request_id: String,
+    pub article_url: String,
+    pub title_hint: Option<String>,
+    pub request_message: String,
+    pub nickname: String,
+    pub status: String,
+    pub ip_region: String,
+    pub ingested_article_id: Option<String>,
+    pub ai_reply: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub attempt_count: i32,
+    pub fingerprint: String,
+    pub client_ip: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleRequestListResponse {
+    pub requests: Vec<ArticleRequestItem>,
+    #[serde(default)]
+    pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminArticleRequestListResponse {
+    pub requests: Vec<ArticleRequestItem>,
+    pub total: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitArticleRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleRequestAiRunRecord {
+    pub run_id: String,
+    pub request_id: String,
+    pub status: String,
+    pub runner_program: String,
+    pub exit_code: Option<i32>,
+    pub final_reply_markdown: Option<String>,
+    pub failure_reason: Option<String>,
+    pub started_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleRequestAiRunChunk {
+    pub chunk_id: String,
+    pub run_id: String,
+    pub request_id: String,
+    pub stream: String,
+    pub batch_index: i32,
+    pub content: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminArticleRequestAiOutputResponse {
+    pub runs: Vec<ArticleRequestAiRunRecord>,
+    pub chunks: Vec<ArticleRequestAiRunChunk>,
+}
+
+pub async fn submit_article_request(
+    article_url: &str,
+    title_hint: Option<&str>,
+    request_message: &str,
+    nickname: Option<&str>,
+    requester_email: Option<&str>,
+    frontend_page_url: Option<&str>,
+) -> Result<SubmitArticleRequestResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(SubmitArticleRequestResponse {
+            request_id: "mock-ar-1".to_string(),
+            status: "pending".to_string(),
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/article-requests/submit", API_BASE);
+        let mut body = serde_json::json!({
+            "article_url": article_url,
+            "request_message": request_message,
+        });
+        if let Some(value) = nickname {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                body["nickname"] = serde_json::Value::String(trimmed.to_string());
+            }
+        }
+        if let Some(hint) = title_hint {
+            let trimmed = hint.trim();
+            if !trimmed.is_empty() {
+                body["title_hint"] = serde_json::Value::String(trimmed.to_string());
+            }
+        }
+        if let Some(email) = requester_email {
+            body["requester_email"] = serde_json::Value::String(email.to_string());
+        }
+        if let Some(page_url) = frontend_page_url {
+            body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
+        }
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("HTTP {}: {}", status, text));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_article_requests(
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<ArticleRequestListResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(ArticleRequestListResponse {
+            requests: vec![],
+            total: 0,
+            offset: 0,
+            has_more: false,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/article-requests/list", API_BASE);
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        if let Some(o) = offset {
+            params.push(format!("offset={o}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        let r: ArticleRequestListResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        Ok(r)
+    }
+}
+
+pub async fn fetch_admin_article_requests(
+    status: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<AdminArticleRequestListResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminArticleRequestListResponse {
+            requests: vec![],
+            total: 0,
+            offset: 0,
+            has_more: false,
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let mut url = format!("{base}/admin/article-requests/tasks?");
+        if let Some(s) = status {
+            url.push_str(&format!("status={}&", urlencoding::encode(s)));
+        }
+        if let Some(l) = limit {
+            url.push_str(&format!("limit={l}&"));
+        }
+        if let Some(o) = offset {
+            url.push_str(&format!("offset={o}&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_approve_and_run_article_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<ArticleRequestItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url = format!(
+            "{base}/admin/article-requests/tasks/{}/approve-and-run",
+            urlencoding::encode(request_id)
+        );
+        let body = serde_json::json!({ "admin_note": admin_note });
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_reject_article_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<ArticleRequestItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url =
+            format!("{base}/admin/article-requests/tasks/{}/reject", urlencoding::encode(request_id));
+        let body = serde_json::json!({ "admin_note": admin_note });
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_retry_article_request(request_id: &str) -> Result<ArticleRequestItem, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url = format!("{base}/admin/article-requests/tasks/{}/retry", urlencoding::encode(request_id));
+        let response = api_post(&url)
+            .json(&serde_json::json!({}))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response
+                .text()
+                .await
+                .map_err(|e| format!("Read error: {:?}", e))?;
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_delete_article_request(request_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        return Err("mock not supported".to_string());
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url = format!("{base}/admin/article-requests/tasks/{}", urlencoding::encode(request_id));
+        let response = gloo_net::http::Request::delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn fetch_admin_article_request_ai_output(
+    request_id: &str,
+) -> Result<AdminArticleRequestAiOutputResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        return Ok(AdminArticleRequestAiOutputResponse {
+            runs: vec![],
+            chunks: vec![],
+        });
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        let url =
+            format!("{base}/admin/article-requests/tasks/{}/ai-output", urlencoding::encode(request_id));
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub fn build_admin_article_request_ai_stream_url(request_id: &str) -> String {
+    #[cfg(feature = "mock")]
+    {
+        return format!("/mock/admin/article-requests/tasks/{}/ai-output/stream", request_id);
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let base = admin_base();
+        format!("{base}/admin/article-requests/tasks/{}/ai-output/stream", urlencoding::encode(request_id))
+    }
+}

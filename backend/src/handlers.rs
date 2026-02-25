@@ -18,6 +18,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use static_flow_shared::{
+    article_request_store::{
+        ArticleRequestAiRunChunkRecord, ArticleRequestAiRunRecord, ArticleRequestRecord,
+        NewArticleRequestInput, REQUEST_STATUS_DONE, REQUEST_STATUS_FAILED,
+        REQUEST_STATUS_PENDING, REQUEST_STATUS_REJECTED, REQUEST_STATUS_RUNNING,
+    },
     comments_store::{
         CommentAiRunChunkRecord, CommentAiRunRecord, CommentAuditRecord, CommentDataStore,
         CommentTaskPatch, NewCommentAuditInput, NewCommentTaskInput, PublishedCommentPatch,
@@ -4105,6 +4110,465 @@ pub async fn admin_music_wish_ai_stream(
         const MAX_CONSECUTIVE_ERRORS: u32 = 10;
         loop {
             let runs = match store.list_ai_runs(&wish_id, Some(1)).await {
+                Ok(r) => { consecutive_errors = 0; r }
+                Err(_) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        yield Ok(Event::default().event("error").data(
+                            serde_json::json!({"status":"error","failure_reason":"DB query failed after retries"}).to_string()
+                        ));
+                        break;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+            let run = match runs.into_iter().last() {
+                Some(r) => r,
+                None => {
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            let chunks = match store.list_ai_run_chunks(&run.run_id, Some(4096)).await {
+                Ok(c) => { consecutive_errors = 0; c }
+                Err(_) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        yield Ok(Event::default().event("error").data(
+                            serde_json::json!({"status":"error","failure_reason":"DB query failed after retries"}).to_string()
+                        ));
+                        break;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            for chunk in &chunks {
+                if chunk.batch_index > last_batch_index {
+                    last_batch_index = chunk.batch_index;
+                    let data = serde_json::json!({
+                        "stream": chunk.stream,
+                        "batch_index": chunk.batch_index,
+                        "content": chunk.content,
+                    });
+                    yield Ok(Event::default().event("chunk").data(data.to_string()));
+                }
+            }
+
+            if run.status != "running" {
+                let event_name = if run.status == "success" { "done" } else { "error" };
+                let data = serde_json::json!({
+                    "status": run.status,
+                    "exit_code": run.exit_code,
+                    "failure_reason": run.failure_reason,
+                    "final_reply_markdown": run.final_reply_markdown,
+                });
+                yield Ok(Event::default().event(event_name).data(data.to_string()));
+                break;
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+// ── Article Request handlers ──
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitArticleRequestRequest {
+    pub article_url: String,
+    pub title_hint: Option<String>,
+    pub request_message: String,
+    #[serde(default)]
+    pub nickname: Option<String>,
+    #[serde(default)]
+    pub requester_email: Option<String>,
+    #[serde(default)]
+    pub frontend_page_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmitArticleRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArticleRequestListQuery {
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ArticleRequestListResponse {
+    pub requests: Vec<ArticleRequestRecord>,
+    pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
+}
+
+pub async fn submit_article_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitArticleRequestRequest>,
+) -> Result<Json<SubmitArticleRequestResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let article_url = request.article_url.trim();
+    if article_url.is_empty() {
+        return Err(bad_request("`article_url` is required"));
+    }
+    if article_url.chars().count() > 2000 {
+        return Err(bad_request("`article_url` must be <= 2000 chars"));
+    }
+    if !(article_url.starts_with("http://") || article_url.starts_with("https://")) {
+        return Err(bad_request("`article_url` must start with http:// or https://"));
+    }
+    let request_message = request.request_message.trim();
+    if request_message.is_empty() {
+        return Err(bad_request("`request_message` is required"));
+    }
+    if request_message.chars().count() > 2000 {
+        return Err(bad_request("`request_message` must be <= 2000 chars"));
+    }
+    let requester_email = normalize_requester_email_input(request.requester_email)
+        .map_err(|err| bad_request(&err.to_string()))?;
+    let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
+        .map_err(|err| bad_request(&err.to_string()))?;
+
+    let ip = extract_client_ip(&headers);
+    let fingerprint = build_client_fingerprint(&headers);
+    let nickname = normalize_public_nickname_input(request.nickname, &fingerprint)?;
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    enforce_comment_submit_rate_limit(
+        state.article_request_submit_guard.as_ref(),
+        &rate_limit_key,
+        now_ms,
+        60,
+    )
+    .await?;
+
+    let ip_region = state.geoip.resolve_region(&ip).await;
+    let request_id = generate_task_id("ar");
+    let record = state
+        .article_request_store
+        .create_request(NewArticleRequestInput {
+            request_id: request_id.clone(),
+            article_url: article_url.to_string(),
+            title_hint: request.title_hint,
+            request_message: request_message.to_string(),
+            nickname,
+            requester_email,
+            frontend_page_url,
+            fingerprint,
+            client_ip: ip,
+            ip_region,
+        })
+        .await
+        .map_err(|e| internal_error("Failed to create article request", e))?;
+
+    if let Some(notifier) = state.email_notifier.clone() {
+        let req_for_email = record.clone();
+        tokio::spawn(async move {
+            if let Err(err) = notifier
+                .send_admin_new_article_request_notification(&req_for_email)
+                .await
+            {
+                tracing::warn!(
+                    "failed to send admin notification email for article request {}: {}",
+                    req_for_email.request_id,
+                    err
+                );
+            }
+        });
+    }
+
+    Ok(Json(SubmitArticleRequestResponse {
+        request_id: record.request_id,
+        status: REQUEST_STATUS_PENDING.to_string(),
+    }))
+}
+
+pub async fn list_article_requests(
+    State(state): State<AppState>,
+    Query(query): Query<ArticleRequestListQuery>,
+) -> Result<Json<ArticleRequestListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.filter(|value| *value > 0).unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0);
+    let total = state
+        .article_request_store
+        .count_requests_public()
+        .await
+        .map_err(|e| internal_error("Failed to count article requests", e))?;
+    if total == 0 || offset >= total {
+        return Ok(Json(ArticleRequestListResponse {
+            requests: vec![],
+            total,
+            offset,
+            has_more: false,
+        }));
+    }
+
+    let requests = state
+        .article_request_store
+        .list_requests_public_page(limit, offset)
+        .await
+        .map_err(|e| internal_error("Failed to list article requests", e))?;
+    let has_more = offset.saturating_add(requests.len()) < total;
+    Ok(Json(ArticleRequestListResponse {
+        requests,
+        total,
+        offset,
+        has_more,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminArticleRequestListQuery {
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminArticleRequestListResponse {
+    pub requests: Vec<ArticleRequestRecord>,
+    pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
+}
+
+pub async fn admin_list_article_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminArticleRequestListQuery>,
+) -> Result<Json<AdminArticleRequestListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let limit = query.limit.filter(|value| *value > 0).unwrap_or(100).min(500);
+    let offset = query.offset.unwrap_or(0);
+    let total = state
+        .article_request_store
+        .count_requests(query.status.as_deref())
+        .await
+        .map_err(|e| internal_error("Failed to count article requests", e))?;
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminArticleRequestListResponse {
+            requests: vec![],
+            total,
+            offset,
+            has_more: false,
+        }));
+    }
+
+    let paged = state
+        .article_request_store
+        .list_requests_page(query.status.as_deref(), limit, offset)
+        .await
+        .map_err(|e| internal_error("Failed to list article requests", e))?;
+    let has_more = offset.saturating_add(paged.len()) < total;
+    Ok(Json(AdminArticleRequestListResponse {
+        requests: paged,
+        total,
+        offset,
+        has_more,
+    }))
+}
+
+pub async fn admin_get_article_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> Result<Json<ArticleRequestRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let record = state
+        .article_request_store
+        .get_request(&request_id)
+        .await
+        .map_err(|e| internal_error("Failed to get article request", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Article request not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+    Ok(Json(record))
+}
+
+pub async fn admin_approve_and_run_article_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<ArticleRequestRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let before = state
+        .article_request_store
+        .get_request(&request_id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch article request", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Article request not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+
+    if before.status == REQUEST_STATUS_RUNNING {
+        return Err(conflict_error("Article request is already running"));
+    }
+    if before.status == REQUEST_STATUS_DONE || before.status == REQUEST_STATUS_REJECTED {
+        return Err(conflict_error("Article request is finalized"));
+    }
+
+    let record = state
+        .article_request_store
+        .transition_request(
+            &request_id,
+            REQUEST_STATUS_RUNNING,
+            request.admin_note.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| internal_error("Failed to transition article request", e))?;
+
+    if let Err(err) = state.article_request_worker_tx.send(request_id.clone()).await {
+        let _ = state
+            .article_request_store
+            .transition_request(&request_id, REQUEST_STATUS_FAILED, None, Some(&err.to_string()), None, None)
+            .await;
+        return Err(internal_error("Failed to enqueue article request worker", err));
+    }
+
+    Ok(Json(record))
+}
+
+pub async fn admin_reject_article_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<ArticleRequestRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let record = state
+        .article_request_store
+        .transition_request(
+            &request_id,
+            REQUEST_STATUS_REJECTED,
+            request.admin_note.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| internal_error("Failed to reject article request", e))?;
+    Ok(Json(record))
+}
+
+pub async fn admin_retry_article_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> Result<Json<ArticleRequestRecord>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let record = state
+        .article_request_store
+        .transition_request(&request_id, REQUEST_STATUS_RUNNING, None, None, None, None)
+        .await
+        .map_err(|e| internal_error("Failed to retry article request", e))?;
+
+    if let Err(err) = state.article_request_worker_tx.send(request_id.clone()).await {
+        let _ = state
+            .article_request_store
+            .transition_request(&request_id, REQUEST_STATUS_FAILED, None, Some(&err.to_string()), None, None)
+            .await;
+        return Err(internal_error("Failed to enqueue article request worker", err));
+    }
+
+    Ok(Json(record))
+}
+
+pub async fn admin_delete_article_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    state
+        .article_request_store
+        .delete_request(&request_id)
+        .await
+        .map_err(|e| internal_error("Failed to delete article request", e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminArticleRequestAiOutputResponse {
+    pub runs: Vec<ArticleRequestAiRunRecord>,
+    pub chunks: Vec<ArticleRequestAiRunChunkRecord>,
+}
+
+pub async fn admin_article_request_ai_output(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> Result<Json<AdminArticleRequestAiOutputResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let runs = state
+        .article_request_store
+        .list_ai_runs(&request_id, Some(20))
+        .await
+        .map_err(|e| internal_error("Failed to list AI runs", e))?;
+    let mut chunks = Vec::new();
+    for run in &runs {
+        let mut run_chunks = state
+            .article_request_store
+            .list_ai_run_chunks(&run.run_id, Some(4096))
+            .await
+            .map_err(|e| internal_error("Failed to list AI run chunks", e))?;
+        chunks.append(&mut run_chunks);
+    }
+    Ok(Json(AdminArticleRequestAiOutputResponse {
+        runs,
+        chunks,
+    }))
+}
+
+pub async fn admin_article_request_ai_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    ensure_admin_access(&state, &headers)?;
+    let store = state.article_request_store.clone();
+
+    let stream = stream! {
+        let mut last_batch_index: i32 = -1;
+        let mut consecutive_errors: u32 = 0;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+        loop {
+            let runs = match store.list_ai_runs(&request_id, Some(1)).await {
                 Ok(r) => { consecutive_errors = 0; r }
                 Err(_) => {
                     consecutive_errors += 1;

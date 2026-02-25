@@ -376,6 +376,35 @@ pub mod music_wish {
     pub const REFRESHING: &str = "刷新中...";
 }
 
+pub mod article_request {
+    pub const SECTION_TITLE: &str = "文章入库请求";
+    pub const SECTION_SUBTITLE: &str = "发现好文？提交链接，审核通过后自动入库";
+    pub const URL_LABEL: &str = "文章链接";
+    pub const URL_PLACEHOLDER: &str = "输入文章 URL（必填，http/https）";
+    pub const TITLE_HINT_LABEL: &str = "标题提示";
+    pub const TITLE_HINT_PLACEHOLDER: &str = "文章标题（可选）";
+    pub const MESSAGE_LABEL: &str = "推荐理由";
+    pub const MESSAGE_PLACEHOLDER: &str = "说说你为什么推荐这篇文章...（必填）";
+    pub const NICKNAME_LABEL: &str = "昵称（可选）";
+    pub const NICKNAME_PLACEHOLDER: &str = "你的昵称（可选，不填会自动生成）";
+    pub const EMAIL_LABEL: &str = "邮箱（可选）";
+    pub const EMAIL_PLACEHOLDER: &str = "填写邮箱可实时接收完成进度";
+    pub const EMAIL_HELP_TEXT: &str = "可选，但建议填写；任务完成后会自动通知你";
+    pub const SUBMIT_BTN: &str = "提交请求";
+    pub const SUBMITTING: &str = "提交中...";
+    pub const STATUS_PENDING: &str = "等待审核";
+    pub const STATUS_APPROVED: &str = "已通过";
+    pub const STATUS_RUNNING: &str = "入库中";
+    pub const STATUS_DONE: &str = "已入库";
+    pub const STATUS_FAILED: &str = "入库失败";
+    pub const VIEW_ARTICLE: &str = "查看文章 →";
+    pub const EMPTY_LIST: &str = "还没有人提交请求，来做第一个吧！";
+    pub const SUBMIT_SUCCESS: &str = "请求已提交，等待审核中";
+    pub const REFRESH_BTN: &str = "刷新状态";
+    pub const REFRESHING: &str = "刷新中...";
+    pub const NAV_BTN: &str = "文章入库";
+}
+
 pub mod mock {
     pub const ARTICLE_TITLE_TEMPLATE: &str = "示例文章 {} - {} 技术与思考";
     pub const ARTICLE_SUMMARY_TEMPLATE: &str = "这是一篇关于 {} 的示例文章，涵盖实践要点与思考。";

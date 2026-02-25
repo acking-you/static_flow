@@ -13,16 +13,19 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
 ## When To Use
 1. Publish one Markdown article (`write-article`).
 2. Batch import images (`write-images`) or sync a notes directory (`sync-notes`).
-3. Query/update/delete data in `articles`, `images`, and `taxonomies`.
-4. Run backend-equivalent local API queries for verification/debug.
-5. Reclaim storage immediately (`db cleanup-orphans`).
+3. Query/update/delete/upsert data in `articles`, `images`, and `taxonomies`.
+4. Update bilingual fields from files (`db update-article-bilingual`).
+5. Backfill article vectors (`db backfill-article-vectors`).
+6. Run backend-equivalent local API queries for verification/debug.
+7. Reclaim storage immediately (`db cleanup-orphans`).
+8. Manually complete a music wish (`complete-wish`).
 
 ## Execution Policy (Mandatory)
 - Context-first: read article and metadata from current context/local files first.
 - LLM-native generation: generate missing metadata and summary directly in-session.
 - Do not call external model APIs, proxy scripts, or sub-agent model commands.
 - Use CLI only for fetch fallback, write/sync, and verification.
-- Keep intermediate artifacts under `tmp/`.
+- Keep intermediate artifacts under `/tmp/`, not in the project root directory.
 - Never run destructive operations unless explicitly requested.
 
 ## Load Extra Context
@@ -72,8 +75,18 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
      - `<cli> write-article --db-path <db_path> --file <post.md>`
    - frontmatter incomplete:
      - `<cli> write-article --db-path <db_path> --file <post.md> --summary "..." --tags "a,b" --category "..." --category-description "..."`
+   - with custom id:
+     - `--id <custom_id>` (defaults to markdown file stem)
+   - with explicit date:
+     - `--date YYYY-MM-DD`
    - explicit bilingual files (preferred for non-frontmatter workflow):
      - `<cli> write-article --db-path <db_path> --file <post.md> --summary "..." --tags "a,b" --category "..." --category-description "..." --content-en-file <content_en.md> --summary-zh-file <summary_zh.md> --summary-en-file <summary_en.md>`
+   - with pre-computed vectors:
+     - `--vector <json_array>` / `--vector-en <json_array>` / `--vector-zh <json_array>`
+   - with auto-embedding language hint:
+     - `--language en|zh`
+   - disable auto-optimize after write:
+     - `--no-auto-optimize`
 7. Local image import (optional):
    - `--import-local-images`
    - optional `--media-root <path>` (repeatable)
@@ -98,9 +111,21 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
 
 ## DB and API Quick Map
 - DB ops: `<cli> db --db-path <db_path> <subcommand>`
-  - common: `list-tables`, `query-rows`, `update-rows`, `delete-rows`, `ensure-indexes`, `optimize`
+  - table info: `list-tables`, `describe-table <table>`, `count-rows <table> [--where ...]`
+  - CRUD: `query-rows`, `update-rows`, `delete-rows`
+  - upsert: `upsert-article --json <json>`, `upsert-image --json <json>`
+  - bilingual: `update-article-bilingual --id <id> [--content-en-file ...] [--summary-zh-file ...] [--summary-en-file ...]`
+  - vectors: `backfill-article-vectors [--limit N] [--dry-run]`
+  - indexes: `ensure-indexes`, `list-indexes <table> [--with-stats]`, `drop-index <name>`
+  - maintenance: `optimize`, `cleanup-orphans [--table <table>]`
+  - special: `reembed-svg-images [--limit N] [--dry-run]`
+  - schema: `create-table <table>`, `drop-table <table> --yes`
 - API-equivalent ops: `<cli> api --db-path <db_path> <subcommand>`
-  - common: `get-article`, `search`, `semantic-search`, `list-tags`, `list-categories`, `search-images`
+  - articles: `list-articles [--tag ...] [--category ...]`, `get-article <id>`, `related-articles <id>`
+  - search: `search --q "..."`, `semantic-search --q "..."`
+  - taxonomy: `list-tags`, `list-categories`
+  - images: `list-images`, `get-image <id-or-filename>`, `search-images --id <id>`, `search-images-text --q "..."`
+- Legacy query shortcut: `<cli> query --table <table> [--where ...] [--columns ...] [--limit N] [--offset N] [--format table|vertical]`
 
 ## One-Click Immediate Prune
 - Single table:
