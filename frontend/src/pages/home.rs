@@ -74,6 +74,13 @@ pub fn home_page() -> Html {
     ];
 
     let staticflow_search_href = crate::config::route_path("/search?q=staticflow");
+    let on_staticflow_search_click = {
+        let staticflow_search_href = staticflow_search_href.clone();
+        Callback::from(move |event: MouseEvent| {
+            event.prevent_default();
+            let _ = crate::navigation_context::navigate_spa_to(&staticflow_search_href);
+        })
+    };
 
     let social_button_class = classes!(
         "btn-fluent-icon",
@@ -347,7 +354,8 @@ pub fn home_page() -> Html {
                                         { "Admin Console" }
                                     </Link<Route>>
                                     <a
-                                        href={staticflow_search_href}
+                                        href={staticflow_search_href.clone()}
+                                        onclick={on_staticflow_search_click}
                                         class={classes!(
                                             "btn-fluent-search-hero",
                                             "no-underline"
