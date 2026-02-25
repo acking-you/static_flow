@@ -84,7 +84,10 @@
   <!-- Cache WASM bytes in IndexedDB to survive HTTP/V8 code-cache eviction.
          After long idle the browser may discard both compiled code and disk cache;
          IndexedDB persists the raw bytes so we skip the network round-trip and let
-         V8's internal compile cache (keyed on identical bytes) accelerate startup. -->
+         V8's internal compile cache (keyed on identical bytes) accelerate startup.
+
+         Key design: probe IndexedDB FIRST (before awaiting fetch), so even when
+         HTTP disk cache is evicted we don't block on the network. -->
   <script>
     (function () {
       var DB = 'sf-wasm-cache', STORE = 'compiled', SCHEMA = 2;
@@ -98,78 +101,109 @@
             db.createObjectStore(STORE);
             log('IndexedDB upgrade to v' + SCHEMA);
           };
-          r.onsuccess = function () { log('IndexedDB opened OK'); ok(r.result); };
-          r.onerror = function () { log('IndexedDB open FAILED: ' + r.error); fail(r.error); };
+          r.onsuccess = function () { ok(r.result); };
+          r.onerror = function () { fail(r.error); };
         });
       }
-      var _is = WebAssembly.instantiateStreaming;
-      if (!_is) { log('instantiateStreaming not available, skipping'); return; }
-      log('Monkey-patching WebAssembly.instantiateStreaming');
-      WebAssembly.instantiateStreaming = function (source, imports) {
+
+      // Read the latest cached entry (any key) from IndexedDB
+      function getLatestCache() {
+        return openDB().then(function (db) {
+          return new Promise(function (ok) {
+            var tx = db.transaction(STORE, 'readonly');
+            var st = tx.objectStore(STORE);
+            var cursorReq = st.openCursor();
+            cursorReq.onsuccess = function () {
+              var cursor = cursorReq.result;
+              if (cursor) {
+                ok({ key: cursor.key, bytes: cursor.value });
+              } else {
+                ok(null);
+              }
+            };
+            cursorReq.onerror = function () { ok(null); };
+          });
+        });
+      }
+
+      function storeBytes(url, bytes) {
+        openDB().then(function (db) {
+          var tx = db.transaction(STORE, 'readwrite');
+          var st = tx.objectStore(STORE);
+          st.clear();
+          st.put(bytes, url);
+          tx.oncomplete = function () { log('Stored ' + bytes.byteLength + ' bytes (key=' + url + ')'); };
+          tx.onerror = function () { log('Store FAILED: ' + tx.error); };
+        }).catch(function () {});
+      }
+
+      function clearCache() {
+        openDB().then(function (db) {
+          var tx = db.transaction(STORE, 'readwrite');
+          tx.objectStore(STORE).clear();
+          tx.oncomplete = function () { log('Stale cache cleared'); };
+        }).catch(function () {});
+      }
+
+      function nativeCompileAndStore(source, imports) {
+        var t1 = performance.now();
         var resp;
         return Promise.resolve(source)
           .then(function (r) {
             resp = r;
-            var url = r.url || '';
-            log('source resolved — url=' + (url || '(empty)'));
-            return url;
-          })
-          .then(function (url) {
-            if (!url.includes('.wasm')) {
-              log('URL has no .wasm, falling back to native');
-              return _is.call(WebAssembly, resp, imports);
-            }
-            log('Checking IndexedDB cache for: ' + url);
-            return openDB()
-              .then(function (db) {
-                return new Promise(function (ok) {
-                  var tx = db.transaction(STORE, 'readonly');
-                  var rq = tx.objectStore(STORE).get(url);
-                  rq.onsuccess = function () {
-                    var val = rq.result;
-                    log('IndexedDB get: ' + (val == null ? 'null' : val.constructor.name + ' (' + val.byteLength + ' bytes)'));
-                    ok(val || null);
-                  };
-                  rq.onerror = function () { log('IndexedDB get FAILED: ' + rq.error); ok(null); };
-                });
+            var cloned = r.clone();
+            return _is.call(WebAssembly, r, imports)
+              .then(function (result) {
+                log('Native instantiateStreaming OK in ' + (performance.now() - t1).toFixed(0) + 'ms');
+                cloned.arrayBuffer().then(function (bytes) {
+                  storeBytes(resp.url || '', bytes);
+                }).catch(function () {});
+                return result;
+              });
+          });
+      }
+
+      var _is = WebAssembly.instantiateStreaming;
+      if (!_is) return;
+      log('Monkey-patching WebAssembly.instantiateStreaming');
+
+      WebAssembly.instantiateStreaming = function (source, imports) {
+        // Probe IndexedDB immediately — don't wait for fetch
+        var cacheP = getLatestCache().catch(function () { return null; });
+
+        return cacheP.then(function (cached) {
+          if (cached && cached.bytes instanceof ArrayBuffer && cached.bytes.byteLength > 0) {
+            log('IndexedDB HIT (' + cached.bytes.byteLength + ' bytes, key=' + cached.key + ')');
+            var t0 = performance.now();
+            return WebAssembly.instantiate(cached.bytes, imports)
+              .then(function (result) {
+                log('Instantiated from cache in ' + (performance.now() - t0).toFixed(0) + 'ms');
+                // Verify URL still matches; if not, fetch will update cache later
+                Promise.resolve(source).then(function (resp) {
+                  var url = resp && resp.url || '';
+                  if (url && url !== cached.key) {
+                    log('URL changed (' + cached.key + ' → ' + url + '), refreshing cache');
+                    resp.arrayBuffer().then(function (b) { storeBytes(url, b); }).catch(function () {});
+                  }
+                }).catch(function () {});
+                return result;
               })
-              .then(function (cached) {
-                if (cached instanceof ArrayBuffer && cached.byteLength > 0) {
-                  log('CACHE HIT — compiling+instantiating from ' + cached.byteLength + ' cached bytes');
-                  var t0 = performance.now();
-                  return WebAssembly.instantiate(cached, imports)
-                    .then(function (result) {
-                      log('Instantiated from cache OK in ' + (performance.now() - t0).toFixed(0) + 'ms');
-                      return result;
-                    });
-                }
-                log('CACHE MISS — calling native instantiateStreaming');
-                var t1 = performance.now();
-                // Clone the response so we can both stream-compile and read bytes
-                var cloned = resp.clone();
-                return _is.call(WebAssembly, resp, imports)
-                  .then(function (result) {
-                    log('Native instantiateStreaming OK in ' + (performance.now() - t1).toFixed(0) + 'ms');
-                    // Read bytes from the cloned response and store in IndexedDB
-                    cloned.arrayBuffer().then(function (bytes) {
-                      log('Fetched ' + bytes.byteLength + ' bytes, storing in IndexedDB ...');
-                      return openDB().then(function (db) {
-                        var tx = db.transaction(STORE, 'readwrite');
-                        var st = tx.objectStore(STORE);
-                        st.clear();
-                        var putReq = st.put(bytes, url);
-                        putReq.onsuccess = function () { log('Bytes stored OK (' + bytes.byteLength + ' bytes, key=' + url + ')'); };
-                        putReq.onerror = function () { log('Bytes store FAILED: ' + putReq.error); };
-                        tx.oncomplete = function () { log('Write transaction committed'); };
-                        tx.onerror = function () { log('Write transaction FAILED: ' + tx.error); };
-                      });
-                    }).catch(function (e) { log('arrayBuffer/store error: ' + e); });
-                    return result;
-                  });
-              })
-              .catch(function (e) { log('Cache path error, falling back: ' + e); return _is.call(WebAssembly, resp, imports); });
-          })
-          .catch(function (e) { log('Outer error, falling back: ' + e); return _is.call(WebAssembly, source, imports); });
+              .catch(function (e) {
+                // LinkError = stale bytes (imports mismatch after rebuild)
+                log('Cache stale (' + e.name + '), clearing and recompiling');
+                clearCache();
+                return nativeCompileAndStore(source, imports);
+              });
+          }
+
+          // Cache empty — fall through to fetch + native compile
+          log('IndexedDB MISS, awaiting fetch + native compile');
+          return nativeCompileAndStore(source, imports);
+        })
+        .catch(function (e) {
+          log('Cache path error, falling back: ' + e);
+          return _is.call(WebAssembly, source, imports);
+        });
       };
     })();
   </script>

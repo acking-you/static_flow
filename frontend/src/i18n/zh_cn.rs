@@ -138,6 +138,9 @@ pub mod search {
     pub const MUSIC_SEARCHING: &str = "正在搜索音乐...";
     pub const MUSIC_MISS_TEMPLATE: &str = "未找到与「{}」相关的音乐";
     pub const MUSIC_FOUND_TEMPLATE: &str = "找到 {} 首相关音乐";
+    pub const MUSIC_TRY_SEMANTIC: &str = "试试语义搜索";
+    pub const MUSIC_TRY_HYBRID: &str = "试试混合搜索";
+    pub const MUSIC_TRY_HINT: &str = "关键词没找到？语义搜索能理解歌曲含义，混合搜索兼顾精确与语义";
     pub const RESULT_SCOPE: &str = "Result Scope";
     pub const RESULT_SCOPE_LIMITED_TEMPLATE: &str = "默认 {} 条";
     pub const RESULT_SCOPE_ALL: &str = "全部召回";

@@ -54,6 +54,8 @@ impl Default for MusicPlayerState {
 
 pub enum MusicAction {
     PlaySong { song: SongDetail, id: String },
+    /// Load song info into context without auto-playing (e.g. page refresh).
+    LoadSong { song: SongDetail, id: String },
     TogglePlay,
     Pause,
     SetTime(f64),
@@ -94,6 +96,27 @@ impl Reducible for MusicPlayerState {
                 next.current_song = Some(song);
                 next.song_id = Some(id);
                 next.playing = true;
+                next.visible = true;
+                next.minimized = false;
+                next.lyrics_offset = 0.0;
+            },
+            MusicAction::LoadSong {
+                song,
+                id,
+            } => {
+                let changed = next.song_id.as_deref() != Some(&id);
+                if changed {
+                    if let Some(idx) = next.history_index {
+                        next.history.truncate(idx + 1);
+                    }
+                    next.history.push((id.clone(), song.clone()));
+                    next.history_index = Some(next.history.len() - 1);
+                    next.current_time = 0.0;
+                    next.duration = 0.0;
+                }
+                next.current_song = Some(song);
+                next.song_id = Some(id);
+                // Don't set playing=true — user must click play
                 next.visible = true;
                 next.minimized = false;
                 next.lyrics_offset = 0.0;

@@ -22,6 +22,45 @@ use crate::{
     utils::image_url,
 };
 
+/// SPA-navigate to `href` without a full page reload.
+/// Use as `onclick` on `<a>` tags that would otherwise trigger a browser navigation.
+fn spa_navigate(href: &str) {
+    if let Some(window) = web_sys::window() {
+        if let Ok(history) = window.history() {
+            let _ = history.push_state_with_url(
+                &wasm_bindgen::JsValue::NULL,
+                "",
+                Some(href),
+            );
+            if let Ok(event) = Event::new("popstate") {
+                let _ = window.dispatch_event(&event);
+            }
+        }
+    }
+}
+
+/// Event-delegation handler: intercept clicks on `<a href="/search...">` inside the
+/// search page and convert them to SPA pushState navigation so music playback and
+/// other in-memory state survive mode switches.
+fn intercept_search_links(e: MouseEvent) {
+    let search_prefix = crate::config::route_path("/search");
+    // Walk up from the click target to find the nearest <a>
+    let mut node = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    while let Some(el) = node {
+        if el.tag_name().eq_ignore_ascii_case("A") {
+            if let Some(href) = el.get_attribute("href") {
+                if href.starts_with(&search_prefix) {
+                    e.prevent_default();
+                    spa_navigate(&href);
+                    return;
+                }
+            }
+            break; // found an <a> but not a search link, let browser handle it
+        }
+        node = el.parent_element();
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Properties, Clone, PartialEq)]
 pub struct SearchPageProps {
@@ -1276,7 +1315,7 @@ pub fn search_page() -> Html {
     );
 
     html! {
-        <main class={classes!(
+        <main onclick={intercept_search_links} class={classes!(
             "search-page",
             "min-h-[60vh]",
             "mt-[var(--header-height-mobile)]",
@@ -1284,6 +1323,13 @@ pub fn search_page() -> Html {
             "pb-20"
         )}>
             <div class={classes!("container")}>
+                <button onclick={Callback::from(|_: MouseEvent| {
+                        if let Some(w) = web_sys::window() { let _ = w.history().map(|h| h.back()); }
+                    })} type="button"
+                    class="flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--text)] transition-colors mt-4 mb-0">
+                    <i class="fas fa-arrow-left text-xs" />
+                    {"Back"}
+                </button>
                 // Hero Section with Cyberpunk Tech Style
                 <div class={classes!(
                     "search-hero",
@@ -1520,64 +1566,47 @@ pub fn search_page() -> Html {
                     </div>
 
                     if mode == "music" && !keyword.is_empty() {
-                        <div class={classes!(
-                            "mt-4",
-                            "flex",
-                            "items-center",
-                            "justify-center",
-                            "gap-2",
-                            "flex-wrap"
-                        )}>
-                            <span class={classes!(
-                                "text-xs",
-                                "uppercase",
-                                "tracking-[0.15em]",
-                                "text-[var(--muted)]",
-                                "font-semibold"
-                            )}
-                            style="font-family: 'Space Mono', monospace;">
-                                { "Search" }
-                            </span>
+                        <div class="mt-6 flex items-center justify-center gap-3 flex-wrap">
                             <a
                                 href={music_sub_keyword_href}
                                 class={classes!(
-                                    mode_button_base.clone(),
-                                    "text-xs",
-                                    if music_sub_mode == "keyword" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
-                                    if music_sub_mode == "keyword" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
-                                    if music_sub_mode == "keyword" { "bg-[var(--primary)]/10" } else { "" },
-                                    if music_sub_mode != "keyword" { "hover:text-[var(--primary)]" } else { "" },
-                                    if music_sub_mode != "keyword" { "hover:border-[var(--primary)]/60" } else { "" }
+                                    "inline-flex", "items-center", "gap-2",
+                                    "px-5", "py-2.5", "rounded-xl",
+                                    "border", "text-sm", "font-semibold",
+                                    "transition-all", "duration-200",
+                                    if music_sub_mode == "keyword" { "border-[var(--primary)] text-[var(--primary)] bg-[var(--primary)]/10 shadow-sm" }
+                                    else { "border-[var(--border)] text-[var(--muted)] hover:text-[var(--primary)] hover:border-[var(--primary)]/60" }
                                 )}
                             >
+                                <i class="fas fa-font text-xs" />
                                 { "Keyword" }
                             </a>
                             <a
-                                href={music_sub_semantic_href}
+                                href={music_sub_semantic_href.clone()}
                                 class={classes!(
-                                    mode_button_base.clone(),
-                                    "text-xs",
-                                    if music_sub_mode == "semantic" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
-                                    if music_sub_mode == "semantic" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
-                                    if music_sub_mode == "semantic" { "bg-[var(--primary)]/10" } else { "" },
-                                    if music_sub_mode != "semantic" { "hover:text-[var(--primary)]" } else { "" },
-                                    if music_sub_mode != "semantic" { "hover:border-[var(--primary)]/60" } else { "" }
+                                    "inline-flex", "items-center", "gap-2",
+                                    "px-5", "py-2.5", "rounded-xl",
+                                    "border", "text-sm", "font-semibold",
+                                    "transition-all", "duration-200",
+                                    if music_sub_mode == "semantic" { "border-[var(--primary)] text-[var(--primary)] bg-[var(--primary)]/10 shadow-sm" }
+                                    else { "border-[var(--border)] text-[var(--muted)] hover:text-[var(--primary)] hover:border-[var(--primary)]/60" }
                                 )}
                             >
+                                <i class="fas fa-brain text-xs" />
                                 { "Semantic" }
                             </a>
                             <a
-                                href={music_sub_hybrid_href}
+                                href={music_sub_hybrid_href.clone()}
                                 class={classes!(
-                                    mode_button_base.clone(),
-                                    "text-xs",
-                                    if music_sub_mode == "hybrid" { "border-[var(--primary)]" } else { "border-[var(--border)]" },
-                                    if music_sub_mode == "hybrid" { "text-[var(--primary)]" } else { "text-[var(--muted)]" },
-                                    if music_sub_mode == "hybrid" { "bg-[var(--primary)]/10" } else { "" },
-                                    if music_sub_mode != "hybrid" { "hover:text-[var(--primary)]" } else { "" },
-                                    if music_sub_mode != "hybrid" { "hover:border-[var(--primary)]/60" } else { "" }
+                                    "inline-flex", "items-center", "gap-2",
+                                    "px-5", "py-2.5", "rounded-xl",
+                                    "border", "text-sm", "font-semibold",
+                                    "transition-all", "duration-200",
+                                    if music_sub_mode == "hybrid" { "border-[var(--primary)] text-[var(--primary)] bg-[var(--primary)]/10 shadow-sm" }
+                                    else { "border-[var(--border)] text-[var(--muted)] hover:text-[var(--primary)] hover:border-[var(--primary)]/60" }
                                 )}
                             >
+                                <i class="fas fa-layer-group text-xs" />
                                 { "Hybrid" }
                             </a>
                         </div>
@@ -2547,6 +2576,27 @@ pub fn search_page() -> Html {
                             <p class={classes!("text-base", "text-[var(--muted)]", "opacity-70")}>
                                 { fill_one(t::MUSIC_MISS_TEMPLATE, &keyword) }
                             </p>
+                            if music_sub_mode == "keyword" {
+                                <p class="text-sm text-[var(--muted)] mt-3 mb-5">
+                                    { t::MUSIC_TRY_HINT }
+                                </p>
+                                <div class="flex items-center justify-center gap-3 flex-wrap">
+                                    <a href={music_sub_semantic_href.clone()}
+                                        class="inline-flex items-center gap-2 px-6 py-3 rounded-xl border-2 border-[var(--primary)] \
+                                               text-[var(--primary)] bg-[var(--primary)]/10 font-semibold text-sm \
+                                               hover:bg-[var(--primary)]/20 transition-all duration-200 shadow-sm">
+                                        <i class="fas fa-brain" />
+                                        { t::MUSIC_TRY_SEMANTIC }
+                                    </a>
+                                    <a href={music_sub_hybrid_href.clone()}
+                                        class="inline-flex items-center gap-2 px-6 py-3 rounded-xl border-2 border-[var(--primary)]/60 \
+                                               text-[var(--primary)] font-semibold text-sm \
+                                               hover:bg-[var(--primary)]/10 hover:border-[var(--primary)] transition-all duration-200">
+                                        <i class="fas fa-layer-group" />
+                                        { t::MUSIC_TRY_HYBRID }
+                                    </a>
+                                </div>
+                            }
                         </div>
                     } else if *loading {
                         <div class={classes!(

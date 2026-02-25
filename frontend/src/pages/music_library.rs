@@ -82,7 +82,16 @@ pub fn music_library_page() -> Html {
             let encoded = urlencoding::encode(&q);
             let url = crate::config::route_path(&format!("/search?q={encoded}&mode=music"));
             if let Some(window) = web_sys::window() {
-                let _ = window.location().set_href(&url);
+                if let Ok(history) = window.history() {
+                    let _ = history.push_state_with_url(
+                        &wasm_bindgen::JsValue::NULL,
+                        "",
+                        Some(&url),
+                    );
+                    if let Ok(event) = web_sys::Event::new("popstate") {
+                        let _ = window.dispatch_event(&event);
+                    }
+                }
             }
         }
     };

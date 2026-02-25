@@ -2,9 +2,11 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result};
 use lettre::{
-    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    message::{header::ContentType, Mailbox, MultiPart, SinglePart},
+    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
+use pulldown_cmark::{html, Options, Parser};
 use serde::Deserialize;
 use static_flow_shared::music_wish_store::MusicWishRecord;
 use url::Url;
@@ -120,21 +122,21 @@ impl EmailNotifier {
 
     pub async fn send_admin_new_wish_notification(&self, wish: &MusicWishRecord) -> Result<()> {
         let subject = format!("[StaticFlow] New Music Wish {} ({})", wish.song_name, wish.wish_id);
-        let body = format!(
-            "New music wish submitted.\n\nWish ID: {}\nSong: {}\nArtist hint: {}\nNickname: \
-             {}\nRequester email: {}\nMessage:\n{}\n\nStatus: {}\nRegion: {}\nCreated at (ms): \
-             {}\n",
+        let body_markdown = format!(
+            "## New music wish submitted\n\n- Wish ID: `{}`\n- Song: {}\n- Artist hint: {}\n- \
+             Nickname: {}\n- Requester email: {}\n- Status: `{}`\n- Region: {}\n- Created at \
+             (ms): `{}`\n\n### Message\n\n{}\n",
             wish.wish_id,
             wish.song_name,
             wish.artist_hint.as_deref().unwrap_or("-"),
             wish.nickname,
             wish.requester_email.as_deref().unwrap_or("-"),
-            wish.wish_message,
             wish.status,
             wish.ip_region,
-            wish.created_at
+            wish.created_at,
+            wish.wish_message,
         );
-        self.send_plain_text_email(&self.admin_recipient, &subject, &body)
+        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
             .await
     }
 
@@ -148,13 +150,14 @@ impl EmailNotifier {
             .as_deref()
             .context("requester email missing for done notification")?;
         let subject = format!("[StaticFlow] 你的点歌已完成：{}", wish.song_name);
-        let link_line = match play_url {
-            Some(url) => format!("播放链接: {url}"),
-            None => "播放链接: 暂不可用".to_string(),
+        let link_markdown = match play_url {
+            Some(url) => format!("- 播放链接: [{url}]({url})"),
+            None => "- 播放链接: 暂不可用".to_string(),
         };
-        let body = format!(
-            "你好，{}：\n\n你的许愿任务已完成并入库。\n\n任务状态: {}\n任务ID: {}\n歌曲: \
-             {}\n歌手提示: {}\n入库歌曲ID: {}\n\n完成内容:\n{}\n\n{}\n",
+        let body_markdown = format!(
+            "你好，{}：\n\n你的许愿任务已完成并入库。\n\n## 任务信息\n- 任务状态: `{}`\n- 任务ID: \
+             `{}`\n- 歌曲: {}\n- 歌手提示: {}\n- 入库歌曲ID: `{}`\n\n## 完成内容\n\n{}\n\n## \
+             播放\n{}\n",
             wish.nickname,
             wish.status,
             wish.wish_id,
@@ -162,20 +165,38 @@ impl EmailNotifier {
             wish.artist_hint.as_deref().unwrap_or("-"),
             wish.ingested_song_id.as_deref().unwrap_or("-"),
             wish.ai_reply.as_deref().unwrap_or("-"),
-            link_line
+            link_markdown,
         );
-        self.send_plain_text_email(requester_email, &subject, &body)
+        self.send_markdown_email(requester_email, &subject, &body_markdown)
             .await
     }
 
-    async fn send_plain_text_email(&self, to: &str, subject: &str, body: &str) -> Result<()> {
+    async fn send_markdown_email(
+        &self,
+        to: &str,
+        subject: &str,
+        markdown_body: &str,
+    ) -> Result<()> {
         let to_mailbox =
             Mailbox::from_str(to).with_context(|| format!("invalid recipient: {to}"))?;
+        let html_body = build_html_email_document(subject, markdown_body);
         let email = Message::builder()
             .from(self.from_mailbox.clone())
             .to(to_mailbox)
             .subject(subject)
-            .body(body.to_string())
+            .multipart(
+                MultiPart::alternative()
+                    .singlepart(
+                        SinglePart::builder()
+                            .header(ContentType::TEXT_PLAIN)
+                            .body(markdown_body.to_string()),
+                    )
+                    .singlepart(
+                        SinglePart::builder()
+                            .header(ContentType::TEXT_HTML)
+                            .body(html_body),
+                    ),
+            )
             .context("failed to build email message")?;
         self.mailer
             .send(email)
@@ -183,6 +204,89 @@ impl EmailNotifier {
             .context("failed to send email via SMTP")?;
         Ok(())
     }
+}
+
+fn render_markdown_to_html_fragment(markdown: &str) -> String {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_GFM);
+    let parser = Parser::new_ext(markdown, options);
+    let mut output = String::new();
+    html::push_html(&mut output, parser);
+    output
+}
+
+fn build_html_email_document(subject: &str, markdown_body: &str) -> String {
+    let escaped_subject = escape_html(subject);
+    let content_html = render_markdown_to_html_fragment(markdown_body);
+    format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{}</title>
+  <style>
+    .sf-content a {{
+      color: #2563eb;
+      text-decoration: underline;
+      word-break: break-all;
+    }}
+    .sf-content img {{
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      display: block;
+      margin: 12px 0;
+    }}
+    .sf-content pre {{
+      white-space: pre-wrap;
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+      overflow-x: auto;
+    }}
+    .sf-content code {{
+      background: #f3f4f6;
+      border-radius: 4px;
+      padding: 2px 4px;
+    }}
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#f5f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:720px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:22px;">
+          <tr>
+            <td style="font-size:20px;font-weight:700;color:#111827;padding-bottom:14px;border-bottom:1px solid #eef2f7;">{}</td>
+          </tr>
+          <tr>
+            <td style="padding-top:18px;font-size:15px;line-height:1.65;">
+              <div class="sf-content" style="word-break:break-word;">
+                {}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"#,
+        escaped_subject, escaped_subject, content_html
+    )
+}
+
+fn escape_html(raw: &str) -> String {
+    raw.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 pub fn normalize_requester_email_input(value: Option<String>) -> Result<Option<String>> {
@@ -300,7 +404,8 @@ fn validate_frontend_url(raw: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_music_player_url, normalize_frontend_page_url_input, normalize_requester_email_input,
+        build_html_email_document, build_music_player_url, normalize_frontend_page_url_input,
+        normalize_requester_email_input, render_markdown_to_html_fragment,
     };
 
     #[test]
@@ -336,5 +441,23 @@ mod tests {
     fn normalize_frontend_page_url_rejects_non_http_scheme() {
         let err = normalize_frontend_page_url_input(Some("javascript:alert(1)".to_string()));
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn render_markdown_to_html_keeps_links_and_images() {
+        let markdown =
+            "查看 [文档](https://example.com/docs)\n\n![cover](https://example.com/cover.png)";
+        let html = render_markdown_to_html_fragment(markdown);
+        assert!(html.contains("href=\"https://example.com/docs\""));
+        assert!(html.contains("src=\"https://example.com/cover.png\""));
+    }
+
+    #[test]
+    fn build_html_email_document_wraps_rendered_markdown() {
+        let html =
+            build_html_email_document("测试主题", "[播放链接](https://example.com/media/audio/1)");
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("class=\"sf-content\""));
+        assert!(html.contains("href=\"https://example.com/media/audio/1\""));
     }
 }

@@ -13,6 +13,25 @@ use crate::{
     router::Route,
 };
 
+/// SPA-navigate to `href` via pushState + popstate (no full page reload).
+fn spa_search_click(href: String) -> Callback<MouseEvent> {
+    Callback::from(move |e: MouseEvent| {
+        e.prevent_default();
+        if let Some(window) = web_sys::window() {
+            if let Ok(history) = window.history() {
+                let _ = history.push_state_with_url(
+                    &wasm_bindgen::JsValue::NULL,
+                    "",
+                    Some(&href),
+                );
+                if let Ok(event) = web_sys::Event::new("popstate") {
+                    let _ = window.dispatch_event(&event);
+                }
+            }
+        }
+    })
+}
+
 #[function_component(Header)]
 pub fn header() -> Html {
     let mobile_menu_open = use_state(|| false);
@@ -308,6 +327,7 @@ pub fn header() -> Html {
                             }) }
                             <a
                                 href={image_search_href.clone()}
+                                onclick={spa_search_click(image_search_href.clone())}
                                 class={classes!(
                                     "nav-icon-btn",
                                     "w-10",
@@ -560,6 +580,7 @@ pub fn header() -> Html {
                         <div onclick={close_mobile_menu.clone()}>
                             <a
                                 href={image_search_href.clone()}
+                                onclick={spa_search_click(image_search_href.clone())}
                                 class={classes!(
                                     "mobile-nav-item",
                                     "flex",

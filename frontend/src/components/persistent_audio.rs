@@ -7,6 +7,23 @@ use crate::{
     music_context::{MusicAction, MusicPlayerContext, NextSongMode},
 };
 
+/// Call `audio.play()` and silently swallow the rejected Promise.
+/// If the browser blocks playback (autoplay policy), dispatch `Pause`
+/// so the UI stays in sync.
+fn try_play(audio: &HtmlAudioElement, ctx: Option<&MusicPlayerContext>) {
+    if let Ok(promise) = audio.play() {
+        let ctx = ctx.cloned();
+        let cb = Closure::once(move |_: JsValue| {
+            // play() was rejected — sync UI back to paused
+            if let Some(c) = ctx {
+                c.dispatch(MusicAction::Pause);
+            }
+        });
+        let _ = promise.catch(&cb);
+        cb.forget();
+    }
+}
+
 /// Pick next song from playlist order, semantic candidates, or random.
 pub(crate) async fn resolve_next_song(
     ctx: &MusicPlayerContext,
@@ -113,7 +130,7 @@ pub fn persistent_audio() -> Html {
                     if let Some(id) = song_id {
                         let url = api::song_audio_url(id);
                         audio.set_src(&url);
-                        let _ = audio.play();
+                        try_play(&audio, Some(&ctx));
                     } else {
                         audio.set_src("");
                         let _ = audio.pause();
@@ -156,12 +173,13 @@ pub fn persistent_audio() -> Html {
     // Sync play/pause state
     {
         let audio_ref = audio_ref.clone();
+        let ctx_for_sync = ctx.clone();
         let playing = ctx.playing;
         let visible = ctx.visible;
         use_effect_with((playing, visible), move |(playing, visible)| {
             if let Some(audio) = audio_ref.cast::<HtmlAudioElement>() {
                 if *playing && *visible {
-                    let _ = audio.play();
+                    try_play(&audio, Some(&ctx_for_sync));
                 } else {
                     let _ = audio.pause();
                 }
