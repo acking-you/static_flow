@@ -11,6 +11,7 @@ pub mod loading_spinner;
 pub mod mini_player;
 pub mod pagination;
 pub mod persistent_audio;
+pub mod raw_html;
 pub mod scroll_to_top_button;
 pub mod spotlight;
 pub mod stats_card;

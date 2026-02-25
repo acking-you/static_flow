@@ -18,6 +18,7 @@ use crate::{
         icons::IconName,
         image_with_loading::ImageWithLoading,
         loading_spinner::{LoadingSpinner, SpinnerSize},
+        raw_html::RawHtml,
         scroll_to_top_button::ScrollToTopButton,
         toc_button::TocButton,
         tooltip::{TooltipIconButton, TooltipPosition},
@@ -597,6 +598,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
 
     let article_data = (*article).clone();
     let content_language = use_state(|| ArticleContentLanguage::Zh);
+    let article_content_ref = use_node_ref();
     let is_lightbox_open = use_state(|| false);
     let is_brief_open = use_state(|| false);
     let is_trend_open = use_state(|| false);
@@ -1234,6 +1236,22 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     } else {
         String::new()
     };
+    let article_body_html = article_data.as_ref().map(|article| {
+        let has_en_content = article
+            .content_en
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let active_content = if *content_language == ArticleContentLanguage::En && has_en_content {
+            article
+                .content_en
+                .as_deref()
+                .unwrap_or(article.content.as_str())
+        } else {
+            article.content.as_str()
+        };
+        AttrValue::from(markdown_to_html(active_content))
+    });
     let comments_render_key = (*comments)
         .iter()
         .map(|comment| {
@@ -1257,6 +1275,20 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             markdown_copied.set(false);
             || ()
         });
+    }
+
+    {
+        let article_content_ref = article_content_ref.clone();
+        let article_body_html = article_body_html.clone();
+        use_effect_with(
+            (markdown_render_key.clone(), article_body_html.clone()),
+            move |(_, html)| {
+                if let Some(host) = article_content_ref.cast::<Element>() {
+                    host.set_inner_html(html.as_deref().unwrap_or(""));
+                }
+                || ()
+            },
+        );
     }
 
     // Initialize markdown rendering after content/language is loaded
@@ -1453,11 +1485,9 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             .chars()
             .filter(|c| !c.is_whitespace())
             .count();
-        let render_html = markdown_to_html(active_content);
-        let content = Html::from_html_unchecked(AttrValue::from(render_html));
         let detailed_summary_html = active_detailed_summary
             .as_ref()
-            .map(|summary| Html::from_html_unchecked(AttrValue::from(markdown_to_html(summary))));
+            .map(|summary| AttrValue::from(markdown_to_html(summary)));
         let zh_button_class = if *content_language == ArticleContentLanguage::Zh {
             classes!(
                 "rounded-full",
@@ -2051,12 +2081,12 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         </header>
 
                         <section
+                            key={markdown_render_key.clone()}
+                            ref={article_content_ref.clone()}
                             class={classes!("article-content")}
                             aria-label={t::ARTICLE_BODY_ARIA}
                             onmouseup={on_article_mouseup.clone()}
-                        >
-                            { content }
-                        </section>
+                        />
 
                         <footer class={classes!(
                             "mt-8",
@@ -2428,9 +2458,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                                     .clone()
                                                     .filter(|value| !value.trim().is_empty())
                                                     .map(|value| {
-                                                        Html::from_html_unchecked(AttrValue::from(
-                                                            markdown_to_html(&value)
-                                                        ))
+                                                        AttrValue::from(markdown_to_html(&value))
                                                     });
 
                                                 html! {
@@ -2505,9 +2533,10 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                                         if let Some(ai_reply_html) = ai_reply_html {
                                                             <section class={classes!("comment-ai-card")}>
                                                                 <p class={classes!("comment-section-label")}>{ "AI 回复" }</p>
-                                                                <div class={classes!("article-content", "comment-ai-markdown")}>
-                                                                    { ai_reply_html }
-                                                                </div>
+                                                                <RawHtml
+                                                                    class={classes!("article-content", "comment-ai-markdown")}
+                                                                    html={ai_reply_html}
+                                                                />
                                                             </section>
                                                         }
                                                     </article>
@@ -2602,13 +2631,13 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                             {
                                                 if let Some(summary_html) = detailed_summary_html.clone() {
                                                     html! {
-                                                        <div class={classes!(
+                                                        <RawHtml class={classes!(
                                                             "article-content",
                                                             "text-[0.97rem]",
                                                             "leading-[1.8]"
-                                                        )}>
-                                                            { summary_html }
-                                                        </div>
+                                                        )}
+                                                        html={summary_html}
+                                                        />
                                                     }
                                                 } else {
                                                     html! {

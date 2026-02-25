@@ -13,6 +13,7 @@ use crate::{
     },
     components::{
         image_with_loading::ImageWithLoading, pagination::Pagination,
+        raw_html::RawHtml,
         scroll_to_top_button::ScrollToTopButton,
     },
     hooks::use_pagination,
@@ -2917,8 +2918,7 @@ pub fn search_page() -> Html {
 
 
 fn render_search_result(result: &SearchResult) -> Html {
-    // 将 HTML 字符串转换为安全的 VNode
-    let highlight_html = Html::from_html_unchecked(AttrValue::from(result.highlight.clone()));
+    let highlight_html = AttrValue::from(result.highlight.clone());
 
     html! {
         <article class={classes!(
@@ -3033,7 +3033,7 @@ fn render_search_result(result: &SearchResult) -> Html {
                     "[&_mark]:border",
                     "[&_mark]:border-[var(--primary)]/30"
                 )}>
-                    { highlight_html }
+                    <RawHtml html={highlight_html} />
                 </div>
 
                 // Tags with cyberpunk style
