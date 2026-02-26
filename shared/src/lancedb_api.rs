@@ -227,6 +227,14 @@ pub struct ImageBlob {
     pub mime_type: String,
 }
 
+pub const CONTENT_TABLE_NAMES: &[&str] = &[
+    "articles",
+    "images",
+    "taxonomies",
+    "article_views",
+    "api_behavior_events",
+];
+
 pub struct StaticFlowDataStore {
     db: Connection,
     articles_table: String,
@@ -237,6 +245,10 @@ pub struct StaticFlowDataStore {
 }
 
 impl StaticFlowDataStore {
+    pub fn connection(&self) -> &Connection {
+        &self.db
+    }
+
     pub async fn connect(db_uri: &str) -> Result<Self> {
         let db = connect(db_uri)
             .execute()
@@ -324,31 +336,44 @@ impl StaticFlowDataStore {
     }
 
     pub async fn append_api_behavior_event(&self, input: NewApiBehaviorEventInput) -> Result<()> {
+        self.append_api_behavior_events(vec![input]).await
+    }
+
+    pub async fn append_api_behavior_events(
+        &self,
+        inputs: Vec<NewApiBehaviorEventInput>,
+    ) -> Result<()> {
+        if inputs.is_empty() {
+            return Ok(());
+        }
         let table = self.api_behavior_table().await?;
         let now_ms = Utc::now().timestamp_millis();
-        let record = ApiBehaviorRecord {
-            event_id: normalize_required_text(input.event_id, 96, "evt"),
-            occurred_at: input.occurred_at,
-            client_source: normalize_required_text(input.client_source, 24, "unknown"),
-            method: normalize_required_text(input.method, 16, "GET"),
-            path: normalize_required_text(input.path, 512, "/"),
-            query: normalize_text(input.query, 2048),
-            page_path: normalize_required_text(input.page_path, 512, "unknown"),
-            referrer: normalize_optional_text(input.referrer, 1024),
-            status_code: input.status_code.max(0),
-            latency_ms: input.latency_ms.max(0),
-            client_ip: normalize_required_text(input.client_ip, 64, "unknown"),
-            ip_region: normalize_required_text(input.ip_region, 128, "Unknown"),
-            ua_raw: normalize_optional_text(input.ua_raw, 1024),
-            device_type: normalize_required_text(input.device_type, 24, "unknown"),
-            os_family: normalize_required_text(input.os_family, 48, "unknown"),
-            browser_family: normalize_required_text(input.browser_family, 48, "unknown"),
-            request_id: normalize_required_text(input.request_id, 128, "unknown"),
-            trace_id: normalize_required_text(input.trace_id, 128, "unknown"),
-            created_at: now_ms,
-            updated_at: now_ms,
-        };
-        upsert_api_behavior_record(&table, &record).await
+        let records: Vec<ApiBehaviorRecord> = inputs
+            .into_iter()
+            .map(|input| ApiBehaviorRecord {
+                event_id: normalize_required_text(input.event_id, 96, "evt"),
+                occurred_at: input.occurred_at,
+                client_source: normalize_required_text(input.client_source, 24, "unknown"),
+                method: normalize_required_text(input.method, 16, "GET"),
+                path: normalize_required_text(input.path, 512, "/"),
+                query: normalize_text(input.query, 2048),
+                page_path: normalize_required_text(input.page_path, 512, "unknown"),
+                referrer: normalize_optional_text(input.referrer, 1024),
+                status_code: input.status_code.max(0),
+                latency_ms: input.latency_ms.max(0),
+                client_ip: normalize_required_text(input.client_ip, 64, "unknown"),
+                ip_region: normalize_required_text(input.ip_region, 128, "Unknown"),
+                ua_raw: normalize_optional_text(input.ua_raw, 1024),
+                device_type: normalize_required_text(input.device_type, 24, "unknown"),
+                os_family: normalize_required_text(input.os_family, 48, "unknown"),
+                browser_family: normalize_required_text(input.browser_family, 48, "unknown"),
+                request_id: normalize_required_text(input.request_id, 128, "unknown"),
+                trace_id: normalize_required_text(input.trace_id, 128, "unknown"),
+                created_at: now_ms,
+                updated_at: now_ms,
+            })
+            .collect();
+        append_api_behavior_records(&table, &records).await
     }
 
     pub async fn list_api_behavior_events(
@@ -462,8 +487,8 @@ impl StaticFlowDataStore {
             .context("failed to compact api_behavior_events table")?;
         table
             .optimize(OptimizeAction::Prune {
-                older_than: Some(ChronoDuration::zero()),
-                delete_unverified: Some(true),
+                older_than: Some(ChronoDuration::hours(1)),
+                delete_unverified: Some(false),
                 error_if_tagged_old_versions: Some(false),
             })
             .await
@@ -2441,7 +2466,7 @@ async fn upsert_article_view_record(table: &Table, record: &ArticleViewRecord) -
     Ok(())
 }
 
-fn build_api_behavior_batch(record: &ApiBehaviorRecord) -> Result<RecordBatch> {
+fn build_api_behavior_batch_multi(records: &[ApiBehaviorRecord]) -> Result<RecordBatch> {
     let mut event_id_builder = StringBuilder::new();
     let mut occurred_at_builder = TimestampMillisecondBuilder::new();
     let mut client_source_builder = StringBuilder::new();
@@ -2463,26 +2488,28 @@ fn build_api_behavior_batch(record: &ApiBehaviorRecord) -> Result<RecordBatch> {
     let mut created_at_builder = TimestampMillisecondBuilder::new();
     let mut updated_at_builder = TimestampMillisecondBuilder::new();
 
-    event_id_builder.append_value(&record.event_id);
-    occurred_at_builder.append_value(record.occurred_at);
-    client_source_builder.append_value(&record.client_source);
-    method_builder.append_value(&record.method);
-    path_builder.append_value(&record.path);
-    query_builder.append_value(&record.query);
-    page_path_builder.append_value(&record.page_path);
-    referrer_builder.append_option(record.referrer.as_deref());
-    status_code_builder.append_value(record.status_code);
-    latency_ms_builder.append_value(record.latency_ms);
-    client_ip_builder.append_value(&record.client_ip);
-    ip_region_builder.append_value(&record.ip_region);
-    ua_raw_builder.append_option(record.ua_raw.as_deref());
-    device_type_builder.append_value(&record.device_type);
-    os_family_builder.append_value(&record.os_family);
-    browser_family_builder.append_value(&record.browser_family);
-    request_id_builder.append_value(&record.request_id);
-    trace_id_builder.append_value(&record.trace_id);
-    created_at_builder.append_value(record.created_at);
-    updated_at_builder.append_value(record.updated_at);
+    for record in records {
+        event_id_builder.append_value(&record.event_id);
+        occurred_at_builder.append_value(record.occurred_at);
+        client_source_builder.append_value(&record.client_source);
+        method_builder.append_value(&record.method);
+        path_builder.append_value(&record.path);
+        query_builder.append_value(&record.query);
+        page_path_builder.append_value(&record.page_path);
+        referrer_builder.append_option(record.referrer.as_deref());
+        status_code_builder.append_value(record.status_code);
+        latency_ms_builder.append_value(record.latency_ms);
+        client_ip_builder.append_value(&record.client_ip);
+        ip_region_builder.append_value(&record.ip_region);
+        ua_raw_builder.append_option(record.ua_raw.as_deref());
+        device_type_builder.append_value(&record.device_type);
+        os_family_builder.append_value(&record.os_family);
+        browser_family_builder.append_value(&record.browser_family);
+        request_id_builder.append_value(&record.request_id);
+        trace_id_builder.append_value(&record.trace_id);
+        created_at_builder.append_value(record.created_at);
+        updated_at_builder.append_value(record.updated_at);
+    }
 
     let schema = api_behavior_schema();
     let arrays: Vec<ArrayRef> = vec![
@@ -2510,15 +2537,18 @@ fn build_api_behavior_batch(record: &ApiBehaviorRecord) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(schema, arrays)?)
 }
 
-async fn upsert_api_behavior_record(table: &Table, record: &ApiBehaviorRecord) -> Result<()> {
-    let batch = build_api_behavior_batch(record)?;
+async fn append_api_behavior_records(table: &Table, records: &[ApiBehaviorRecord]) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let batch = build_api_behavior_batch_multi(records)?;
     let schema = batch.schema();
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-
-    let mut merge = table.merge_insert(&["event_id"]);
-    merge.when_matched_update_all(None);
-    merge.when_not_matched_insert_all();
-    merge.execute(Box::new(batches)).await?;
+    table
+        .add(Box::new(batches))
+        .execute()
+        .await
+        .context("failed to append api behavior records")?;
     Ok(())
 }
 

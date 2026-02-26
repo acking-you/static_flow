@@ -279,6 +279,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             DbCommands::UpsertImage {
                 json,
             } => db_manage::upsert_image_json(&db_path, &json).await,
+            DbCommands::RestoreVersion {
+                table,
+                version,
+            } => db_manage::restore_table(&db_path, &table, version).await,
         },
     }
 }

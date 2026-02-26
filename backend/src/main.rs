@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
     let app_state = state::AppState::new(&db_uri, &comments_db_uri, &music_db_uri).await?;
 
     // Build router
+    let app_state_ref = app_state.clone();
     let app = routes::create_router(app_state);
 
     // Start server
@@ -55,7 +56,14 @@ async fn main() -> Result<()> {
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("shutdown signal received, stopping background tasks...");
+            app_state_ref.shutdown();
+        })
+        .await?;
 
     Ok(())
 }

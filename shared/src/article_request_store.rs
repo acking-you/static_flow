@@ -108,6 +108,12 @@ pub struct ArticleRequestAiRunChunkRecord {
     pub created_at: i64,
 }
 
+pub const ARTICLE_REQUEST_TABLE_NAMES: &[&str] = &[
+    "article_requests",
+    "article_request_ai_runs",
+    "article_request_ai_run_chunks",
+];
+
 pub struct ArticleRequestStore {
     db: Connection,
     requests_table: String,
@@ -116,6 +122,10 @@ pub struct ArticleRequestStore {
 }
 
 impl ArticleRequestStore {
+    pub fn connection(&self) -> &Connection {
+        &self.db
+    }
+
     pub async fn connect(db_uri: &str) -> Result<Self> {
         let db = connect(db_uri)
             .execute()

@@ -818,6 +818,28 @@ pub async fn upsert_article_json(db_path: &Path, json: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn restore_table(db_path: &Path, table: &str, version: u64) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, table).await?;
+    let current = table.version().await?;
+    tracing::info!(
+        "Table `{}` current version: {}, restoring to version {}",
+        table.name(),
+        current,
+        version
+    );
+    table.checkout(version).await.context("checkout failed")?;
+    table.restore().await.context("restore failed")?;
+    let new_ver = table.version().await?;
+    tracing::info!(
+        "Restored `{}` to version {} (new version: {})",
+        table.name(),
+        version,
+        new_ver
+    );
+    Ok(())
+}
+
 pub async fn upsert_image_json(db_path: &Path, json: &str) -> Result<()> {
     let mut record: ImageRecord = serde_json::from_str(json).context("invalid image JSON")?;
     if record.created_at == 0 {

@@ -37,6 +37,8 @@ const SONGS_TABLE: &str = "songs";
 const MUSIC_PLAYS_TABLE: &str = "music_plays";
 const MUSIC_COMMENTS_TABLE: &str = "music_comments";
 
+pub const MUSIC_TABLE_NAMES: &[&str] = &["songs", "music_plays", "music_comments"];
+
 // ---------------------------------------------------------------------------
 // Record structs (DB rows)
 // ---------------------------------------------------------------------------
@@ -540,6 +542,10 @@ pub struct MusicDataStore {
 }
 
 impl MusicDataStore {
+    pub fn connection(&self) -> &Connection {
+        &self.db
+    }
+
     pub async fn connect(db_uri: &str) -> Result<Self> {
         let db = connect(db_uri)
             .execute()

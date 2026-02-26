@@ -503,4 +503,11 @@ pub enum DbCommands {
         #[arg(long)]
         json: String,
     },
+    /// Restore a table to a specific version (checkout + restore).
+    RestoreVersion {
+        /// Table name.
+        table: String,
+        /// Target version number.
+        version: u64,
+    },
 }

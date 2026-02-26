@@ -206,6 +206,14 @@ pub struct CommentAiRunChunkRecord {
     pub created_at: i64,
 }
 
+pub const COMMENT_TABLE_NAMES: &[&str] = &[
+    "comment_tasks",
+    "comment_published",
+    "comment_audit_logs",
+    "comment_ai_runs",
+    "comment_ai_run_chunks",
+];
+
 pub struct CommentDataStore {
     db: Connection,
     tasks_table: String,
@@ -216,6 +224,10 @@ pub struct CommentDataStore {
 }
 
 impl CommentDataStore {
+    pub fn connection(&self) -> &Connection {
+        &self.db
+    }
+
     pub async fn connect(db_uri: &str) -> Result<Self> {
         let db = connect(db_uri)
             .execute()

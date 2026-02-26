@@ -17,6 +17,9 @@ pub mod music_wish_store;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod article_request_store;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod optimize;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LocalizedText {
     pub zh: Option<String>,

@@ -20,9 +20,6 @@ use crate::{
 const CLIENT_SOURCE_HEADER: &str = "x-sf-client";
 const PAGE_PATH_HEADER: &str = "x-sf-page";
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
-/// Compact the api_behavior_events table every N appends to prevent fragment
-/// accumulation.
-const COMPACT_EVERY_N_EVENTS: u64 = 500;
 
 pub async fn behavior_analytics_middleware(
     State(state): State<AppState>,
@@ -52,7 +49,7 @@ pub async fn behavior_analytics_middleware(
     let latency_ms = started_at.elapsed().as_millis().min(i32::MAX as u128) as i32;
     let response_headers = response.headers().clone();
 
-    // Fire-and-forget: GeoIP + DB write run in background, don't block response
+    // Build event and send to buffered flusher — non-blocking, no spawn needed
     tokio::spawn(async move {
         let occurred_at = chrono::Utc::now().timestamp_millis();
         let ip_region = state.geoip.resolve_region(&client_ip).await;
@@ -92,17 +89,8 @@ pub async fn behavior_analytics_middleware(
             trace_id,
         };
 
-        if let Err(err) = state.store.append_api_behavior_event(input).await {
-            tracing::warn!("failed to append api behavior event: {err}");
-        }
-
-        // Periodic compaction to merge small fragments
-        let count = EVENT_COUNTER.load(Ordering::Relaxed);
-        if count % COMPACT_EVERY_N_EVENTS == 0 {
-            tracing::info!("auto-compacting api_behavior_events (event #{count})");
-            if let Err(err) = state.store.compact_api_behavior_table().await {
-                tracing::warn!("auto-compact api_behavior_events failed: {err}");
-            }
+        if let Err(err) = state.behavior_event_tx.try_send(input) {
+            tracing::warn!("behavior event channel full or closed: {err}");
         }
     });
 

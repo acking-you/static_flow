@@ -1,15 +1,16 @@
-use std::{collections::HashMap, env, sync::Arc, time::Instant};
+use std::{collections::HashMap, env, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{
-    article_request_store::ArticleRequestStore,
-    comments_store::CommentDataStore,
-    lancedb_api::{CategoryInfo, StaticFlowDataStore, StatsResponse, TagInfo},
-    music_store::MusicDataStore,
-    music_wish_store::MusicWishStore,
+    article_request_store::{self, ArticleRequestStore},
+    comments_store::{self, CommentDataStore},
+    lancedb_api::{self, CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo},
+    music_store::{self, MusicDataStore},
+    music_wish_store::{self, MusicWishStore},
+    optimize::{scan_and_compact_tables, CompactConfig},
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 
 use crate::{
     article_request_worker::{self, ArticleRequestWorkerConfig},
@@ -140,6 +141,8 @@ pub struct AppState {
     pub(crate) article_request_worker_tx: mpsc::Sender<String>,
     pub(crate) article_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
+    pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
+    pub(crate) shutdown_tx: watch::Sender<bool>,
 }
 
 impl AppState {
@@ -148,7 +151,7 @@ impl AppState {
         comments_db_uri: &str,
         music_db_uri: &str,
     ) -> Result<Self> {
-        let store = StaticFlowDataStore::connect(content_db_uri).await?;
+        let store = Arc::new(StaticFlowDataStore::connect(content_db_uri).await?);
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
         let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
         let music_wish_store = Arc::new(MusicWishStore::connect(music_db_uri).await?);
@@ -182,8 +185,21 @@ impl AppState {
                 .filter(|value| !value.is_empty()),
         };
 
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
+
+        spawn_table_compactor(
+            store.clone(),
+            comment_store.clone(),
+            music_store.clone(),
+            music_wish_store.clone(),
+            article_request_store.clone(),
+            shutdown_rx,
+        );
+
         Ok(Self {
-            store: Arc::new(store),
+            store,
             comment_store,
             geoip,
             tags_cache: Arc::new(RwLock::new(None)),
@@ -206,7 +222,14 @@ impl AppState {
             article_request_worker_tx,
             article_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             email_notifier,
+            behavior_event_tx,
+            shutdown_tx,
         })
+    }
+
+    /// Signal all background tasks to shut down gracefully.
+    pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
     }
 }
 
@@ -271,4 +294,186 @@ fn read_api_behavior_runtime_config_from_env() -> ApiBehaviorRuntimeConfig {
         default_days,
         max_days,
     }
+}
+
+/// Buffered writer for api_behavior_events.
+///
+/// Events are collected via an mpsc channel and flushed as a single batch
+/// every `FLUSH_INTERVAL` or when the buffer reaches `FLUSH_BATCH_SIZE`,
+/// whichever comes first.
+const BEHAVIOR_FLUSH_BATCH_SIZE: usize = 50;
+const BEHAVIOR_CHANNEL_CAPACITY: usize = 2048;
+
+fn spawn_behavior_event_flusher(
+    store: Arc<StaticFlowDataStore>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> mpsc::Sender<NewApiBehaviorEventInput> {
+    let (tx, mut rx) = mpsc::channel::<NewApiBehaviorEventInput>(BEHAVIOR_CHANNEL_CAPACITY);
+
+    tokio::spawn(async move {
+        let flush_interval = tokio::time::Duration::from_secs(5);
+        let mut buffer = Vec::with_capacity(BEHAVIOR_FLUSH_BATCH_SIZE);
+        let mut flush_count: u64 = 0;
+
+        loop {
+            let event = tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        if !buffer.is_empty() {
+                            if let Err(err) = store.append_api_behavior_events(buffer.drain(..).collect()).await {
+                                tracing::warn!("final behavior event flush failed: {err}");
+                            }
+                        }
+                        tracing::info!("behavior event flusher shutting down (shutdown signal)");
+                        return;
+                    }
+                    continue;
+                }
+                result = tokio::time::timeout(flush_interval, rx.recv()) => result,
+            };
+
+            match event {
+                Ok(Some(input)) => {
+                    buffer.push(input);
+                    while buffer.len() < BEHAVIOR_FLUSH_BATCH_SIZE {
+                        match rx.try_recv() {
+                            Ok(input) => buffer.push(input),
+                            Err(_) => break,
+                        }
+                    }
+                },
+                Ok(None) => {
+                    if !buffer.is_empty() {
+                        if let Err(err) = store.append_api_behavior_events(buffer.drain(..).collect()).await {
+                            tracing::warn!("final behavior event flush failed: {err}");
+                        }
+                    }
+                    tracing::info!("behavior event flusher shutting down");
+                    return;
+                },
+                Err(_) => {},
+            }
+
+            if buffer.is_empty() {
+                continue;
+            }
+
+            let batch: Vec<_> = buffer.drain(..).collect();
+            let count = batch.len();
+
+            if let Err(err) = store.append_api_behavior_events(batch).await {
+                tracing::warn!("behavior event batch flush failed ({count} events): {err}");
+                continue;
+            }
+
+            flush_count += 1;
+            tracing::debug!("flushed {count} behavior events (flush #{flush_count})");
+        }
+    });
+
+    tx
+}
+
+const DEFAULT_SCAN_INTERVAL_SECS: u64 = 180;
+
+fn spawn_table_compactor(
+    store: Arc<StaticFlowDataStore>,
+    comment_store: Arc<CommentDataStore>,
+    music_store: Arc<MusicDataStore>,
+    music_wish_store: Arc<MusicWishStore>,
+    article_request_store: Arc<ArticleRequestStore>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let interval_secs = env_u64("TABLE_COMPACT_SCAN_INTERVAL_SECS", DEFAULT_SCAN_INTERVAL_SECS, 30);
+    let threshold = env_usize("TABLE_COMPACT_FRAGMENT_THRESHOLD", 10, 2);
+    let config = CompactConfig {
+        fragment_threshold: threshold,
+        prune_older_than_hours: 2,
+    };
+
+    tokio::spawn(async move {
+        // Startup delay to avoid racing with schema migrations
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    tracing::info!("table compactor cancelled during startup delay");
+                    return;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+        }
+        tracing::info!(
+            "table compactor started (scan_interval={interval_secs}s, threshold={threshold})"
+        );
+
+        loop {
+            let started = Instant::now();
+
+            let mut total_compacted = 0usize;
+
+            // Scan each DB group sequentially
+            for (db_label, conn, tables) in [
+                ("content", store.connection(), lancedb_api::CONTENT_TABLE_NAMES),
+                (
+                    "content",
+                    article_request_store.connection(),
+                    article_request_store::ARTICLE_REQUEST_TABLE_NAMES,
+                ),
+                ("comments", comment_store.connection(), comments_store::COMMENT_TABLE_NAMES),
+                ("music", music_store.connection(), music_store::MUSIC_TABLE_NAMES),
+                ("music", music_wish_store.connection(), music_wish_store::MUSIC_WISH_TABLE_NAMES),
+            ] {
+                let results = scan_and_compact_tables(conn, tables, &config).await;
+                for r in &results {
+                    if let Some(err) = &r.error {
+                        tracing::warn!("compactor {db_label}/{}: {err}", r.table);
+                    } else if r.compacted {
+                        tracing::info!(
+                            "compacted {db_label}/{} (had {} small fragments)",
+                            r.table,
+                            r.small_fragments
+                        );
+                        total_compacted += 1;
+                    }
+                }
+            }
+
+            if total_compacted > 0 {
+                tracing::info!(
+                    "compactor cycle: {total_compacted} tables compacted in {:.1}s",
+                    started.elapsed().as_secs_f64()
+                );
+            }
+
+            // Wait for next cycle or shutdown
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!("table compactor shutting down");
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(interval_secs)) => {}
+            }
+        }
+    });
+}
+
+fn env_u64(key: &str, default: u64, min: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v >= min)
+        .unwrap_or(default)
+}
+
+fn env_usize(key: &str, default: usize, min: usize) -> usize {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= min)
+        .unwrap_or(default)
 }
