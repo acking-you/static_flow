@@ -38,7 +38,7 @@ impl Default for MusicPlayerState {
             playing: false,
             current_time: 0.0,
             duration: 0.0,
-            volume: 1.0,
+            volume: 0.5,
             minimized: false,
             visible: false,
             history: Vec::new(),
