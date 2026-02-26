@@ -461,6 +461,22 @@ pub fn music_library_page() -> Html {
         })
     };
 
+    let on_wish_fill_form = {
+        let wish_form_song = wish_form_song.clone();
+        let wish_form_artist = wish_form_artist.clone();
+        let wish_form_message = wish_form_message.clone();
+        Callback::from(move |w: api::MusicWishItem| {
+            wish_form_song.set(w.song_name.clone());
+            wish_form_artist.set(w.artist_hint.unwrap_or_default());
+            wish_form_message.set(w.wish_message.clone());
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Some(el) = doc.get_element_by_id("music-wish-form") {
+                    el.scroll_into_view();
+                }
+            }
+        })
+    };
+
     let on_wish_submit = {
         let wish_form_song = wish_form_song.clone();
         let wish_form_artist = wish_form_artist.clone();
@@ -680,7 +696,7 @@ pub fn music_library_page() -> Html {
                 </h2>
                 <p class="text-[var(--muted)] text-sm mb-6">{wish_t::SECTION_SUBTITLE}</p>
 
-                <form onsubmit={on_wish_submit}
+                <form id="music-wish-form" onsubmit={on_wish_submit}
                     class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-5 mb-8 \
                            grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -797,7 +813,9 @@ pub fn music_library_page() -> Html {
                             </div>
                         }
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                            { for wishes.iter().map(render_wish_card) }
+                            { for wishes.iter().map(|w| html! {
+                                <WishCard key={w.wish_id.clone()} wish={w.clone()} on_fill_form={on_wish_fill_form.clone()} />
+                            }) }
                         </div>
                     </>
                 }
@@ -888,7 +906,16 @@ fn format_duration(ms: u64) -> String {
     format!("{:02}:{:02}", minutes, seconds)
 }
 
-fn render_wish_card(w: &api::MusicWishItem) -> Html {
+#[derive(Properties, PartialEq)]
+struct WishCardProps {
+    pub wish: api::MusicWishItem,
+    pub on_fill_form: Callback<api::MusicWishItem>,
+}
+
+#[function_component(WishCard)]
+fn wish_card(props: &WishCardProps) -> Html {
+    let w = &props.wish;
+
     let status_class = match w.status.as_str() {
         "pending" => "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
         "approved" | "running" => "bg-blue-500/10 text-blue-600 border-blue-500/20",
@@ -907,6 +934,12 @@ fn render_wish_card(w: &api::MusicWishItem) -> Html {
 
     let ts = format_ts_ms(w.created_at);
 
+    let on_fill = {
+        let cb = props.on_fill_form.clone();
+        let wish = w.clone();
+        Callback::from(move |_: MouseEvent| cb.emit(wish.clone()))
+    };
+
     html! {
         <div class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-4 \
                     flex flex-col gap-2">
@@ -924,7 +957,20 @@ fn render_wish_card(w: &api::MusicWishItem) -> Html {
             <div class="flex items-center justify-between text-[10px] text-[var(--muted)] mt-auto pt-1 \
                         border-t border-[var(--border)]">
                 <span>{format!("{} · {}", w.nickname, w.ip_region)}</span>
-                <span>{&ts}</span>
+                <div class="flex items-center gap-2">
+                    <button onclick={on_fill}
+                        class="inline-flex items-center gap-1 text-[var(--muted)] \
+                               hover:text-[var(--primary)] transition-colors"
+                        title={wish_t::FILL_FORM}>
+                        <svg class="w-3 h-3" xmlns="http://www.w3.org/2000/svg" fill="none"
+                             viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                  d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                        </svg>
+                        <span>{wish_t::FILL_FORM}</span>
+                    </button>
+                    <span>{&ts}</span>
+                </div>
             </div>
             if w.status == "done" {
                 if let Some(ref song_id) = w.ingested_song_id {

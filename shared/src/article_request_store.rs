@@ -38,6 +38,7 @@ pub struct NewArticleRequestInput {
     pub fingerprint: String,
     pub client_ip: String,
     pub ip_region: String,
+    pub parent_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,6 +63,7 @@ pub struct ArticleRequestRecord {
     pub created_at: i64,
     pub updated_at: i64,
     pub ai_reply: Option<String>,
+    pub parent_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,7 +130,21 @@ impl ArticleRequestStore {
     }
 
     async fn requests_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.requests_table, request_schema()).await
+        let table = ensure_table(&self.db, &self.requests_table, request_schema()).await?;
+        let schema = table.schema().await.ok();
+        if schema
+            .as_ref()
+            .map(|s| s.field_with_name("parent_request_id").is_err())
+            .unwrap_or(false)
+        {
+            let new_field =
+                Arc::new(Schema::new(vec![Field::new("parent_request_id", DataType::Utf8, true)]));
+            table
+                .add_columns(lancedb::table::NewColumnTransform::AllNulls(new_field), None)
+                .await
+                .ok();
+        }
+        Ok(table)
     }
     async fn ai_runs_table(&self) -> Result<Table> {
         ensure_table(&self.db, &self.ai_runs_table, request_ai_runs_schema()).await
@@ -158,6 +174,7 @@ impl ArticleRequestStore {
             created_at: now,
             updated_at: now,
             ai_reply: None,
+            parent_request_id: normalize_opt(input.parent_request_id),
         };
         let table = self.requests_table().await?;
         upsert_request_record(&table, &record).await?;
@@ -269,6 +286,30 @@ impl ArticleRequestStore {
         let chunks = self.ai_chunks_table().await?;
         chunks.delete(&format!("request_id = '{esc}'")).await?;
         Ok(())
+    }
+
+    /// Walk the parent_request_id chain upward, collecting ancestor records.
+    /// Returns `[self_or_parent, grandparent, ...]` up to `max_depth` entries.
+    pub async fn build_parent_context_chain(
+        &self,
+        request_id: &str,
+        max_depth: usize,
+    ) -> Result<Vec<ArticleRequestRecord>> {
+        let mut chain = Vec::new();
+        let mut current_id = request_id.to_string();
+        for _ in 0..max_depth {
+            let record = match self.get_request(&current_id).await? {
+                Some(r) => r,
+                None => break,
+            };
+            let next_parent = record.parent_request_id.clone();
+            chain.push(record);
+            match next_parent {
+                Some(pid) if !pid.is_empty() => current_id = pid,
+                _ => break,
+            }
+        }
+        Ok(chain)
     }
 
     pub async fn create_ai_run(
@@ -433,6 +474,7 @@ fn request_schema() -> Arc<Schema> {
         Field::new("ai_reply", DataType::Utf8, true),
         Field::new("requester_email", DataType::Utf8, true),
         Field::new("frontend_page_url", DataType::Utf8, true),
+        Field::new("parent_request_id", DataType::Utf8, true),
     ]))
 }
 
@@ -482,6 +524,7 @@ fn build_request_batch(r: &ArticleRequestRecord) -> Result<RecordBatch> {
     let mut ai_reply = StringBuilder::new();
     let mut requester_email = StringBuilder::new();
     let mut frontend_page_url = StringBuilder::new();
+    let mut parent_request_id = StringBuilder::new();
 
     request_id.append_value(&r.request_id);
     article_url.append_value(&r.article_url);
@@ -501,6 +544,7 @@ fn build_request_batch(r: &ArticleRequestRecord) -> Result<RecordBatch> {
     ai_reply.append_option(r.ai_reply.as_deref());
     requester_email.append_option(r.requester_email.as_deref());
     frontend_page_url.append_option(r.frontend_page_url.as_deref());
+    parent_request_id.append_option(r.parent_request_id.as_deref());
 
     let columns: Vec<ArrayRef> = vec![
         Arc::new(request_id.finish()),
@@ -521,6 +565,7 @@ fn build_request_batch(r: &ArticleRequestRecord) -> Result<RecordBatch> {
         Arc::new(ai_reply.finish()),
         Arc::new(requester_email.finish()),
         Arc::new(frontend_page_url.finish()),
+        Arc::new(parent_request_id.finish()),
     ];
     Ok(RecordBatch::try_new(request_schema(), columns)?)
 }
@@ -660,6 +705,7 @@ async fn query_requests(
         "created_at",
         "updated_at",
         "ai_reply",
+        "parent_request_id",
     ];
     let batches = query
         .select(Select::columns(cols))
@@ -688,6 +734,7 @@ async fn query_requests(
         let c_created_at = ts_col(&batch, "created_at")?;
         let c_updated_at = ts_col(&batch, "updated_at")?;
         let c_ai_reply = string_col(&batch, "ai_reply")?;
+        let c_parent_request_id = string_col(&batch, "parent_request_id")?;
 
         for i in 0..batch.num_rows() {
             rows.push(ArticleRequestRecord {
@@ -709,6 +756,7 @@ async fn query_requests(
                 created_at: c_created_at.value(i),
                 updated_at: c_updated_at.value(i),
                 ai_reply: nullable_str(c_ai_reply, i),
+                parent_request_id: nullable_str(c_parent_request_id, i),
             });
         }
     }

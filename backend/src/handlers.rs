@@ -4185,7 +4185,7 @@ pub async fn admin_music_wish_ai_stream(
 
 #[derive(Debug, Deserialize)]
 pub struct SubmitArticleRequestRequest {
-    pub article_url: String,
+    pub article_url: Option<String>,
     pub title_hint: Option<String>,
     pub request_message: String,
     #[serde(default)]
@@ -4194,6 +4194,8 @@ pub struct SubmitArticleRequestRequest {
     pub requester_email: Option<String>,
     #[serde(default)]
     pub frontend_page_url: Option<String>,
+    #[serde(default)]
+    pub parent_request_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4222,10 +4224,36 @@ pub async fn submit_article_request(
     headers: HeaderMap,
     Json(request): Json<SubmitArticleRequestRequest>,
 ) -> Result<Json<SubmitArticleRequestResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let article_url = request.article_url.trim();
-    if article_url.is_empty() {
-        return Err(bad_request("`article_url` is required"));
-    }
+    let parent_request_id = request
+        .parent_request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // When following up, inherit article_url from parent if not provided
+    let article_url = if let Some(ref parent_id) = parent_request_id {
+        let parent = state
+            .article_request_store
+            .get_request(parent_id)
+            .await
+            .map_err(|e| internal_error("Failed to look up parent request", e))?
+            .ok_or_else(|| bad_request("parent request not found"))?;
+        if parent.status != REQUEST_STATUS_DONE {
+            return Err(bad_request("parent request must be in done status"));
+        }
+        match request.article_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(url) => url.to_string(),
+            None => parent.article_url.clone(),
+        }
+    } else {
+        let url = request.article_url.as_deref().unwrap_or("").trim().to_string();
+        if url.is_empty() {
+            return Err(bad_request("`article_url` is required"));
+        }
+        url
+    };
+
     if article_url.chars().count() > 2000 {
         return Err(bad_request("`article_url` must be <= 2000 chars"));
     }
@@ -4272,6 +4300,7 @@ pub async fn submit_article_request(
             fingerprint,
             client_ip: ip,
             ip_region,
+            parent_request_id,
         })
         .await
         .map_err(|e| internal_error("Failed to create article request", e))?;

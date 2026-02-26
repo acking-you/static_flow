@@ -609,7 +609,7 @@ pub fn music_player_page(props: &Props) -> Html {
                     <input type="range" min="0" max={duration.to_string()} step="0.1" value={current_time.to_string()} oninput={on_seek}
                         class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" aria-label="Seek" />
                 </div>
-                <div class="flex items-center gap-3">
+                <div class="flex flex-wrap items-center justify-center gap-3">
                     <button onclick={on_set_random_mode} type="button"
                         class={classes!(
                             "transition-colors",
@@ -670,10 +670,11 @@ pub fn music_player_page(props: &Props) -> Html {
                             "Playlist"
                         }}
                     </span>
-                    <span class="text-xs text-[var(--muted)] tabular-nums whitespace-nowrap min-w-[80px]">
+                </div>
+                <div class="flex items-center justify-center gap-3 mt-2">
+                    <span class="text-xs text-[var(--muted)] tabular-nums whitespace-nowrap">
                         {format!("{} / {}", format_time(current_time), format_time(duration))}
                     </span>
-                    <div class="flex-1" />
                     <a href={audio_url} download={format!("{}.{}", detail.title, detail.format)}
                         class="text-[var(--muted)] hover:text-[var(--text)] transition-colors" aria-label="Download"
                         onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}>

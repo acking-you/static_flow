@@ -91,6 +91,19 @@ struct ArticleRequestWorkerPayload<'a> {
     request_message: &'a str,
     content_db_path: &'a str,
     skill_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_request_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_context: Option<Vec<ParentContextEntry>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ParentContextEntry {
+    request_id: String,
+    article_url: String,
+    request_message: String,
+    ingested_article_id: Option<String>,
+    ai_reply: Option<String>,
 }
 
 #[derive(Debug)]
@@ -333,6 +346,26 @@ async fn run_request_runner(
     let result_file_path = build_result_file_path(&config.result_dir, &request.request_id);
     let _ = tokio::fs::remove_file(&result_file_path).await;
 
+    let (parent_id, parent_context) = if let Some(ref pid) = request.parent_request_id {
+        let chain = store
+            .build_parent_context_chain(pid, 5)
+            .await
+            .unwrap_or_default();
+        let entries: Vec<ParentContextEntry> = chain
+            .into_iter()
+            .map(|r| ParentContextEntry {
+                request_id: r.request_id,
+                article_url: r.article_url,
+                request_message: r.request_message,
+                ingested_article_id: r.ingested_article_id,
+                ai_reply: r.ai_reply,
+            })
+            .collect();
+        (Some(pid.as_str()), if entries.is_empty() { None } else { Some(entries) })
+    } else {
+        (None, None)
+    };
+
     let payload = ArticleRequestWorkerPayload {
         request_id: &request.request_id,
         article_url: &request.article_url,
@@ -340,6 +373,8 @@ async fn run_request_runner(
         request_message: &request.request_message,
         content_db_path: &config.content_db_path,
         skill_path: config.skill_path.display().to_string(),
+        parent_request_id: parent_id,
+        parent_context,
     };
 
     let payload_json =

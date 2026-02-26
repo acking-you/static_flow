@@ -2636,9 +2636,14 @@ a:hover {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  overflow-x: hidden;
-  overflow-y: visible;
+  overflow: hidden;
   padding-bottom: 0;
+}
+
+/* Images never need horizontal scroll — disable scroll-wrap overflow for media */
+.article-content .md-scroll-wrap.md-media-wrap,
+.article-content .md-scroll-wrap:has(> .md-media-wrap) {
+  overflow: hidden;
 }
 
 .article-content .md-media-wrap > img,

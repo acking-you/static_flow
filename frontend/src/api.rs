@@ -3255,6 +3255,8 @@ pub struct ArticleRequestItem {
     pub attempt_count: i32,
     pub fingerprint: String,
     pub client_ip: String,
+    #[serde(default)]
+    pub parent_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3322,6 +3324,7 @@ pub async fn submit_article_request(
     nickname: Option<&str>,
     requester_email: Option<&str>,
     frontend_page_url: Option<&str>,
+    parent_request_id: Option<&str>,
 ) -> Result<SubmitArticleRequestResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -3355,6 +3358,9 @@ pub async fn submit_article_request(
         }
         if let Some(page_url) = frontend_page_url {
             body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
+        }
+        if let Some(pid) = parent_request_id {
+            body["parent_request_id"] = serde_json::Value::String(pid.to_string());
         }
         let response = api_post(&url)
             .json(&body)

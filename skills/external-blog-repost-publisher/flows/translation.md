@@ -19,6 +19,7 @@ Before translating, identify:
 ## Step 3: Translate with style fidelity
 1. Keep facts unchanged:
    - numbers, units, comparisons, entity names, links, code intent.
+   - do not compress specific evidence into generic paraphrase.
 2. Keep structure meaningful:
    - translate headings, keep section logic and list semantics.
    - keep source information order unless target-language grammar forces minor reordering.
@@ -33,6 +34,9 @@ Before translating, identify:
 6. Expansion boundary:
    - do not invent facts, numbers, or positions not supported by source text.
    - do not let expansion replace or dilute source-critical information.
+7. Domain-term sanity pass (mandatory for long technical docs):
+   - verify high-risk terms and phrases section-by-section,
+   - fix mistranslations that change meaning (especially protocol/consistency/concurrency semantics).
 
 ## Step 4: Quick quality check
 1. No missing key section (especially definitions and conclusions).
@@ -41,6 +45,9 @@ Before translating, identify:
 4. Expansion quality:
    - added wording feels natural, not bloated.
    - key facts/constraints are fully preserved after expansion.
+5. Heading and label quality:
+   - title + section headings are translated/readable,
+   - operation labels and figure notes remain semantically precise.
 
 ## Common Failure Patterns (must avoid)
 1. Reordering logic so heavily that argument flow changes.

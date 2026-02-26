@@ -72,6 +72,15 @@ Notes:
 - Do not install/copy/remove any skill files at runtime.
 - Before starting work, check if any of these files exist in the working directory
   and read them for project context: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
+
+FOLLOW-UP CONTEXT (if applicable):
+- If the payload contains "parent_request_id" and "parent_context", this is a follow-up request.
+- "parent_context" is an array ordered from direct parent to oldest ancestor.
+- Each entry has: "request_id", "article_url", "request_message" (user instruction),
+  "ai_reply" (what AI did), "ingested_article_id" (article produced, if any).
+- Use the full chain to understand the user's cumulative intent.
+- If a previous round produced an article (ingested_article_id), consider updating it
+  rather than creating a new one, unless the user explicitly asks for a new article.
 EOF
 
 codex_cmd=(

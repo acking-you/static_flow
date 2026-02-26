@@ -374,6 +374,7 @@ pub mod music_wish {
     pub const SUBMIT_SUCCESS: &str = "心愿已提交，等待审核中";
     pub const REFRESH_BTN: &str = "刷新状态";
     pub const REFRESHING: &str = "刷新中...";
+    pub const FILL_FORM: &str = "填入表单";
 }
 
 pub mod article_request {
@@ -403,6 +404,20 @@ pub mod article_request {
     pub const REFRESH_BTN: &str = "刷新状态";
     pub const REFRESHING: &str = "刷新中...";
     pub const NAV_BTN: &str = "文章入库";
+    pub const AI_REPLY_TOGGLE: &str = "查看 AI 回复";
+    pub const FOLLOW_UP_BTN: &str = "继续对话 →";
+    pub const FOLLOW_UP_INDICATOR: &str = "追问模式 — 基于已完成请求";
+    pub const FOLLOW_UP_BADGE: &str = "追问";
+    pub const FOLLOW_UP_REF_PREFIX: &str = "基于 #";
+    pub const CANCEL_FOLLOW_UP: &str = "取消追问";
+    pub const DETAIL_MODAL_TITLE: &str = "请求详情";
+    pub const DETAIL_MODAL_CLOSE: &str = "关闭";
+    pub const VIEW_DETAIL_BTN: &str = "查看详情";
+    pub const LABEL_URL: &str = "文章链接";
+    pub const LABEL_TITLE: &str = "标题";
+    pub const LABEL_MESSAGE: &str = "推荐理由";
+    pub const LABEL_AI_REPLY: &str = "AI 回复";
+    pub const LABEL_REGION: &str = "来源";
 }
 
 pub mod mock {
