@@ -6,6 +6,7 @@ use yew::prelude::*;
 
 use crate::{
     api,
+    media_session,
     music_context::{MusicAction, MusicPlayerContext, NextSongMode},
 };
 
@@ -146,6 +147,16 @@ pub fn persistent_audio() -> Html {
                         let _ = audio.pause();
                     }
                 }
+                // Sync Media Session metadata
+                if let Some(song) = &ctx.current_song {
+                    let cover = api::song_cover_url(song.cover_image.as_deref());
+                    media_session::set_media_metadata(
+                        &song.title,
+                        &song.artist,
+                        &song.album,
+                        &cover,
+                    );
+                }
             }
             || ()
         });
@@ -177,6 +188,15 @@ pub fn persistent_audio() -> Html {
             if let Some(audio) = audio_ref.cast::<HtmlAudioElement>() {
                 audio.set_volume(*vol);
             }
+            || ()
+        });
+    }
+
+    // Sync Media Session playback state
+    {
+        let playing = ctx.playing;
+        use_effect_with(playing, move |playing| {
+            media_session::set_playback_state(*playing);
             || ()
         });
     }
@@ -229,6 +249,31 @@ pub fn persistent_audio() -> Html {
                 let _ =
                     audio.add_event_listener_with_callback("ended", c3.as_ref().unchecked_ref());
                 closures.borrow_mut().push(c3);
+
+                // Register Media Session action handlers
+                {
+                    let ctx_play = ctx.clone();
+                    let ctx_pause = ctx.clone();
+                    let ctx_prev = ctx.clone();
+                    let ctx_next = ctx.clone();
+                    let ms_closures = media_session::register_media_session_handlers(
+                        audio.clone(),
+                        // on_play: audio.play() is called synchronously inside the handler
+                        // to preserve user-gesture context. TogglePlay syncs UI state.
+                        // Safe because OS only sends "play" when state is paused.
+                        move || ctx_play.dispatch(MusicAction::TogglePlay),
+                        move || ctx_pause.dispatch(MusicAction::Pause),
+                        move || ctx_prev.dispatch(MusicAction::PlayPrev),
+                        move || {
+                            let ctx_inner = ctx_next.clone();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let fallback = resolve_next_song(&ctx_inner).await;
+                                ctx_inner.dispatch(MusicAction::PlayNext { fallback });
+                            });
+                        },
+                    );
+                    closures.borrow_mut().extend(ms_closures);
+                }
             }
 
             move || {

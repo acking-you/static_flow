@@ -3,6 +3,7 @@ mod components;
 mod config;
 pub mod hooks;
 mod i18n;
+mod media_session;
 mod models;
 pub mod music_context;
 mod navigation_context;
