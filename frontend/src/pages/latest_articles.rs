@@ -89,7 +89,7 @@ fn request_card(props: &RequestCardProps) -> Html {
 
     // Render the detail modal
     let modal_html = if *show_modal {
-        let ai_rendered = req.ai_reply.as_deref().map(|r| markdown_to_html(r));
+        let ai_rendered = req.ai_reply.as_deref().map(markdown_to_html);
         html! {
             <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
                  onclick={close_modal.clone()}>

@@ -324,7 +324,10 @@ fn spawn_behavior_event_flusher(
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         if !buffer.is_empty() {
-                            if let Err(err) = store.append_api_behavior_events(buffer.drain(..).collect()).await {
+                            if let Err(err) = store
+                                .append_api_behavior_events(std::mem::take(&mut buffer))
+                                .await
+                            {
                                 tracing::warn!("final behavior event flush failed: {err}");
                             }
                         }
@@ -348,7 +351,10 @@ fn spawn_behavior_event_flusher(
                 },
                 Ok(None) => {
                     if !buffer.is_empty() {
-                        if let Err(err) = store.append_api_behavior_events(buffer.drain(..).collect()).await {
+                        if let Err(err) = store
+                            .append_api_behavior_events(std::mem::take(&mut buffer))
+                            .await
+                        {
                             tracing::warn!("final behavior event flush failed: {err}");
                         }
                     }
@@ -362,7 +368,7 @@ fn spawn_behavior_event_flusher(
                 continue;
             }
 
-            let batch: Vec<_> = buffer.drain(..).collect();
+            let batch = std::mem::take(&mut buffer);
             let count = batch.len();
 
             if let Err(err) = store.append_api_behavior_events(batch).await {

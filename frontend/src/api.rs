@@ -1,6 +1,5 @@
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::{Request, RequestBuilder};
-#[cfg(not(feature = "mock"))]
 use js_sys::Date;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
@@ -17,6 +16,9 @@ pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
     Some(url) => url,
     None => "http://localhost:3000/api",
 };
+
+#[cfg(feature = "mock")]
+pub const API_BASE: &str = "http://localhost:3000/api";
 
 #[cfg(not(feature = "mock"))]
 fn current_page_path() -> Option<String> {
@@ -160,17 +162,11 @@ pub async fn fetch_articles(
         let mut articles = models::get_mock_articles();
 
         if let Some(t) = tag {
-            articles = articles
-                .into_iter()
-                .filter(|article| article.tags.iter().any(|tag| tag.eq_ignore_ascii_case(t)))
-                .collect();
+            articles.retain(|article| article.tags.iter().any(|tag| tag.eq_ignore_ascii_case(t)));
         }
 
         if let Some(c) = category {
-            articles = articles
-                .into_iter()
-                .filter(|article| article.category.eq_ignore_ascii_case(c))
-                .collect();
+            articles.retain(|article| article.category.eq_ignore_ascii_case(c));
         }
 
         let total = articles.len();
@@ -179,13 +175,13 @@ pub async fn fetch_articles(
             Some(l) => articles.into_iter().skip(off).take(l).collect(),
             None => articles,
         };
-        let has_more = limit.map_or(false, |l| off + l < total);
+        let has_more = limit.is_some_and(|l| off + l < total);
 
-        return Ok(ArticlePage {
+        Ok(ArticlePage {
             articles,
             total,
             has_more,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -249,7 +245,7 @@ pub async fn fetch_all_articles(
 pub async fn fetch_article_detail(id: &str) -> Result<Option<Article>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(models::get_mock_article_detail(id));
+        Ok(models::get_mock_article_detail(id))
     }
 
     #[cfg(not(feature = "mock"))]
@@ -295,7 +291,7 @@ pub async fn fetch_article_raw_markdown(id: &str, lang: &str) -> Result<String, 
                 .ok_or_else(|| "English article markdown not found".to_string())?,
             _ => return Err("`lang` must be `zh` or `en`".to_string()),
         };
-        return Ok(content);
+        Ok(content)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -338,7 +334,7 @@ pub async fn fetch_article_raw_markdown(id: &str, lang: &str) -> Result<String, 
 pub async fn track_article_view(id: &str) -> Result<ArticleViewTrackResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(ArticleViewTrackResponse {
+        Ok(ArticleViewTrackResponse {
             article_id: id.to_string(),
             counted: true,
             total_views: 128,
@@ -351,7 +347,7 @@ pub async fn track_article_view(id: &str) -> Result<ArticleViewTrackResponse, St
                 })
                 .collect(),
             server_time_ms: 0,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -401,7 +397,7 @@ pub async fn fetch_article_view_trend(
         }
 
         let window = days.unwrap_or(30).max(1);
-        return Ok(ArticleViewTrendResponse {
+        Ok(ArticleViewTrendResponse {
             article_id: id.to_string(),
             timezone: "Asia/Shanghai".to_string(),
             granularity: "day".to_string(),
@@ -413,7 +409,7 @@ pub async fn fetch_article_view_trend(
                     views: ((offset * 5 + 9) % 40) as u32,
                 })
                 .collect(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -453,7 +449,7 @@ pub async fn fetch_article_view_trend(
 pub async fn fetch_tags() -> Result<Vec<TagInfo>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(models::mock_tags());
+        Ok(models::mock_tags())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -482,7 +478,7 @@ pub async fn fetch_tags() -> Result<Vec<TagInfo>, String> {
 pub async fn fetch_categories() -> Result<Vec<CategoryInfo>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(models::mock_categories());
+        Ok(models::mock_categories())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -531,11 +527,11 @@ pub async fn fetch_site_stats() -> Result<SiteStats, String> {
             }
         }
 
-        return Ok(SiteStats {
+        Ok(SiteStats {
             total_articles: articles.len(),
             total_tags: tags.len(),
             total_categories: categories.len(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -652,7 +648,7 @@ pub async fn search_articles(
         if let Some(limit) = limit {
             results.truncate(limit);
         }
-        return Ok(results);
+        Ok(results)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -701,11 +697,19 @@ pub async fn semantic_search_articles(
 
     #[cfg(feature = "mock")]
     {
+        let _ = (
+            enhanced_highlight,
+            max_distance,
+            hybrid,
+            hybrid_rrf_k,
+            hybrid_vector_limit,
+            hybrid_fts_limit,
+        );
         let mut results = models::mock_search(keyword);
         if let Some(limit) = limit {
             results.truncate(limit);
         }
-        return Ok(results);
+        Ok(results)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -756,11 +760,11 @@ pub async fn fetch_related_articles(id: &str) -> Result<Vec<ArticleListItem>, St
     #[cfg(feature = "mock")]
     {
         let articles = models::get_mock_articles();
-        return Ok(articles
+        Ok(articles
             .into_iter()
             .filter(|a| a.id != id)
             .take(3)
-            .collect());
+            .collect())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -799,13 +803,13 @@ pub async fn fetch_images_page(
 ) -> Result<ImagePage, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(ImagePage {
+        Ok(ImagePage {
             images: vec![],
             total: 0,
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(0),
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -874,13 +878,14 @@ pub async fn search_images_by_id_page(
 
     #[cfg(feature = "mock")]
     {
-        return Ok(ImagePage {
+        let _ = max_distance;
+        Ok(ImagePage {
             images: vec![],
             total: 0,
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(0),
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -950,13 +955,14 @@ pub async fn search_images_by_text_page(
 
     #[cfg(feature = "mock")]
     {
-        return Ok(ImagePage {
+        let _ = max_distance;
+        Ok(ImagePage {
             images: vec![],
             total: 0,
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(0),
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1350,7 +1356,7 @@ pub fn build_admin_comment_ai_stream_url(
             url.push('?');
             url.push_str(&params.join("&"));
         }
-        return url;
+        url
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1436,10 +1442,10 @@ pub async fn submit_article_comment(
 
     #[cfg(feature = "mock")]
     {
-        return Ok(SubmitCommentResponse {
+        Ok(SubmitCommentResponse {
             task_id: format!("mock-task-{}", Date::now() as u64),
             status: "pending".to_string(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1474,11 +1480,12 @@ pub async fn fetch_article_comments(
 
     #[cfg(feature = "mock")]
     {
-        return Ok(CommentListResponse {
+        let _ = limit;
+        Ok(CommentListResponse {
             comments: vec![],
             total: 0,
             article_id: article_id.to_string(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1511,10 +1518,10 @@ pub async fn fetch_article_comment_stats(article_id: &str) -> Result<CommentStat
 
     #[cfg(feature = "mock")]
     {
-        return Ok(CommentStatsResponse {
+        Ok(CommentStatsResponse {
             article_id: article_id.to_string(),
             total: 0,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1539,11 +1546,11 @@ pub async fn fetch_article_comment_stats(article_id: &str) -> Result<CommentStat
 pub async fn fetch_admin_view_analytics_config() -> Result<ViewAnalyticsConfig, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(ViewAnalyticsConfig {
+        Ok(ViewAnalyticsConfig {
             dedupe_window_seconds: 60,
             trend_default_days: 30,
             trend_max_days: 180,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1568,7 +1575,7 @@ pub async fn update_admin_view_analytics_config(
 ) -> Result<ViewAnalyticsConfig, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(config.clone());
+        Ok(config.clone())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1594,11 +1601,11 @@ pub async fn update_admin_view_analytics_config(
 pub async fn fetch_admin_api_behavior_config() -> Result<ApiBehaviorConfig, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(ApiBehaviorConfig {
+        Ok(ApiBehaviorConfig {
             retention_days: 90,
             default_days: 30,
             max_days: 180,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1623,7 +1630,7 @@ pub async fn update_admin_api_behavior_config(
 ) -> Result<ApiBehaviorConfig, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(config.clone());
+        Ok(config.clone())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1652,7 +1659,8 @@ pub async fn fetch_admin_api_behavior_overview(
 ) -> Result<AdminApiBehaviorOverviewResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminApiBehaviorOverviewResponse {
+        let _ = limit;
+        Ok(AdminApiBehaviorOverviewResponse {
             timezone: "Asia/Shanghai".to_string(),
             days: days.unwrap_or(30),
             total_events: 0,
@@ -1667,7 +1675,7 @@ pub async fn fetch_admin_api_behavior_overview(
             os_distribution: vec![],
             region_distribution: vec![],
             recent_events: vec![],
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1704,13 +1712,13 @@ pub async fn fetch_admin_api_behavior_events(
 ) -> Result<AdminApiBehaviorEventsResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminApiBehaviorEventsResponse {
+        Ok(AdminApiBehaviorEventsResponse {
             total: 0,
             offset: query.offset.unwrap_or(0),
             limit: query.limit.unwrap_or(100),
             has_more: false,
             events: vec![],
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1796,11 +1804,11 @@ pub async fn admin_cleanup_api_behavior(
 ) -> Result<AdminApiBehaviorCleanupResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminApiBehaviorCleanupResponse {
+        Ok(AdminApiBehaviorCleanupResponse {
             deleted_events: 0,
             before_ms: 0,
             retention_days: request.retention_days.unwrap_or(90),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1826,11 +1834,11 @@ pub async fn admin_cleanup_api_behavior(
 pub async fn fetch_admin_comment_runtime_config() -> Result<CommentRuntimeConfig, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(CommentRuntimeConfig {
+        Ok(CommentRuntimeConfig {
             submit_rate_limit_seconds: 60,
             list_default_limit: 20,
             cleanup_retention_days: -1,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1855,7 +1863,7 @@ pub async fn update_admin_comment_runtime_config(
 ) -> Result<CommentRuntimeConfig, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(config.clone());
+        Ok(config.clone())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1885,14 +1893,15 @@ pub async fn fetch_admin_comment_tasks_grouped(
 ) -> Result<AdminCommentTaskGroupedResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminCommentTaskGroupedResponse {
+        let _ = (status, limit, offset);
+        Ok(AdminCommentTaskGroupedResponse {
             groups: vec![],
             total_tasks: 0,
             total_articles: 0,
             status_counts: std::collections::HashMap::new(),
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1930,7 +1939,8 @@ pub async fn fetch_admin_comment_tasks_grouped(
 pub async fn fetch_admin_comment_task(task_id: &str) -> Result<AdminCommentTask, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("not found".to_string());
+        let _ = task_id;
+        Err("not found".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -1958,7 +1968,8 @@ pub async fn fetch_admin_comment_task_ai_output(
 ) -> Result<AdminCommentTaskAiOutputResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminCommentTaskAiOutputResponse {
+        let _ = (run_id, limit);
+        Ok(AdminCommentTaskAiOutputResponse {
             task_id: task_id.to_string(),
             selected_run_id: None,
             runs: vec![],
@@ -1966,7 +1977,7 @@ pub async fn fetch_admin_comment_task_ai_output(
             merged_stdout: String::new(),
             merged_stderr: String::new(),
             merged_output: String::new(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2008,7 +2019,8 @@ pub async fn patch_admin_comment_task(
 ) -> Result<AdminCommentTask, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("not implemented in mock".to_string());
+        let _ = (task_id, request);
+        Err("not implemented in mock".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2066,7 +2078,8 @@ pub async fn admin_delete_comment_task(
 ) -> Result<serde_json::Value, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(serde_json::json!({ "task_id": task_id, "deleted": true }));
+        let _ = request;
+        Ok(serde_json::json!({ "task_id": task_id, "deleted": true }))
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2098,12 +2111,13 @@ pub async fn fetch_admin_published_comments(
 ) -> Result<AdminCommentPublishedResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminCommentPublishedResponse {
+        let _ = (article_id, task_id, limit, offset);
+        Ok(AdminCommentPublishedResponse {
             comments: vec![],
             total: 0,
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2147,7 +2161,8 @@ pub async fn patch_admin_published_comment(
 ) -> Result<ArticleComment, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("not implemented in mock".to_string());
+        let _ = (comment_id, request);
+        Err("not implemented in mock".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2180,7 +2195,8 @@ pub async fn delete_admin_published_comment(
 ) -> Result<serde_json::Value, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(serde_json::json!({ "comment_id": comment_id, "deleted": true }));
+        let _ = request;
+        Ok(serde_json::json!({ "comment_id": comment_id, "deleted": true }))
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2215,12 +2231,13 @@ pub async fn fetch_admin_comment_audit_logs(
 ) -> Result<AdminCommentAuditResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminCommentAuditResponse {
+        let _ = (task_id, action, limit, offset);
+        Ok(AdminCommentAuditResponse {
             logs: vec![],
             total: 0,
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2263,10 +2280,11 @@ pub async fn admin_cleanup_comments(
 ) -> Result<AdminCleanupResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminCleanupResponse {
+        let _ = request;
+        Ok(AdminCleanupResponse {
             deleted_tasks: 0,
             before_ms: None,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2296,7 +2314,8 @@ async fn admin_post_task_action(
 ) -> Result<AdminCommentTask, String> {
     #[cfg(feature = "mock")]
     {
-        return Err(format!("mock action not implemented: {}", action));
+        let _ = (task_id, request);
+        Err(format!("mock action not implemented: {}", action))
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2404,15 +2423,6 @@ pub enum NextSongResolveMode {
     Semantic,
 }
 
-impl NextSongResolveMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Random => "random",
-            Self::Semantic => "semantic",
-        }
-    }
-}
-
 #[cfg(not(feature = "mock"))]
 #[derive(Debug, Deserialize)]
 struct NextSongApiResponse {
@@ -2467,13 +2477,14 @@ pub async fn fetch_songs(
 ) -> Result<SongListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(SongListResponse {
+        let _ = (limit, offset, artist, album, sort);
+        Ok(SongListResponse {
             songs: vec![],
             total: 0,
             offset: 0,
             limit: 20,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2521,7 +2532,7 @@ pub async fn fetch_random_recommended_songs(
     #[cfg(feature = "mock")]
     {
         let _ = (limit, exclude_ids);
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2577,7 +2588,7 @@ pub async fn fetch_next_song(
     #[cfg(feature = "mock")]
     {
         let _ = (mode, current_song_id, recent_song_ids);
-        return Ok(None);
+        Ok(None)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2600,7 +2611,10 @@ pub async fn fetch_next_song(
             .map(|id| id.to_string());
 
         let body = serde_json::json!({
-            "mode": mode.as_str(),
+            "mode": match mode {
+                NextSongResolveMode::Random => "random",
+                NextSongResolveMode::Semantic => "semantic",
+            },
             "current_song_id": current,
             "recent_song_ids": normalized_recent,
         });
@@ -2631,7 +2645,7 @@ pub async fn search_songs(
     #[cfg(feature = "mock")]
     {
         let _ = (q, limit, mode);
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2661,7 +2675,8 @@ pub async fn search_songs(
 pub async fn fetch_song_detail(id: &str) -> Result<Option<SongDetail>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(None);
+        let _ = id;
+        Ok(None)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2688,7 +2703,8 @@ pub async fn fetch_song_detail(id: &str) -> Result<Option<SongDetail>, String> {
 pub async fn fetch_song_lyrics(id: &str) -> Result<Option<SongLyrics>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(None);
+        let _ = id;
+        Ok(None)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2715,7 +2731,8 @@ pub async fn fetch_song_lyrics(id: &str) -> Result<Option<SongLyrics>, String> {
 pub async fn fetch_related_songs(id: &str) -> Result<Vec<SongSearchResult>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        let _ = id;
+        Ok(vec![])
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2738,11 +2755,11 @@ pub async fn fetch_related_songs(id: &str) -> Result<Vec<SongSearchResult>, Stri
 pub async fn track_song_play(id: &str) -> Result<PlayTrackResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(PlayTrackResponse {
+        Ok(PlayTrackResponse {
             song_id: id.to_string(),
             counted: true,
             total_plays: 42,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2769,14 +2786,14 @@ pub async fn submit_music_comment(
 ) -> Result<MusicCommentItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(MusicCommentItem {
+        Ok(MusicCommentItem {
             id: "mock".to_string(),
             song_id: song_id.to_string(),
             nickname: nickname.unwrap_or("Reader").to_string(),
             comment_text: text.to_string(),
             ip_region: None,
             created_at: 0,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2816,7 +2833,8 @@ pub async fn fetch_music_comments(
 ) -> Result<Vec<MusicCommentItem>, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(vec![]);
+        let _ = (song_id, limit, offset);
+        Ok(vec![])
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2934,10 +2952,18 @@ pub async fn submit_music_wish(
 ) -> Result<SubmitMusicWishResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(SubmitMusicWishResponse {
+        let _ = (
+            song_name,
+            artist_hint,
+            wish_message,
+            nickname,
+            requester_email,
+            frontend_page_url,
+        );
+        Ok(SubmitMusicWishResponse {
             wish_id: "mock-wish-1".to_string(),
             status: "pending".to_string(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2989,12 +3015,13 @@ pub async fn fetch_music_wishes(
 ) -> Result<MusicWishListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(MusicWishListResponse {
+        let _ = (limit, offset);
+        Ok(MusicWishListResponse {
             wishes: vec![],
             total: 0,
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3033,12 +3060,13 @@ pub async fn fetch_admin_music_wishes(
 ) -> Result<AdminMusicWishListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminMusicWishListResponse {
+        let _ = (status, limit, offset);
+        Ok(AdminMusicWishListResponse {
             wishes: vec![],
             total: 0,
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3074,7 +3102,8 @@ pub async fn admin_approve_and_run_music_wish(
 ) -> Result<MusicWishItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = (wish_id, admin_note);
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3111,7 +3140,8 @@ pub async fn admin_reject_music_wish(
 ) -> Result<MusicWishItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = (wish_id, admin_note);
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3143,7 +3173,8 @@ pub async fn admin_reject_music_wish(
 pub async fn admin_retry_music_wish(wish_id: &str) -> Result<MusicWishItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = wish_id;
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3173,7 +3204,8 @@ pub async fn admin_retry_music_wish(wish_id: &str) -> Result<MusicWishItem, Stri
 pub async fn admin_delete_music_wish(wish_id: &str) -> Result<(), String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = wish_id;
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3197,10 +3229,11 @@ pub async fn fetch_admin_music_wish_ai_output(
 ) -> Result<AdminMusicWishAiOutputResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminMusicWishAiOutputResponse {
+        let _ = wish_id;
+        Ok(AdminMusicWishAiOutputResponse {
             runs: vec![],
             chunks: vec![],
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3225,7 +3258,7 @@ pub async fn fetch_admin_music_wish_ai_output(
 pub fn build_admin_music_wish_ai_stream_url(wish_id: &str) -> String {
     #[cfg(feature = "mock")]
     {
-        return format!("/mock/admin/music-wishes/tasks/{}/ai-output/stream", wish_id);
+        format!("/mock/admin/music-wishes/tasks/{}/ai-output/stream", wish_id)
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3328,10 +3361,19 @@ pub async fn submit_article_request(
 ) -> Result<SubmitArticleRequestResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(SubmitArticleRequestResponse {
+        let _ = (
+            article_url,
+            title_hint,
+            request_message,
+            nickname,
+            requester_email,
+            frontend_page_url,
+            parent_request_id,
+        );
+        Ok(SubmitArticleRequestResponse {
             request_id: "mock-ar-1".to_string(),
             status: "pending".to_string(),
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3389,12 +3431,13 @@ pub async fn fetch_article_requests(
 ) -> Result<ArticleRequestListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(ArticleRequestListResponse {
+        let _ = (limit, offset);
+        Ok(ArticleRequestListResponse {
             requests: vec![],
             total: 0,
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3433,12 +3476,13 @@ pub async fn fetch_admin_article_requests(
 ) -> Result<AdminArticleRequestListResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminArticleRequestListResponse {
+        let _ = (status, limit, offset);
+        Ok(AdminArticleRequestListResponse {
             requests: vec![],
             total: 0,
             offset: 0,
             has_more: false,
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3474,7 +3518,8 @@ pub async fn admin_approve_and_run_article_request(
 ) -> Result<ArticleRequestItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3511,7 +3556,8 @@ pub async fn admin_reject_article_request(
 ) -> Result<ArticleRequestItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3543,7 +3589,8 @@ pub async fn admin_reject_article_request(
 pub async fn admin_retry_article_request(request_id: &str) -> Result<ArticleRequestItem, String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = request_id;
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3573,7 +3620,8 @@ pub async fn admin_retry_article_request(request_id: &str) -> Result<ArticleRequ
 pub async fn admin_delete_article_request(request_id: &str) -> Result<(), String> {
     #[cfg(feature = "mock")]
     {
-        return Err("mock not supported".to_string());
+        let _ = request_id;
+        Err("mock not supported".to_string())
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3597,10 +3645,11 @@ pub async fn fetch_admin_article_request_ai_output(
 ) -> Result<AdminArticleRequestAiOutputResponse, String> {
     #[cfg(feature = "mock")]
     {
-        return Ok(AdminArticleRequestAiOutputResponse {
+        let _ = request_id;
+        Ok(AdminArticleRequestAiOutputResponse {
             runs: vec![],
             chunks: vec![],
-        });
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -3625,7 +3674,7 @@ pub async fn fetch_admin_article_request_ai_output(
 pub fn build_admin_article_request_ai_stream_url(request_id: &str) -> String {
     #[cfg(feature = "mock")]
     {
-        return format!("/mock/admin/article-requests/tasks/{}/ai-output/stream", request_id);
+        format!("/mock/admin/article-requests/tasks/{}/ai-output/stream", request_id)
     }
 
     #[cfg(not(feature = "mock"))]

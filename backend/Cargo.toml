@@ -25,4 +25,5 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 url = "2.5"
 urlencoding = "2.1"
 pulldown-cmark = "0.12"
+better_mimalloc_rs = { workspace = true }
 static-flow-shared = { path = "../shared" }

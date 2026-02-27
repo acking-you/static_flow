@@ -13,13 +13,18 @@ mod state;
 use std::env;
 
 use anyhow::Result;
+use better_mimalloc_rs::MiMalloc;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_LOG_FILTER: &str =
     "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";
 
+#[global_allocator]
+static GLOBAL_MIMALLOC: MiMalloc = MiMalloc;
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    MiMalloc::init();
     // Default: suppress verbose dependency info logs.
     // Override with RUST_LOG for troubleshooting.
     let filter =

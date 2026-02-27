@@ -1,8 +1,20 @@
 use std::collections::HashSet;
 
 use js_sys::Date;
+use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
+
+#[wasm_bindgen(inline_js = r#"
+export function copy_text(text) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).catch(function(){});
+    }
+}
+"#)]
+extern "C" {
+    fn copy_text(text: &str);
+}
 use yew_router::prelude::Link;
 
 use crate::{
@@ -93,6 +105,16 @@ fn to_view_points(buckets: &[ApiBehaviorBucket]) -> Vec<ArticleViewPoint> {
             views: item.count,
         })
         .collect()
+}
+
+fn copy_icon_button(text: &str) -> Html {
+    let text = text.to_string();
+    let on_copy = Callback::from(move |_: MouseEvent| copy_text(&text));
+    html! {
+        <button class="btn-copy-inline" onclick={on_copy} title="Copy">
+            <i class="fas fa-copy text-[10px]" aria-hidden="true"></i>
+        </button>
+    }
 }
 
 #[function_component(AdminPage)]
@@ -419,7 +441,6 @@ pub fn admin_page() -> Html {
                 let behavior_overview = behavior_overview.clone();
                 let load_error = load_error.clone();
                 let behavior_overview_loading = behavior_overview_loading.clone();
-                let query_days = query_days;
                 let refresh_behavior_seq = refresh_behavior_seq.clone();
                 behavior_overview_loading.set(true);
                 wasm_bindgen_futures::spawn_local(async move {
@@ -1311,12 +1332,12 @@ pub fn admin_page() -> Html {
     };
 
     // Compute total pages
-    let tasks_total_pages = ((*tasks_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
-    let published_total_pages = ((*published_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
-    let audit_total_pages = ((*audit_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
-    let behavior_total_pages = ((*behavior_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
-    let music_wish_total_pages = ((*music_wish_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
-    let article_request_total_pages = ((*article_request_total).max(1) + PAGE_SIZE - 1) / PAGE_SIZE;
+    let tasks_total_pages = (*tasks_total).max(1).div_ceil(PAGE_SIZE);
+    let published_total_pages = (*published_total).max(1).div_ceil(PAGE_SIZE);
+    let audit_total_pages = (*audit_total).max(1).div_ceil(PAGE_SIZE);
+    let behavior_total_pages = (*behavior_total).max(1).div_ceil(PAGE_SIZE);
+    let music_wish_total_pages = (*music_wish_total).max(1).div_ceil(PAGE_SIZE);
+    let article_request_total_pages = (*article_request_total).max(1).div_ceil(PAGE_SIZE);
 
     html! {
         <main class={classes!("container", "py-8")}>
@@ -1615,13 +1636,25 @@ pub fn admin_page() -> Html {
                 "p-5",
                 "mb-5"
             )}>
-                <div class={classes!("flex", "items-center", "gap-2", "mb-4", "flex-wrap")}>
-                    <button class={if *active_tab == Some(AdminTab::Tasks) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_tasks}>{ "Tasks (Grouped)" }</button>
-                    <button class={if *active_tab == Some(AdminTab::Published) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_published}>{ "Published" }</button>
-                    <button class={if *active_tab == Some(AdminTab::Audit) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_audit}>{ "Audit Logs" }</button>
-                    <button class={if *active_tab == Some(AdminTab::Behavior) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_behavior}>{ "API Behavior" }</button>
-                    <button class={if *active_tab == Some(AdminTab::MusicWishes) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_music_wishes}>{ "Music Wishes" }</button>
-                    <button class={if *active_tab == Some(AdminTab::ArticleRequests) { classes!("btn-fluent-primary") } else { classes!("btn-fluent-secondary") }} onclick={tab_article_requests}>{ "Article Requests" }</button>
+                <div class="admin-tab-bar mb-4">
+                    <button class={if *active_tab == Some(AdminTab::Tasks) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_tasks}>
+                        <i class="fas fa-list-check text-xs" aria-hidden="true"></i>{ "Tasks" }
+                    </button>
+                    <button class={if *active_tab == Some(AdminTab::Published) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_published}>
+                        <i class="fas fa-check-circle text-xs" aria-hidden="true"></i>{ "Published" }
+                    </button>
+                    <button class={if *active_tab == Some(AdminTab::Audit) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_audit}>
+                        <i class="fas fa-scroll text-xs" aria-hidden="true"></i>{ "Audit" }
+                    </button>
+                    <button class={if *active_tab == Some(AdminTab::Behavior) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_behavior}>
+                        <i class="fas fa-chart-line text-xs" aria-hidden="true"></i>{ "Behavior" }
+                    </button>
+                    <button class={if *active_tab == Some(AdminTab::MusicWishes) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_music_wishes}>
+                        <i class="fas fa-music text-xs" aria-hidden="true"></i>{ "Music" }
+                    </button>
+                    <button class={if *active_tab == Some(AdminTab::ArticleRequests) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_article_requests}>
+                        <i class="fas fa-newspaper text-xs" aria-hidden="true"></i>{ "Articles" }
+                    </button>
                 </div>
 
                 if active_tab.is_none() {
@@ -1647,7 +1680,7 @@ pub fn admin_page() -> Html {
                                     value={(*status_filter).clone()}
                                     oninput={on_filter_change}
                                     placeholder="status filter: pending/approved/failed"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[280px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[280px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_tasks_apply}>{ "Apply" }</button>
                             </div>
@@ -1959,22 +1992,22 @@ pub fn admin_page() -> Html {
                         </div>
                     } else {
                     <>
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "flex-wrap", "mb-3")}>
+                        <div class={classes!("flex", "flex-col", "md:flex-row", "md:items-center", "justify-between", "gap-2", "mb-3")}>
                             <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ format!("Audit Logs ({})", audit_logs.len()) }</h2>
-                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <div class={classes!("flex", "flex-col", "md:flex-row", "md:items-center", "gap-2")}>
                                 <input
                                     type="text"
                                     value={(*audit_task_filter).clone()}
                                     oninput={on_audit_task_filter_change}
                                     placeholder="task_id"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[180px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[180px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*audit_action_filter).clone()}
                                     oninput={on_audit_action_filter_change}
                                     placeholder="action"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[150px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[150px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_refresh_audit_click}>{ "Apply" }</button>
                             </div>
@@ -2018,50 +2051,50 @@ pub fn admin_page() -> Html {
                     </div>
                 } else if *active_tab == Some(AdminTab::Behavior) {
                     <div class="animate-[fadeIn_0.3s_ease]">
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "flex-wrap", "mb-3")}>
+                        <div class={classes!("flex", "flex-col", "md:flex-row", "md:items-center", "justify-between", "gap-2", "flex-wrap", "mb-3")}>
                             <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "API Behavior Analytics" }</h2>
-                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <div class={classes!("grid", "grid-cols-2", "md:flex", "md:items-center", "gap-2", "md:flex-wrap")}>
                                 <input
                                     type="number"
                                     value={(*behavior_days).clone()}
                                     oninput={on_behavior_days_change}
                                     placeholder="days"
                                     disabled={!(*behavior_date).is_empty()}
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[110px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
                                 />
                                 <input
                                     type="date"
                                     value={(*behavior_date).clone()}
                                     oninput={on_behavior_date_change}
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[160px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[160px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*behavior_path_filter).clone()}
                                     oninput={on_behavior_path_filter_change}
                                     placeholder="path contains"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[170px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[170px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*behavior_page_filter).clone()}
                                     oninput={on_behavior_page_filter_change}
                                     placeholder="page contains"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[170px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[170px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*behavior_device_filter).clone()}
                                     oninput={on_behavior_device_filter_change}
                                     placeholder="device"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[120px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[120px]")}
                                 />
                                 <input
                                     type="number"
                                     value={(*behavior_status_filter).clone()}
                                     oninput={on_behavior_status_filter_change}
                                     placeholder="status"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-[110px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_apply.clone()}>{ "Apply" }</button>
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_cleanup}>{ "Cleanup Old Logs" }</button>
@@ -2222,12 +2255,27 @@ pub fn admin_page() -> Html {
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]")}>
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(event.occurred_at) }</td>
-                                                <td class={classes!("py-2", "pr-3", "max-w-[220px]", "truncate")} title={event.page_path.clone()}>{ event.page_path.clone() }</td>
-                                                <td class={classes!("py-2", "pr-3", "max-w-[260px]", "truncate")} title={format!("{} {}?{}", event.method, event.path, event.query)}>{ format!("{} {}", event.method, event.path) }</td>
+                                                <td class={classes!("py-2", "pr-3", "max-w-[220px]")}>
+                                                    <div class={classes!("flex", "items-center", "gap-1")}>
+                                                        <span class={classes!("truncate")} title={event.page_path.clone()}>{ event.page_path.clone() }</span>
+                                                        { copy_icon_button(&event.page_path) }
+                                                    </div>
+                                                </td>
+                                                <td class={classes!("py-2", "pr-3", "max-w-[260px]")}>
+                                                    <div class={classes!("flex", "items-center", "gap-1")}>
+                                                        <span class={classes!("truncate")} title={format!("{} {}?{}", event.method, event.path, event.query)}>{ format!("{} {}", event.method, event.path) }</span>
+                                                        { copy_icon_button(&format!("{} {}?{}", event.method, event.path, event.query)) }
+                                                    </div>
+                                                </td>
                                                 <td class={classes!("py-2", "pr-3")}>{ event.status_code }</td>
                                                 <td class={classes!("py-2", "pr-3")}>{ event.device_type.clone() }</td>
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{}/{}", event.browser_family, event.os_family) }</td>
-                                                <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{}/{}", event.client_ip, event.ip_region) }</td>
+                                                <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>
+                                                    <div class={classes!("flex", "items-center", "gap-1")}>
+                                                        <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
+                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region)) }
+                                                    </div>
+                                                </td>
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{} ms", event.latency_ms) }</td>
                                             </tr>
                                         }
@@ -2681,7 +2729,7 @@ pub fn admin_page() -> Html {
                         type="number"
                         value={(*cleanup_days).clone()}
                         oninput={on_cleanup_days_change}
-                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "w-[180px]")}
+                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "w-full", "md:w-[180px]")}
                     />
                     <button class={classes!("btn-fluent-secondary")} onclick={on_cleanup}>
                         { "Cleanup Failed Tasks" }

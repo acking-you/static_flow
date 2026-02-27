@@ -4265,6 +4265,105 @@ button[aria-current="page"]:hover {
    Icon & Tooltip System - Technical Refinement
    ========================================== */
 
+  /* ==========================================
+     Admin Tab Bar & Utilities
+     ========================================== */
+
+  .admin-tab-bar {
+    display: flex;
+    gap: 0.25rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .admin-tab-bar::-webkit-scrollbar { display: none; }
+
+  .admin-tab {
+    flex-shrink: 0;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: var(--radius);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid transparent;
+    transition: all 0.15s ease-out;
+    cursor: pointer;
+  }
+  .admin-tab:hover {
+    color: var(--text);
+    background: var(--surface-alt);
+  }
+  .admin-tab--active {
+    color: var(--primary);
+    background: rgba(var(--primary-rgb), 0.08);
+    border-color: rgba(var(--primary-rgb), 0.2);
+    font-weight: 600;
+  }
+  .admin-tab--active::after {
+    content: "";
+    position: absolute;
+    bottom: -2px;
+    left: 25%;
+    right: 25%;
+    height: 2px;
+    background: var(--primary);
+    border-radius: 1px;
+  }
+
+  /* Horizontal fill bar for distribution lists */
+  .dist-bar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .dist-bar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(var(--primary-rgb), 0.06);
+    border-radius: inherit;
+    transform-origin: left;
+    transform: scaleX(var(--fill, 0));
+    transition: transform 0.3s ease-out;
+  }
+  [data-theme="dark"] .dist-bar::before,
+  [theme="dark"] .dist-bar::before {
+    background: rgba(var(--primary-rgb), 0.1);
+  }
+
+  /* Inline copy icon button */
+  .btn-copy-inline {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: color 0.15s, background 0.15s;
+  }
+  .btn-copy-inline:hover {
+    color: var(--primary);
+    background: rgba(var(--primary-rgb), 0.08);
+  }
+
 }
 
 /* ==========================================

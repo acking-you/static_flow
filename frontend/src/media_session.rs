@@ -100,13 +100,13 @@ pub fn register_media_session_handlers(
     }
     // previoustrack
     {
-        let closure = Closure::<dyn FnMut()>::new(move || on_prev());
+        let closure = Closure::<dyn FnMut()>::new(on_prev);
         set_action(&ms, "previoustrack", &closure);
         closures.push(closure);
     }
     // nexttrack
     {
-        let closure = Closure::<dyn FnMut()>::new(move || on_next());
+        let closure = Closure::<dyn FnMut()>::new(on_next);
         set_action(&ms, "nexttrack", &closure);
         closures.push(closure);
     }

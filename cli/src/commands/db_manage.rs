@@ -382,10 +382,12 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
                     "Full optimize failed for `{}` with offset overflow, retrying with safe compaction settings",
                     table.name()
                 );
-                let mut options = CompactionOptions::default();
-                options.batch_size = Some(SAFE_COMPACTION_BATCH_SIZE);
-                options.max_rows_per_group = SAFE_COMPACTION_MAX_ROWS_PER_GROUP;
-                options.max_bytes_per_file = Some(SAFE_COMPACTION_MAX_BYTES_PER_FILE);
+                let options = CompactionOptions {
+                    batch_size: Some(SAFE_COMPACTION_BATCH_SIZE),
+                    max_rows_per_group: SAFE_COMPACTION_MAX_ROWS_PER_GROUP,
+                    max_bytes_per_file: Some(SAFE_COMPACTION_MAX_BYTES_PER_FILE),
+                    ..CompactionOptions::default()
+                };
                 let _ = table
                     .optimize(OptimizeAction::Compact {
                         options,
