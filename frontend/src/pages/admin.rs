@@ -19,29 +19,26 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        admin_approve_and_run_comment_task, admin_approve_and_run_music_wish,
-        admin_approve_comment_task, admin_cleanup_api_behavior, admin_cleanup_comments,
-        admin_approve_and_run_article_request, admin_delete_article_request,
-        admin_delete_comment_task, admin_delete_music_wish, admin_reject_article_request,
-        admin_reject_comment_task,
+        admin_approve_and_run_article_request, admin_approve_and_run_comment_task,
+        admin_approve_and_run_music_wish, admin_approve_comment_task, admin_cleanup_api_behavior,
+        admin_cleanup_comments, admin_delete_article_request, admin_delete_comment_task,
+        admin_delete_music_wish, admin_reject_article_request, admin_reject_comment_task,
         admin_reject_music_wish, admin_retry_article_request, admin_retry_comment_task,
-        admin_retry_music_wish,
-        delete_admin_published_comment, fetch_admin_article_requests,
-        fetch_admin_api_behavior_config,
+        admin_retry_music_wish, delete_admin_published_comment, fetch_admin_api_behavior_config,
         fetch_admin_api_behavior_events, fetch_admin_api_behavior_overview,
-        fetch_admin_comment_audit_logs, fetch_admin_comment_runtime_config,
-        fetch_admin_comment_task, fetch_admin_comment_task_ai_output,
-        fetch_admin_comment_tasks_grouped, fetch_admin_music_wishes,
-        fetch_admin_published_comments, fetch_admin_view_analytics_config,
-        patch_admin_comment_task, patch_admin_published_comment, update_admin_api_behavior_config,
-        update_admin_comment_runtime_config, update_admin_view_analytics_config,
-        AdminApiBehaviorCleanupRequest, AdminApiBehaviorEvent, AdminApiBehaviorEventsQuery,
-        AdminApiBehaviorOverviewResponse, AdminCleanupRequest, AdminCommentAuditLog,
-        AdminCommentTask, AdminCommentTaskAiOutputResponse, AdminCommentTaskGroup,
-        AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest, AdminTaskActionRequest,
-        ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment, ArticleRequestItem,
-        ArticleViewPoint,
-        CommentRuntimeConfig, MusicWishItem, ViewAnalyticsConfig,
+        fetch_admin_article_requests, fetch_admin_comment_audit_logs,
+        fetch_admin_comment_runtime_config, fetch_admin_comment_task,
+        fetch_admin_comment_task_ai_output, fetch_admin_comment_tasks_grouped,
+        fetch_admin_music_wishes, fetch_admin_published_comments,
+        fetch_admin_view_analytics_config, patch_admin_comment_task, patch_admin_published_comment,
+        update_admin_api_behavior_config, update_admin_comment_runtime_config,
+        update_admin_view_analytics_config, AdminApiBehaviorCleanupRequest, AdminApiBehaviorEvent,
+        AdminApiBehaviorEventsQuery, AdminApiBehaviorOverviewResponse, AdminCleanupRequest,
+        AdminCommentAuditLog, AdminCommentTask, AdminCommentTaskAiOutputResponse,
+        AdminCommentTaskGroup, AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest,
+        AdminTaskActionRequest, ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment,
+        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, MusicWishItem,
+        ViewAnalyticsConfig,
     },
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
@@ -107,6 +104,44 @@ fn to_view_points(buckets: &[ApiBehaviorBucket]) -> Vec<ArticleViewPoint> {
         .collect()
 }
 
+fn behavior_distribution_card(title: &str, items: &[ApiBehaviorBucket], path_like: bool) -> Html {
+    let max_count = items.iter().map(|item| item.count).max().unwrap_or(1);
+    let key_class = if path_like {
+        classes!("admin-dist-item__key", "admin-dist-item__key--path")
+    } else {
+        classes!("admin-dist-item__key")
+    };
+
+    html! {
+        <article class={classes!("admin-dist-card")}>
+            <header class={classes!("admin-dist-card__header")}>
+                <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ title }</h3>
+                <span class={classes!("admin-dist-card__count")}>{ format!("{} items", items.len()) }</span>
+            </header>
+            if items.is_empty() {
+                <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ "No data" }</p>
+            } else {
+                <ul class={classes!("admin-dist-list")}>
+                    { for items.iter().map(|item| {
+                        let fill = if max_count == 0 {
+                            0.0
+                        } else {
+                            item.count as f64 / max_count as f64
+                        };
+                        let fill_style = format!("--fill: {:.4};", fill);
+                        html! {
+                            <li class={classes!("dist-bar", "admin-dist-item")} style={fill_style}>
+                                <span class={key_class.clone()} title={item.key.clone()}>{ item.key.clone() }</span>
+                                <span class={classes!("admin-dist-item__value")}>{ item.count }</span>
+                            </li>
+                        }
+                    }) }
+                </ul>
+            }
+        </article>
+    }
+}
+
 fn copy_icon_button(text: &str) -> Html {
     let text = text.to_string();
     let on_copy = Callback::from(move |_: MouseEvent| copy_text(&text));
@@ -162,7 +197,8 @@ pub fn admin_page() -> Html {
     let saving = use_state(|| false);
     let loaded_tabs = use_state(HashSet::<AdminTab>::new);
     let tab_loading = use_state(HashSet::<AdminTab>::new);
-    // Request sequence guards to avoid stale async responses overriding newer pages.
+    // Request sequence guards to avoid stale async responses overriding newer
+    // pages.
     let refresh_all_seq = use_mut_ref(|| 0_u64);
     let refresh_audit_seq = use_mut_ref(|| 0_u64);
     let refresh_behavior_seq = use_mut_ref(|| 0_u64);
@@ -2124,72 +2160,12 @@ pub fn admin_page() -> Html {
                             <ViewTrendChart points={to_view_points(&overview.timeseries)} empty_text={"No behavior trend data".to_string()} />
 
                             <div class={classes!("grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-3", "mt-4", "mb-4")}>
-                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Top Endpoints" }</h3>
-                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
-                                        { for overview.top_endpoints.iter().map(|item| html! {
-                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
-                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
-                                                <span class={classes!("font-semibold")}>{ item.count }</span>
-                                            </li>
-                                        }) }
-                                    </ul>
-                                </article>
-                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Top Pages" }</h3>
-                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
-                                        { for overview.top_pages.iter().map(|item| html! {
-                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
-                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
-                                                <span class={classes!("font-semibold")}>{ item.count }</span>
-                                            </li>
-                                        }) }
-                                    </ul>
-                                </article>
-                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Device Distribution" }</h3>
-                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
-                                        { for overview.device_distribution.iter().map(|item| html! {
-                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
-                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
-                                                <span class={classes!("font-semibold")}>{ item.count }</span>
-                                            </li>
-                                        }) }
-                                    </ul>
-                                </article>
-                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Browser Distribution" }</h3>
-                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
-                                        { for overview.browser_distribution.iter().map(|item| html! {
-                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
-                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
-                                                <span class={classes!("font-semibold")}>{ item.count }</span>
-                                            </li>
-                                        }) }
-                                    </ul>
-                                </article>
-                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "OS Distribution" }</h3>
-                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
-                                        { for overview.os_distribution.iter().map(|item| html! {
-                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
-                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
-                                                <span class={classes!("font-semibold")}>{ item.count }</span>
-                                            </li>
-                                        }) }
-                                    </ul>
-                                </article>
-                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                    <h3 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Region Distribution" }</h3>
-                                    <ul class={classes!("m-0", "p-0", "list-none", "space-y-1", "text-sm")}>
-                                        { for overview.region_distribution.iter().map(|item| html! {
-                                            <li class={classes!("flex", "items-center", "justify-between", "gap-2")}>
-                                                <span class={classes!("truncate", "text-[var(--muted)]")}>{ item.key.clone() }</span>
-                                                <span class={classes!("font-semibold")}>{ item.count }</span>
-                                            </li>
-                                        }) }
-                                    </ul>
-                                </article>
+                                { behavior_distribution_card("Top Endpoints", &overview.top_endpoints, true) }
+                                { behavior_distribution_card("Top Pages", &overview.top_pages, true) }
+                                { behavior_distribution_card("Device Distribution", &overview.device_distribution, false) }
+                                { behavior_distribution_card("Browser Distribution", &overview.browser_distribution, false) }
+                                { behavior_distribution_card("OS Distribution", &overview.os_distribution, false) }
+                                { behavior_distribution_card("Region Distribution", &overview.region_distribution, false) }
                             </div>
                         } else if *behavior_overview_loading {
                             // Skeleton for overview cards

@@ -108,11 +108,8 @@ pub struct ArticleRequestAiRunChunkRecord {
     pub created_at: i64,
 }
 
-pub const ARTICLE_REQUEST_TABLE_NAMES: &[&str] = &[
-    "article_requests",
-    "article_request_ai_runs",
-    "article_request_ai_run_chunks",
-];
+pub const ARTICLE_REQUEST_TABLE_NAMES: &[&str] =
+    &["article_requests", "article_request_ai_runs", "article_request_ai_run_chunks"];
 
 pub struct ArticleRequestStore {
     db: Connection,
@@ -163,7 +160,10 @@ impl ArticleRequestStore {
         ensure_table(&self.db, &self.ai_chunks_table, request_ai_chunks_schema()).await
     }
 
-    pub async fn create_request(&self, input: NewArticleRequestInput) -> Result<ArticleRequestRecord> {
+    pub async fn create_request(
+        &self,
+        input: NewArticleRequestInput,
+    ) -> Result<ArticleRequestRecord> {
         let now = now_ms();
         let record = ArticleRequestRecord {
             request_id: input.request_id,
@@ -203,7 +203,8 @@ impl ArticleRequestStore {
         status: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<ArticleRequestRecord>> {
-        self.list_requests_page(status, limit.unwrap_or(100), 0).await
+        self.list_requests_page(status, limit.unwrap_or(100), 0)
+            .await
     }
 
     pub async fn list_requests_page(
@@ -217,7 +218,10 @@ impl ArticleRequestStore {
         query_requests(&table, filter.as_deref(), Some(limit), Some(offset)).await
     }
 
-    pub async fn list_requests_public(&self, limit: Option<usize>) -> Result<Vec<ArticleRequestRecord>> {
+    pub async fn list_requests_public(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<Vec<ArticleRequestRecord>> {
         self.list_requests_public_page(limit.unwrap_or(50), 0).await
     }
 
@@ -416,8 +420,10 @@ fn validate_request_transition(current: &str, next: &str) -> Result<()> {
     }
     let ok = matches!(
         (current, next),
-        (REQUEST_STATUS_PENDING, REQUEST_STATUS_APPROVED | REQUEST_STATUS_RUNNING | REQUEST_STATUS_REJECTED)
-            | (REQUEST_STATUS_APPROVED, REQUEST_STATUS_RUNNING | REQUEST_STATUS_REJECTED)
+        (
+            REQUEST_STATUS_PENDING,
+            REQUEST_STATUS_APPROVED | REQUEST_STATUS_RUNNING | REQUEST_STATUS_REJECTED
+        ) | (REQUEST_STATUS_APPROVED, REQUEST_STATUS_RUNNING | REQUEST_STATUS_REJECTED)
             | (REQUEST_STATUS_RUNNING, REQUEST_STATUS_DONE | REQUEST_STATUS_FAILED)
             | (
                 REQUEST_STATUS_FAILED,
@@ -669,7 +675,10 @@ fn build_ai_chunk_batch(r: &ArticleRequestAiRunChunkRecord) -> Result<RecordBatc
     Ok(RecordBatch::try_new(request_ai_chunks_schema(), columns)?)
 }
 
-async fn upsert_ai_chunk_record(table: &Table, record: &ArticleRequestAiRunChunkRecord) -> Result<()> {
+async fn upsert_ai_chunk_record(
+    table: &Table,
+    record: &ArticleRequestAiRunChunkRecord,
+) -> Result<()> {
     let batch = build_ai_chunk_batch(record)?;
     let schema = batch.schema();
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
@@ -847,7 +856,8 @@ async fn query_ai_chunks(
     if let Some(l) = limit {
         query = query.limit(l.max(1));
     }
-    let cols = &["chunk_id", "run_id", "request_id", "stream", "batch_index", "content", "created_at"];
+    let cols =
+        &["chunk_id", "run_id", "request_id", "stream", "batch_index", "content", "created_at"];
     let batches = query
         .select(Select::columns(cols))
         .execute()

@@ -106,11 +106,8 @@ pub struct MusicWishAiRunChunkRecord {
     pub created_at: i64,
 }
 
-pub const MUSIC_WISH_TABLE_NAMES: &[&str] = &[
-    "music_wishes",
-    "music_wish_ai_runs",
-    "music_wish_ai_run_chunks",
-];
+pub const MUSIC_WISH_TABLE_NAMES: &[&str] =
+    &["music_wishes", "music_wish_ai_runs", "music_wish_ai_run_chunks"];
 
 pub struct MusicWishStore {
     db: Connection,

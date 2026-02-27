@@ -6898,6 +6898,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static-flow-shared",
+ "url",
  "urlencoding",
  "wasm-bindgen",
  "wasm-bindgen-futures",

@@ -52,7 +52,7 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
                 compacted: false,
                 error: Some(format!("open failed: {err:#}")),
             }
-        }
+        },
     };
 
     let stats = match table.stats().await {
@@ -64,7 +64,7 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
                 compacted: false,
                 error: Some(format!("stats failed: {err:#}")),
             }
-        }
+        },
     };
 
     let small = stats.fragment_stats.num_small_fragments;
@@ -142,12 +142,13 @@ async fn optimize_all_with_fallback(table: &Table) -> Result<(), String> {
                 .await
             {
                 return Err(format!(
-                    "compact hit offset overflow and safe compact succeeded, but index rebuild failed: {index_err:#}"
+                    "compact hit offset overflow and safe compact succeeded, but index rebuild \
+                     failed: {index_err:#}"
                 ));
             }
 
             Ok(())
-        }
+        },
     }
 }
 

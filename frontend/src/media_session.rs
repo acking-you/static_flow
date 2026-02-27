@@ -64,7 +64,8 @@ pub fn set_media_metadata(title: &str, artist: &str, album: &str, cover_url: &st
 /// Register play/pause/previoustrack/nexttrack action handlers.
 ///
 /// `audio` is the real `<audio>` element — handlers call `.play()` / `.pause()`
-/// directly so the browser's user-gesture context is preserved (critical on mobile).
+/// directly so the browser's user-gesture context is preserved (critical on
+/// mobile).
 pub fn register_media_session_handlers(
     audio: HtmlAudioElement,
     on_play: impl Fn() + 'static,

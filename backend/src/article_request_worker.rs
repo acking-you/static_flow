@@ -12,9 +12,10 @@ use std::{
 use anyhow::{Context, Result};
 use serde::Serialize;
 use static_flow_shared::article_request_store::{
-    ArticleRequestRecord, ArticleRequestStore, NewArticleRequestAiRunChunkInput, NewArticleRequestAiRunInput,
-    REQUEST_AI_RUN_STATUS_FAILED, REQUEST_AI_RUN_STATUS_SUCCESS, REQUEST_STATUS_APPROVED, REQUEST_STATUS_DONE,
-    REQUEST_STATUS_FAILED, REQUEST_STATUS_REJECTED, REQUEST_STATUS_RUNNING,
+    ArticleRequestRecord, ArticleRequestStore, NewArticleRequestAiRunChunkInput,
+    NewArticleRequestAiRunInput, REQUEST_AI_RUN_STATUS_FAILED, REQUEST_AI_RUN_STATUS_SUCCESS,
+    REQUEST_STATUS_APPROVED, REQUEST_STATUS_DONE, REQUEST_STATUS_FAILED, REQUEST_STATUS_REJECTED,
+    REQUEST_STATUS_RUNNING,
 };
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -128,9 +129,13 @@ pub fn spawn_article_request_worker(
     let (sender, mut receiver) = mpsc::channel::<String>(128);
     tokio::spawn(async move {
         while let Some(request_id) = receiver.recv().await {
-            if let Err(err) =
-                process_one_request(store.clone(), config.clone(), email_notifier.clone(), &request_id)
-                    .await
+            if let Err(err) = process_one_request(
+                store.clone(),
+                config.clone(),
+                email_notifier.clone(),
+                &request_id,
+            )
+            .await
             {
                 tracing::error!("article request worker failed for {request_id}: {err}");
             }
@@ -163,7 +168,10 @@ async fn process_one_request(
             .transition_request(request_id, REQUEST_STATUS_RUNNING, None, None, None, None)
             .await?;
     } else if request.status != REQUEST_STATUS_RUNNING {
-        tracing::warn!("article request worker skipped request {request_id} with status {}", request.status);
+        tracing::warn!(
+            "article request worker skipped request {request_id} with status {}",
+            request.status
+        );
         return Ok(());
     }
 
@@ -194,8 +202,8 @@ async fn process_one_request(
                 let result_path = build_result_file_path(&config.result_dir, request_id);
                 if let Ok(result_json) = read_result_json(&result_path).await {
                     tracing::info!(
-                        "article request runner timed out but result file exists for {request_id}, \
-                         treating as success"
+                        "article request runner timed out but result file exists for \
+                         {request_id}, treating as success"
                     );
                     let ingested_article_id = result_json
                         .get("ingested_article_id")
@@ -379,8 +387,8 @@ async fn run_request_runner(
 
     let payload_json =
         serde_json::to_vec_pretty(&payload).context("failed to encode request payload")?;
-    let payload_path =
-        std::env::temp_dir().join(format!("staticflow-article-request-{}.json", request.request_id));
+    let payload_path = std::env::temp_dir()
+        .join(format!("staticflow-article-request-{}.json", request.request_id));
     tokio::fs::write(&payload_path, payload_json)
         .await
         .with_context(|| format!("failed to write payload {}", payload_path.display()))?;
@@ -583,6 +591,10 @@ async fn send_request_done_notification(
         .send_user_article_request_done_notification(&done_request, article_url_link.as_deref())
         .await
     {
-        tracing::warn!("failed to send done notification email for request {}: {}", request.request_id, err);
+        tracing::warn!(
+            "failed to send done notification email for request {}: {}",
+            request.request_id,
+            err
+        );
     }
 }

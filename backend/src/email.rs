@@ -8,8 +8,9 @@ use lettre::{
 };
 use pulldown_cmark::{html, Options, Parser};
 use serde::Deserialize;
-use static_flow_shared::article_request_store::ArticleRequestRecord;
-use static_flow_shared::music_wish_store::MusicWishRecord;
+use static_flow_shared::{
+    article_request_store::ArticleRequestRecord, music_wish_store::MusicWishRecord,
+};
 use url::Url;
 
 const DEFAULT_EMAIL_ACCOUNTS_FILE: &str = "backend/.local/email_accounts.json";
@@ -208,10 +209,8 @@ impl EmailNotifier {
             .requester_email
             .as_deref()
             .context("requester email missing for done notification")?;
-        let subject = format!(
-            "[StaticFlow] 你的文章入库请求已完成：{}",
-            truncate_str(&req.article_url, 60)
-        );
+        let subject =
+            format!("[StaticFlow] 你的文章入库请求已完成：{}", truncate_str(&req.article_url, 60));
         let link_markdown = match article_detail_url {
             Some(url) => format!("- 文章链接: [{url}]({url})"),
             None => "- 文章链接: 暂不可用".to_string(),
@@ -407,8 +406,7 @@ pub fn build_article_detail_url(frontend_page_url: &str, article_id: &str) -> Re
     let mut url = Url::parse(frontend_page_url).context("invalid frontend_page_url")?;
     let path = url.path();
     let has_static_flow_prefix = path == "/static_flow" || path.starts_with("/static_flow/");
-    let encoded_id: String =
-        url::form_urlencoded::byte_serialize(article_id.as_bytes()).collect();
+    let encoded_id: String = url::form_urlencoded::byte_serialize(article_id.as_bytes()).collect();
     let target_path = if has_static_flow_prefix {
         format!("/static_flow/posts/{encoded_id}")
     } else {

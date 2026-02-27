@@ -24,6 +24,7 @@ web-sys = { workspace = true, features = [
 ] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }
+url = "2.5"
 urlencoding = "2.1"
 yew-hooks = "0.3.4"
 

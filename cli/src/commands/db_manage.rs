@@ -379,7 +379,8 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
             let message = err.to_string();
             if message.contains("Offset overflow error") {
                 tracing::warn!(
-                    "Full optimize failed for `{}` with offset overflow, retrying with safe compaction settings",
+                    "Full optimize failed for `{}` with offset overflow, retrying with safe \
+                     compaction settings",
                     table.name()
                 );
                 let options = CompactionOptions {
@@ -833,12 +834,7 @@ pub async fn restore_table(db_path: &Path, table: &str, version: u64) -> Result<
     table.checkout(version).await.context("checkout failed")?;
     table.restore().await.context("restore failed")?;
     let new_ver = table.version().await?;
-    tracing::info!(
-        "Restored `{}` to version {} (new version: {})",
-        table.name(),
-        version,
-        new_ver
-    );
+    tracing::info!("Restored `{}` to version {} (new version: {})", table.name(), version, new_ver);
     Ok(())
 }
 

@@ -1,11 +1,18 @@
-use std::{collections::HashMap, env, sync::Arc, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    env,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{
     article_request_store::{self, ArticleRequestStore},
     comments_store::{self, CommentDataStore},
-    lancedb_api::{self, CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo},
+    lancedb_api::{
+        self, CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
+    },
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
     optimize::{scan_and_compact_tables, CompactConfig},

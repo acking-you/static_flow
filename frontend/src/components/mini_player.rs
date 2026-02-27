@@ -96,9 +96,8 @@ pub fn mini_player() -> Html {
     let container_class = format!(
         "fixed bottom-4 right-4 z-[70] flex items-center gap-3 bg-[var(--surface)] liquid-glass \
          border border-[var(--border)] rounded-xl shadow-[var(--shadow-8)] px-3 py-2 \
-         cursor-pointer hover:border-[var(--primary)] transition-all duration-300 \
-         max-w-[280px] max-w-[min(280px,calc(100vw-2rem))] \
-         select-none {vis_class}"
+         cursor-pointer hover:border-[var(--primary)] transition-all duration-300 max-w-[280px] \
+         max-w-[min(280px,calc(100vw-2rem))] select-none {vis_class}"
     );
 
     html! {

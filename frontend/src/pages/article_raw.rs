@@ -64,7 +64,7 @@ pub fn article_raw_page(props: &ArticleRawProps) -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_article_raw_markdown(&article_id, &lang).await {
                     Ok(content) => {
-                        markdown.set(Some(content));
+                        markdown.set(Some(crate::utils::markdown_for_external_export(&content)));
                         loading.set(false);
                     },
                     Err(err_text) => {

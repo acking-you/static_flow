@@ -5,8 +5,7 @@ use web_sys::HtmlAudioElement;
 use yew::prelude::*;
 
 use crate::{
-    api,
-    media_session,
+    api, media_session,
     music_context::{MusicAction, MusicPlayerContext, NextSongMode},
 };
 
@@ -268,7 +267,9 @@ pub fn persistent_audio() -> Html {
                             let ctx_inner = ctx_next.clone();
                             wasm_bindgen_futures::spawn_local(async move {
                                 let fallback = resolve_next_song(&ctx_inner).await;
-                                ctx_inner.dispatch(MusicAction::PlayNext { fallback });
+                                ctx_inner.dispatch(MusicAction::PlayNext {
+                                    fallback,
+                                });
                             });
                         },
                     );

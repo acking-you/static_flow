@@ -206,14 +206,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/robots.txt", get(seo::robots_txt))
         .with_state(state);
 
-    // 3) SPA fallback — serve frontend/dist/ static files; unknown routes get index.html (200)
+    // 3) SPA fallback — serve frontend/dist/ static files; unknown routes get
+    //    index.html (200)
     let frontend_dist_dir =
         std::env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "../frontend/dist".to_string());
     let spa_fallback = ServeDir::new(&frontend_dist_dir);
 
-    let spa_index_fallback = move || async move {
-        Html(spa_state.index_html_template.as_ref().clone()).into_response()
-    };
+    let spa_index_fallback =
+        move || async move { Html(spa_state.index_html_template.as_ref().clone()).into_response() };
 
     // Merge: API first, then SEO, then static files, then SPA index fallback
     api_router

@@ -20,8 +20,8 @@ use sha2::{Digest, Sha256};
 use static_flow_shared::{
     article_request_store::{
         ArticleRequestAiRunChunkRecord, ArticleRequestAiRunRecord, ArticleRequestRecord,
-        NewArticleRequestInput, REQUEST_STATUS_DONE, REQUEST_STATUS_FAILED,
-        REQUEST_STATUS_PENDING, REQUEST_STATUS_REJECTED, REQUEST_STATUS_RUNNING,
+        NewArticleRequestInput, REQUEST_STATUS_DONE, REQUEST_STATUS_FAILED, REQUEST_STATUS_PENDING,
+        REQUEST_STATUS_REJECTED, REQUEST_STATUS_RUNNING,
     },
     comments_store::{
         CommentAiRunChunkRecord, CommentAiRunRecord, CommentAuditRecord, CommentDataStore,
@@ -905,43 +905,26 @@ pub async fn admin_list_api_behavior_events(
         .status_code
         .filter(|value| *value >= 100 && *value <= 599);
 
-    let mut filters = vec![format!(
-        "occurred_at >= arrow_cast({since_ms}, 'Timestamp(Millisecond, None)')"
-    )];
+    let mut filters =
+        vec![format!("occurred_at >= arrow_cast({since_ms}, 'Timestamp(Millisecond, None)')")];
     if let Some(until_ms) = until_ms {
-        filters.push(format!(
-            "occurred_at < arrow_cast({until_ms}, 'Timestamp(Millisecond, None)')"
-        ));
+        filters
+            .push(format!("occurred_at < arrow_cast({until_ms}, 'Timestamp(Millisecond, None)')"));
     }
     if let Some(filter) = path_filter.as_deref() {
-        filters.push(format!(
-            "lower(path) LIKE '%{}%'",
-            escape_filter_literal(filter)
-        ));
+        filters.push(format!("lower(path) LIKE '%{}%'", escape_filter_literal(filter)));
     }
     if let Some(filter) = page_filter.as_deref() {
-        filters.push(format!(
-            "lower(page_path) LIKE '%{}%'",
-            escape_filter_literal(filter)
-        ));
+        filters.push(format!("lower(page_path) LIKE '%{}%'", escape_filter_literal(filter)));
     }
     if let Some(filter) = device_filter.as_deref() {
-        filters.push(format!(
-            "lower(device_type) = '{}'",
-            escape_filter_literal(filter)
-        ));
+        filters.push(format!("lower(device_type) = '{}'", escape_filter_literal(filter)));
     }
     if let Some(filter) = method_filter.as_deref() {
-        filters.push(format!(
-            "lower(method) = '{}'",
-            escape_filter_literal(filter)
-        ));
+        filters.push(format!("lower(method) = '{}'", escape_filter_literal(filter)));
     }
     if let Some(filter) = ip_filter.as_deref() {
-        filters.push(format!(
-            "lower(client_ip) LIKE '%{}%'",
-            escape_filter_literal(filter)
-        ));
+        filters.push(format!("lower(client_ip) LIKE '%{}%'", escape_filter_literal(filter)));
     }
     if let Some(code) = status_filter {
         filters.push(format!("status_code = {code}"));
@@ -3843,7 +3826,11 @@ pub async fn list_music_wishes(
     State(state): State<AppState>,
     Query(query): Query<MusicWishListQuery>,
 ) -> Result<Json<MusicWishListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = query.limit.filter(|value| *value > 0).unwrap_or(50).min(200);
+    let limit = query
+        .limit
+        .filter(|value| *value > 0)
+        .unwrap_or(50)
+        .min(200);
     let offset = query.offset.unwrap_or(0);
     let total = state
         .music_wish_store
@@ -3895,7 +3882,11 @@ pub async fn admin_list_music_wishes(
     Query(query): Query<AdminMusicWishListQuery>,
 ) -> Result<Json<AdminMusicWishListResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let limit = query.limit.filter(|value| *value > 0).unwrap_or(100).min(500);
+    let limit = query
+        .limit
+        .filter(|value| *value > 0)
+        .unwrap_or(100)
+        .min(500);
     let offset = query.offset.unwrap_or(0);
     let total = state
         .music_wish_store
@@ -4242,12 +4233,22 @@ pub async fn submit_article_request(
         if parent.status != REQUEST_STATUS_DONE {
             return Err(bad_request("parent request must be in done status"));
         }
-        match request.article_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match request
+            .article_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(url) => url.to_string(),
             None => parent.article_url.clone(),
         }
     } else {
-        let url = request.article_url.as_deref().unwrap_or("").trim().to_string();
+        let url = request
+            .article_url
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if url.is_empty() {
             return Err(bad_request("`article_url` is required"));
         }
@@ -4331,7 +4332,11 @@ pub async fn list_article_requests(
     State(state): State<AppState>,
     Query(query): Query<ArticleRequestListQuery>,
 ) -> Result<Json<ArticleRequestListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = query.limit.filter(|value| *value > 0).unwrap_or(50).min(200);
+    let limit = query
+        .limit
+        .filter(|value| *value > 0)
+        .unwrap_or(50)
+        .min(200);
     let offset = query.offset.unwrap_or(0);
     let total = state
         .article_request_store
@@ -4383,7 +4388,11 @@ pub async fn admin_list_article_requests(
     Query(query): Query<AdminArticleRequestListQuery>,
 ) -> Result<Json<AdminArticleRequestListResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let limit = query.limit.filter(|value| *value > 0).unwrap_or(100).min(500);
+    let limit = query
+        .limit
+        .filter(|value| *value > 0)
+        .unwrap_or(100)
+        .min(500);
     let offset = query.offset.unwrap_or(0);
     let total = state
         .article_request_store
@@ -4479,10 +4488,21 @@ pub async fn admin_approve_and_run_article_request(
         .await
         .map_err(|e| internal_error("Failed to transition article request", e))?;
 
-    if let Err(err) = state.article_request_worker_tx.send(request_id.clone()).await {
+    if let Err(err) = state
+        .article_request_worker_tx
+        .send(request_id.clone())
+        .await
+    {
         let _ = state
             .article_request_store
-            .transition_request(&request_id, REQUEST_STATUS_FAILED, None, Some(&err.to_string()), None, None)
+            .transition_request(
+                &request_id,
+                REQUEST_STATUS_FAILED,
+                None,
+                Some(&err.to_string()),
+                None,
+                None,
+            )
             .await;
         return Err(internal_error("Failed to enqueue article request worker", err));
     }
@@ -4524,10 +4544,21 @@ pub async fn admin_retry_article_request(
         .await
         .map_err(|e| internal_error("Failed to retry article request", e))?;
 
-    if let Err(err) = state.article_request_worker_tx.send(request_id.clone()).await {
+    if let Err(err) = state
+        .article_request_worker_tx
+        .send(request_id.clone())
+        .await
+    {
         let _ = state
             .article_request_store
-            .transition_request(&request_id, REQUEST_STATUS_FAILED, None, Some(&err.to_string()), None, None)
+            .transition_request(
+                &request_id,
+                REQUEST_STATUS_FAILED,
+                None,
+                Some(&err.to_string()),
+                None,
+                None,
+            )
             .await;
         return Err(internal_error("Failed to enqueue article request worker", err));
     }

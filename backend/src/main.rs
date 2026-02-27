@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
         Ok(html) => {
             tracing::info!("Loaded SEO template from {}", index_html_path);
             html
-        }
+        },
         Err(err) => {
             tracing::warn!(
                 "Failed to load {}: {} — SEO pages will return fallback HTML",
@@ -63,13 +63,12 @@ async fn main() -> Result<()> {
                 err
             );
             String::new()
-        }
+        },
     };
 
     // Initialize application state
     let app_state =
-        state::AppState::new(&db_uri, &comments_db_uri, &music_db_uri, index_html_template)
-            .await?;
+        state::AppState::new(&db_uri, &comments_db_uri, &music_db_uri, index_html_template).await?;
 
     // Build router
     let app_state_ref = app_state.clone();

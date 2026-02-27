@@ -227,13 +227,8 @@ pub struct ImageBlob {
     pub mime_type: String,
 }
 
-pub const CONTENT_TABLE_NAMES: &[&str] = &[
-    "articles",
-    "images",
-    "taxonomies",
-    "article_views",
-    "api_behavior_events",
-];
+pub const CONTENT_TABLE_NAMES: &[&str] =
+    &["articles", "images", "taxonomies", "article_views", "api_behavior_events"];
 
 pub struct StaticFlowDataStore {
     db: Connection,
@@ -392,17 +387,16 @@ impl StaticFlowDataStore {
                 .push(format!("occurred_at < arrow_cast({max}, 'Timestamp(Millisecond, None)')"));
         }
 
-        let filter = if filters.is_empty() {
-            None
-        } else {
-            Some(filters.join(" AND "))
-        };
+        let filter = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
         let mut events = self.query_api_behavior_events(filter, limit, None).await?;
         events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
         Ok(events)
     }
 
-    pub async fn count_api_behavior_events_with_filter(&self, filter: Option<String>) -> Result<usize> {
+    pub async fn count_api_behavior_events_with_filter(
+        &self,
+        filter: Option<String>,
+    ) -> Result<usize> {
         let table = self.api_behavior_table().await?;
         let total = table
             .count_rows(filter)

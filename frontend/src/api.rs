@@ -2952,14 +2952,8 @@ pub async fn submit_music_wish(
 ) -> Result<SubmitMusicWishResponse, String> {
     #[cfg(feature = "mock")]
     {
-        let _ = (
-            song_name,
-            artist_hint,
-            wish_message,
-            nickname,
-            requester_email,
-            frontend_page_url,
-        );
+        let _ =
+            (song_name, artist_hint, wish_message, nickname, requester_email, frontend_page_url);
         Ok(SubmitMusicWishResponse {
             wish_id: "mock-wish-1".to_string(),
             status: "pending".to_string(),
@@ -3563,8 +3557,10 @@ pub async fn admin_reject_article_request(
     #[cfg(not(feature = "mock"))]
     {
         let base = admin_base();
-        let url =
-            format!("{base}/admin/article-requests/tasks/{}/reject", urlencoding::encode(request_id));
+        let url = format!(
+            "{base}/admin/article-requests/tasks/{}/reject",
+            urlencoding::encode(request_id)
+        );
         let body = serde_json::json!({ "admin_note": admin_note });
         let response = api_post(&url)
             .json(&body)
@@ -3596,7 +3592,10 @@ pub async fn admin_retry_article_request(request_id: &str) -> Result<ArticleRequ
     #[cfg(not(feature = "mock"))]
     {
         let base = admin_base();
-        let url = format!("{base}/admin/article-requests/tasks/{}/retry", urlencoding::encode(request_id));
+        let url = format!(
+            "{base}/admin/article-requests/tasks/{}/retry",
+            urlencoding::encode(request_id)
+        );
         let response = api_post(&url)
             .json(&serde_json::json!({}))
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -3627,7 +3626,8 @@ pub async fn admin_delete_article_request(request_id: &str) -> Result<(), String
     #[cfg(not(feature = "mock"))]
     {
         let base = admin_base();
-        let url = format!("{base}/admin/article-requests/tasks/{}", urlencoding::encode(request_id));
+        let url =
+            format!("{base}/admin/article-requests/tasks/{}", urlencoding::encode(request_id));
         let response = gloo_net::http::Request::delete(&url)
             .send()
             .await
@@ -3655,8 +3655,10 @@ pub async fn fetch_admin_article_request_ai_output(
     #[cfg(not(feature = "mock"))]
     {
         let base = admin_base();
-        let url =
-            format!("{base}/admin/article-requests/tasks/{}/ai-output", urlencoding::encode(request_id));
+        let url = format!(
+            "{base}/admin/article-requests/tasks/{}/ai-output",
+            urlencoding::encode(request_id)
+        );
         let response = api_get(&url)
             .send()
             .await
@@ -3680,6 +3682,9 @@ pub fn build_admin_article_request_ai_stream_url(request_id: &str) -> String {
     #[cfg(not(feature = "mock"))]
     {
         let base = admin_base();
-        format!("{base}/admin/article-requests/tasks/{}/ai-output/stream", urlencoding::encode(request_id))
+        format!(
+            "{base}/admin/article-requests/tasks/{}/ai-output/stream",
+            urlencoding::encode(request_id)
+        )
     }
 }

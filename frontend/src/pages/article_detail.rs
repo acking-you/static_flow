@@ -27,7 +27,7 @@ use crate::{
     i18n::{current::article_detail_page as t, fill_one},
     router::Route,
     seo,
-    utils::{image_url, markdown_to_html},
+    utils::{image_url, markdown_for_external_export, markdown_to_html},
 };
 
 #[derive(Properties, Clone, PartialEq)]
@@ -1628,7 +1628,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         };
         let copy_markdown_click = {
             let markdown_copied = markdown_copied.clone();
-            let markdown_source = active_content.to_string();
+            let markdown_source = markdown_for_external_export(active_content);
             Callback::from(move |_| {
                 let markdown_copied = markdown_copied.clone();
                 let markdown_source = markdown_source.clone();

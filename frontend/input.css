@@ -4343,6 +4343,108 @@ button[aria-current="page"]:hover {
     background: rgba(var(--primary-rgb), 0.1);
   }
 
+  .admin-dist-card {
+    border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    background: linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--surface) 95%, rgba(var(--primary-rgb), 0.06)),
+      color-mix(in srgb, var(--surface-alt) 84%, var(--surface))
+    );
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  }
+
+  .admin-dist-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .admin-dist-card__count {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border) 82%, rgba(var(--primary-rgb), 0.15));
+    background: color-mix(in srgb, var(--surface) 85%, rgba(var(--primary-rgb), 0.1));
+    padding: 0.15rem 0.45rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+
+  .admin-dist-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .admin-dist-item {
+    align-items: flex-start;
+    border: 1px solid color-mix(in srgb, var(--border) 87%, transparent);
+    background: color-mix(in srgb, var(--surface) 91%, rgba(var(--primary-rgb), 0.04));
+    transition: border-color 0.16s ease, transform 0.16s ease;
+  }
+
+  .admin-dist-item:hover {
+    border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+    transform: translateX(1px);
+  }
+
+  .admin-dist-item > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .admin-dist-item__key {
+    flex: 1;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-dist-item__key--path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.76rem;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+
+  .admin-dist-item__value {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2rem;
+    border-radius: 999px;
+    padding: 0.08rem 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text);
+    background: rgba(var(--primary-rgb), 0.16);
+  }
+
+  @media (min-width: 48rem) {
+    .admin-dist-item__key--path {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  [data-theme="dark"] .admin-dist-card,
+  [theme="dark"] .admin-dist-card {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
   /* Inline copy icon button */
   .btn-copy-inline {
     display: inline-flex;

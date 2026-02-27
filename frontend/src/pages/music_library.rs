@@ -269,11 +269,8 @@ pub fn music_library_page() -> Html {
     let total_val = *total;
     let total_pages = if total_val == 0 { 1 } else { total_val.div_ceil(PAGE_SIZE) };
     let wish_total_val = *wish_total;
-    let wish_total_pages = if wish_total_val == 0 {
-        1
-    } else {
-        wish_total_val.div_ceil(WISH_PAGE_SIZE)
-    };
+    let wish_total_pages =
+        if wish_total_val == 0 { 1 } else { wish_total_val.div_ceil(WISH_PAGE_SIZE) };
 
     let on_artist_click = {
         let active_artist = active_artist.clone();

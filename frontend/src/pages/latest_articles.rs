@@ -16,8 +16,7 @@ use crate::{
         raw_html::RawHtml,
         scroll_to_top_button::ScrollToTopButton,
     },
-    i18n::current::latest_articles_page as t,
-    i18n::current::article_request as ar_t,
+    i18n::current::{article_request as ar_t, latest_articles_page as t},
     router::Route,
     utils::markdown_to_html,
 };
@@ -40,23 +39,28 @@ fn request_card(props: &RequestCardProps) -> Html {
 
     let (status_class, status_dot) = match req.status.as_str() {
         "done" => (
-            "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/25",
+            "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 \
+             dark:text-emerald-300 dark:ring-emerald-500/25",
             "bg-emerald-500",
         ),
         "running" => (
-            "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/25",
+            "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 \
+             dark:ring-sky-500/25",
             "bg-sky-500 animate-pulse",
         ),
         "failed" => (
-            "bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/25",
+            "bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 \
+             dark:ring-red-500/25",
             "bg-red-500",
         ),
         "rejected" => (
-            "bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-400 dark:ring-gray-500/25",
+            "bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-400 \
+             dark:ring-gray-500/25",
             "bg-gray-400",
         ),
         _ => (
-            "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/25",
+            "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 \
+             dark:text-amber-300 dark:ring-amber-500/25",
             "bg-amber-500",
         ),
     };
@@ -495,7 +499,11 @@ pub fn latest_articles_page() -> Html {
     // Article request: fetch on page change
     let ar_total_pages = {
         let t = *ar_total;
-        if t == 0 { 1 } else { t.div_ceil(REQUEST_PAGE_SIZE) }
+        if t == 0 {
+            1
+        } else {
+            t.div_ceil(REQUEST_PAGE_SIZE)
+        }
     };
     {
         let ar_requests = ar_requests.clone();
@@ -592,11 +600,11 @@ pub fn latest_articles_page() -> Html {
             ar_submitting.set(true);
             ar_submit_msg.set(None);
             ar_submit_err.set(None);
-            let frontend_page_url = web_sys::window()
-                .and_then(|w| w.location().href().ok());
+            let frontend_page_url = web_sys::window().and_then(|w| w.location().href().ok());
             wasm_bindgen_futures::spawn_local(async move {
                 let title_opt = if title.trim().is_empty() { None } else { Some(title.trim()) };
-                let nick_opt = if nickname.trim().is_empty() { None } else { Some(nickname.trim()) };
+                let nick_opt =
+                    if nickname.trim().is_empty() { None } else { Some(nickname.trim()) };
                 let email_opt = if email.trim().is_empty() { None } else { Some(email.trim()) };
                 match api::submit_article_request(
                     &url,
@@ -606,7 +614,9 @@ pub fn latest_articles_page() -> Html {
                     email_opt,
                     frontend_page_url.as_deref(),
                     parent_id.as_deref(),
-                ).await {
+                )
+                .await
+                {
                     Ok(_) => {
                         ar_submit_msg.set(Some(ar_t::SUBMIT_SUCCESS.to_string()));
                         ar_form_url.set(String::new());

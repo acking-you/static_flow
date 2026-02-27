@@ -58,11 +58,11 @@ fn strip_markdown(md: &str) -> String {
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
                 buf.push(' ');
-            }
+            },
             Event::Start(Tag::Paragraph) if !buf.is_empty() && !in_code_block => {
                 buf.push(' ');
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     // Collapse whitespace
@@ -90,12 +90,18 @@ fn extract_description(article: &Article) -> String {
 // HTML template injection helpers
 // ---------------------------------------------------------------------------
 
-fn replace_meta_content(html: &str, attr_name: &str, attr_value: &str, new_content: &str) -> String {
+fn replace_meta_content(
+    html: &str,
+    attr_name: &str,
+    attr_value: &str,
+    new_content: &str,
+) -> String {
     // Find <meta ... {attr_name}="{attr_value}" ... content="..."> where whitespace
     // (including newlines) may separate attributes.
     let needle = format!(r#"{attr_name}="{attr_value}""#);
 
-    // Strategy: find the needle, then locate content="..." within the same <meta> tag.
+    // Strategy: find the needle, then locate content="..." within the same <meta>
+    // tag.
     let mut search_from = 0;
     while let Some(needle_pos) = html[search_from..].find(&needle) {
         let abs_needle = search_from + needle_pos;
@@ -105,7 +111,10 @@ fn replace_meta_content(html: &str, attr_name: &str, attr_value: &str, new_conte
         // Find the tag end (> or />)
         let tag_end = match html[abs_needle..].find('>') {
             Some(p) => abs_needle + p,
-            None => { search_from = abs_needle + needle.len(); continue; }
+            None => {
+                search_from = abs_needle + needle.len();
+                continue;
+            },
         };
 
         let tag_slice = &html[tag_start..=tag_end];
@@ -130,7 +139,9 @@ fn replace_meta_content(html: &str, attr_name: &str, attr_value: &str, new_conte
         let abs_pos = search_from + pos;
         let content_start = abs_pos + content_needle.len();
         if let Some(end_quote) = html[content_start..].find('"') {
-            let tag_end = html[content_start + end_quote..].find('>').map(|p| content_start + end_quote + p);
+            let tag_end = html[content_start + end_quote..]
+                .find('>')
+                .map(|p| content_start + end_quote + p);
             if let Some(te) = tag_end {
                 if html[abs_pos..=te].contains(&needle) {
                     let before = &html[..content_start];
@@ -197,11 +208,7 @@ fn build_article_json_ld(
     og_image: &str,
     description: &str,
 ) -> String {
-    let author = if article.author.is_empty() {
-        "ackingliu"
-    } else {
-        &article.author
-    };
+    let author = if article.author.is_empty() { "ackingliu" } else { &article.author };
     let mut ld = format!(
         r#"<script type="application/ld+json">
 {{
@@ -219,13 +226,23 @@ fn build_article_json_ld(
         json_escape(canonical),
     );
     if !og_image.is_empty() {
-        ld.push_str(&format!(r#",
-  "image": "{}""#, json_escape(og_image)));
+        ld.push_str(&format!(
+            r#",
+  "image": "{}""#,
+            json_escape(og_image)
+        ));
     }
     if !article.tags.is_empty() {
-        let kw: Vec<String> = article.tags.iter().map(|t| format!("\"{}\"", json_escape(t))).collect();
-        ld.push_str(&format!(r#",
-  "keywords": [{}]"#, kw.join(", ")));
+        let kw: Vec<String> = article
+            .tags
+            .iter()
+            .map(|t| format!("\"{}\"", json_escape(t)))
+            .collect();
+        ld.push_str(&format!(
+            r#",
+  "keywords": [{}]"#,
+            kw.join(", ")
+        ));
     }
     ld.push_str("\n}\n</script>");
     ld
@@ -340,10 +357,8 @@ fn build_fallback_seo_html(article: &Article) -> String {
 
     let mut og_image_tag = String::new();
     if !og_image.is_empty() {
-        og_image_tag = format!(
-            r#"<meta property="og:image" content="{}" />"#,
-            html_attr_escape(&og_image)
-        );
+        og_image_tag =
+            format!(r#"<meta property="og:image" content="{}" />"#, html_attr_escape(&og_image));
     }
 
     format!(
@@ -380,10 +395,7 @@ fn build_fallback_seo_html(article: &Article) -> String {
 // ---------------------------------------------------------------------------
 
 /// GET /posts/:id — serve SPA HTML with injected SEO meta tags
-pub async fn seo_article_page(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Response {
+pub async fn seo_article_page(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let article = match state.store.get_article(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -392,11 +404,11 @@ pub async fn seo_article_page(
                 return (StatusCode::NOT_FOUND, "Not Found").into_response();
             }
             return Html(state.index_html_template.as_ref().clone()).into_response();
-        }
+        },
         Err(err) => {
             tracing::warn!("SEO page DB error for id={}: {}", id, err);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
-        }
+        },
     };
 
     let html = inject_article_seo(&state.index_html_template, &article);
@@ -409,8 +421,9 @@ pub async fn sitemap_xml(State(state): State<AppState>) -> Response {
         Ok(resp) => resp.articles,
         Err(err) => {
             tracing::warn!("sitemap: failed to list articles: {}", err);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate sitemap").into_response();
-        }
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate sitemap")
+                .into_response();
+        },
     };
 
     let base = site_base_url();
@@ -422,14 +435,16 @@ pub async fn sitemap_xml(State(state): State<AppState>) -> Response {
 
     // Homepage
     xml.push_str(&format!(
-        "  <url>\n    <loc>{}</loc>\n    <changefreq>daily</changefreq>\n    <priority>1.0</priority>\n  </url>\n",
+        "  <url>\n    <loc>{}</loc>\n    <changefreq>daily</changefreq>\n    \
+         <priority>1.0</priority>\n  </url>\n",
         html_escape(&base)
     ));
 
     for item in &articles {
         let loc = format!("{}/posts/{}", base, urlencoding::encode(&item.id));
         xml.push_str(&format!(
-            "  <url>\n    <loc>{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.8</priority>\n  </url>\n",
+            "  <url>\n    <loc>{}</loc>\n    <lastmod>{}</lastmod>\n    \
+             <changefreq>weekly</changefreq>\n    <priority>0.8</priority>\n  </url>\n",
             html_escape(&loc),
             html_escape(&item.date),
         ));
@@ -437,27 +452,15 @@ pub async fn sitemap_xml(State(state): State<AppState>) -> Response {
 
     xml.push_str("</urlset>\n");
 
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
-        xml,
-    )
+    (StatusCode::OK, [(header::CONTENT_TYPE, "application/xml; charset=utf-8")], xml)
         .into_response()
 }
 
 /// GET /robots.txt
 pub async fn robots_txt() -> Response {
     let base = site_base_url();
-    let body = format!(
-        "User-agent: *\nAllow: /\n\nSitemap: {}/sitemap.xml\n",
-        base
-    );
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        body,
-    )
-        .into_response()
+    let body = format!("User-agent: *\nAllow: /\n\nSitemap: {}/sitemap.xml\n", base);
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -465,11 +468,10 @@ pub async fn robots_txt() -> Response {
 // ---------------------------------------------------------------------------
 
 /// Known GitHub Pages origins that should be rewritten to SITE_BASE_URL.
-const GITHUB_PAGES_ORIGINS: &[&str] = &[
-    "https://acking-you.github.io",
-];
+const GITHUB_PAGES_ORIGINS: &[&str] = &["https://acking-you.github.io"];
 
-/// Replace hardcoded GitHub Pages URLs in the template with the configured site URL.
+/// Replace hardcoded GitHub Pages URLs in the template with the configured site
+/// URL.
 fn rewrite_origin_urls(html: &str, site_base: &str) -> String {
     let mut result = html.to_string();
     for origin in GITHUB_PAGES_ORIGINS {
@@ -488,7 +490,9 @@ pub async fn seo_homepage(State(state): State<AppState>) -> Response {
     if let Some(body_pos) = html.find("<body") {
         if let Some(gt) = html[body_pos..].find('>') {
             let insert_at = body_pos + gt + 1;
-            let h1 = "\n<h1>StaticFlow \u{00b7} AI + Skill \u{9a71}\u{52a8}\u{7684}\u{672c}\u{5730}\u{4f18}\u{5148}\u{6280}\u{672f}\u{535a}\u{5ba2}</h1>\n";
+            let h1 = "\n<h1>StaticFlow \u{00b7} AI + Skill \
+                      \u{9a71}\u{52a8}\u{7684}\u{672c}\u{5730}\u{4f18}\u{5148}\u{6280}\u{672f}\\
+                      u{535a}\u{5ba2}</h1>\n";
             html.insert_str(insert_at, h1);
         }
     }
