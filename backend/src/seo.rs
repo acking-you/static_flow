@@ -307,11 +307,13 @@ fn inject_article_seo(template: &str, article: &Article) -> String {
 
 fn build_seo_body_content(article: &Article, description: &str) -> String {
     let plain_content = truncate_text(&strip_markdown(&article.content), 2000);
+    // <h1> and <p> must be visible for Bing/Google to index them.
+    // Yew replaces <body> on WASM load, so these disappear naturally.
     format!(
-        r#"<div id="seo-content" style="display:none"><h1>{}</h1><p>{}</p><article>{}</article></div>"#,
-        html_escape(&article.title),
-        html_escape(description),
-        html_escape(&plain_content),
+        r#"<h1>{title}</h1><p>{desc}</p><div id="seo-content" style="display:none"><article>{content}</article></div>"#,
+        title = html_escape(&article.title),
+        desc = html_escape(description),
+        content = html_escape(&plain_content),
     )
 }
 
@@ -476,9 +478,20 @@ fn rewrite_origin_urls(html: &str, site_base: &str) -> String {
     result
 }
 
-/// GET / — serve homepage with corrected SEO URLs
+/// GET / — serve homepage with corrected SEO URLs and visible <h1>
 pub async fn seo_homepage(State(state): State<AppState>) -> Response {
     let base = site_base_url();
-    let html = rewrite_origin_urls(&state.index_html_template, &base);
+    let mut html = rewrite_origin_urls(&state.index_html_template, &base);
+
+    // Inject visible <h1> after <body> for search engine indexing.
+    // Yew replaces <body> on WASM load, so this disappears naturally.
+    if let Some(body_pos) = html.find("<body") {
+        if let Some(gt) = html[body_pos..].find('>') {
+            let insert_at = body_pos + gt + 1;
+            let h1 = "\n<h1>StaticFlow \u{00b7} AI + Skill \u{9a71}\u{52a8}\u{7684}\u{672c}\u{5730}\u{4f18}\u{5148}\u{6280}\u{672f}\u{535a}\u{5ba2}</h1>\n";
+            html.insert_str(insert_at, h1);
+        }
+    }
+
     Html(html).into_response()
 }

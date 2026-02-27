@@ -8,3 +8,6 @@ node_modules/
 pnpm-lock.yaml
 yarn.lock
 
+# trunk serve dev output (separate from dist/ used by self-hosted)
+dist-dev/
+

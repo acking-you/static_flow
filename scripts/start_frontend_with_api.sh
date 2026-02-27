@@ -149,7 +149,7 @@ ensure_frontend_deps() {
 
 ensure_frontend_deps
 
-TRUNK_CMD=(trunk serve --release --port "$FRONTEND_PORT")
+TRUNK_CMD=(trunk serve --release --port "$FRONTEND_PORT" --dist dist-dev)
 if [[ "$OPEN_BROWSER" == "true" ]]; then
   TRUNK_CMD+=(--open)
 fi
