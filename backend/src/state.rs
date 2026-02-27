@@ -143,6 +143,7 @@ pub struct AppState {
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
     pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
     pub(crate) shutdown_tx: watch::Sender<bool>,
+    pub(crate) index_html_template: Arc<String>,
 }
 
 impl AppState {
@@ -150,6 +151,7 @@ impl AppState {
         content_db_uri: &str,
         comments_db_uri: &str,
         music_db_uri: &str,
+        index_html_template: String,
     ) -> Result<Self> {
         let store = Arc::new(StaticFlowDataStore::connect(content_db_uri).await?);
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
@@ -224,6 +226,7 @@ impl AppState {
             email_notifier,
             behavior_event_tx,
             shutdown_tx,
+            index_html_template: Arc::new(index_html_template),
         })
     }
 

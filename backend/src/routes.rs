@@ -1,12 +1,16 @@
 use axum::{
     http::{HeaderValue, Method},
     middleware,
+    response::{Html, IntoResponse},
     routing::{get, patch, post},
     Router,
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    services::ServeDir,
+};
 
-use crate::{behavior_analytics, handlers, request_context, state::AppState};
+use crate::{behavior_analytics, handlers, request_context, seo, state::AppState};
 
 pub fn create_router(state: AppState) -> Router {
     let behavior_state = state.clone();
@@ -45,7 +49,8 @@ pub fn create_router(state: AppState) -> Router {
     };
 
     // Define routes
-    Router::new()
+    // 1) API + admin routes (highest priority)
+    let api_router = Router::new()
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
         .route("/api/articles/:id/raw/:lang", get(handlers::get_article_raw_markdown))
@@ -190,7 +195,30 @@ pub fn create_router(state: AppState) -> Router {
             "/admin/article-requests/tasks/:request_id/ai-output/stream",
             get(handlers::admin_article_request_ai_stream),
         )
-        .with_state(state)
+        .with_state(state.clone());
+
+    // 2) SEO routes — /, /posts/:id, /sitemap.xml, /robots.txt
+    let spa_state = state.clone();
+    let seo_router = Router::new()
+        .route("/", get(seo::seo_homepage))
+        .route("/posts/:id", get(seo::seo_article_page))
+        .route("/sitemap.xml", get(seo::sitemap_xml))
+        .route("/robots.txt", get(seo::robots_txt))
+        .with_state(state);
+
+    // 3) SPA fallback — serve frontend/dist/ static files; unknown routes get index.html (200)
+    let frontend_dist_dir =
+        std::env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "../frontend/dist".to_string());
+    let spa_fallback = ServeDir::new(&frontend_dist_dir);
+
+    let spa_index_fallback = move || async move {
+        Html(spa_state.index_html_template.as_ref().clone()).into_response()
+    };
+
+    // Merge: API first, then SEO, then static files, then SPA index fallback
+    api_router
+        .merge(seo_router)
+        .fallback_service(spa_fallback.fallback(get(spa_index_fallback)))
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(
             behavior_state,

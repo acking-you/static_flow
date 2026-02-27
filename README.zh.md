@@ -80,27 +80,66 @@ git push origin main
 说明：执行 `git xet track` 后，`.gitattributes` 中仍出现 `filter=lfs` 属于正常现象，
 这是 Hugging Face 的 Xet 兼容传输实现方式。
 
-## 推荐部署拓扑
+## 部署模式
 
-1. 本地运行 `backend`（如 `127.0.0.1:3000`）。
-2. 本地 Nginx 前置 backend，提供本地 HTTPS（如 `127.0.0.1:3443`）。
-3. 通过 `pb-mapper` 把本地 `127.0.0.1:3443` 映射到云端可访问端点（如 `https://<cloud-host>:8888`）。
-4. 前端页面加载后，直接请求该云端 HTTPS 端点作为 API。
-5. 可选：云端再加 Nginx（443 + 证书）统一域名，再反代到 pb-mapper local 端口。
+### 模式 A：自托管（推荐）
 
-主链路（按前端请求视角）：
+后端同时提供 API 和前端静态文件，通过 pb-mapper + Caddy 对外暴露 HTTPS。
 
 ```text
-Frontend(fetch/XHR)
-  -> https://<cloud-host>:8888/api
-  -> pb-mapper tunnel
-  -> Local Nginx https://127.0.0.1:3443
-  -> Local backend http://127.0.0.1:3000
+浏览器 -> https://ackingliu.top
+       -> Caddy (TLS) -> pb-mapper tunnel -> 本地 backend (127.0.0.1:39080)
+                                              ├── /api/*        → API handler
+                                              ├── /posts/:id    → SEO 注入页
+                                              ├── /sitemap.xml  → 动态 sitemap
+                                              └── /*            → 前端静态文件 (SPA fallback)
+```
+
+启动方式：
+
+```bash
+# 1. 构建前端（API_BASE=/api，同源请求）
+bash scripts/build_frontend_selfhosted.sh
+
+# 2. 启动后端（自动 serve 前端静态文件）
+bash scripts/start_backend_selfhosted.sh --daemon
+
+# 日志查看
+tail -f /tmp/staticflow-backend.log
+
+# 前端代码改动后需要重新构建 + 重启后端（后端启动时缓存 index.html）
+bash scripts/build_frontend_selfhosted.sh
+bash scripts/start_backend_selfhosted.sh --daemon
+```
+
+### 模式 B：本地开发（trunk 热重载）
+
+前端由 trunk dev server 提供，支持热重载；trunk 自动代理 `/api` 到后端。
+
+```bash
+# 1. 启动后端
+bash scripts/start_backend_selfhosted.sh
+
+# 2. 启动前端（trunk serve，自动代理 /api -> localhost:39080）
+bash scripts/start_frontend_with_api.sh --open
+```
+
+后端: `http://127.0.0.1:39080` | 前端: `http://127.0.0.1:38080`
+
+### 模式 C：GitHub Pages（纯前端）
+
+前端部署到 GitHub Pages，API 通过 pb-mapper 隧道访问本地后端。
+CI 自动构建，`STATICFLOW_API_BASE` 由 GitHub repo variables 配置。
+
+```text
+浏览器 -> https://acking-you.github.io (GitHub Pages 静态文件)
+       -> fetch(STATICFLOW_API_BASE/api/...) -> pb-mapper -> 本地 backend
 ```
 
 参考配置：
-- 本地 Nginx HTTPS：`deployment-examples/nginx-staticflow-api.conf`
-- 云端 Nginx HTTPS（可选）：`deployment-examples/nginx-staticflow-cloud-proxy.conf`
+- 自托管 Caddy：云端 `/etc/caddy/Caddyfile`
+- GitHub Pages CI：`.github/workflows/deploy.yml`
+- 旧版 Nginx 配置：`deployment-examples/`
 
 ## 快速开始
 
@@ -116,19 +155,16 @@ make bin-all
 cd cli
 ../target/release/sf-cli init --db-path ../data/lancedb
 
-# 启动后端
-cd ../backend
-LANCEDB_URI=../data/lancedb ../target/release/static-flow-backend
-
-# 启动前端（另一个终端，可指定后端 URL）
+# --- 自托管模式（推荐） ---
 cd ..
-./scripts/start_frontend_with_api.sh \
-  --api-base "http://127.0.0.1:3000/api" \
-  --open
-# 若不传 --api-base，脚本默认: http://127.0.0.1:39080/api
-```
+bash scripts/build_frontend_selfhosted.sh
+bash scripts/start_backend_selfhosted.sh --daemon
 
-后端: `http://127.0.0.1:3000` | 前端（默认）: `http://127.0.0.1:38080`
+# --- 本地开发模式 ---
+cd ..
+bash scripts/start_backend_selfhosted.sh          # 前台启动后端
+bash scripts/start_frontend_with_api.sh --open     # 另一个终端，trunk 热重载
+```
 
 ## CLI 命令
 
@@ -274,16 +310,20 @@ cd cli
 
 ## 关键环境变量
 
-后端（`backend/.env`）：
-- `LANCEDB_URI`（默认 `../data/lancedb`）
-- `PORT`（默认 `3000`）
-- `BIND_ADDR`（开发建议 `0.0.0.0`，生产建议 `127.0.0.1`）
+后端（由 `scripts/start_backend_selfhosted.sh` 自动设置）：
+- `DB_ROOT`（默认 `/mnt/e/static-flow-data`，自动解析 content/comments/music 三个 DB）
+- `PORT`（默认 `39080`）
+- `HOST`（默认 `127.0.0.1`）
+- `SITE_BASE_URL`（默认 `https://ackingliu.top`，用于 SEO 注入）
+- `FRONTEND_DIST_DIR`（默认 `../frontend/dist`，自托管模式的静态文件目录）
 - `RUST_ENV`（`development` 或 `production`）
 - `ALLOWED_ORIGINS`（生产可选，逗号分隔 CORS 白名单）
 
 前端构建时：
-- `STATICFLOW_API_BASE`（直连 pb-mapper 端点，例如 `https://<cloud-host>:8888/api`）
-- 若使用云端 Nginx 反代，可设为域名（如 `https://api.yourdomain.com/api`）
+- `STATICFLOW_API_BASE`
+  - 自托管模式：`/api`（由 `build_frontend_selfhosted.sh` 设置）
+  - GitHub Pages：绝对 URL（由 CI workflow 的 repo variables 设置）
+  - 本地开发：`http://127.0.0.1:39080/api`（由 `start_frontend_with_api.sh` 设置）
 
 ## 开发命令
 
@@ -294,14 +334,16 @@ cargo test --workspace
 cargo fmt --all
 cargo clippy --workspace -- -D warnings
 
-# Frontend
-cd frontend && trunk serve
-cd frontend && trunk build --release
+# Frontend（自托管构建）
+bash scripts/build_frontend_selfhosted.sh
+
+# Frontend（trunk 热重载开发）
+bash scripts/start_frontend_with_api.sh --open
 
 # Backend
 make bin-backend
-cd backend && ../target/release/static-flow-backend
-cd backend && RUST_ENV=production BIND_ADDR=127.0.0.1 ../target/release/static-flow-backend
+bash scripts/start_backend_selfhosted.sh           # 前台
+bash scripts/start_backend_selfhosted.sh --daemon   # 后台（日志: /tmp/staticflow-backend.log）
 ```
 
 ## License

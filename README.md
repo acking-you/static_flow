@@ -106,27 +106,64 @@ git push origin main
 Note: after `git xet track`, `.gitattributes` may still show `filter=lfs`; this is expected
 on Hugging Face's Xet-integrated transfer path.
 
-## Deployment Topology (Recommended)
+## Deployment Modes
 
-1. Run `backend` on local machine (`127.0.0.1:3000`).
-2. Put local Nginx in front of backend for local HTTPS (`127.0.0.1:3443`).
-3. Use `pb-mapper` to map local `127.0.0.1:3443` to a cloud endpoint (for example `https://<cloud-host>:8888`).
-4. Frontend (already loaded in browser) directly calls that cloud HTTPS endpoint as API.
-5. Optional: add cloud Nginx on `443` for domain/cert management and reverse-proxy to pb-mapper local port.
+### Mode A: Self-Hosted (Recommended)
 
-Main request chain (frontend fetch perspective):
+Backend serves both API and frontend static files. Exposed via pb-mapper + Caddy HTTPS.
 
 ```text
-Frontend(fetch/XHR)
-  -> https://<cloud-host>:8888/api
-  -> pb-mapper tunnel
-  -> Local Nginx https://127.0.0.1:3443
-  -> Local backend http://127.0.0.1:3000
+Browser -> https://ackingliu.top
+        -> Caddy (TLS) -> pb-mapper tunnel -> Local backend (127.0.0.1:39080)
+                                               ├── /api/*        → API handlers
+                                               ├── /posts/:id    → SEO-injected page
+                                               ├── /sitemap.xml  → Dynamic sitemap
+                                               └── /*            → Frontend static (SPA fallback)
+```
+
+```bash
+# 1. Build frontend (API_BASE=/api, same-origin)
+bash scripts/build_frontend_selfhosted.sh
+
+# 2. Start backend (serves frontend static files)
+bash scripts/start_backend_selfhosted.sh --daemon
+
+# View logs
+tail -f /tmp/staticflow-backend.log
+
+# After frontend code changes: rebuild + restart backend (index.html is cached at startup)
+bash scripts/build_frontend_selfhosted.sh
+bash scripts/start_backend_selfhosted.sh --daemon
+```
+
+### Mode B: Local Development (trunk hot-reload)
+
+Frontend served by trunk dev server with hot-reload; trunk proxies `/api` to backend.
+
+```bash
+# 1. Start backend
+bash scripts/start_backend_selfhosted.sh
+
+# 2. Start frontend (trunk serve, proxies /api -> localhost:39080)
+bash scripts/start_frontend_with_api.sh --open
+```
+
+Backend: `http://127.0.0.1:39080` | Frontend: `http://127.0.0.1:38080`
+
+### Mode C: GitHub Pages (Frontend-only)
+
+Frontend deployed to GitHub Pages; API accessed via pb-mapper tunnel to local backend.
+CI builds automatically; `STATICFLOW_API_BASE` configured via GitHub repo variables.
+
+```text
+Browser -> https://acking-you.github.io (GitHub Pages static files)
+        -> fetch(STATICFLOW_API_BASE/api/...) -> pb-mapper -> Local backend
 ```
 
 Reference configs:
-- Local Nginx HTTPS: `deployment-examples/nginx-staticflow-api.conf`
-- Optional cloud Nginx HTTPS proxy: `deployment-examples/nginx-staticflow-cloud-proxy.conf`
+- Self-hosted Caddy: cloud `/etc/caddy/Caddyfile`
+- GitHub Pages CI: `.github/workflows/deploy.yml`
+- Legacy Nginx configs: `deployment-examples/`
 
 ## Quick Start
 
@@ -142,19 +179,16 @@ make bin-all
 cd cli
 ../target/release/sf-cli init --db-path ../data/lancedb
 
-# Start backend
-cd ../backend
-LANCEDB_URI=../data/lancedb ../target/release/static-flow-backend
-
-# Start frontend with configurable backend URL (another terminal)
+# --- Self-hosted mode (recommended) ---
 cd ..
-./scripts/start_frontend_with_api.sh \
-  --api-base "http://127.0.0.1:3000/api" \
-  --open
-# If omitted, script default is: http://127.0.0.1:39080/api
-```
+bash scripts/build_frontend_selfhosted.sh
+bash scripts/start_backend_selfhosted.sh --daemon
 
-Backend: `http://127.0.0.1:3000` | Frontend (default): `http://127.0.0.1:38080`
+# --- Local dev mode ---
+cd ..
+bash scripts/start_backend_selfhosted.sh            # foreground
+bash scripts/start_frontend_with_api.sh --open       # another terminal, trunk hot-reload
+```
 
 ## CLI Tools
 
@@ -309,11 +343,12 @@ cd cli
 
 ## Key Env Vars
 
-Backend (`backend/.env`):
-- `LANCEDB_URI` (default `../data/lancedb`)
-- `COMMENTS_LANCEDB_URI` (default `../data/lancedb-comments`)
-- `PORT` (default `3000`)
-- `BIND_ADDR` (dev: `0.0.0.0`, production: `127.0.0.1`)
+Backend (set automatically by `scripts/start_backend_selfhosted.sh`):
+- `DB_ROOT` (default `/mnt/e/static-flow-data`, auto-resolves content/comments/music DBs)
+- `PORT` (default `39080`)
+- `HOST` (default `127.0.0.1`)
+- `SITE_BASE_URL` (default `https://ackingliu.top`, used for SEO injection)
+- `FRONTEND_DIST_DIR` (default `../frontend/dist`, static file directory for self-hosted mode)
 - `RUST_ENV` (`development` or `production`)
 - `ALLOWED_ORIGINS` (optional comma-separated CORS list in production)
 - `ADMIN_LOCAL_ONLY` (default `true`, guard `/admin/*` to local/private sources)
@@ -332,26 +367,30 @@ Backend (`backend/.env`):
 - `GEOIP_PROXY_URL` (optional proxy, e.g. `http://127.0.0.1:7890`)
 
 Frontend build-time:
-- `STATICFLOW_API_BASE` (direct pb-mapper endpoint, e.g. `https://<cloud-host>:8888/api`)
-- If using cloud Nginx proxy, set it to your domain (e.g. `https://api.yourdomain.com/api`)
+- `STATICFLOW_API_BASE`
+  - Self-hosted: `/api` (set by `build_frontend_selfhosted.sh`)
+  - GitHub Pages: absolute URL (set by CI workflow repo variables)
+  - Local dev: `http://127.0.0.1:39080/api` (set by `start_frontend_with_api.sh`)
 
 ## Development Commands
 
 ```bash
-# Workspace commands
+# Workspace
 cargo build --workspace
 cargo test --workspace
 cargo fmt --all
 cargo clippy --workspace -- -D warnings
 
-# Frontend
-cd frontend && trunk serve
-cd frontend && trunk build --release
+# Frontend (self-hosted build)
+bash scripts/build_frontend_selfhosted.sh
+
+# Frontend (trunk hot-reload dev)
+bash scripts/start_frontend_with_api.sh --open
 
 # Backend
 make bin-backend
-cd backend && ../target/release/static-flow-backend
-cd backend && RUST_ENV=production BIND_ADDR=127.0.0.1 ../target/release/static-flow-backend
+bash scripts/start_backend_selfhosted.sh            # foreground
+bash scripts/start_backend_selfhosted.sh --daemon    # background (log: /tmp/staticflow-backend.log)
 ```
 
 ## License
