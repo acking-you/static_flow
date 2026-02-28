@@ -59,6 +59,13 @@ codegen-units = 1 # 单一代码生成单元，更好的优化
 panic = "abort"   # Panic 时直接中止，减小体积
 strip = true      # 移除调试符号
 
+# Backend release: keep symbols for memory profiler stack resolution
+[profile.release-backend]
+inherits = "release"
+strip = false     # preserve symbol table for backtrace::resolve()
+debug = 1         # line tables only (function names + file:line)
+opt-level = 3     # max performance for backend server
+
 [profile.dev]
 opt-level = 0 # 开发模式不优化，编译快
 debug = true  # 保留调试信息

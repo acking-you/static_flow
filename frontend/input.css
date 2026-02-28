@@ -1995,6 +1995,7 @@ a:hover {
   --article-body-line-height: 1.78;
   --article-flow-space: 1.14em;
   --article-paragraph-gap: 0.28em;
+  --article-plain-paragraph-gap: 0.96em;
   --article-block-space-tight: 1em;
   --article-block-space: 1.3em;
   --article-block-space-wide: 1.68em;
@@ -2033,6 +2034,7 @@ a:hover {
     --article-body-line-height: 1.74;
     --article-flow-space: 1em;
     --article-paragraph-gap: 0.26em;
+    --article-plain-paragraph-gap: 0.82em;
     --article-block-space-tight: 0.88em;
     --article-block-space: 1.1em;
     --article-block-space-wide: 1.38em;
@@ -2283,6 +2285,10 @@ a:hover {
 
 .article-content p + p {
   margin-top: var(--article-paragraph-gap, 0.28em);
+}
+
+.article-content:not(.comment-ai-markdown) > p.sf-plain-paragraph + p.sf-plain-paragraph {
+  margin-top: var(--article-plain-paragraph-gap, 0.96em);
 }
 
 .article-content ul,

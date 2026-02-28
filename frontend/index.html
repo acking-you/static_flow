@@ -719,6 +719,7 @@
 
       // Improve markdown wide-content UX on small screens and dense layouts
       enhanceMarkdownWideBlocks(articleContent);
+      applyPlainParagraphSpacing(articleContent);
 
       // Assign stable anchor ids for paragraph-level comments and quote jumps.
       assignArticleBlockIds(articleContent);
@@ -843,6 +844,72 @@
       target.parentNode.insertBefore(wrapper, target);
       wrapper.appendChild(target);
       return wrapper;
+    }
+
+    function applyPlainParagraphSpacing(articleContent) {
+      if (!articleContent) return;
+      const allowedInlineTags = new Set([
+        'A',
+        'CODE',
+        'EM',
+        'STRONG',
+        'DEL',
+        'SUP',
+        'SUB',
+        'MARK',
+        'KBD',
+        'SAMP',
+        'VAR',
+        'SPAN',
+        'SMALL',
+        'B',
+        'I',
+        'U'
+      ]);
+
+      const isPlainInlineTree = (node) => {
+        if (!node) return true;
+        if (node.nodeType === Node.TEXT_NODE) return true;
+        if (node.nodeType !== Node.ELEMENT_NODE) return false;
+
+        const tag = node.tagName;
+        if (!allowedInlineTags.has(tag)) return false;
+
+        // Math/diagram/html-heavy inline wrappers should not be treated as plain prose.
+        if (
+          node.classList &&
+          (node.classList.contains('katex')
+            || node.classList.contains('mermaid')
+            || node.classList.contains('sf-math-block'))
+        ) {
+          return false;
+        }
+
+        for (const child of node.childNodes) {
+          if (!isPlainInlineTree(child)) return false;
+        }
+        return true;
+      };
+
+      Array.from(articleContent.children).forEach((child) => {
+        if (!child || child.tagName !== 'P') return;
+        child.classList.remove('sf-plain-paragraph');
+
+        const text = (child.textContent || '').trim();
+        if (!text) return;
+
+        let plain = true;
+        for (const node of child.childNodes) {
+          if (!isPlainInlineTree(node)) {
+            plain = false;
+            break;
+          }
+        }
+
+        if (plain) {
+          child.classList.add('sf-plain-paragraph');
+        }
+      });
     }
 
     function enhanceMarkdownWideBlocks(articleContent) {

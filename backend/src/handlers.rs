@@ -50,6 +50,7 @@ use tokio::time::sleep;
 
 use crate::{
     email::{normalize_frontend_page_url_input, normalize_requester_email_input},
+    memory_profiler::{self, MemoryProfilerConfigUpdate},
     state::{
         ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, MusicRuntimeConfig,
         ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
@@ -354,6 +355,12 @@ pub struct AdminApiBehaviorCleanupResponse {
     pub deleted_events: usize,
     pub before_ms: i64,
     pub retention_days: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminMemoryTopQuery {
+    #[serde(default)]
+    pub top: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1029,6 +1036,78 @@ pub async fn get_geoip_status(
 ) -> Result<Json<crate::geoip::GeoIpStatus>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     Ok(Json(state.geoip.status().await))
+}
+
+pub async fn admin_memory_profiler_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<memory_profiler::MemoryProfilerOverview>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let profiler = memory_profiler::profiler()
+        .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
+    Ok(Json(profiler.overview()))
+}
+
+pub async fn admin_memory_profiler_stacks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminMemoryTopQuery>,
+) -> Result<Json<memory_profiler::MemoryStackReport>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let profiler = memory_profiler::profiler()
+        .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
+    let top = memory_profiler::normalized_top_or_default(query.top);
+    Ok(Json(profiler.stacks_report(top)))
+}
+
+pub async fn admin_memory_profiler_functions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminMemoryTopQuery>,
+) -> Result<Json<memory_profiler::MemoryFunctionReport>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let profiler = memory_profiler::profiler()
+        .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
+    let top = memory_profiler::normalized_top_or_default(query.top);
+    Ok(Json(profiler.functions_report(top)))
+}
+
+pub async fn admin_memory_profiler_modules(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminMemoryTopQuery>,
+) -> Result<Json<memory_profiler::MemoryModuleReport>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let profiler = memory_profiler::profiler()
+        .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
+    let top = memory_profiler::normalized_top_or_default(query.top);
+    Ok(Json(profiler.modules_report(top)))
+}
+
+pub async fn admin_reset_memory_profiler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let profiler = memory_profiler::profiler()
+        .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
+    profiler.reset();
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+pub async fn admin_update_memory_profiler_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<MemoryProfilerConfigUpdate>,
+) -> Result<Json<memory_profiler::MemoryProfilerConfigSnapshot>, (StatusCode, Json<ErrorResponse>)>
+{
+    ensure_admin_access(&state, &headers)?;
+    let profiler = memory_profiler::profiler()
+        .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
+    let config = profiler
+        .update_config(request)
+        .map_err(|message| bad_request(&message))?;
+    Ok(Json(config))
 }
 
 pub async fn submit_comment(
@@ -2983,6 +3062,16 @@ async fn write_cache<T>(cache: &tokio::sync::RwLock<Option<(T, Instant)>>, items
 
 fn internal_error(message: &str, err: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
     tracing::error!("{}: {}", message, err);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: message.to_string(),
+            code: 500,
+        }),
+    )
+}
+
+fn internal_error_message(message: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ErrorResponse {

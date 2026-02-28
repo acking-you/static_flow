@@ -4,80 +4,57 @@
 Produce readable canonical Markdown from any source shape.
 Prefer original Markdown source over HTML extraction whenever possible.
 
-## Step 0: Markdown Source Discovery (mandatory for URL inputs)
+## Step 0: Discovery and retry (mandatory for URL input)
 
-Before extracting content from HTML, actively probe for a direct Markdown source.
-A clean Markdown source is always superior to HTML-to-Markdown conversion.
+→ Rule 2: web tools first, no `curl`/`wget` as primary path.
 
-### Probe sequence (run in order, stop on first success)
+Retry policy:
+1. Do not fail on single timeout.
+2. Retry canonical extraction at least 3 times with short backoff (~2s, ~5s, ~10s).
+3. Record every attempt in `source_discovery.json` (method, URL, attempt index, outcome).
 
-1. **URL suffix probe** — request `<original_url>.md` and check response:
-   - `Content-Type: text/markdown` → direct Markdown source confirmed.
-   - Also try `.mdx` if `.md` returns 404.
-   - Example: `https://clickhouse.com/blog/fivetran-connector-beta` → append `.md` → returns full Markdown with frontmatter.
+Probe sequence (stop on first full-source success):
+1. Direct Markdown probe (`<url>.md`, `<url>.mdx`).
+2. In-page source link scan (`.md`, `.mdx`, `raw`, `view source`, `edit`, `amp`, `rss`, `feed`).
+3. Repo/source inference when page links to GitHub.
+4. Content-negotiation attempt (`Accept: text/markdown`, if supported).
 
-2. **HTML button/link scan** — fetch the original HTML page and search for:
-   - Buttons or links with text matching: `View as Markdown`, `Edit on GitHub`, `Edit this page`, `View source`, `Raw`, `Suggest an edit`.
-   - `<a>` tags whose `href` contains `.md`, `.mdx`, or `raw.githubusercontent.com`.
-   - `data-*` attributes on buttons that encode a source URL.
-   - Note: these elements are often in dropdown menus or hidden behind JS toggles; scan the full HTML source, not just visible text.
+If Markdown source is found: save as `source_raw.md`, normalize into `source_canonical_<lang>.md`.
 
-3. **GitHub repo inference** — if the page contains a GitHub repository link:
-   - Extract the repo owner/name (e.g. `ClickHouse/clickhouse-docs`).
-   - Derive a candidate path from the URL slug:
-     - strip domain and leading path segments (e.g. `/blog/my-post` → `my-post`),
-     - try common content directories: `blog/`, `content/blog/`, `_posts/`, `src/content/`, `docs/`, `website/blog/`.
-   - Use GitHub API or raw URL to verify: `https://raw.githubusercontent.com/<owner>/<repo>/<default_branch>/<candidate_path>.md`
-   - If the repo has a clear blog content structure, navigate it to find the matching file.
+## Step 1: HTML/mixed extraction fallback
+When direct Markdown is unavailable, extract body from HTML using adaptive paths:
+1. Semantic container extraction (`article`, `main`, content blocks).
+2. Readability-style extraction.
+3. Structured payload extraction (JSON-LD/article-body signals).
+4. Section stitching fallback for noisy layouts.
 
-4. **Content negotiation** — send `Accept: text/markdown` header to the original URL:
-   - Some CMS platforms (Hugo, Docusaurus, custom) honor this and return Markdown directly.
+Cleanup rules:
+1. Preserve heading hierarchy and argument order.
+2. Keep examples, figure context, and caption meaning.
+3. Normalize callouts/code fences/details blocks to render-safe Markdown.
+4. Rewrite local relative links to project-valid targets.
+5. Keep evidence artifacts; do not fabricate missing sections.
 
-### Discovery output
-- If a Markdown source is found, save it as `source_raw.md` and skip HTML extraction entirely.
-- Record the discovery method and source URL in `source_discovery.json`:
-  ```json
-  {
-    "method": "url_suffix_probe",
-    "markdown_url": "https://example.com/blog/post.md",
-    "original_url": "https://example.com/blog/post",
-    "has_frontmatter": true
-  }
-  ```
-- If all probes fail, proceed to HTML extraction (Step 1 below) as normal.
+## Step 2: Best-effort before refusal
+Complete all downgrade stages before refusing:
+1. Retry same source path (transient-timeout hypothesis).
+2. Downgrade extractor path on same source (semantic → readability → structured).
+3. Downgrade source path (canonical variants, search variants, mirrors).
 
-## Step 1: Detect and extract (adaptive, not fixed)
-1. Detect source type:
-   - Markdown (from discovery or local file): keep structure, apply light cleanup.
-   - HTML/mixed: try one or more extraction paths and keep the best result.
-2. Candidate paths for HTML:
-   - semantic container extraction (`article`, `main`, content blocks),
-   - readability-style main-content extraction,
-   - section-by-section fallback (manual stitching) when structure is noisy.
-3. Cleanup pass:
-   - preserve heading hierarchy,
-   - merge broken wrapped prose,
-   - normalize callouts/lists/tables/code fences for Markdown readability,
-   - normalize admonitions/callouts (for example `!!! note`) into render-safe Markdown blocks when needed,
-   - keep `<details>/<summary>` blocks valid and readable (no fence/tag breakage),
-   - keep image captions and surrounding explanation text,
-   - normalize local relative links to project-valid paths:
-     - keep external links unchanged,
-     - rewrite local article links to `/posts/<id>` style targets,
-     - rewrite local image links to `images/<id>` after image ingestion/mapping.
+Refusal is allowed only after cross-path failure convergence.
 
 ## Quality Gate
 Canonical Markdown is acceptable only if:
-1. Major sections are complete.
-2. Key definitions/arguments are present.
-3. Figures and captions keep their information density.
-4. Boilerplate/CTA noise is controlled.
-5. Local relative links are either rewritten or explicitly documented as intentionally preserved.
-6. Markdown structure is stable end-to-end:
-   - no unclosed/duplicated code fences,
-   - no orphan `<details>` or `<summary>` tags,
-   - no callout/body spillover that accidentally turns later prose into a code block.
+1. Major sections are complete; key definitions/arguments present.
+2. Figures and captions keep their information density.
+3. Boilerplate/CTA noise is controlled.
+4. Local relative links are rewritten or explicitly documented.
+5. Markdown structure is stable (no unclosed fences, orphan tags, callout spillover).
+6. Anti-summary gate: canonical text is the article body itself, not commentary. → Rule 3
+7. Coverage gate: section headings aligned with source; image handling documented.
+8. Refusal gate: if blocked, produce `source_extraction_blocker.md` with attempt matrix, causal chain, and dominant cause label. → Rule 8
 
 ## Output
-- `source_discovery.json` (discovery metadata, if URL input)
+- `source_discovery.json` (if URL input)
 - `source_canonical_<source_lang>.md`
+- `source_extraction_blocker.md` (when blocked)

@@ -7,32 +7,17 @@ if [[ -z "${payload_path}" || ! -f "${payload_path}" ]]; then
   exit 1
 fi
 
-# Preferred: user provides an explicit runner command.
-# The payload path will be appended as the final argument.
+# Custom executor override (trusted, set by backend WorkerConfig)
 if [[ -n "${COMMENT_AI_EXEC_COMMAND:-}" ]]; then
-  eval "${COMMENT_AI_EXEC_COMMAND} \"${payload_path}\""
-  exit $?
+  exec bash -c "${COMMENT_AI_EXEC_COMMAND} \"\$1\"" -- "${payload_path}"
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex command not found. Install/configure Codex on this backend host." >&2
-  exit 1
-fi
-
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq command not found. Install jq because runner requires payload parsing." >&2
-  exit 1
-fi
-
-sanitize_task_id() {
-  local raw="$1"
-  local safe
-  safe="$(printf '%s' "${raw}" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
-  if [[ -z "${safe}" ]]; then
-    safe="unknown-task"
+for cmd in codex jq; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "${cmd} command not found." >&2
+    exit 1
   fi
-  printf '%s' "${safe}"
-}
+done
 
 task_id="$(jq -r '.task_id // empty' "${payload_path}")"
 if [[ -z "${task_id}" ]]; then
@@ -40,44 +25,42 @@ if [[ -z "${task_id}" ]]; then
   exit 1
 fi
 
+# Sanitize task_id for filesystem use
+safe_task_id="$(printf '%s' "${task_id}" | tr -cs 'A-Za-z0-9._-' '_')"
+: "${safe_task_id:=unknown}"
+
 skill_path="${COMMENT_AI_SKILL_PATH:-skills/comment-review-ai-responder/SKILL.md}"
 workdir="${COMMENT_AI_WORKDIR:-$(pwd)}"
 codex_sandbox="${COMMENT_AI_CODEX_SANDBOX:-danger-full-access}"
 codex_json_stream="${COMMENT_AI_CODEX_JSON_STREAM:-1}"
 codex_bypass="${COMMENT_AI_CODEX_BYPASS:-0}"
 result_dir="${COMMENT_AI_RESULT_DIR:-/tmp/staticflow-comment-results}"
-safe_task_id="$(sanitize_task_id "${task_id}")"
 result_path="${COMMENT_AI_RESULT_PATH:-${result_dir}/task-${safe_task_id}.md}"
 
 mkdir -p "$(dirname "${result_path}")"
-rm -f "${result_path}" >/dev/null 2>&1 || true
+rm -f "${result_path}"
 
 tmp_prompt="$(mktemp -t staticflow-comment-prompt.XXXXXX.txt)"
-cleanup() {
-  rm -f "${tmp_prompt}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
+trap 'rm -f "${tmp_prompt}"' EXIT
 
 cat > "${tmp_prompt}" <<EOF
 You are a StaticFlow comment review worker.
 
-MANDATORY:
+INSTRUCTIONS:
 1) Open and follow this skill file exactly: ${skill_path}
 2) Read the task payload JSON from: ${payload_path}
 3) Use sf-cli and payload fields as specified by the skill.
-4) Write FINAL markdown reply to this exact local file path (UTF-8, non-empty):
+4) Write the final markdown reply (UTF-8, non-empty) atomically (temp file then rename) to:
    ${result_path}
-5) Write the result file atomically: write to a temp file then rename to target path.
 
 Notes:
-- Backend marks task success based on the result file content, not stdout JSON format.
-- Keep normal Codex stdout/stderr streaming; they are used for execution trace/audit.
-- If the answer is uncertain, say uncertainty inside the final markdown content.
-- Fetch article context via local HTTP API first, fallback to sf-cli only when HTTP fails.
-- When using sf-cli fallback, read content-only fields ('content' or 'content_en') instead of full row.
-- Do not install/copy/remove any skill files at runtime.
-- Before starting work, check if any of these files exist in the working directory
-  and read them for project context: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
+- Backend judges success by result file content, not stdout.
+- Keep stdout/stderr streaming for execution trace.
+- If uncertain, express uncertainty in the final markdown content.
+- Fetch article context via local HTTP API first; fall back to sf-cli only when HTTP fails.
+- When using sf-cli fallback, read content-only fields (content/content_en) instead of full row.
+- Do not install/copy/remove skill files at runtime.
+- Before starting, read any of these if present in workdir: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
 EOF
 
 codex_cmd=(
@@ -106,16 +89,14 @@ codex_status=$?
 set -e
 
 if [[ -s "${result_path}" ]]; then
-  if [[ "${codex_status}" -ne 0 ]]; then
-    echo "codex exited with status=${codex_status}, but result file is valid: ${result_path}" >&2
-  else
-    echo "comment result file ready: ${result_path}" >&2
-  fi
+  [[ "${codex_status}" -ne 0 ]] \
+    && echo "codex exited status=${codex_status}, but result file exists: ${result_path}" >&2 \
+    || echo "comment result ready: ${result_path}" >&2
   exit 0
 fi
 
 if [[ "${codex_status}" -ne 0 ]]; then
-  echo "codex failed with status=${codex_status} and result file missing/empty: ${result_path}" >&2
+  echo "codex failed (status=${codex_status}), result file missing/empty: ${result_path}" >&2
 else
   echo "codex completed but result file missing/empty: ${result_path}" >&2
 fi

@@ -23,12 +23,15 @@ use crate::{
         admin_approve_and_run_music_wish, admin_approve_comment_task, admin_cleanup_api_behavior,
         admin_cleanup_comments, admin_delete_article_request, admin_delete_comment_task,
         admin_delete_music_wish, admin_reject_article_request, admin_reject_comment_task,
-        admin_reject_music_wish, admin_retry_article_request, admin_retry_comment_task,
-        admin_retry_music_wish, delete_admin_published_comment, fetch_admin_api_behavior_config,
+        admin_reject_music_wish, admin_reset_memory_profiler, admin_retry_article_request,
+        admin_retry_comment_task, admin_retry_music_wish, admin_update_memory_profiler_config,
+        delete_admin_published_comment, fetch_admin_api_behavior_config,
         fetch_admin_api_behavior_events, fetch_admin_api_behavior_overview,
         fetch_admin_article_requests, fetch_admin_comment_audit_logs,
         fetch_admin_comment_runtime_config, fetch_admin_comment_task,
         fetch_admin_comment_task_ai_output, fetch_admin_comment_tasks_grouped,
+        fetch_admin_memory_profiler_functions, fetch_admin_memory_profiler_modules,
+        fetch_admin_memory_profiler_overview, fetch_admin_memory_profiler_stacks,
         fetch_admin_music_wishes, fetch_admin_published_comments,
         fetch_admin_view_analytics_config, patch_admin_comment_task, patch_admin_published_comment,
         update_admin_api_behavior_config, update_admin_comment_runtime_config,
@@ -37,8 +40,9 @@ use crate::{
         AdminCommentAuditLog, AdminCommentTask, AdminCommentTaskAiOutputResponse,
         AdminCommentTaskGroup, AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest,
         AdminTaskActionRequest, ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment,
-        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, MusicWishItem,
-        ViewAnalyticsConfig,
+        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, MemoryFunctionReport,
+        MemoryModuleReport, MemoryProfilerConfigSnapshot, MemoryProfilerConfigUpdate,
+        MemoryProfilerOverview, MemoryStackReport, MusicWishItem, ViewAnalyticsConfig,
     },
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
@@ -54,6 +58,7 @@ enum AdminTab {
     Published,
     Audit,
     Behavior,
+    RuntimeMemory,
     MusicWishes,
     ArticleRequests,
 }
@@ -69,6 +74,30 @@ fn format_ms(ts_ms: i64) -> String {
         d.get_minutes(),
         d.get_seconds(),
     )
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+    let bytes_f = bytes as f64;
+
+    if bytes_f >= TB {
+        format!("{:.2} TB", bytes_f / TB)
+    } else if bytes_f >= GB {
+        format!("{:.2} GB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.2} MB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.2} KB", bytes_f / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_ratio_percent(ratio: f64) -> String {
+    format!("{:.2}%", ratio * 100.0)
 }
 
 fn status_badge_class(status: &str) -> Classes {
@@ -169,6 +198,13 @@ pub fn admin_page() -> Html {
     let behavior_page_filter = use_state(String::new);
     let behavior_device_filter = use_state(String::new);
     let behavior_status_filter = use_state(String::new);
+    let memory_overview = use_state(|| None::<MemoryProfilerOverview>);
+    let memory_functions = use_state(|| None::<MemoryFunctionReport>);
+    let memory_modules = use_state(|| None::<MemoryModuleReport>);
+    let memory_stacks = use_state(|| None::<MemoryStackReport>);
+    let memory_config = use_state(|| None::<MemoryProfilerConfigSnapshot>);
+    let memory_top = use_state(|| "20".to_string());
+    let memory_action_loading = use_state(|| false);
 
     let task_groups = use_state(Vec::<AdminCommentTaskGroup>::new);
     let grouped_status_counts = use_state(std::collections::HashMap::<String, usize>::new);
@@ -202,6 +238,7 @@ pub fn admin_page() -> Html {
     let refresh_all_seq = use_mut_ref(|| 0_u64);
     let refresh_audit_seq = use_mut_ref(|| 0_u64);
     let refresh_behavior_seq = use_mut_ref(|| 0_u64);
+    let refresh_memory_seq = use_mut_ref(|| 0_u64);
     let refresh_music_wishes_seq = use_mut_ref(|| 0_u64);
     let refresh_article_requests_seq = use_mut_ref(|| 0_u64);
 
@@ -581,6 +618,84 @@ pub fn admin_page() -> Html {
         })
     };
 
+    let refresh_memory = {
+        let load_error = load_error.clone();
+        let memory_overview = memory_overview.clone();
+        let memory_functions = memory_functions.clone();
+        let memory_modules = memory_modules.clone();
+        let memory_stacks = memory_stacks.clone();
+        let memory_config = memory_config.clone();
+        let memory_top = memory_top.clone();
+        let tab_loading = tab_loading.clone();
+        let refresh_memory_seq = refresh_memory_seq.clone();
+        Callback::from(move |_| {
+            let load_error = load_error.clone();
+            let memory_overview = memory_overview.clone();
+            let memory_functions = memory_functions.clone();
+            let memory_modules = memory_modules.clone();
+            let memory_stacks = memory_stacks.clone();
+            let memory_config = memory_config.clone();
+            let tab_loading = tab_loading.clone();
+            let refresh_memory_seq = refresh_memory_seq.clone();
+            let top = (*memory_top)
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0);
+            let request_id = {
+                let mut seq = refresh_memory_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
+
+            {
+                let mut s = (*tab_loading).clone();
+                s.insert(AdminTab::RuntimeMemory);
+                tab_loading.set(s);
+            }
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let overview_result = fetch_admin_memory_profiler_overview().await;
+                let functions_result = fetch_admin_memory_profiler_functions(top).await;
+                let modules_result = fetch_admin_memory_profiler_modules(top).await;
+                let stacks_result = fetch_admin_memory_profiler_stacks(top).await;
+
+                if *refresh_memory_seq.borrow() != request_id {
+                    return;
+                }
+
+                match (overview_result, functions_result, modules_result, stacks_result) {
+                    (Ok(overview), Ok(functions), Ok(modules), Ok(stacks)) => {
+                        memory_config.set(Some(overview.config.clone()));
+                        memory_overview.set(Some(overview));
+                        memory_functions.set(Some(functions));
+                        memory_modules.set(Some(modules));
+                        memory_stacks.set(Some(stacks));
+                        load_error.set(None);
+                    },
+                    (overview_err, functions_err, modules_err, stacks_err) => {
+                        load_error.set(Some(format!(
+                            "Memory profiler unavailable. overview={:?}, functions={:?}, \
+                             modules={:?}, stacks={:?}",
+                            overview_err.err(),
+                            functions_err.err(),
+                            modules_err.err(),
+                            stacks_err.err()
+                        )));
+                    },
+                }
+
+                if *refresh_memory_seq.borrow() != request_id {
+                    return;
+                }
+
+                let mut s = (*tab_loading).clone();
+                s.remove(&AdminTab::RuntimeMemory);
+                tab_loading.set(s);
+            });
+        })
+    };
+
     let refresh_all = {
         let load_error = load_error.clone();
         let view_config = view_config.clone();
@@ -759,6 +874,7 @@ pub fn admin_page() -> Html {
         let refresh_all = refresh_all.clone();
         let refresh_audit = refresh_audit.clone();
         let refresh_behavior = refresh_behavior.clone();
+        let refresh_memory = refresh_memory.clone();
         let refresh_music_wishes = refresh_music_wishes.clone();
         let refresh_article_requests = refresh_article_requests.clone();
         use_effect_with(*active_tab, move |tab| {
@@ -768,6 +884,7 @@ pub fn admin_page() -> Html {
                         AdminTab::Tasks | AdminTab::Published => refresh_all.emit((None, None)),
                         AdminTab::Audit => refresh_audit.emit(None),
                         AdminTab::Behavior => refresh_behavior.emit(None),
+                        AdminTab::RuntimeMemory => refresh_memory.emit(()),
                         AdminTab::MusicWishes => refresh_music_wishes.emit(None),
                         AdminTab::ArticleRequests => refresh_article_requests.emit(None),
                     }
@@ -803,6 +920,7 @@ pub fn admin_page() -> Html {
         let refresh_all = refresh_all.clone();
         let refresh_audit = refresh_audit.clone();
         let refresh_behavior = refresh_behavior.clone();
+        let refresh_memory = refresh_memory.clone();
         let refresh_music_wishes = refresh_music_wishes.clone();
         let refresh_article_requests = refresh_article_requests.clone();
         Callback::from(move |_| {
@@ -811,6 +929,7 @@ pub fn admin_page() -> Html {
                     AdminTab::Tasks | AdminTab::Published => refresh_all.emit((None, None)),
                     AdminTab::Audit => refresh_audit.emit(None),
                     AdminTab::Behavior => refresh_behavior.emit(None),
+                    AdminTab::RuntimeMemory => refresh_memory.emit(()),
                     AdminTab::MusicWishes => refresh_music_wishes.emit(None),
                     AdminTab::ArticleRequests => refresh_article_requests.emit(None),
                 }
@@ -1386,6 +1505,146 @@ pub fn admin_page() -> Html {
         })
     };
 
+    let on_memory_top_change = {
+        let memory_top = memory_top.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                memory_top.set(target.value());
+            }
+        })
+    };
+
+    let on_memory_refresh = {
+        let refresh_memory = refresh_memory.clone();
+        Callback::from(move |_| refresh_memory.emit(()))
+    };
+
+    let on_memory_enabled_change = {
+        let memory_config = memory_config.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                let mut next = (*memory_config).clone();
+                if let Some(cfg) = next.as_mut() {
+                    cfg.enabled = target.checked();
+                }
+                memory_config.set(next);
+            }
+        })
+    };
+
+    let on_memory_sample_rate_change = {
+        let memory_config = memory_config.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                if let Ok(value) = target.value().parse::<u64>() {
+                    let mut next = (*memory_config).clone();
+                    if let Some(cfg) = next.as_mut() {
+                        cfg.sample_rate = value;
+                    }
+                    memory_config.set(next);
+                }
+            }
+        })
+    };
+
+    let on_memory_min_alloc_change = {
+        let memory_config = memory_config.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                if let Ok(value) = target.value().parse::<usize>() {
+                    let mut next = (*memory_config).clone();
+                    if let Some(cfg) = next.as_mut() {
+                        cfg.min_alloc_bytes = value;
+                    }
+                    memory_config.set(next);
+                }
+            }
+        })
+    };
+
+    let on_memory_max_tracked_change = {
+        let memory_config = memory_config.clone();
+        Callback::from(move |event: InputEvent| {
+            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                if let Ok(value) = target.value().parse::<usize>() {
+                    let mut next = (*memory_config).clone();
+                    if let Some(cfg) = next.as_mut() {
+                        cfg.max_tracked_allocations = value;
+                    }
+                    memory_config.set(next);
+                }
+            }
+        })
+    };
+
+    let on_memory_reset = {
+        let memory_action_loading = memory_action_loading.clone();
+        let load_error = load_error.clone();
+        let refresh_memory = refresh_memory.clone();
+        Callback::from(move |_| {
+            if *memory_action_loading {
+                return;
+            }
+            memory_action_loading.set(true);
+            let memory_action_loading = memory_action_loading.clone();
+            let load_error = load_error.clone();
+            let refresh_memory = refresh_memory.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match admin_reset_memory_profiler().await {
+                    Ok(()) => {
+                        load_error.set(None);
+                        refresh_memory.emit(());
+                    },
+                    Err(err) => {
+                        load_error.set(Some(format!("Reset memory profiler failed: {}", err)));
+                    },
+                }
+                memory_action_loading.set(false);
+            });
+        })
+    };
+
+    let on_memory_save_config = {
+        let memory_config = memory_config.clone();
+        let memory_action_loading = memory_action_loading.clone();
+        let load_error = load_error.clone();
+        let refresh_memory = refresh_memory.clone();
+        Callback::from(move |_| {
+            if *memory_action_loading {
+                return;
+            }
+            let Some(config) = (*memory_config).clone() else {
+                return;
+            };
+
+            memory_action_loading.set(true);
+            let memory_action_loading = memory_action_loading.clone();
+            let memory_config = memory_config.clone();
+            let load_error = load_error.clone();
+            let refresh_memory = refresh_memory.clone();
+            let request = MemoryProfilerConfigUpdate {
+                enabled: Some(config.enabled),
+                sample_rate: Some(config.sample_rate),
+                min_alloc_bytes: Some(config.min_alloc_bytes),
+                max_tracked_allocations: Some(config.max_tracked_allocations),
+            };
+            wasm_bindgen_futures::spawn_local(async move {
+                match admin_update_memory_profiler_config(&request).await {
+                    Ok(updated) => {
+                        memory_config.set(Some(updated));
+                        load_error.set(None);
+                        refresh_memory.emit(());
+                    },
+                    Err(err) => {
+                        load_error
+                            .set(Some(format!("Update memory profiler config failed: {}", err)));
+                    },
+                }
+                memory_action_loading.set(false);
+            });
+        })
+    };
+
     let tab_tasks = {
         let active_tab = active_tab.clone();
         Callback::from(move |_| active_tab.set(Some(AdminTab::Tasks)))
@@ -1401,6 +1660,10 @@ pub fn admin_page() -> Html {
     let tab_behavior = {
         let active_tab = active_tab.clone();
         Callback::from(move |_| active_tab.set(Some(AdminTab::Behavior)))
+    };
+    let tab_runtime_memory = {
+        let active_tab = active_tab.clone();
+        Callback::from(move |_| active_tab.set(Some(AdminTab::RuntimeMemory)))
     };
     let tab_music_wishes = {
         let active_tab = active_tab.clone();
@@ -1782,6 +2045,9 @@ pub fn admin_page() -> Html {
                     </button>
                     <button class={if *active_tab == Some(AdminTab::Behavior) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_behavior}>
                         <i class="fas fa-chart-line text-xs" aria-hidden="true"></i>{ "Behavior" }
+                    </button>
+                    <button class={if *active_tab == Some(AdminTab::RuntimeMemory) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_runtime_memory}>
+                        <i class="fas fa-memory text-xs" aria-hidden="true"></i>{ "Memory" }
                     </button>
                     <button class={if *active_tab == Some(AdminTab::MusicWishes) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_music_wishes}>
                         <i class="fas fa-music text-xs" aria-hidden="true"></i>{ "Music" }
@@ -2370,6 +2636,237 @@ pub fn admin_page() -> Html {
                         }
                         <div class={classes!("mt-4")}>
                             <Pagination current_page={*behavior_page} total_pages={behavior_total_pages} on_page_change={on_behavior_page_change} />
+                        </div>
+                    </div>
+                } else if *active_tab == Some(AdminTab::RuntimeMemory) {
+                    <div class="animate-[fadeIn_0.3s_ease]">
+                        <div class={classes!("flex", "flex-col", "xl:flex-row", "xl:items-center", "justify-between", "gap-3", "mb-4")}>
+                            <div>
+                                <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Runtime Memory Profiler" }</h2>
+                                if let Some(overview) = (*memory_overview).clone() {
+                                    <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
+                                        { format!(
+                                            "generated={} · uptime={}s · top={}",
+                                            format_ms(overview.generated_at_ms),
+                                            overview.process_uptime_secs,
+                                            memory_top.trim()
+                                        ) }
+                                    </p>
+                                }
+                            </div>
+                            <div class={classes!("grid", "grid-cols-2", "sm:flex", "sm:items-center", "gap-2")}>
+                                <input
+                                    type="number"
+                                    value={(*memory_top).clone()}
+                                    oninput={on_memory_top_change}
+                                    min="1"
+                                    placeholder="top"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "sm:w-[110px]")}
+                                />
+                                <button class={classes!("btn-fluent-secondary")} onclick={on_memory_refresh}>{ "Refresh" }</button>
+                                <button class={classes!("btn-fluent-secondary")} onclick={on_memory_reset} disabled={*memory_action_loading}>
+                                    { if *memory_action_loading { "Working..." } else { "Reset Stats" } }
+                                </button>
+                                <button class={classes!("btn-fluent-primary")} onclick={on_memory_save_config} disabled={*memory_action_loading || memory_config.is_none()}>
+                                    { if *memory_action_loading { "Saving..." } else { "Save Config" } }
+                                </button>
+                            </div>
+                        </div>
+
+                        if tab_loading.contains(&AdminTab::RuntimeMemory) {
+                            <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                                <LoadingSpinner size={SpinnerSize::Small} />
+                                <span>{ "Loading memory profiler data..." }</span>
+                            </div>
+                        }
+
+                        if let Some(overview) = (*memory_overview).clone() {
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-4", "mb-4")}>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Live Heap (est)" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ format_bytes(overview.total_live_bytes_estimate) }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Alloc Total (est)" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ format_bytes(overview.total_alloc_bytes_estimate) }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Process RSS" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ format_bytes(overview.process_rss_bytes) }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Virtual Memory" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ format_bytes(overview.process_virtual_bytes) }</p>
+                                </article>
+                            </div>
+
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-4", "mb-4")}>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Tracked Allocs" }</p>
+                                    <p class={classes!("m-0", "text-lg", "font-semibold")}>{ overview.tracked_allocations }</p>
+                                    <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ format!("distinct stacks={}", overview.distinct_stacks) }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "Sampled Events" }</p>
+                                    <p class={classes!("m-0", "text-sm", "font-semibold")}>{ format!("alloc={} free={} realloc={}", overview.sampled_alloc_events, overview.sampled_dealloc_events, overview.sampled_realloc_events) }</p>
+                                    <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ format!("dropped={}", overview.dropped_allocations) }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "MiMalloc RSS" }</p>
+                                    <p class={classes!("m-0", "text-sm", "font-semibold")}>{ format!("current={} peak={}", format_bytes(overview.mimalloc.current_rss_bytes), format_bytes(overview.mimalloc.peak_rss_bytes)) }</p>
+                                    <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ format!("faults={}", overview.mimalloc.page_faults) }</p>
+                                </article>
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                    <p class={classes!("m-0", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "MiMalloc Commit" }</p>
+                                    <p class={classes!("m-0", "text-sm", "font-semibold")}>{ format!("current={} peak={}", format_bytes(overview.mimalloc.current_commit_bytes), format_bytes(overview.mimalloc.peak_commit_bytes)) }</p>
+                                    <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ format!("elapsed={} ms", overview.mimalloc.elapsed_millis) }</p>
+                                </article>
+                            </div>
+                        } else {
+                            <p class={classes!("m-0", "mb-4", "text-sm", "text-[var(--muted)]")}>{ "Memory overview unavailable." }</p>
+                        }
+
+                        if let Some(config) = (*memory_config).clone() {
+                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-4", "mb-4")}>
+                                <h3 class={classes!("m-0", "mb-3", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                                    { "Profiler Config" }
+                                </h3>
+                                <div class={classes!("grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-4")}>
+                                    <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                        <input
+                                            type="checkbox"
+                                            checked={config.enabled}
+                                            onchange={on_memory_enabled_change}
+                                        />
+                                        { "enabled" }
+                                    </label>
+                                    <label class={classes!("block", "text-sm")}>
+                                        { "sample_rate" }
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            value={config.sample_rate.to_string()}
+                                            oninput={on_memory_sample_rate_change}
+                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        />
+                                    </label>
+                                    <label class={classes!("block", "text-sm")}>
+                                        { "min_alloc_bytes" }
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            value={config.min_alloc_bytes.to_string()}
+                                            oninput={on_memory_min_alloc_change}
+                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        />
+                                    </label>
+                                    <label class={classes!("block", "text-sm")}>
+                                        { "max_tracked_allocations" }
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            value={config.max_tracked_allocations.to_string()}
+                                            oninput={on_memory_max_tracked_change}
+                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        />
+                                    </label>
+                                </div>
+                                <p class={classes!("m-0", "mt-3", "text-xs", "text-[var(--muted)]")}>
+                                    { format!("stack_skip={} · max_stack_depth={}", config.stack_skip, config.max_stack_depth) }
+                                </p>
+                            </article>
+                        }
+
+                        <div class={classes!("grid", "gap-4", "xl:grid-cols-3")}>
+                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                <header class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                                    <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Top Functions" }</h3>
+                                    if let Some(report) = (*memory_functions).clone() {
+                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} entries", report.entries.len()) }</span>
+                                    }
+                                </header>
+                                if let Some(report) = (*memory_functions).clone() {
+                                    if report.entries.is_empty() {
+                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No sampled function data." }</p>
+                                    } else {
+                                        <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
+                                            { for report.entries.iter().map(|entry| html! {
+                                                <li class={classes!("rounded-[var(--radius-sm)]", "border", "border-[var(--border)]", "p-2")}>
+                                                    <p class={classes!("m-0", "text-xs", "font-semibold", "truncate")} title={entry.function.clone()}>{ entry.function.clone() }</p>
+                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]", "truncate")} title={entry.module.clone()}>{ entry.module.clone() }</p>
+                                                    <p class={classes!("m-0", "text-xs")}>{ format!("live={} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }</p>
+                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("stacks={} alloc={} free={}", entry.stack_count, entry.alloc_count, entry.free_count) }</p>
+                                                </li>
+                                            }) }
+                                        </ul>
+                                    }
+                                } else {
+                                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Unavailable" }</p>
+                                }
+                            </article>
+
+                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                <header class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                                    <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Top Modules" }</h3>
+                                    if let Some(report) = (*memory_modules).clone() {
+                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} entries", report.entries.len()) }</span>
+                                    }
+                                </header>
+                                if let Some(report) = (*memory_modules).clone() {
+                                    if report.entries.is_empty() {
+                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No sampled module data." }</p>
+                                    } else {
+                                        <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
+                                            { for report.entries.iter().map(|entry| html! {
+                                                <li class={classes!("rounded-[var(--radius-sm)]", "border", "border-[var(--border)]", "p-2")}>
+                                                    <p class={classes!("m-0", "text-xs", "font-semibold", "truncate")} title={entry.module.clone()}>{ entry.module.clone() }</p>
+                                                    <p class={classes!("m-0", "text-xs")}>{ format!("live={} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }</p>
+                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("functions={} stacks={}", entry.function_count, entry.stack_count) }</p>
+                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("alloc={} free={}", entry.alloc_count, entry.free_count) }</p>
+                                                </li>
+                                            }) }
+                                        </ul>
+                                    }
+                                } else {
+                                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Unavailable" }</p>
+                                }
+                            </article>
+
+                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                                <header class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                                    <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Top Stacks" }</h3>
+                                    if let Some(report) = (*memory_stacks).clone() {
+                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} entries", report.entries.len()) }</span>
+                                    }
+                                </header>
+                                if let Some(report) = (*memory_stacks).clone() {
+                                    if report.entries.is_empty() {
+                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No sampled stack data." }</p>
+                                    } else {
+                                        <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
+                                            { for report.entries.iter().map(|entry| {
+                                                let frame_preview = entry
+                                                    .frames
+                                                    .iter()
+                                                    .take(3)
+                                                    .cloned()
+                                                    .collect::<Vec<_>>()
+                                                    .join(" ← ");
+                                                html! {
+                                                    <li class={classes!("rounded-[var(--radius-sm)]", "border", "border-[var(--border)]", "p-2")}>
+                                                        <p class={classes!("m-0", "text-xs", "font-semibold", "font-mono", "truncate")} title={entry.stack_id.clone()}>{ entry.stack_id.clone() }</p>
+                                                        <p class={classes!("m-0", "text-xs", "font-mono", "break-all")} title={frame_preview.clone()}>{ frame_preview }</p>
+                                                        <p class={classes!("m-0", "text-xs")}>{ format!("live={} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }</p>
+                                                        <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("alloc={} free={}", entry.alloc_count, entry.free_count) }</p>
+                                                    </li>
+                                                }
+                                            }) }
+                                        </ul>
+                                    }
+                                } else {
+                                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Unavailable" }</p>
+                                }
+                            </article>
                         </div>
                     </div>
                 } else if *active_tab == Some(AdminTab::MusicWishes) {

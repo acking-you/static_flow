@@ -4,6 +4,7 @@ mod comment_worker;
 mod email;
 mod geoip;
 mod handlers;
+mod memory_profiler;
 mod music_wish_worker;
 mod request_context;
 mod routes;
@@ -14,17 +15,23 @@ use std::env;
 
 use anyhow::Result;
 use better_mimalloc_rs::MiMalloc;
+use memory_profiler::ProfiledMiMalloc;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_LOG_FILTER: &str =
     "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";
 
 #[global_allocator]
-static GLOBAL_MIMALLOC: MiMalloc = MiMalloc;
+static GLOBAL_MIMALLOC: ProfiledMiMalloc = ProfiledMiMalloc::new(MiMalloc);
 
 #[tokio::main]
 async fn main() -> Result<()> {
     MiMalloc::init();
+    // Initialize memory profiler as early as possible so all subsequent
+    // allocations (tracing, LanceDB, etc.) are tracked from the start.
+    let mem_profiler = memory_profiler::init_from_env();
+    let mem_profiler_cfg = mem_profiler.config_snapshot();
+
     // Default: suppress verbose dependency info logs.
     // Override with RUST_LOG for troubleshooting.
     let filter =
@@ -33,6 +40,15 @@ async fn main() -> Result<()> {
         .compact()
         .with_env_filter(filter)
         .init();
+
+    tracing::info!(
+        "Memory profiler: enabled={}, sample_rate={}, min_alloc_bytes={}, \
+         max_tracked_allocations={}",
+        mem_profiler_cfg.enabled,
+        mem_profiler_cfg.sample_rate,
+        mem_profiler_cfg.min_alloc_bytes,
+        mem_profiler_cfg.max_tracked_allocations,
+    );
 
     // Load environment variables
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());

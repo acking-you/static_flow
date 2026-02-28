@@ -88,13 +88,16 @@ resolve_backend_bin() {
   if [[ -x "$ROOT_DIR/bin/static-flow-backend" ]]; then
     echo "$ROOT_DIR/bin/static-flow-backend"; return
   fi
+  if [[ -x "$ROOT_DIR/target/release-backend/static-flow-backend" ]]; then
+    echo "$ROOT_DIR/target/release-backend/static-flow-backend"; return
+  fi
   if [[ -x "$ROOT_DIR/target/release/static-flow-backend" ]]; then
     echo "$ROOT_DIR/target/release/static-flow-backend"; return
   fi
   if [[ -x "$ROOT_DIR/target/debug/static-flow-backend" ]]; then
     echo "$ROOT_DIR/target/debug/static-flow-backend"; return
   fi
-  fail "Backend binary not found. Run with --build or: cargo build --release -p static-flow-backend"
+  fail "Backend binary not found. Run with --build or: cargo build --profile release-backend -p static-flow-backend"
 }
 
 # ---------------------------------------------------------------------------
@@ -106,10 +109,10 @@ if [[ "$BUILD_FRONTEND" == "true" ]]; then
 fi
 
 if [[ "$BUILD_BACKEND" == "true" ]]; then
-  log "Building backend (release)..."
-  cargo build --release -p static-flow-backend
+  log "Building backend (release-backend profile)..."
+  cargo build --profile release-backend -p static-flow-backend
   # Copy to bin/ for consistency
-  cp "$ROOT_DIR/target/release/static-flow-backend" "$ROOT_DIR/bin/static-flow-backend"
+  cp "$ROOT_DIR/target/release-backend/static-flow-backend" "$ROOT_DIR/bin/static-flow-backend"
   log "Binary copied to bin/static-flow-backend"
 fi
 
@@ -156,6 +159,8 @@ export MUSIC_LANCEDB_URI="$MUSIC_DB_PATH"
 export SITE_BASE_URL
 export FRONTEND_DIST_DIR
 export COMMENT_AI_CONTENT_API_BASE
+# Memory profiler: enabled by default for release-backend builds (has debug symbols)
+export MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-1}"
 export COMMENT_AI_CODEX_SANDBOX
 export COMMENT_AI_CODEX_JSON_STREAM
 export COMMENT_AI_CODEX_BYPASS

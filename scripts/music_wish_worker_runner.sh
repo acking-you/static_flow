@@ -7,28 +7,17 @@ if [[ -z "${payload_path}" || ! -f "${payload_path}" ]]; then
   exit 1
 fi
 
+# Custom executor override (trusted, set by backend WorkerConfig)
 if [[ -n "${MUSIC_WISH_EXEC_COMMAND:-}" ]]; then
-  eval "${MUSIC_WISH_EXEC_COMMAND} \"${payload_path}\""
-  exit $?
+  exec bash -c "${MUSIC_WISH_EXEC_COMMAND} \"\$1\"" -- "${payload_path}"
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex command not found." >&2
-  exit 1
-fi
-
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq command not found." >&2
-  exit 1
-fi
-
-sanitize_id() {
-  local raw="$1"
-  local safe
-  safe="$(printf '%s' "${raw}" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
-  if [[ -z "${safe}" ]]; then safe="unknown"; fi
-  printf '%s' "${safe}"
-}
+for cmd in codex jq; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "${cmd} command not found." >&2
+    exit 1
+  fi
+done
 
 wish_id="$(jq -r '.wish_id // empty' "${payload_path}")"
 if [[ -z "${wish_id}" ]]; then
@@ -36,42 +25,40 @@ if [[ -z "${wish_id}" ]]; then
   exit 1
 fi
 
+# Sanitize wish_id for filesystem use
+safe_wish_id="$(printf '%s' "${wish_id}" | tr -cs 'A-Za-z0-9._-' '_')"
+: "${safe_wish_id:=unknown}"
+
 skill_path="${MUSIC_WISH_SKILL_PATH:-skills/music-ingestion-publisher/SKILL.md}"
 workdir="${MUSIC_WISH_WORKDIR:-$(pwd)}"
 codex_sandbox="${MUSIC_WISH_CODEX_SANDBOX:-danger-full-access}"
 codex_json_stream="${MUSIC_WISH_CODEX_JSON_STREAM:-1}"
 codex_bypass="${MUSIC_WISH_CODEX_BYPASS:-0}"
 result_dir="${MUSIC_WISH_RESULT_DIR:-/tmp/staticflow-music-wish-results}"
-safe_wish_id="$(sanitize_id "${wish_id}")"
 result_path="${MUSIC_WISH_RESULT_PATH:-${result_dir}/wish-${safe_wish_id}.json}"
 
 mkdir -p "$(dirname "${result_path}")"
-rm -f "${result_path}" >/dev/null 2>&1 || true
+rm -f "${result_path}"
 
 tmp_prompt="$(mktemp -t staticflow-music-wish-prompt.XXXXXX.txt)"
-cleanup() {
-  rm -f "${tmp_prompt}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
+trap 'rm -f "${tmp_prompt}"' EXIT
 
 cat > "${tmp_prompt}" <<EOF
 You are a StaticFlow music ingestion worker.
 
-MANDATORY:
+INSTRUCTIONS:
 1) Open and follow this skill file exactly: ${skill_path}
 2) Read the task payload JSON from: ${payload_path}
-3) Use the skill to search, download, and ingest the requested song into the music DB.
-4) Write a JSON result to this exact local file path (UTF-8, non-empty):
+3) Execute the skill workflow to search, download, and ingest the requested song.
+4) Write a JSON result (UTF-8, non-empty) atomically (temp file then rename) to:
    ${result_path}
-5) The JSON must contain: { "ingested_song_id": "<id or null>", "reply_markdown": "<summary>" }
-6) Write the result file atomically: write to a temp file then rename to target path.
+5) Result schema: { "ingested_song_id": "<id or null>", "reply_markdown": "<summary>" }
 
 Notes:
-- Backend marks task success based on the result file content, not stdout JSON format.
-- Keep normal Codex stdout/stderr streaming; they are used for execution trace/audit.
-- Do not install/copy/remove any skill files at runtime.
-- Before starting work, check if any of these files exist in the working directory
-  and read them for project context: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
+- Backend judges success by result file content, not stdout.
+- Keep stdout/stderr streaming for execution trace.
+- Do not install/copy/remove skill files at runtime.
+- Before starting, read any of these if present in workdir: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
 EOF
 
 codex_cmd=(
@@ -100,16 +87,14 @@ codex_status=$?
 set -e
 
 if [[ -s "${result_path}" ]]; then
-  if [[ "${codex_status}" -ne 0 ]]; then
-    echo "codex exited with status=${codex_status}, but result file is valid: ${result_path}" >&2
-  else
-    echo "music wish result file ready: ${result_path}" >&2
-  fi
+  [[ "${codex_status}" -ne 0 ]] \
+    && echo "codex exited status=${codex_status}, but result file exists: ${result_path}" >&2 \
+    || echo "music wish result ready: ${result_path}" >&2
   exit 0
 fi
 
 if [[ "${codex_status}" -ne 0 ]]; then
-  echo "codex failed with status=${codex_status} and result file missing/empty: ${result_path}" >&2
+  echo "codex failed (status=${codex_status}), result file missing/empty: ${result_path}" >&2
 else
   echo "codex completed but result file missing/empty: ${result_path}" >&2
 fi

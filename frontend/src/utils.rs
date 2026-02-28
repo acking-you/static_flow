@@ -33,6 +33,7 @@ pub fn markdown_to_html(content: &str) -> String {
     // Protect display-math blocks before markdown parsing so `=` lines inside
     // formulas are not interpreted as Setext headings.
     let normalized_content = protect_display_math_blocks(content);
+    let normalized_content = normalize_standalone_break_markers(&normalized_content);
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -66,6 +67,52 @@ pub fn markdown_to_html(content: &str) -> String {
     let mut html_output = String::new();
     html::push_html(&mut html_output, transformed_parser);
     html_output
+}
+
+fn normalize_standalone_break_markers(content: &str) -> String {
+    let mut result = String::new();
+    let mut in_fenced_code = false;
+    let mut active_fence = "";
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        let fence_marker = if trimmed.starts_with("```") {
+            Some("```")
+        } else if trimmed.starts_with("~~~") {
+            Some("~~~")
+        } else {
+            None
+        };
+
+        if let Some(marker) = fence_marker {
+            if in_fenced_code && active_fence == marker {
+                in_fenced_code = false;
+                active_fence = "";
+            } else if !in_fenced_code {
+                in_fenced_code = true;
+                active_fence = marker;
+            }
+
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        if !in_fenced_code && matches!(trimmed, "<br>" | "<br/>" | "<br />") {
+            result.push('\n');
+            continue;
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
 }
 
 #[derive(Clone, Debug)]
@@ -563,5 +610,21 @@ $$
         assert!(rewritten.contains("[rel](https://ackingliu.top/x/y)"));
         assert!(rewritten.contains("[ref-link]: https://ackingliu.top/article/foo \"title\""));
         assert!(rewritten.contains("<a href=\"https://ackingliu.top/posts/hello\">x</a>"));
+    }
+
+    #[test]
+    fn standalone_break_markers_become_paragraph_boundaries() {
+        let markdown = "第一段\n<br/>\n第二段";
+        let html = markdown_to_html(markdown);
+        assert!(html.contains("<p>第一段</p>"));
+        assert!(html.contains("<p>第二段</p>"));
+        assert!(!html.contains("<br"));
+    }
+
+    #[test]
+    fn standalone_break_marker_inside_code_fence_is_preserved_as_code_text() {
+        let markdown = "```text\nline1\n<br/>\nline2\n```";
+        let html = markdown_to_html(markdown);
+        assert!(html.contains("&lt;br/&gt;"));
     }
 }

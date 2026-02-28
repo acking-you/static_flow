@@ -7,28 +7,17 @@ if [[ -z "${payload_path}" || ! -f "${payload_path}" ]]; then
   exit 1
 fi
 
+# Custom executor override (trusted, set by backend WorkerConfig)
 if [[ -n "${ARTICLE_REQUEST_EXEC_COMMAND:-}" ]]; then
-  eval "${ARTICLE_REQUEST_EXEC_COMMAND} \"${payload_path}\""
-  exit $?
+  exec bash -c "${ARTICLE_REQUEST_EXEC_COMMAND} \"\$1\"" -- "${payload_path}"
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex command not found." >&2
-  exit 1
-fi
-
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq command not found." >&2
-  exit 1
-fi
-
-sanitize_id() {
-  local raw="$1"
-  local safe
-  safe="$(printf '%s' "${raw}" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
-  if [[ -z "${safe}" ]]; then safe="unknown"; fi
-  printf '%s' "${safe}"
-}
+for cmd in codex jq; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "${cmd} command not found." >&2
+    exit 1
+  fi
+done
 
 request_id="$(jq -r '.request_id // empty' "${payload_path}")"
 if [[ -z "${request_id}" ]]; then
@@ -36,51 +25,48 @@ if [[ -z "${request_id}" ]]; then
   exit 1
 fi
 
+# Sanitize request_id for filesystem use
+safe_request_id="$(printf '%s' "${request_id}" | tr -cs 'A-Za-z0-9._-' '_')"
+: "${safe_request_id:=unknown}"
+
 skill_path="${ARTICLE_REQUEST_SKILL_PATH:-skills/external-blog-repost-publisher/SKILL.md}"
 workdir="${ARTICLE_REQUEST_WORKDIR:-$(pwd)}"
 codex_sandbox="${ARTICLE_REQUEST_CODEX_SANDBOX:-danger-full-access}"
 codex_json_stream="${ARTICLE_REQUEST_CODEX_JSON_STREAM:-1}"
 codex_bypass="${ARTICLE_REQUEST_CODEX_BYPASS:-0}"
 result_dir="${ARTICLE_REQUEST_RESULT_DIR:-/tmp/staticflow-article-request-results}"
-safe_request_id="$(sanitize_id "${request_id}")"
 result_path="${ARTICLE_REQUEST_RESULT_PATH:-${result_dir}/request-${safe_request_id}.json}"
 
 mkdir -p "$(dirname "${result_path}")"
-rm -f "${result_path}" >/dev/null 2>&1 || true
+rm -f "${result_path}"
 
 tmp_prompt="$(mktemp -t staticflow-article-request-prompt.XXXXXX.txt)"
-cleanup() {
-  rm -f "${tmp_prompt}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
+trap 'rm -f "${tmp_prompt}"' EXIT
 
 cat > "${tmp_prompt}" <<EOF
 You are a StaticFlow article ingestion worker.
 
-MANDATORY:
+INSTRUCTIONS:
 1) Open and follow this skill file exactly: ${skill_path}
 2) Read the task payload JSON from: ${payload_path}
-3) Use the skill to fetch, process, and ingest the requested article into the content DB.
-4) Write a JSON result to this exact local file path (UTF-8, non-empty):
+3) Execute the skill workflow to fetch, process, and ingest the article.
+4) Write a JSON result (UTF-8, non-empty) atomically (temp file then rename) to:
    ${result_path}
-5) The JSON must contain: { "ingested_article_id": "<id or null>", "reply_markdown": "<summary>" }
-6) Write the result file atomically: write to a temp file then rename to target path.
+5) Result schema: { "ingested_article_id": "<id or null>", "reply_markdown": "<task_status_markdown>" }
+6) \`reply_markdown\` is an operator-facing status summary; it does not relax any skill rules.
 
 Notes:
-- Backend marks task success based on the result file content, not stdout JSON format.
-- Keep normal Codex stdout/stderr streaming; they are used for execution trace/audit.
-- Do not install/copy/remove any skill files at runtime.
-- Before starting work, check if any of these files exist in the working directory
-  and read them for project context: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
+- Backend judges success by result file content, not stdout.
+- Keep stdout/stderr streaming for execution trace.
+- Do not install/copy/remove skill files at runtime.
+- Before starting, read any of these if present in workdir: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
 
 FOLLOW-UP CONTEXT (if applicable):
-- If the payload contains "parent_request_id" and "parent_context", this is a follow-up request.
-- "parent_context" is an array ordered from direct parent to oldest ancestor.
-- Each entry has: "request_id", "article_url", "request_message" (user instruction),
-  "ai_reply" (what AI did), "ingested_article_id" (article produced, if any).
-- Use the full chain to understand the user's cumulative intent.
-- If a previous round produced an article (ingested_article_id), consider updating it
-  rather than creating a new one, unless the user explicitly asks for a new article.
+- If payload contains "parent_request_id" + "parent_context", this is a follow-up.
+- "parent_context" is ordered from direct parent to oldest ancestor.
+- Each entry: "request_id", "article_url", "request_message", "ai_reply", "ingested_article_id".
+- Use the chain to understand cumulative intent.
+- If a previous round produced an article, prefer updating it unless user asks for a new one.
 EOF
 
 codex_cmd=(
@@ -109,16 +95,14 @@ codex_status=$?
 set -e
 
 if [[ -s "${result_path}" ]]; then
-  if [[ "${codex_status}" -ne 0 ]]; then
-    echo "codex exited with status=${codex_status}, but result file is valid: ${result_path}" >&2
-  else
-    echo "article request result file ready: ${result_path}" >&2
-  fi
+  [[ "${codex_status}" -ne 0 ]] \
+    && echo "codex exited status=${codex_status}, but result file exists: ${result_path}" >&2 \
+    || echo "article request result ready: ${result_path}" >&2
   exit 0
 fi
 
 if [[ "${codex_status}" -ne 0 ]]; then
-  echo "codex failed with status=${codex_status} and result file missing/empty: ${result_path}" >&2
+  echo "codex failed (status=${codex_status}), result file missing/empty: ${result_path}" >&2
 else
   echo "codex completed but result file missing/empty: ${result_path}" >&2
 fi

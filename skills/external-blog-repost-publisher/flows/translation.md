@@ -37,23 +37,34 @@ Before translating, identify:
 7. Domain-term sanity pass (mandatory for long technical docs):
    - verify high-risk terms and phrases section-by-section,
    - fix mistranslations that change meaning (especially protocol/consistency/concurrency semantics).
+8. Example-preservation pass (mandatory):
+   - preserve concrete examples from source (tool names, command patterns, guardrail examples, exception cases),
+   - do not reduce example-rich sections into high-level summary-only prose.
+9. Narrative-frame fidelity:
+   - keep the article's own narrative voice; do not rewrite body into reviewer/commentator framing,
+   - avoid opening/section patterns like "this article explains..." unless the source itself uses that framing.
 
 ## Step 4: Quick quality check
 1. No missing key section (especially definitions and conclusions).
-2. Tone still resembles source article.
-3. Target audience can read smoothly without "machine translation" feeling.
-4. Expansion quality:
+2. No missing key paragraphs inside each section (paragraph-level coverage).
+3. Tone still resembles source article.
+4. Target audience can read smoothly without "machine translation" feeling.
+5. Expansion quality:
    - added wording feels natural, not bloated.
    - key facts/constraints are fully preserved after expansion.
-5. Heading and label quality:
+6. Heading and label quality:
    - title + section headings are translated/readable,
    - operation labels and figure notes remain semantically precise.
+7. Professional readability:
+   - final output must read like human-authored technical writing in target language,
+   - avoid literal word-by-word phrasing when target language has clearer professional wording.
 
 ## Common Failure Patterns (must avoid)
 1. Reordering logic so heavily that argument flow changes.
 2. Expansion that sounds fluent but weakens factual precision.
 3. Adding speculative explanations that shift the author's stance.
 4. Keeping words but dropping key constraints, numbers, or qualifiers.
+5. Preserving headings but dropping concrete examples and edge-case caveats.
 
 ## Output
 - `content_<target_lang>.md`

@@ -62,6 +62,11 @@ resolve_backend_bin() {
     return
   fi
 
+  if [[ -x "$ROOT_DIR/target/release-backend/static-flow-backend" ]]; then
+    echo "$ROOT_DIR/target/release-backend/static-flow-backend"
+    return
+  fi
+
   if [[ -x "$ROOT_DIR/target/release/static-flow-backend" ]]; then
     echo "$ROOT_DIR/target/release/static-flow-backend"
     return
@@ -315,6 +320,7 @@ COMMENT_AI_CODEX_JSON_STREAM="$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE" \
 COMMENT_AI_CODEX_BYPASS="$COMMENT_AI_CODEX_BYPASS_EFFECTIVE" \
 COMMENT_AI_RESULT_DIR="$COMMENT_AI_RESULT_DIR_EFFECTIVE" \
 COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS="$COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE" \
+MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-1}" \
 "$BACKEND_BIN_PATH" &
 BACKEND_PID=$!
 

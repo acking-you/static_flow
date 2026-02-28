@@ -1167,6 +1167,119 @@ pub struct AdminApiBehaviorCleanupResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryProfilerConfigSnapshot {
+    pub enabled: bool,
+    pub sample_rate: u64,
+    pub min_alloc_bytes: usize,
+    pub max_tracked_allocations: usize,
+    pub stack_skip: usize,
+    pub max_stack_depth: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryProfilerConfigUpdate {
+    pub enabled: Option<bool>,
+    pub sample_rate: Option<u64>,
+    pub min_alloc_bytes: Option<usize>,
+    pub max_tracked_allocations: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MiProcessMemoryInfo {
+    pub elapsed_millis: u64,
+    pub user_millis: u64,
+    pub system_millis: u64,
+    pub current_rss_bytes: u64,
+    pub peak_rss_bytes: u64,
+    pub current_commit_bytes: u64,
+    pub peak_commit_bytes: u64,
+    pub page_faults: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryProfilerOverview {
+    pub generated_at_ms: i64,
+    pub config: MemoryProfilerConfigSnapshot,
+    pub process_uptime_secs: u64,
+    pub tracked_allocations: usize,
+    pub distinct_stacks: usize,
+    pub dropped_allocations: u64,
+    pub sampled_alloc_events: u64,
+    pub sampled_dealloc_events: u64,
+    pub sampled_realloc_events: u64,
+    pub total_live_bytes_estimate: u64,
+    pub total_alloc_bytes_estimate: u64,
+    pub process_rss_bytes: u64,
+    pub process_virtual_bytes: u64,
+    pub mimalloc: MiProcessMemoryInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryStackEntry {
+    pub stack_id: String,
+    pub live_bytes_estimate: u64,
+    pub alloc_bytes_total_estimate: u64,
+    pub alloc_count: u64,
+    pub free_count: u64,
+    pub live_ratio_heap: f64,
+    pub live_ratio_rss: f64,
+    pub frames: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryStackReport {
+    pub generated_at_ms: i64,
+    pub top: usize,
+    pub total_live_bytes_estimate: u64,
+    pub process_rss_bytes: u64,
+    pub entries: Vec<MemoryStackEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryFunctionEntry {
+    pub function: String,
+    pub module: String,
+    pub live_bytes_estimate: u64,
+    pub alloc_bytes_total_estimate: u64,
+    pub stack_count: usize,
+    pub alloc_count: u64,
+    pub free_count: u64,
+    pub live_ratio_heap: f64,
+    pub live_ratio_rss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryFunctionReport {
+    pub generated_at_ms: i64,
+    pub top: usize,
+    pub total_live_bytes_estimate: u64,
+    pub process_rss_bytes: u64,
+    pub entries: Vec<MemoryFunctionEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryModuleEntry {
+    pub module: String,
+    pub live_bytes_estimate: u64,
+    pub alloc_bytes_total_estimate: u64,
+    pub function_count: usize,
+    pub stack_count: usize,
+    pub alloc_count: u64,
+    pub free_count: u64,
+    pub live_ratio_heap: f64,
+    pub live_ratio_rss: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MemoryModuleReport {
+    pub generated_at_ms: i64,
+    pub top: usize,
+    pub total_live_bytes_estimate: u64,
+    pub process_rss_bytes: u64,
+    pub entries: Vec<MemoryModuleEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AdminCommentTask {
     pub task_id: String,
     pub article_id: String,
@@ -1817,6 +1930,217 @@ pub async fn admin_cleanup_api_behavior(
         let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_memory_profiler_overview() -> Result<MemoryProfilerOverview, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(MemoryProfilerOverview {
+            generated_at_ms: Date::now() as i64,
+            config: MemoryProfilerConfigSnapshot {
+                enabled: true,
+                sample_rate: 128,
+                min_alloc_bytes: 256,
+                max_tracked_allocations: 100_000,
+                stack_skip: 6,
+                max_stack_depth: 24,
+            },
+            process_uptime_secs: 0,
+            tracked_allocations: 0,
+            distinct_stacks: 0,
+            dropped_allocations: 0,
+            sampled_alloc_events: 0,
+            sampled_dealloc_events: 0,
+            sampled_realloc_events: 0,
+            total_live_bytes_estimate: 0,
+            total_alloc_bytes_estimate: 0,
+            process_rss_bytes: 0,
+            process_virtual_bytes: 0,
+            mimalloc: MiProcessMemoryInfo {
+                elapsed_millis: 0,
+                user_millis: 0,
+                system_millis: 0,
+                current_rss_bytes: 0,
+                peak_rss_bytes: 0,
+                current_commit_bytes: 0,
+                peak_commit_bytes: 0,
+                page_faults: 0,
+            },
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/runtime/memory/overview", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_memory_profiler_stacks(
+    top: Option<usize>,
+) -> Result<MemoryStackReport, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(MemoryStackReport {
+            generated_at_ms: Date::now() as i64,
+            top: top.unwrap_or(20),
+            total_live_bytes_estimate: 0,
+            process_rss_bytes: 0,
+            entries: vec![],
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/runtime/memory/stacks", admin_base());
+        if let Some(top) = top {
+            url.push_str(&format!("?top={top}"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_memory_profiler_functions(
+    top: Option<usize>,
+) -> Result<MemoryFunctionReport, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(MemoryFunctionReport {
+            generated_at_ms: Date::now() as i64,
+            top: top.unwrap_or(20),
+            total_live_bytes_estimate: 0,
+            process_rss_bytes: 0,
+            entries: vec![],
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/runtime/memory/functions", admin_base());
+        if let Some(top) = top {
+            url.push_str(&format!("?top={top}"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_memory_profiler_modules(
+    top: Option<usize>,
+) -> Result<MemoryModuleReport, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(MemoryModuleReport {
+            generated_at_ms: Date::now() as i64,
+            top: top.unwrap_or(20),
+            total_live_bytes_estimate: 0,
+            process_rss_bytes: 0,
+            entries: vec![],
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/runtime/memory/modules", admin_base());
+        if let Some(top) = top {
+            url.push_str(&format!("?top={top}"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn admin_reset_memory_profiler() -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/runtime/memory/reset", admin_base());
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        Ok(())
+    }
+}
+
+pub async fn admin_update_memory_profiler_config(
+    config: &MemoryProfilerConfigUpdate,
+) -> Result<MemoryProfilerConfigSnapshot, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(MemoryProfilerConfigSnapshot {
+            enabled: config.enabled.unwrap_or(true),
+            sample_rate: config.sample_rate.unwrap_or(128),
+            min_alloc_bytes: config.min_alloc_bytes.unwrap_or(256),
+            max_tracked_allocations: config.max_tracked_allocations.unwrap_or(100_000),
+            stack_skip: 6,
+            max_stack_depth: 24,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/runtime/memory/config", admin_base());
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(config)
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await

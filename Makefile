@@ -127,12 +127,12 @@ bin-cli:
 	@cp $(TARGET_DIR)/sf-cli $(BIN_DIR)/sf-cli
 	@echo "✅ 输出: $(BIN_DIR)/sf-cli"
 
-# 编译 backend binary
+# 编译 backend binary (release-backend profile: keeps symbols for memory profiler)
 bin-backend:
 	@echo "📦 编译 static-flow-backend ..."
-	@cargo build -p static-flow-backend --release
+	@cargo build -p static-flow-backend --profile release-backend
 	@mkdir -p $(BIN_DIR)
-	@cp $(TARGET_DIR)/static-flow-backend $(BIN_DIR)/static-flow-backend
+	@cp ./target/release-backend/static-flow-backend $(BIN_DIR)/static-flow-backend
 	@echo "✅ 输出: $(BIN_DIR)/static-flow-backend"
 
 # 编译所有 Rust binary

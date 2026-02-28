@@ -26,4 +26,9 @@ url = "2.5"
 urlencoding = "2.1"
 pulldown-cmark = "0.12"
 better_mimalloc_rs = { workspace = true }
+better_mimalloc_sys = { version = "0.1.1", default-features = false, features = ["extended"] }
+backtrace = "0.3"
+dashmap = "6.1"
+memory-stats = "1.2"
+rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
