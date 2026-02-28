@@ -1256,6 +1256,104 @@ pub fn admin_page() -> Html {
         })
     };
 
+    let on_behavior_refresh_events = {
+        let behavior_days = behavior_days.clone();
+        let behavior_date = behavior_date.clone();
+        let behavior_path_filter = behavior_path_filter.clone();
+        let behavior_page_filter = behavior_page_filter.clone();
+        let behavior_device_filter = behavior_device_filter.clone();
+        let behavior_status_filter = behavior_status_filter.clone();
+        let behavior_page = behavior_page.clone();
+        let behavior_events = behavior_events.clone();
+        let behavior_has_more = behavior_has_more.clone();
+        let behavior_total = behavior_total.clone();
+        let behavior_offset = behavior_offset.clone();
+        let behavior_events_loading = behavior_events_loading.clone();
+        let load_error = load_error.clone();
+        let tab_loading = tab_loading.clone();
+        let refresh_behavior_seq = refresh_behavior_seq.clone();
+        Callback::from(move |_| {
+            let date_val = (*behavior_date).trim().to_string();
+            let days = (*behavior_days)
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0);
+            let path_filter = (*behavior_path_filter).trim().to_string();
+            let page_filter = (*behavior_page_filter).trim().to_string();
+            let device_filter = (*behavior_device_filter).trim().to_string();
+            let status_filter = (*behavior_status_filter).trim().parse::<i32>().ok();
+            let page = (*behavior_page).max(1);
+            let (query_days, query_date) =
+                if date_val.is_empty() { (days, None) } else { (None, Some(date_val)) };
+
+            let request_id = {
+                let mut seq = refresh_behavior_seq.borrow_mut();
+                *seq += 1;
+                *seq
+            };
+
+            behavior_events_loading.set(true);
+            {
+                let mut s = (*tab_loading).clone();
+                s.insert(AdminTab::Behavior);
+                tab_loading.set(s);
+            }
+
+            let behavior_events = behavior_events.clone();
+            let behavior_has_more = behavior_has_more.clone();
+            let behavior_total = behavior_total.clone();
+            let behavior_offset = behavior_offset.clone();
+            let behavior_events_loading = behavior_events_loading.clone();
+            let load_error = load_error.clone();
+            let tab_loading = tab_loading.clone();
+            let refresh_behavior_seq = refresh_behavior_seq.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let offset = (page - 1) * PAGE_SIZE;
+                let events_result = fetch_admin_api_behavior_events(&AdminApiBehaviorEventsQuery {
+                    days: query_days,
+                    limit: Some(PAGE_SIZE),
+                    offset: Some(offset),
+                    path_contains: if path_filter.is_empty() { None } else { Some(path_filter) },
+                    page_contains: if page_filter.is_empty() { None } else { Some(page_filter) },
+                    device_type: if device_filter.is_empty() { None } else { Some(device_filter) },
+                    method: None,
+                    status_code: status_filter,
+                    ip: None,
+                    date: query_date,
+                })
+                .await;
+
+                match events_result {
+                    Ok(events) => {
+                        if *refresh_behavior_seq.borrow() != request_id {
+                            return;
+                        }
+                        behavior_has_more.set(events.has_more);
+                        behavior_total.set(events.total);
+                        behavior_offset.set(events.offset);
+                        behavior_events.set(events.events);
+                        load_error.set(None);
+                    },
+                    Err(err) => {
+                        if *refresh_behavior_seq.borrow() != request_id {
+                            return;
+                        }
+                        load_error.set(Some(format!("Behavior events unavailable: {:?}", err)));
+                    },
+                }
+
+                if *refresh_behavior_seq.borrow() != request_id {
+                    return;
+                }
+                behavior_events_loading.set(false);
+                let mut s = (*tab_loading).clone();
+                s.remove(&AdminTab::Behavior);
+                tab_loading.set(s);
+            });
+        })
+    };
+
     let on_behavior_cleanup = {
         let behavior_config = behavior_config.clone();
         let behavior_page = behavior_page.clone();
@@ -2192,15 +2290,25 @@ pub fn admin_page() -> Html {
                             <p class={classes!("m-0", "text-sm", "text-[var(--muted)]", "mb-4")}>{ "Behavior overview unavailable." }</p>
                         }
 
-                        <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                            {
-                                if (*behavior_date).is_empty() {
-                                    format!("Recent Events ({}/{})", behavior_events.len(), *behavior_total)
-                                } else {
-                                    format!("Events for {} ({}/{})", *behavior_date, behavior_events.len(), *behavior_total)
+                        <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                            <h3 class={classes!("m-0", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                                {
+                                    if (*behavior_date).is_empty() {
+                                        format!("Recent Events ({}/{})", behavior_events.len(), *behavior_total)
+                                    } else {
+                                        format!("Events for {} ({}/{})", *behavior_date, behavior_events.len(), *behavior_total)
+                                    }
                                 }
-                            }
-                        </h3>
+                            </h3>
+                            <button
+                                class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")}
+                                onclick={on_behavior_refresh_events}
+                                disabled={*behavior_events_loading}
+                            >
+                                <i class={classes!("fas", "fa-rotate-right", "mr-1")} aria-hidden="true"></i>
+                                { if *behavior_events_loading { "Refreshing..." } else { "Refresh Events" } }
+                            </button>
+                        </div>
                         if *behavior_events_loading {
                             <div class={classes!("mb-2", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
                                 <LoadingSpinner size={SpinnerSize::Small} />
