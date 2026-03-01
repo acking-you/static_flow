@@ -8,3 +8,9 @@
 	path = patches/object_store
 	url = git@github.com:acking-you/arrow-rs-object-store.git
 	branch = dev
+[submodule "deps/lance"]
+	path = deps/lance
+	url = git@github.com:acking-you/lance.git
+[submodule "deps/lancedb"]
+	path = deps/lancedb
+	url = git@github.com:acking-you/lancedb.git
