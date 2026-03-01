@@ -854,7 +854,11 @@ fn read_mimalloc_process_info() -> MiProcessMemoryInfo {
     // Clamp to 0 when the value exceeds a reasonable threshold (1 TB).
     const MAX_REASONABLE: usize = 1 << 40; // 1 TB
     let clamp = |v: usize| -> u64 {
-        if v > MAX_REASONABLE { 0 } else { v as u64 }
+        if v > MAX_REASONABLE {
+            0
+        } else {
+            v as u64
+        }
     };
     MiProcessMemoryInfo {
         elapsed_millis: elapsed as u64,

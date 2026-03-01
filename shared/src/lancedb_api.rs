@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use arrow_array::{
     builder::{Int32Builder, StringBuilder, TimestampMillisecondBuilder},
     Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int32Array, ListArray,
-    RecordBatch, RecordBatchIterator, StringArray, TimestampMillisecondArray,
+    RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, TimestampMillisecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::{Duration as ChronoDuration, FixedOffset, NaiveDate, Utc};
@@ -296,7 +296,7 @@ impl StaticFlowDataStore {
                 let batch = RecordBatch::new_empty(schema.clone());
                 let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
                 self.db
-                    .create_table(&self.article_views_table, Box::new(batches))
+                    .create_table(&self.article_views_table, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
                     .execute()
                     .await
                     .context("failed to create article_views table")?;
@@ -317,7 +317,7 @@ impl StaticFlowDataStore {
                 let batch = RecordBatch::new_empty(schema.clone());
                 let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
                 self.db
-                    .create_table(&self.api_behavior_table, Box::new(batches))
+                    .create_table(&self.api_behavior_table, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
                     .execute()
                     .await
                     .context("failed to create api_behavior_events table")?;
@@ -2539,7 +2539,7 @@ async fn append_api_behavior_records(table: &Table, records: &[ApiBehaviorRecord
     let schema = batch.schema();
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
     table
-        .add(Box::new(batches))
+        .add(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
         .execute()
         .await
         .context("failed to append api behavior records")?;

@@ -1,7 +1,7 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
-use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray};
 use arrow_schema::{DataType, Schema};
 use futures::TryStreamExt;
 use lancedb::{
@@ -33,7 +33,7 @@ pub async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> R
         Err(_) => {
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-            db.create_table(name, Box::new(batches)).execute().await?;
+            db.create_table(name, Box::new(batches) as Box<dyn RecordBatchReader + Send>).execute().await?;
             db.open_table(name).execute().await?
         },
     };

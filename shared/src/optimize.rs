@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use lancedb::{
     table::{CompactionOptions, OptimizeAction, OptimizeOptions},
     Connection, Table,
@@ -11,6 +13,9 @@ const SAFE_COMPACTION_MAX_BYTES_PER_FILE: usize = 512 * 1024 * 1024;
 pub struct CompactConfig {
     pub fragment_threshold: usize,
     pub prune_older_than_hours: i64,
+    /// Tables to skip during compaction (e.g. tables with blob v2 encoding
+    /// that the current lance version cannot compact).
+    pub skip_tables: HashSet<String>,
 }
 
 impl Default for CompactConfig {
@@ -18,6 +23,7 @@ impl Default for CompactConfig {
         Self {
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
             prune_older_than_hours: 2,
+            skip_tables: HashSet::new(),
         }
     }
 }
@@ -37,6 +43,9 @@ pub async fn scan_and_compact_tables(
 ) -> Vec<CompactResult> {
     let mut results = Vec::new();
     for &name in table_names {
+        if config.skip_tables.contains(name) {
+            continue;
+        }
         results.push(check_and_compact(db, name, config).await);
     }
     results

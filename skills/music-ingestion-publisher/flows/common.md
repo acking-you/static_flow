@@ -2,6 +2,18 @@
 
 Shared procedures for all ingestion flows.
 
+## CRITICAL: Never Write Directly to LanceDB
+
+The songs table uses Lance blob v2 encoding for `audio_data`
+(`Struct<data: LargeBinary?, uri: Utf8?>`).
+Direct writes (Python lancedb, arrow, manual RecordBatch, etc.) **WILL** corrupt
+the table — the fragment's `audio_data` column encoding won't match blob v2
+struct layout, causing `lance-encoding decoder.rs` errors on read.
+
+**ALWAYS** use `sf-cli write-music` for ingestion.
+
+Binary location: `./bin/sf-cli` (preferred) → `./target/release/sf-cli` → PATH.
+
 ## Verification (Post-Write)
 
 ```bash
@@ -18,7 +30,16 @@ Checklist:
 
 ## Cover Image Update
 
-`sf-cli write-music` does not accept cover URL directly. Update after ingest:
+**Recommended**: use `--cover-url` during ingestion (one-step):
+```bash
+sf-cli write-music \
+  --db-path /mnt/e/static-flow-data/lancedb-music \
+  --file /tmp/music/<file>.mp3 \
+  --cover-url "https://..." \
+  ... # other flags
+```
+
+**Fallback** (post-write update, if cover URL was not available at ingest time):
 ```bash
 sf-cli db --db-path /mnt/e/static-flow-data/lancedb-music \
   update-rows songs \

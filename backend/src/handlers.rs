@@ -3061,7 +3061,7 @@ async fn write_cache<T>(cache: &tokio::sync::RwLock<Option<(T, Instant)>>, items
 }
 
 fn internal_error(message: &str, err: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
-    tracing::error!("{}: {}", message, err);
+    tracing::error!("{}: {:#}", message, err);
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ErrorResponse {

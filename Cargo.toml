@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["frontend", "shared", "backend", "cli"]
+exclude = ["deps/lance", "deps/lancedb"]
 
 # Workspace 级别的依赖版本管理
 [workspace.dependencies]
@@ -37,8 +38,9 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 better_mimalloc_rs = { version = "0.1.1", features = ["config"] }
-# LanceDB + Arrow
-lancedb = "0.26"
+# LanceDB + Arrow (local forks for blob v2 compaction)
+lance = { path = "deps/lance/rust/lance", default-features = false }
+lancedb = { path = "deps/lancedb/rust/lancedb" }
 arrow-array = "57.2"
 arrow-schema = "57.2"
 arrow = "57.2"

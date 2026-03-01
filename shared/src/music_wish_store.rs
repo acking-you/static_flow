@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use arrow_array::{
     builder::{Int32Builder, StringBuilder, TimestampMillisecondBuilder},
-    Array, ArrayRef, Int32Array, RecordBatch, RecordBatchIterator, StringArray,
+    Array, ArrayRef, Int32Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray,
     TimestampMillisecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -435,7 +435,7 @@ async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> Resul
         Err(_) => {
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-            db.create_table(name, Box::new(batches))
+            db.create_table(name, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
                 .execute()
                 .await
                 .with_context(|| format!("failed to create table {name}"))?;
@@ -927,7 +927,7 @@ mod tests {
     };
 
     use anyhow::{Context, Result};
-    use arrow_array::{RecordBatch, RecordBatchIterator};
+    use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
     use arrow_schema::{DataType, Field, Schema, TimeUnit};
     use lancedb::connect;
 
@@ -953,7 +953,7 @@ mod tests {
         let schema = legacy_wish_schema();
         let batch = RecordBatch::new_empty(schema.clone());
         let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-        db.create_table("music_wishes", Box::new(batches))
+        db.create_table("music_wishes", Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .execute()
             .await
             .context("failed to create legacy music_wishes table")?;

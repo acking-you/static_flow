@@ -51,7 +51,7 @@ for lyrics and metadata.
    "
    ```
 
-6. **Ingest**:
+6. **Ingest** (with cover URL from step 5):
    ```bash
    sf-cli write-music \
      --db-path /mnt/e/static-flow-data/lancedb-music \
@@ -59,12 +59,14 @@ for lyrics and metadata.
      --id "netease-<track_id>" \
      --title "<title>" --artist "<artist>" \
      --album "<album>" --album-id "<album_id>" \
+     --cover-url "<cover_url_from_step5>" \
      --lyrics /tmp/music/<track_id>.lrc \
      --lyrics-translation /tmp/music/<track_id>.tlyric.lrc \
      --source netease --source-id "<track_id>"
    ```
 
-7. **Update cover** (see `common.md`).
+7. **Verify** (see `common.md`).
+   If cover was not available at ingest, update it separately (see `common.md`).
 
 ## Flow D: Bulk Album Ingestion
 

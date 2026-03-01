@@ -14,6 +14,7 @@ pub struct WriteMusicOptions {
     pub album: Option<String>,
     pub album_id: Option<String>,
     pub cover: Option<PathBuf>,
+    pub cover_url: Option<String>,
     pub _content_db_path: PathBuf, // reserved for cover image import
     pub lyrics: Option<PathBuf>,
     pub lyrics_translation: Option<PathBuf>,
@@ -93,16 +94,14 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
         TextEmbeddingLanguage::English => (Some(primary_vector), None),
     };
 
-    // Handle cover image (just store the filename reference for now)
-    let cover_image = if let Some(ref cover_path) = opts.cover {
-        let cover_filename = cover_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("cover.jpg");
-        Some(cover_filename.to_string())
-    } else {
-        None
-    };
+    // Handle cover image: --cover-url takes priority, then --cover filename
+    let cover_image = opts.cover_url.or_else(|| {
+        opts.cover.as_ref().and_then(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
+    });
 
     let tags_str = opts
         .tags

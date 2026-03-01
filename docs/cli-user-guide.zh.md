@@ -690,4 +690,139 @@ CLI 会返回：
 4. 用 `api` 子命令做线上问题复现（无需起 backend）
 5. 用 `db query-rows ... --format vertical` 精确排查单行数据
 
-这样可以把“数据落库、检索效果、API 输出”统一在一条 CLI 调试链路里。
+这样可以把”数据落库、检索效果、API 输出”统一在一条 CLI 调试链路里。
+
+---
+
+## 13. 表重建（Rebuild）参考流程
+
+### 13.1 什么时候需要重建
+
+- **Schema 变更**：列类型从 `Binary` 迁移到 `LargeBinary`、向量维度变更等无法通过 `NewColumnTransform` 原地完成的改动
+- **Fragment 膨胀**：大量增量写入导致 `.lance` 目录内碎片过多，`optimize` 已无法有效收敛
+- **编码修正**：历史数据使用了不合适的 Arrow 类型（如小二进制列存储大文件），需要统一编码
+
+> 常规的”增列 + 补空”需求不需要重建——使用 `NewColumnTransform::AllNulls` 即可。
+
+### 13.2 已有命令：`rebuild-songs-table`
+
+该命令用于重建 Music DB 的 `songs` 表，将 `audio_data` 列从 `Binary` 迁移为 `LargeBinary`，同时消除碎片。
+
+```bash
+# 默认 batch_size=10，适合内存有限的机器
+sf-cli rebuild-songs-table --db-path /mnt/e/static-flow-data/lancedb-music
+
+# 调大 batch_size 加速（需更多内存）
+sf-cli rebuild-songs-table --db-path /mnt/e/static-flow-data/lancedb-music --batch-size 50
+```
+
+参数说明：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--db-path` | `./data/lancedb-music` | Music LanceDB 目录 |
+| `--batch-size` | `10` | 每批读写的行数，控制内存峰值 |
+
+### 13.3 内部执行流程
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. 连接源 DB，统计 songs 总行数                              │
+│ 2. 创建临时 DB：{db_path}-rebuild                            │
+│ 3. 分批读取（offset + limit）                                │
+│    ├── 逐行反序列化为 RebuildRow（兼容 Binary/LargeBinary）   │
+│    └── 用目标 schema 构建 RecordBatch → 写入临时表            │
+│ 4. 在临时表上重建 FTS 索引（searchable_text）                 │
+│ 5. 原子文件系统交换：                                         │
+│    ├── songs.lance → songs.lance.bak（备份）                  │
+│    └── {tmp}/songs.lance → songs.lance（替换）                │
+│ 6. 清理临时 DB 目录                                          │
+│ 7. 输出：Rebuild complete: N songs                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+关键安全措施：
+- **原子交换**：先备份再替换，任何步骤失败不会丢失原始数据
+- **旧表保留**：`songs.lance.bak` 需手动确认后删除
+- **幂等启动**：若临时目录已存在（上次中断），会先清理再重建
+
+### 13.4 为其他表实现重建的参考模板
+
+当需要对 `articles`、`images` 等表执行类似重建时，可参照以下步骤在 `shared/` 和 `cli/` 中实现：
+
+**1) `shared/src/*_store.rs` — 核心逻辑**
+
+```rust
+pub async fn rebuild_xxx_table(&self, batch_size: usize, db_uri: &str) -> Result<usize> {
+    // (a) 统计总行数
+    // (b) 创建 “{db_uri}-rebuild” 临时 DB
+    // (c) 分批读取：
+    //     - query().limit(batch_size).offset(offset)
+    //     - 反序列化为中间结构体 RebuildRow::from_batch()
+    //     - 用目标 schema 重新构建 RecordBatch
+    //     - 首批 create_table()，后续 add()
+    // (d) 在临时表上重建必要索引（FTS / 向量索引）
+    // (e) 原子交换：old → .bak，tmp → final
+    // (f) 清理临时目录
+}
+```
+
+**2) `cli/src/cli.rs` — 注册子命令**
+
+```rust
+/// Rebuild xxx table with new schema.
+RebuildXxxTable {
+    #[arg(long, default_value = “...”)]
+    db_path: PathBuf,
+    #[arg(long, default_value = “10”)]
+    batch_size: usize,
+},
+```
+
+**3) `cli/src/commands/rebuild_xxx.rs` — 入口**
+
+```rust
+pub async fn run(db_path: &Path, batch_size: usize) -> Result<()> {
+    let store = XxxDataStore::connect(&db_path.to_string_lossy()).await?;
+    let count = store.rebuild_xxx_table(batch_size, &db_path.to_string_lossy()).await?;
+    tracing::info!(“Rebuild complete: {count} rows.”);
+    Ok(())
+}
+```
+
+**4) `cli/src/commands/mod.rs` — 注册 dispatch**
+
+```rust
+pub mod rebuild_xxx;
+
+// match 分支
+Commands::RebuildXxxTable { db_path, batch_size } =>
+    rebuild_xxx::run(&db_path, batch_size).await,
+```
+
+### 13.5 重建后验证清单
+
+```bash
+# 1. 确认行数一致
+sf-cli db --db-path <db_path> count-rows <table>
+
+# 2. 检查 schema（确认目标列类型已变更）
+sf-cli db --db-path <db_path> describe-table <table>
+
+# 3. 抽查数据完整性
+sf-cli db --db-path <db_path> query-rows <table> --limit 3 --format vertical
+
+# 4. 验证 FTS / 向量检索仍可用
+sf-cli api --db-path <db_path> search --q “关键词”
+
+# 5. 确认无误后手动删除备份
+rm -rf <db_path>/<table>.lance.bak
+```
+
+### 13.6 注意事项
+
+- **batch_size 选择**：含二进制大字段（如 `audio_data`、`images.data`）时建议 5–20；纯文本表可设到 100–500
+- **磁盘空间**：重建期间需要约 2× 表空间（原表 + 临时表 + 备份）
+- **并发安全**：重建期间应停止对目标表的写入（停 backend 或暂停 worker）
+- **向量列处理**：`RebuildRow` 需兼容 nullable 向量；维度不匹配时 `append(false)` 标记为 null
+- **LargeBinary vs Binary**：>2GB 的单行二进制值必须用 `LargeBinary`（offset 为 i64）；一般场景 `Binary`（i32 offset）足够

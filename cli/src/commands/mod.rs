@@ -5,6 +5,7 @@ pub mod embed_songs;
 pub mod ensure_indexes;
 pub mod init;
 pub mod query;
+pub mod rebuild_songs;
 pub mod sync_notes;
 pub mod write_article;
 pub mod write_images;
@@ -115,6 +116,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             album,
             album_id,
             cover,
+            cover_url,
             content_db_path,
             lyrics,
             lyrics_translation,
@@ -129,6 +131,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 album,
                 album_id,
                 cover,
+                cover_url,
                 _content_db_path: content_db_path,
                 lyrics,
                 lyrics_translation,
@@ -141,6 +144,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::EmbedSongs {
             db_path,
         } => embed_songs::run(&db_path).await,
+        Commands::RebuildSongsTable {
+            db_path,
+            batch_size,
+        } => rebuild_songs::run(&db_path, batch_size).await,
         Commands::CompleteWish {
             db_path,
             wish_id,

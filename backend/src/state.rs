@@ -335,7 +335,7 @@ fn spawn_behavior_event_flusher(
                                 .append_api_behavior_events(std::mem::take(&mut buffer))
                                 .await
                             {
-                                tracing::warn!("final behavior event flush failed: {err}");
+                                tracing::warn!("final behavior event flush failed: {err:#}");
                             }
                         }
                         tracing::info!("behavior event flusher shutting down (shutdown signal)");
@@ -362,7 +362,7 @@ fn spawn_behavior_event_flusher(
                             .append_api_behavior_events(std::mem::take(&mut buffer))
                             .await
                         {
-                            tracing::warn!("final behavior event flush failed: {err}");
+                            tracing::warn!("final behavior event flush failed: {err:#}");
                         }
                     }
                     tracing::info!("behavior event flusher shutting down");
@@ -379,7 +379,7 @@ fn spawn_behavior_event_flusher(
             let count = batch.len();
 
             if let Err(err) = store.append_api_behavior_events(batch).await {
-                tracing::warn!("behavior event batch flush failed ({count} events): {err}");
+                tracing::warn!("behavior event batch flush failed ({count} events): {err:#}");
                 continue;
             }
 
@@ -406,6 +406,9 @@ fn spawn_table_compactor(
     let config = CompactConfig {
         fragment_threshold: threshold,
         prune_older_than_hours: 2,
+        // songs table uses blob v2 encoding (data_storage_version=2.2) which
+        // the current lance version cannot compact yet.
+        skip_tables: ["songs"].iter().map(|s| s.to_string()).collect(),
     };
 
     tokio::spawn(async move {

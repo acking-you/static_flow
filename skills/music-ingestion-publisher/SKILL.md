@@ -74,7 +74,13 @@ dump <files>     Decrypt NCM → MP3/FLAC (-d, -r, -o, -m)
 
 - Never delete source audio files.
 - Never overwrite existing records unless user confirms.
+- **NEVER write to LanceDB directly** — always use `sf-cli write-music` for
+  ingestion. The songs table uses Lance blob v2 encoding for `audio_data`.
+  Direct writes (Python lancedb, arrow, manual RecordBatch, etc.) WILL corrupt
+  the table and require a full rebuild.
+- **Binary location**: `./bin/sf-cli` (preferred) or `./target/release/sf-cli`.
 - **Cover image is MANDATORY** for online tracks. Must be `https://` URL.
+  Use `--cover-url` to set it during ingestion (preferred over post-write update).
 - **Album metadata is MANDATORY** when available (Netease tracks).
 - **Lyrics**: always attempt `ncmdump-cli lyric <netease_track_id>` even
   for Bilibili-sourced songs, as long as a Netease track_id is known.

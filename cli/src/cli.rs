@@ -174,6 +174,9 @@ pub enum Commands {
         /// Cover image file path.
         #[arg(long)]
         cover: Option<PathBuf>,
+        /// Cover image URL (for online sources like Netease/Bilibili).
+        #[arg(long)]
+        cover_url: Option<String>,
         /// Content DB path for cover image import.
         #[arg(long, default_value = "./data/lancedb")]
         content_db_path: PathBuf,
@@ -198,6 +201,17 @@ pub enum Commands {
         /// Music LanceDB directory path.
         #[arg(long, default_value = "./data/lancedb-music")]
         db_path: PathBuf,
+    },
+    /// Rebuild songs table with new schema (LargeBinary blob encoding for
+    /// audio_data). Eliminates fragment bloat by reading all rows and
+    /// re-creating the table.
+    RebuildSongsTable {
+        /// Music LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb-music")]
+        db_path: PathBuf,
+        /// Number of songs per write batch (controls memory usage).
+        #[arg(long, default_value = "10")]
+        batch_size: usize,
     },
     /// Manually complete a music wish (mark done + set ai_reply).
     CompleteWish {

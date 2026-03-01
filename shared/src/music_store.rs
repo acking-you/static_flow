@@ -1,23 +1,25 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::{Context, Result};
 use arrow_array::{
     builder::{
-        BinaryBuilder, FixedSizeListBuilder, Float32Builder, StringBuilder,
-        TimestampMillisecondBuilder, UInt64Builder,
+        FixedSizeListBuilder, Float32Builder, StringBuilder, TimestampMillisecondBuilder,
+        UInt64Builder,
     },
-    Array, BinaryArray, FixedSizeListArray, RecordBatch, RecordBatchIterator, StringArray,
-    TimestampMillisecondArray, UInt64Array,
+    Array, BinaryArray, FixedSizeListArray, LargeBinaryArray, RecordBatch, RecordBatchIterator,
+    RecordBatchReader, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::Utc;
 use futures::TryStreamExt;
+use lance::{blob_field, BlobArrayBuilder};
 use lancedb::{
     connect,
-    index::Index,
+    index::{scalar::BTreeIndexBuilder, Index},
     query::{ExecutableQuery, QueryBase, Select},
     table::NewColumnTransform,
     Connection, Table,
@@ -199,7 +201,48 @@ fn songs_schema() -> Arc<Schema> {
         Field::new("bitrate", DataType::UInt64, false),
         Field::new("lyrics_lrc", DataType::Utf8, true),
         Field::new("lyrics_translation", DataType::Utf8, true),
-        Field::new("audio_data", DataType::Binary, false),
+        blob_field("audio_data", false),
+        Field::new("source", DataType::Utf8, false),
+        Field::new("source_id", DataType::Utf8, true),
+        Field::new("tags", DataType::Utf8, false),
+        Field::new("searchable_text", DataType::Utf8, false),
+        Field::new(
+            "vector_en",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                TEXT_VECTOR_DIM_EN as i32,
+            ),
+            true,
+        ),
+        Field::new(
+            "vector_zh",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                TEXT_VECTOR_DIM_ZH as i32,
+            ),
+            true,
+        ),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+    ]))
+}
+
+/// Schema for metadata-only updates (all columns except `audio_data`).
+/// Used by partial upsert to avoid rewriting the large audio blob.
+fn songs_metadata_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("artist", DataType::Utf8, false),
+        Field::new("album", DataType::Utf8, false),
+        Field::new("album_id", DataType::Utf8, true),
+        Field::new("cover_image", DataType::Utf8, true),
+        Field::new("duration_ms", DataType::UInt64, false),
+        Field::new("format", DataType::Utf8, false),
+        Field::new("bitrate", DataType::UInt64, false),
+        Field::new("lyrics_lrc", DataType::Utf8, true),
+        Field::new("lyrics_translation", DataType::Utf8, true),
+        // audio_data intentionally omitted
         Field::new("source", DataType::Utf8, false),
         Field::new("source_id", DataType::Utf8, true),
         Field::new("tags", DataType::Utf8, false),
@@ -254,16 +297,31 @@ fn music_comments_schema() -> Arc<Schema> {
 // Table helpers (reuse comments_store pattern)
 // ---------------------------------------------------------------------------
 
-async fn ensure_table(db: &Connection, table_name: &str, schema: Arc<Schema>) -> Result<Table> {
+async fn ensure_table(
+    db: &Connection,
+    table_name: &str,
+    schema: Arc<Schema>,
+    storage_options: &[(&str, &str)],
+) -> Result<Table> {
     match db.open_table(table_name).execute().await {
         Ok(table) => Ok(table),
         Err(_) => {
+            tracing::info!(
+                table = table_name,
+                storage_options = ?storage_options,
+                "Table not found, creating with schema"
+            );
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-            db.create_table(table_name, Box::new(batches))
+            let mut builder = db.create_table(table_name, Box::new(batches) as Box<dyn RecordBatchReader + Send>);
+            for &(k, v) in storage_options {
+                builder = builder.storage_option(k, v);
+            }
+            builder
                 .execute()
                 .await
                 .with_context(|| format!("failed to create table {table_name}"))?;
+            tracing::info!(table = table_name, "Table created successfully");
             db.open_table(table_name)
                 .execute()
                 .await
@@ -304,7 +362,7 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
     let mut bitrate = UInt64Builder::new();
     let mut lyrics_lrc = StringBuilder::new();
     let mut lyrics_translation = StringBuilder::new();
-    let mut audio_data = BinaryBuilder::new();
+    let mut audio_data = BlobArrayBuilder::new(1);
     let mut source = StringBuilder::new();
     let mut source_id = StringBuilder::new();
     let mut tags = StringBuilder::new();
@@ -329,7 +387,7 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
     bitrate.append_value(record.bitrate);
     append_optional_str(&mut lyrics_lrc, &record.lyrics_lrc);
     append_optional_str(&mut lyrics_translation, &record.lyrics_translation);
-    audio_data.append_value(&record.audio_data);
+    audio_data.push_bytes(&record.audio_data)?;
     source.append_value(&record.source);
     append_optional_str(&mut source_id, &record.source_id);
     tags.append_value(&record.tags);
@@ -382,7 +440,7 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
         Arc::new(bitrate.finish()),
         Arc::new(lyrics_lrc.finish()),
         Arc::new(lyrics_translation.finish()),
-        Arc::new(audio_data.finish()),
+        audio_data.finish()?,
         Arc::new(source.finish()),
         Arc::new(source_id.finish()),
         Arc::new(tags.finish()),
@@ -393,6 +451,109 @@ fn build_song_batch(record: &SongRecord) -> Result<RecordBatch> {
         Arc::new(updated_at.finish()),
     ])
     .context("failed to build song batch")
+}
+
+/// Build a partial batch with all columns except `audio_data`.
+/// Used for metadata-only updates so the large audio blob is not rewritten.
+fn build_song_metadata_batch(record: &SongRecord) -> Result<RecordBatch> {
+    let schema = songs_metadata_schema();
+    let mut id = StringBuilder::new();
+    let mut title = StringBuilder::new();
+    let mut artist = StringBuilder::new();
+    let mut album = StringBuilder::new();
+    let mut album_id = StringBuilder::new();
+    let mut cover_image = StringBuilder::new();
+    let mut duration_ms = UInt64Builder::new();
+    let mut format = StringBuilder::new();
+    let mut bitrate = UInt64Builder::new();
+    let mut lyrics_lrc = StringBuilder::new();
+    let mut lyrics_translation = StringBuilder::new();
+    let mut source = StringBuilder::new();
+    let mut source_id = StringBuilder::new();
+    let mut tags = StringBuilder::new();
+    let mut searchable_text = StringBuilder::new();
+    let mut vector_en_builder =
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32)
+            .with_field(Field::new("item", DataType::Float32, false));
+    let mut vector_zh_builder =
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_ZH as i32)
+            .with_field(Field::new("item", DataType::Float32, false));
+    let mut created_at = TimestampMillisecondBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+
+    id.append_value(&record.id);
+    title.append_value(&record.title);
+    artist.append_value(&record.artist);
+    album.append_value(&record.album);
+    append_optional_str(&mut album_id, &record.album_id);
+    append_optional_str(&mut cover_image, &record.cover_image);
+    duration_ms.append_value(record.duration_ms);
+    format.append_value(&record.format);
+    bitrate.append_value(record.bitrate);
+    append_optional_str(&mut lyrics_lrc, &record.lyrics_lrc);
+    append_optional_str(&mut lyrics_translation, &record.lyrics_translation);
+    source.append_value(&record.source);
+    append_optional_str(&mut source_id, &record.source_id);
+    tags.append_value(&record.tags);
+    searchable_text.append_value(&record.searchable_text);
+
+    // vector_en
+    match &record.vector_en {
+        Some(v) if v.len() == TEXT_VECTOR_DIM_EN => {
+            for val in v {
+                vector_en_builder.values().append_value(*val);
+            }
+            vector_en_builder.append(true);
+        },
+        _ => {
+            for _ in 0..TEXT_VECTOR_DIM_EN {
+                vector_en_builder.values().append_value(0.0);
+            }
+            vector_en_builder.append(false);
+        },
+    }
+
+    // vector_zh
+    match &record.vector_zh {
+        Some(v) if v.len() == TEXT_VECTOR_DIM_ZH => {
+            for val in v {
+                vector_zh_builder.values().append_value(*val);
+            }
+            vector_zh_builder.append(true);
+        },
+        _ => {
+            for _ in 0..TEXT_VECTOR_DIM_ZH {
+                vector_zh_builder.values().append_value(0.0);
+            }
+            vector_zh_builder.append(false);
+        },
+    }
+
+    created_at.append_value(record.created_at);
+    updated_at.append_value(record.updated_at);
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(id.finish()),
+        Arc::new(title.finish()),
+        Arc::new(artist.finish()),
+        Arc::new(album.finish()),
+        Arc::new(album_id.finish()),
+        Arc::new(cover_image.finish()),
+        Arc::new(duration_ms.finish()),
+        Arc::new(format.finish()),
+        Arc::new(bitrate.finish()),
+        Arc::new(lyrics_lrc.finish()),
+        Arc::new(lyrics_translation.finish()),
+        Arc::new(source.finish()),
+        Arc::new(source_id.finish()),
+        Arc::new(tags.finish()),
+        Arc::new(searchable_text.finish()),
+        Arc::new(vector_en_builder.finish()),
+        Arc::new(vector_zh_builder.finish()),
+        Arc::new(created_at.finish()),
+        Arc::new(updated_at.finish()),
+    ])
+    .context("failed to build song metadata batch")
 }
 
 fn build_music_play_batch(record: &MusicPlayRecord) -> Result<RecordBatch> {
@@ -557,7 +718,12 @@ impl MusicDataStore {
     }
 
     async fn songs_table(&self) -> Result<Table> {
-        let table = ensure_table(&self.db, SONGS_TABLE, songs_schema()).await?;
+        let table = ensure_table(&self.db, SONGS_TABLE, songs_schema(), &[
+            ("new_table_data_storage_version", "2.2"),
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ])
+        .await?;
 
         // Auto-migrate: add missing vector columns to existing tables
         let schema = table.schema().await?;
@@ -595,23 +761,39 @@ impl MusicDataStore {
         // Auto-ensure FTS index on searchable_text for full-text search
         let indices = table.list_indices().await.unwrap_or_default();
         if !indices.iter().any(|idx| idx.columns == ["searchable_text"]) {
+            tracing::info!("Creating FTS index on songs.searchable_text...");
             if let Err(err) = table
                 .create_index(&["searchable_text"], Index::FTS(Default::default()))
                 .execute()
                 .await
             {
                 tracing::warn!("Failed to auto-create FTS index on songs.searchable_text: {err}");
+            } else {
+                tracing::info!("FTS index on songs.searchable_text created successfully");
+            }
+        }
+        // Auto-ensure BTree index on id for point lookups
+        if !indices.iter().any(|idx| idx.columns == ["id"]) {
+            tracing::info!("Creating BTree index on songs.id...");
+            if let Err(err) = table
+                .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
+                .execute()
+                .await
+            {
+                tracing::warn!("Failed to auto-create BTree index on songs.id: {err}");
+            } else {
+                tracing::info!("BTree index on songs.id created successfully");
             }
         }
         Ok(table)
     }
 
     async fn plays_table(&self) -> Result<Table> {
-        ensure_table(&self.db, MUSIC_PLAYS_TABLE, music_plays_schema()).await
+        ensure_table(&self.db, MUSIC_PLAYS_TABLE, music_plays_schema(), &[]).await
     }
 
     async fn comments_table(&self) -> Result<Table> {
-        ensure_table(&self.db, MUSIC_COMMENTS_TABLE, music_comments_schema()).await
+        ensure_table(&self.db, MUSIC_COMMENTS_TABLE, music_comments_schema(), &[]).await
     }
 
     // -- Song CRUD --
@@ -623,25 +805,39 @@ impl MusicDataStore {
             .count_rows(Some(format!("id = '{escaped_id}'")))
             .await
             .unwrap_or(0);
-        let batch = build_song_batch(record)?;
-        let schema = batch.schema();
         if existing_count == 0 {
-            // New ID: plain add avoids merge edge cases observed on large tables.
+            // New ID: write full row including audio_data.
+            tracing::info!(
+                song_id = %record.id,
+                audio_len = record.audio_data.len(),
+                "Inserting new song with audio blob v2"
+            );
+            let batch = build_song_batch(record)?;
+            let schema = batch.schema();
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
             table
-                .add(Box::new(batches))
+                .add(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
                 .execute()
                 .await
                 .context("failed to add new song record")?;
+            tracing::info!(song_id = %record.id, "New song inserted successfully");
         } else {
+            // Existing song: partial update — metadata only, skip audio_data
+            // to avoid copy-on-write bloat of the large audio blob.
+            tracing::info!(
+                song_id = %record.id,
+                "Updating existing song metadata (audio_data unchanged)"
+            );
+            let batch = build_song_metadata_batch(record)?;
+            let schema = batch.schema();
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
             let mut merge = table.merge_insert(&["id"]);
             merge.when_matched_update_all(None);
-            merge.when_not_matched_insert_all();
             merge
                 .execute(Box::new(batches))
                 .await
-                .context("failed to upsert song")?;
+                .context("failed to upsert song metadata")?;
+            tracing::info!(song_id = %record.id, "Song metadata updated successfully");
         }
         Ok(())
     }
@@ -689,31 +885,88 @@ impl MusicDataStore {
     }
 
     pub async fn get_song_audio(&self, id: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let call_started = Instant::now();
+        tracing::info!(song_id = %id, "get_song_audio started");
+
         let table = self.songs_table().await?;
         let escaped = escape_literal(id);
-        let batches = table
-            .query()
-            .only_if(format!("id = '{escaped}'"))
-            .limit(1)
-            .select(Select::columns(&["audio_data", "format"]))
-            .execute()
-            .await?;
-        let batch_list = batches.try_collect::<Vec<_>>().await?;
-        for batch in &batch_list {
-            if batch.num_rows() > 0 {
-                let audio = batch
-                    .column_by_name("audio_data")
-                    .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
-                    .map(|a| a.value(0).to_vec())
-                    .unwrap_or_default();
-                let fmt = extract_string(batch, "format", 0);
-                if audio.is_empty() {
+
+        let ds_wrapper = table.dataset().context("songs table has no dataset")?;
+        let dataset = ds_wrapper.get().await?;
+
+        // Phase 1: scanner finds row_addr + format (BTree index pushdown, no audio_data
+        // read)
+        let mut scanner = dataset.scan();
+        scanner.project(&["format"])?;
+        scanner.filter(format!("id = '{escaped}'").as_str())?;
+        scanner.limit(Some(1), None)?;
+        scanner.with_row_address();
+        let stream = scanner.try_into_stream().await?;
+        let batch_list: Vec<RecordBatch> = stream.try_collect().await?;
+
+        let (row_addr, fmt) = match batch_list.first() {
+            Some(b) if b.num_rows() > 0 => {
+                let addr = b
+                    .column_by_name("_rowaddr")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
+                    .map(|a| a.value(0))
+                    .context("missing _rowaddr column")?;
+                (addr, extract_string(b, "format", 0))
+            },
+            _ => {
+                tracing::info!(
+                    song_id = %id,
+                    total_ms = call_started.elapsed().as_millis(),
+                    "get_song_audio: song not found"
+                );
+                return Ok(None);
+            },
+        };
+
+        tracing::info!(
+            song_id = %id,
+            row_addr,
+            format = %fmt,
+            phase1_ms = call_started.elapsed().as_millis(),
+            "get_song_audio phase 1 complete: row_addr resolved"
+        );
+
+        // Phase 2: take_blobs_by_addresses — direct seek into .blob file, O(1)
+        let dataset_arc = Arc::new(dataset.clone());
+        let blobs = dataset_arc
+            .take_blobs_by_addresses(&[row_addr], "audio_data")
+            .await
+            .context("take_blobs_by_addresses failed")?;
+
+        match blobs.into_iter().next() {
+            Some(blob) => {
+                let data = blob.read().await.context("blob read failed")?.to_vec();
+                if data.is_empty() {
+                    tracing::info!(
+                        song_id = %id,
+                        total_ms = call_started.elapsed().as_millis(),
+                        "get_song_audio: audio data empty"
+                    );
                     return Ok(None);
                 }
-                return Ok(Some((audio, fmt)));
-            }
+                tracing::info!(
+                    song_id = %id,
+                    audio_len = data.len(),
+                    format = %fmt,
+                    total_ms = call_started.elapsed().as_millis(),
+                    "get_song_audio completed successfully"
+                );
+                Ok(Some((data, fmt)))
+            },
+            None => {
+                tracing::info!(
+                    song_id = %id,
+                    total_ms = call_started.elapsed().as_millis(),
+                    "get_song_audio: no blob returned for row_addr"
+                );
+                Ok(None)
+            },
         }
-        Ok(None)
     }
 
     pub async fn get_song_lyrics(&self, id: &str) -> Result<Option<SongLyrics>> {
@@ -1535,6 +1788,201 @@ impl MusicDataStore {
         tracing::info!("Backfilled vectors for {total} songs");
         Ok(total)
     }
+
+    /// Rebuild the songs table with the current schema (LargeBinary blob
+    /// encoding for `audio_data`). Reads all rows in batches, drops the old
+    /// table, and re-creates it with the new schema. This also eliminates
+    /// fragment bloat.
+    ///
+    /// **Must be called while the backend is stopped.**
+    ///
+    /// Strategy: read batches from old table → write to a temp DB dir →
+    /// atomic filesystem rename to swap in the new `songs.lance`, keeping
+    /// the old one as `.bak`.
+    pub async fn rebuild_songs_table(&self, batch_size: usize, db_uri: &str) -> Result<usize> {
+        use std::path::Path;
+
+        let table = self.songs_table().await?;
+        let total = table.count_rows(None).await? as usize;
+        if total == 0 {
+            tracing::warn!("songs table is empty, nothing to rebuild");
+            return Ok(0);
+        }
+        tracing::info!("Rebuilding songs table: {total} rows, batch_size={batch_size}");
+
+        // --- paths ---
+        let db_path = Path::new(db_uri);
+        let tmp_db_uri = format!("{}-rebuild", db_uri);
+        let tmp_db_path = Path::new(&tmp_db_uri);
+        if tmp_db_path.exists() {
+            tracing::info!("Cleaning stale rebuild tmp dir: {}", tmp_db_path.display());
+            std::fs::remove_dir_all(tmp_db_path)
+                .context("failed to clean stale rebuild tmp dir")?;
+        }
+
+        // --- connect temp DB ---
+        tracing::info!("Connecting to temporary rebuild DB: {tmp_db_uri}");
+        let tmp_db = connect(&tmp_db_uri)
+            .execute()
+            .await
+            .context("failed to connect rebuild tmp DB")?;
+
+        // Use lance Dataset scanner with AllBinary to read blob data from old table
+        tracing::info!("Opening lance Dataset scanner with AllBinary blob handling");
+        let ds_wrapper = table.dataset().context("no dataset on songs table")?;
+        let dataset = ds_wrapper.get().await?;
+
+        let schema = songs_schema();
+        let mut written: usize = 0;
+        let mut tmp_table: Option<Table> = None;
+
+        // --- batched read → write loop ---
+        let mut offset: usize = 0;
+        while offset < total {
+            tracing::info!("Reading batch: offset={offset}, batch_size={batch_size}");
+            let mut scanner = dataset.scan();
+            scanner.limit(Some(batch_size as i64), Some(offset as i64))?;
+            scanner.blob_handling(lance::datatypes::BlobHandling::AllBinary);
+            let stream = scanner.try_into_stream().await?;
+            let batches: Vec<RecordBatch> = stream
+                .try_collect()
+                .await
+                .with_context(|| format!("collect songs offset={offset}"))?;
+
+            let mut rows: Vec<RebuildRow> = Vec::new();
+            for b in &batches {
+                for i in 0..b.num_rows() {
+                    rows.push(RebuildRow::from_batch(b, i)?);
+                }
+            }
+            if rows.is_empty() {
+                tracing::info!("No more rows at offset={offset}, ending read loop");
+                break;
+            }
+            tracing::info!("Read {} rows from old table at offset={offset}", rows.len());
+
+            let batch = rebuild_rows_to_batch(&rows, &schema)?;
+            let s = batch.schema();
+            let iter = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), s);
+
+            match &tmp_table {
+                None => {
+                    tracing::info!(
+                        "Creating tmp songs table with blob v2 (data_storage_version=2.2, \
+                         stable_row_ids=true)"
+                    );
+                    let t = tmp_db
+                        .create_table("songs", Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+                        .storage_option("new_table_data_storage_version", "2.2")
+                        .storage_option("new_table_enable_stable_row_ids", "true")
+                        .storage_option("new_table_enable_v2_manifest_paths", "true")
+                        .execute()
+                        .await
+                        .context("create tmp songs table")?;
+                    tmp_table = Some(t);
+                },
+                Some(t) => {
+                    t.add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
+                        .execute()
+                        .await
+                        .context("add batch to tmp songs")?;
+                },
+            }
+
+            written += rows.len();
+            offset += rows.len();
+            tracing::info!("Written {written}/{total} rows to tmp DB");
+        }
+
+        if written == 0 {
+            tracing::warn!("No rows written, aborting rebuild");
+            let _ = std::fs::remove_dir_all(tmp_db_path);
+            return Ok(0);
+        }
+
+        // --- rebuild FTS + BTree indices on tmp table ---
+        if let Some(t) = &tmp_table {
+            tracing::info!("Rebuilding FTS index on tmp table...");
+            t.create_index(&["searchable_text"], Index::FTS(Default::default()))
+                .replace(true)
+                .execute()
+                .await
+                .context("rebuild FTS on tmp table")?;
+            tracing::info!("FTS index on tmp table created successfully");
+
+            tracing::info!("Creating BTree index on id...");
+            if let Err(err) = t
+                .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
+                .execute()
+                .await
+            {
+                tracing::warn!("Failed to create BTree index on tmp table: {err}");
+            } else {
+                tracing::info!("BTree index on tmp table created successfully");
+            }
+        }
+
+        // --- filesystem swap (cp+rm for 9p/NTFS compat, rename not supported) ---
+        tracing::info!("Starting filesystem swap...");
+        let old_lance = db_path.join("songs.lance");
+        let bak_lance = db_path.join("songs.lance.bak");
+        let new_lance = tmp_db_path.join("songs.lance");
+
+        if !new_lance.exists() {
+            anyhow::bail!("tmp songs.lance not found at {}", new_lance.display());
+        }
+
+        // remove stale backup if present
+        if bak_lance.exists() {
+            tracing::info!("Removing stale backup: {}", bak_lance.display());
+            std::fs::remove_dir_all(&bak_lance).context("remove stale .bak")?;
+        }
+
+        // old → bak (cp + rm for cross-fs compat)
+        if old_lance.exists() {
+            tracing::info!(
+                "Backing up old table: {} → {}",
+                old_lance.display(),
+                bak_lance.display()
+            );
+            copy_dir_recursive(&old_lance, &bak_lance).context("copy old songs.lance → .bak")?;
+            std::fs::remove_dir_all(&old_lance).context("remove old songs.lance after backup")?;
+            tracing::info!("Backed up old table to {}", bak_lance.display());
+        }
+
+        // new → final (cp + rm for cross-fs compat)
+        tracing::info!("Installing new table: {} → {}", new_lance.display(), old_lance.display());
+        copy_dir_recursive(&new_lance, &old_lance).context("copy tmp songs.lance → songs.lance")?;
+        tracing::info!("Swapped in new songs.lance");
+
+        // cleanup tmp dir shell (songs.lance already moved out)
+        let _ = std::fs::remove_dir_all(tmp_db_path);
+
+        // --- post-rebuild compaction ---
+        tracing::info!("Running post-rebuild compaction...");
+        let new_db = connect(db_uri)
+            .execute()
+            .await
+            .context("reconnect after rebuild")?;
+        let new_table = new_db
+            .open_table(SONGS_TABLE)
+            .execute()
+            .await
+            .context("open rebuilt songs table")?;
+        match new_table
+            .optimize(lancedb::table::OptimizeAction::All)
+            .await
+        {
+            Ok(_stats) => tracing::info!("Post-rebuild compaction done"),
+            Err(err) => tracing::warn!("Post-rebuild compaction failed (non-fatal): {err}"),
+        }
+
+        tracing::info!(
+            "Rebuild complete: {written} songs. Backup at {} — delete manually after verification.",
+            bak_lance.display()
+        );
+        Ok(written)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1600,4 +2048,251 @@ fn fuse_song_rrf(
             row
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for rebuild_songs_table
+// ---------------------------------------------------------------------------
+
+/// Recursively copy a directory. Used instead of `std::fs::rename` for
+/// cross-filesystem compatibility (WSL 9p / NTFS mounts reject rename).
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst).with_context(|| format!("create dir {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)
+                .with_context(|| format!("copy {} → {}", src_path.display(), dst_path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Intermediate row representation used during table rebuild.
+struct RebuildRow {
+    id: String,
+    title: String,
+    artist: String,
+    album: String,
+    album_id: Option<String>,
+    cover_image: Option<String>,
+    duration_ms: u64,
+    format: String,
+    bitrate: u64,
+    lyrics_lrc: Option<String>,
+    lyrics_translation: Option<String>,
+    audio_data: Vec<u8>,
+    source: String,
+    source_id: Option<String>,
+    tags: String,
+    searchable_text: String,
+    vector_en: Option<Vec<f32>>,
+    vector_zh: Option<Vec<f32>>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl RebuildRow {
+    fn from_batch(batch: &RecordBatch, i: usize) -> Result<Self> {
+        let str_col = |name: &str| -> String {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .map(|a| a.value(i).to_string())
+                .unwrap_or_default()
+        };
+        let opt_str_col = |name: &str| -> Option<String> {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .and_then(|a| {
+                    if a.is_null(i) {
+                        None
+                    } else {
+                        let v = a.value(i);
+                        if v.is_empty() {
+                            None
+                        } else {
+                            Some(v.to_string())
+                        }
+                    }
+                })
+        };
+        let u64_col = |name: &str| -> u64 {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
+                .map(|a| a.value(i))
+                .unwrap_or(0)
+        };
+        let ts_col = |name: &str| -> i64 {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<TimestampMillisecondArray>())
+                .map(|a| a.value(i))
+                .unwrap_or(0)
+        };
+
+        // audio_data: try LargeBinary first, fallback to Binary
+        let audio_data = batch
+            .column_by_name("audio_data")
+            .and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<LargeBinaryArray>()
+                    .map(|a| a.value(i).to_vec())
+                    .or_else(|| {
+                        c.as_any()
+                            .downcast_ref::<BinaryArray>()
+                            .map(|a| a.value(i).to_vec())
+                    })
+            })
+            .unwrap_or_default();
+
+        // vector columns
+        let vec_col = |name: &str, dim: usize| -> Option<Vec<f32>> {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>())
+                .and_then(|a| {
+                    if a.is_null(i) {
+                        return None;
+                    }
+                    let values = a.value(i);
+                    let floats = values
+                        .as_any()
+                        .downcast_ref::<arrow_array::Float32Array>()?;
+                    let v: Vec<f32> = (0..dim).map(|j| floats.value(j)).collect();
+                    Some(v)
+                })
+        };
+
+        Ok(RebuildRow {
+            id: str_col("id"),
+            title: str_col("title"),
+            artist: str_col("artist"),
+            album: str_col("album"),
+            album_id: opt_str_col("album_id"),
+            cover_image: opt_str_col("cover_image"),
+            duration_ms: u64_col("duration_ms"),
+            format: str_col("format"),
+            bitrate: u64_col("bitrate"),
+            lyrics_lrc: opt_str_col("lyrics_lrc"),
+            lyrics_translation: opt_str_col("lyrics_translation"),
+            audio_data,
+            source: str_col("source"),
+            source_id: opt_str_col("source_id"),
+            tags: str_col("tags"),
+            searchable_text: str_col("searchable_text"),
+            vector_en: vec_col("vector_en", TEXT_VECTOR_DIM_EN),
+            vector_zh: vec_col("vector_zh", TEXT_VECTOR_DIM_ZH),
+            created_at: ts_col("created_at"),
+            updated_at: ts_col("updated_at"),
+        })
+    }
+}
+
+fn rebuild_rows_to_batch(rows: &[RebuildRow], schema: &Arc<Schema>) -> Result<RecordBatch> {
+    let mut id = StringBuilder::new();
+    let mut title = StringBuilder::new();
+    let mut artist = StringBuilder::new();
+    let mut album = StringBuilder::new();
+    let mut album_id = StringBuilder::new();
+    let mut cover_image = StringBuilder::new();
+    let mut duration_ms = UInt64Builder::new();
+    let mut format = StringBuilder::new();
+    let mut bitrate = UInt64Builder::new();
+    let mut lyrics_lrc = StringBuilder::new();
+    let mut lyrics_translation = StringBuilder::new();
+    let mut audio_data = BlobArrayBuilder::new(rows.len());
+    let mut source = StringBuilder::new();
+    let mut source_id = StringBuilder::new();
+    let mut tags = StringBuilder::new();
+    let mut searchable_text = StringBuilder::new();
+    let mut vector_en_builder =
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32)
+            .with_field(Field::new("item", DataType::Float32, false));
+    let mut vector_zh_builder =
+        FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_ZH as i32)
+            .with_field(Field::new("item", DataType::Float32, false));
+    let mut created_at_b = TimestampMillisecondBuilder::new();
+    let mut updated_at_b = TimestampMillisecondBuilder::new();
+
+    for r in rows {
+        id.append_value(&r.id);
+        title.append_value(&r.title);
+        artist.append_value(&r.artist);
+        album.append_value(&r.album);
+        append_optional_str(&mut album_id, &r.album_id);
+        append_optional_str(&mut cover_image, &r.cover_image);
+        duration_ms.append_value(r.duration_ms);
+        format.append_value(&r.format);
+        bitrate.append_value(r.bitrate);
+        append_optional_str(&mut lyrics_lrc, &r.lyrics_lrc);
+        append_optional_str(&mut lyrics_translation, &r.lyrics_translation);
+        audio_data.push_bytes(&r.audio_data)?;
+        source.append_value(&r.source);
+        append_optional_str(&mut source_id, &r.source_id);
+        tags.append_value(&r.tags);
+        searchable_text.append_value(&r.searchable_text);
+
+        match &r.vector_en {
+            Some(v) if v.len() == TEXT_VECTOR_DIM_EN => {
+                for val in v {
+                    vector_en_builder.values().append_value(*val);
+                }
+                vector_en_builder.append(true);
+            },
+            _ => {
+                for _ in 0..TEXT_VECTOR_DIM_EN {
+                    vector_en_builder.values().append_value(0.0);
+                }
+                vector_en_builder.append(false);
+            },
+        }
+        match &r.vector_zh {
+            Some(v) if v.len() == TEXT_VECTOR_DIM_ZH => {
+                for val in v {
+                    vector_zh_builder.values().append_value(*val);
+                }
+                vector_zh_builder.append(true);
+            },
+            _ => {
+                for _ in 0..TEXT_VECTOR_DIM_ZH {
+                    vector_zh_builder.values().append_value(0.0);
+                }
+                vector_zh_builder.append(false);
+            },
+        }
+
+        created_at_b.append_value(r.created_at);
+        updated_at_b.append_value(r.updated_at);
+    }
+
+    RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(id.finish()),
+        Arc::new(title.finish()),
+        Arc::new(artist.finish()),
+        Arc::new(album.finish()),
+        Arc::new(album_id.finish()),
+        Arc::new(cover_image.finish()),
+        Arc::new(duration_ms.finish()),
+        Arc::new(format.finish()),
+        Arc::new(bitrate.finish()),
+        Arc::new(lyrics_lrc.finish()),
+        Arc::new(lyrics_translation.finish()),
+        audio_data.finish()?,
+        Arc::new(source.finish()),
+        Arc::new(source_id.finish()),
+        Arc::new(tags.finish()),
+        Arc::new(searchable_text.finish()),
+        Arc::new(vector_en_builder.finish()),
+        Arc::new(vector_zh_builder.finish()),
+        Arc::new(created_at_b.finish()),
+        Arc::new(updated_at_b.finish()),
+    ])
+    .context("failed to build rebuild batch")
 }

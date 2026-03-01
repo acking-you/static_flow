@@ -40,9 +40,10 @@ use crate::{
         AdminCommentAuditLog, AdminCommentTask, AdminCommentTaskAiOutputResponse,
         AdminCommentTaskGroup, AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest,
         AdminTaskActionRequest, ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment,
-        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, MemoryFunctionReport,
-        MemoryModuleReport, MemoryProfilerConfigSnapshot, MemoryProfilerConfigUpdate,
-        MemoryProfilerOverview, MemoryStackReport, MusicWishItem, ViewAnalyticsConfig,
+        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, MemoryFunctionEntry,
+        MemoryFunctionReport, MemoryModuleEntry, MemoryModuleReport, MemoryProfilerConfigSnapshot,
+        MemoryProfilerConfigUpdate, MemoryProfilerOverview, MemoryStackEntry, MemoryStackReport,
+        MusicWishItem, ViewAnalyticsConfig,
     },
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
@@ -168,6 +169,108 @@ fn behavior_distribution_card(title: &str, items: &[ApiBehaviorBucket], path_lik
                 </ul>
             }
         </article>
+    }
+}
+
+fn memory_function_list(entries: &[MemoryFunctionEntry]) -> Html {
+    let max_bytes = entries
+        .iter()
+        .map(|e| e.live_bytes_estimate)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    html! {
+        <ul class="admin-dist-list">
+            { for entries.iter().map(|entry| {
+                let fill = entry.live_bytes_estimate as f64 / max_bytes as f64;
+                let style = format!("--fill:{:.3}", fill);
+                html! {
+                    <li class="dist-bar admin-dist-item" {style}>
+                        <div class="admin-mem-name" style="flex:1;min-width:0">
+                            <details>
+                                <summary title={entry.function.clone()}>{ &entry.function }</summary>
+                                <div class="admin-mem-full">{ &entry.function }</div>
+                            </details>
+                            <div class="admin-mem-sub" title={entry.module.clone()}>{ &entry.module }</div>
+                        </div>
+                        <span class="admin-dist-item__value">
+                            { format!("{} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }
+                        </span>
+                    </li>
+                }
+            }) }
+        </ul>
+    }
+}
+
+fn memory_module_list(entries: &[MemoryModuleEntry]) -> Html {
+    let max_bytes = entries
+        .iter()
+        .map(|e| e.live_bytes_estimate)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    html! {
+        <ul class="admin-dist-list">
+            { for entries.iter().map(|entry| {
+                let fill = entry.live_bytes_estimate as f64 / max_bytes as f64;
+                let style = format!("--fill:{:.3}", fill);
+                html! {
+                    <li class="dist-bar admin-dist-item" {style}>
+                        <div class="admin-mem-name" style="flex:1;min-width:0">
+                            <details>
+                                <summary title={entry.module.clone()}>{ &entry.module }</summary>
+                                <div class="admin-mem-full">{ &entry.module }</div>
+                            </details>
+                            <div class="admin-mem-sub">
+                                { format!("fns={} stacks={}", entry.function_count, entry.stack_count) }
+                            </div>
+                        </div>
+                        <span class="admin-dist-item__value">
+                            { format!("{} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }
+                        </span>
+                    </li>
+                }
+            }) }
+        </ul>
+    }
+}
+
+fn memory_stack_list(entries: &[MemoryStackEntry]) -> Html {
+    let max_bytes = entries
+        .iter()
+        .map(|e| e.live_bytes_estimate)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    html! {
+        <ul class="admin-dist-list">
+            { for entries.iter().map(|entry| {
+                let fill = entry.live_bytes_estimate as f64 / max_bytes as f64;
+                let style = format!("--fill:{:.3}", fill);
+                let top_frame = entry.frames.first().cloned().unwrap_or_default();
+                html! {
+                    <li class="dist-bar admin-dist-item" {style}>
+                        <div class="admin-mem-name" style="flex:1;min-width:0">
+                            <details>
+                                <summary title={top_frame.clone()}>{ &top_frame }</summary>
+                                <div class="admin-mem-full">
+                                    { for entry.frames.iter().map(|f| html! {
+                                        <div>{ f }</div>
+                                    }) }
+                                </div>
+                            </details>
+                            <div class="admin-mem-sub">
+                                { format!("alloc={} free={}", entry.alloc_count, entry.free_count) }
+                            </div>
+                        </div>
+                        <span class="admin-dist-item__value">
+                            { format!("{} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }
+                        </span>
+                    </li>
+                }
+            }) }
+        </ul>
     }
 }
 
@@ -2640,7 +2743,7 @@ pub fn admin_page() -> Html {
                     </div>
                 } else if *active_tab == Some(AdminTab::RuntimeMemory) {
                     <div class="animate-[fadeIn_0.3s_ease]">
-                        <div class={classes!("flex", "flex-col", "xl:flex-row", "xl:items-center", "justify-between", "gap-3", "mb-4")}>
+                        <div class={classes!("flex", "flex-col", "md:flex-row", "md:items-center", "justify-between", "gap-3", "mb-4")}>
                             <div>
                                 <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Runtime Memory Profiler" }</h2>
                                 if let Some(overview) = (*memory_overview).clone() {
@@ -2654,14 +2757,14 @@ pub fn admin_page() -> Html {
                                     </p>
                                 }
                             </div>
-                            <div class={classes!("grid", "grid-cols-2", "sm:flex", "sm:items-center", "gap-2")}>
+                            <div class={classes!("grid", "grid-cols-2", "md:flex", "md:items-center", "gap-2")}>
                                 <input
                                     type="number"
                                     value={(*memory_top).clone()}
                                     oninput={on_memory_top_change}
                                     min="1"
                                     placeholder="top"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "sm:w-[110px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_memory_refresh}>{ "Refresh" }</button>
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_memory_reset} disabled={*memory_action_loading}>
@@ -2777,91 +2880,55 @@ pub fn admin_page() -> Html {
                             </article>
                         }
 
-                        <div class={classes!("grid", "gap-4", "xl:grid-cols-3")}>
-                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                <header class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                        <div class={classes!("grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-3")}>
+                            <article class={classes!("admin-dist-card", "overflow-hidden", "min-w-0")}>
+                                <header class="admin-dist-card__header">
                                     <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Top Functions" }</h3>
                                     if let Some(report) = (*memory_functions).clone() {
-                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} entries", report.entries.len()) }</span>
+                                        <span class="admin-dist-card__count">{ report.entries.len() }</span>
                                     }
                                 </header>
                                 if let Some(report) = (*memory_functions).clone() {
                                     if report.entries.is_empty() {
-                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No sampled function data." }</p>
+                                        <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ "No sampled function data." }</p>
                                     } else {
-                                        <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
-                                            { for report.entries.iter().map(|entry| html! {
-                                                <li class={classes!("rounded-[var(--radius-sm)]", "border", "border-[var(--border)]", "p-2")}>
-                                                    <p class={classes!("m-0", "text-xs", "font-semibold", "truncate")} title={entry.function.clone()}>{ entry.function.clone() }</p>
-                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]", "truncate")} title={entry.module.clone()}>{ entry.module.clone() }</p>
-                                                    <p class={classes!("m-0", "text-xs")}>{ format!("live={} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }</p>
-                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("stacks={} alloc={} free={}", entry.stack_count, entry.alloc_count, entry.free_count) }</p>
-                                                </li>
-                                            }) }
-                                        </ul>
+                                        { memory_function_list(&report.entries) }
                                     }
                                 } else {
                                     <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Unavailable" }</p>
                                 }
                             </article>
 
-                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                <header class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                            <article class={classes!("admin-dist-card", "overflow-hidden", "min-w-0")}>
+                                <header class="admin-dist-card__header">
                                     <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Top Modules" }</h3>
                                     if let Some(report) = (*memory_modules).clone() {
-                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} entries", report.entries.len()) }</span>
+                                        <span class="admin-dist-card__count">{ report.entries.len() }</span>
                                     }
                                 </header>
                                 if let Some(report) = (*memory_modules).clone() {
                                     if report.entries.is_empty() {
-                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No sampled module data." }</p>
+                                        <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ "No sampled module data." }</p>
                                     } else {
-                                        <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
-                                            { for report.entries.iter().map(|entry| html! {
-                                                <li class={classes!("rounded-[var(--radius-sm)]", "border", "border-[var(--border)]", "p-2")}>
-                                                    <p class={classes!("m-0", "text-xs", "font-semibold", "truncate")} title={entry.module.clone()}>{ entry.module.clone() }</p>
-                                                    <p class={classes!("m-0", "text-xs")}>{ format!("live={} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }</p>
-                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("functions={} stacks={}", entry.function_count, entry.stack_count) }</p>
-                                                    <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("alloc={} free={}", entry.alloc_count, entry.free_count) }</p>
-                                                </li>
-                                            }) }
-                                        </ul>
+                                        { memory_module_list(&report.entries) }
                                     }
                                 } else {
                                     <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Unavailable" }</p>
                                 }
                             </article>
 
-                            <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
-                                <header class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-2", "flex-wrap")}>
+                            <article class={classes!("admin-dist-card", "overflow-hidden", "min-w-0")}>
+                                <header class="admin-dist-card__header">
                                     <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Top Stacks" }</h3>
                                     if let Some(report) = (*memory_stacks).clone() {
-                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} entries", report.entries.len()) }</span>
+                                        <span class="admin-dist-card__count">{ report.entries.len() }</span>
                                     }
                                 </header>
                                 if let Some(report) = (*memory_stacks).clone() {
                                     if report.entries.is_empty() {
-                                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No sampled stack data." }</p>
+                                        <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>{ "No sampled stack data." }</p>
                                     } else {
-                                        <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
-                                            { for report.entries.iter().map(|entry| {
-                                                let frame_preview = entry
-                                                    .frames
-                                                    .iter()
-                                                    .take(3)
-                                                    .cloned()
-                                                    .collect::<Vec<_>>()
-                                                    .join(" ← ");
-                                                html! {
-                                                    <li class={classes!("rounded-[var(--radius-sm)]", "border", "border-[var(--border)]", "p-2")}>
-                                                        <p class={classes!("m-0", "text-xs", "font-semibold", "font-mono", "truncate")} title={entry.stack_id.clone()}>{ entry.stack_id.clone() }</p>
-                                                        <p class={classes!("m-0", "text-xs", "font-mono", "break-all")} title={frame_preview.clone()}>{ frame_preview }</p>
-                                                        <p class={classes!("m-0", "text-xs")}>{ format!("live={} ({})", format_bytes(entry.live_bytes_estimate), format_ratio_percent(entry.live_ratio_heap)) }</p>
-                                                        <p class={classes!("m-0", "text-[11px]", "text-[var(--muted)]")}>{ format!("alloc={} free={}", entry.alloc_count, entry.free_count) }</p>
-                                                    </li>
-                                                }
-                                            }) }
-                                        </ul>
+                                        { memory_stack_list(&report.entries) }
                                     }
                                 } else {
                                     <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Unavailable" }</p>

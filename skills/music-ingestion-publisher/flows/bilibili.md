@@ -32,7 +32,7 @@ errors. Lyrics are still fetched from Netease via `ncmdump-cli lyric`.
    - Split output at `--- Translation ---` into `.lrc` and `.tlyric.lrc`
    - If no track_id: skip lyrics or provide manually.
 
-5. **Ingest**:
+5. **Ingest** (with cover URL from step 2):
    ```bash
    sf-cli write-music \
      --db-path /mnt/e/static-flow-data/lancedb-music \
@@ -40,22 +40,22 @@ errors. Lyrics are still fetched from Netease via `ncmdump-cli lyric`.
      --id "bilibili-<bvid>" \
      --title "<song_title>" \
      --artist "<actual_artist>" \
+     --cover-url "https://i0.hdslb.com/bfs/archive/..." \
      --source bilibili \
      --source-id "<bvid>" \
      --lyrics /tmp/music/<id>.lrc \
      --lyrics-translation /tmp/music/<id>.tlyric.lrc
    ```
+   Note: Bilibili API returns `http://` cover URLs — **always convert to `https://`**.
 
-6. **Update cover** (MUST use `https://`, not `http://`):
+6. **Verify** (see `common.md`).
+   If cover was not available at ingest, update it separately:
    ```bash
-   # Bilibili API returns http:// URLs — always convert to https://
    sf-cli db --db-path /mnt/e/static-flow-data/lancedb-music \
      update-rows songs \
      --where "id='bilibili-<bvid>'" \
      --set "cover_image='https://i0.hdslb.com/bfs/archive/...'"
    ```
-
-7. **Verify** (see `common.md`).
 
 ## Flow F: Batch Ingestion
 
