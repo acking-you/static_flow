@@ -296,7 +296,10 @@ impl StaticFlowDataStore {
                 let batch = RecordBatch::new_empty(schema.clone());
                 let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
                 self.db
-                    .create_table(&self.article_views_table, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+                    .create_table(
+                        &self.article_views_table,
+                        Box::new(batches) as Box<dyn RecordBatchReader + Send>,
+                    )
                     .execute()
                     .await
                     .context("failed to create article_views table")?;
@@ -317,7 +320,10 @@ impl StaticFlowDataStore {
                 let batch = RecordBatch::new_empty(schema.clone());
                 let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
                 self.db
-                    .create_table(&self.api_behavior_table, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+                    .create_table(
+                        &self.api_behavior_table,
+                        Box::new(batches) as Box<dyn RecordBatchReader + Send>,
+                    )
                     .execute()
                     .await
                     .context("failed to create api_behavior_events table")?;

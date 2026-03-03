@@ -1215,3 +1215,234 @@ fn downcast_timestamp_ms<'a>(
         .downcast_ref::<TimestampMillisecondArray>()
         .ok_or_else(|| anyhow!("column `{column}` is not TimestampMillisecondArray"))
 }
+
+// ---------------------------------------------------------------------------
+// Blob V2 Compaction E2E Test
+// ---------------------------------------------------------------------------
+
+pub async fn test_blob_compact(db_path: &Path, count: usize, blob_size: usize) -> Result<()> {
+    use std::time::Instant;
+
+    use static_flow_shared::music_store::{MusicDataStore, SongRecord};
+
+    if count == 0 {
+        bail!("count must be at least 1");
+    }
+
+    let test_dir = db_path.join("_test_blob_compact");
+    if test_dir.exists() {
+        std::fs::remove_dir_all(&test_dir)?;
+    }
+    std::fs::create_dir_all(&test_dir)?;
+    let db_uri = test_dir.to_string_lossy().to_string();
+
+    tracing::info!(
+        "=== Blob V2 Compaction E2E Test ===\n  songs: {count}\n  blob_size: {} bytes\n  test_db: \
+         {db_uri}",
+        blob_size
+    );
+
+    let store = MusicDataStore::connect(&db_uri).await?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // Step 1: insert N songs (each as separate fragment)
+    let start = Instant::now();
+    for i in 0..count {
+        let record = SongRecord {
+            id: format!("test-song-{i:04}"),
+            title: format!("Test Song {i}"),
+            artist: "CompactionTest".into(),
+            album: "BlobV2Test".into(),
+            album_id: None,
+            cover_image: None,
+            duration_ms: 180_000,
+            format: "mp3".into(),
+            bitrate: 320,
+            lyrics_lrc: None,
+            lyrics_translation: None,
+            audio_data: vec![(i as u8).wrapping_add(42); blob_size],
+            source: "test".into(),
+            source_id: None,
+            tags: "test,compaction".into(),
+            searchable_text: format!("Test Song {i} CompactionTest"),
+            vector_en: None,
+            vector_zh: None,
+            created_at: now_ms,
+            updated_at: now_ms,
+        };
+        store.upsert_song(&record).await?;
+    }
+    let insert_ms = start.elapsed().as_millis();
+    tracing::info!("Inserted {count} songs in {insert_ms}ms");
+
+    // Step 2: count fragments before compaction
+    let table = store.connection().open_table("songs").execute().await?;
+    let ds_before = table.dataset().context("no dataset")?;
+    let frags_before = ds_before.get().await?.get_fragments().len();
+    tracing::info!("Fragments before compact: {frags_before}");
+
+    // Step 3: compact
+    let compact_start = Instant::now();
+    table.optimize(OptimizeAction::All).await?;
+    let compact_ms = compact_start.elapsed().as_millis();
+    tracing::info!("Compact completed in {compact_ms}ms");
+
+    // Step 4: fragments after
+    let ds_after = table.dataset().context("no dataset")?;
+    let frags_after = ds_after.get().await?.get_fragments().len();
+    tracing::info!("Fragments after compact: {frags_after}");
+
+    // Step 5: prune
+    table
+        .optimize(OptimizeAction::Prune {
+            older_than: Some(ChronoDuration::zero()),
+            delete_unverified: Some(true),
+            error_if_tagged_old_versions: Some(false),
+        })
+        .await?;
+    tracing::info!("Prune completed");
+
+    // Step 6: verify audio data integrity
+    let mut pass = 0usize;
+    let mut fail = 0usize;
+    for i in 0..count {
+        let id = format!("test-song-{i:04}");
+        match store.get_song_audio(&id).await {
+            Ok(Some((data, fmt))) => {
+                let expected_byte = (i as u8).wrapping_add(42);
+                let size_ok = data.len() == blob_size;
+                let content_ok = data[0] == expected_byte && data[data.len() - 1] == expected_byte;
+                let fmt_ok = fmt == "mp3";
+                if size_ok && content_ok && fmt_ok {
+                    pass += 1;
+                } else {
+                    fail += 1;
+                    tracing::error!(
+                        "FAIL {id}: size={}/{blob_size} first_byte={}/{expected_byte} format={fmt}",
+                        data.len(),
+                        data[0]
+                    );
+                }
+            },
+            Ok(None) => {
+                fail += 1;
+                tracing::error!("FAIL {id}: audio not found");
+            },
+            Err(err) => {
+                fail += 1;
+                tracing::error!("FAIL {id}: {err}");
+            },
+        }
+    }
+
+    // Step 7: verify metadata
+    for i in 0..count {
+        let id = format!("test-song-{i:04}");
+        match store.get_song(&id).await {
+            Ok(Some(detail)) => {
+                if detail.title != format!("Test Song {i}") || detail.artist != "CompactionTest" {
+                    fail += 1;
+                    tracing::error!(
+                        "FAIL {id}: metadata mismatch title={} artist={}",
+                        detail.title,
+                        detail.artist
+                    );
+                }
+            },
+            Ok(None) => {
+                fail += 1;
+                tracing::error!("FAIL {id}: metadata not found");
+            },
+            Err(err) => {
+                fail += 1;
+                tracing::error!("FAIL {id}: metadata error {err}");
+            },
+        }
+    }
+
+    // Cleanup
+    if let Err(err) = std::fs::remove_dir_all(&test_dir) {
+        tracing::warn!("Failed to cleanup test dir: {err}");
+    }
+
+    let total_ms = start.elapsed().as_millis();
+    tracing::info!(
+        "\n=== Result ===\n  pass: {pass}/{count}\n  fail: {fail}\n  fragments: {frags_before} -> \
+         {frags_after}\n  total: {total_ms}ms"
+    );
+
+    if fail > 0 {
+        bail!("{fail} verification(s) failed");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Verify Audio Data Retrieval
+// ---------------------------------------------------------------------------
+
+pub async fn verify_audio(db_path: &Path, ids: Option<String>, limit: Option<usize>) -> Result<()> {
+    use static_flow_shared::music_store::MusicDataStore;
+
+    let db_uri = db_path.to_string_lossy().to_string();
+    let store = MusicDataStore::connect(&db_uri).await?;
+
+    let target_ids: Vec<String> = match ids {
+        Some(ref csv) => csv.split(',').map(|s| s.trim().to_string()).collect(),
+        None => {
+            // Query all song IDs from the table
+            let db = connect_db(db_path).await?;
+            let table = open_table(&db, "songs").await?;
+            let mut query = table.query();
+            if let Some(lim) = limit {
+                query = query.limit(lim);
+            }
+            let stream = query
+                .select(Select::columns(&["id"]))
+                .execute()
+                .await
+                .map_err(|err| anyhow!("failed to query songs: {err}"))?;
+            let batches = stream.try_collect::<Vec<_>>().await?;
+            let mut all_ids = Vec::new();
+            for batch in &batches {
+                let id_col = downcast_string(batch, "id")?;
+                for row in 0..batch.num_rows() {
+                    all_ids.push(id_col.value(row).to_string());
+                }
+            }
+            all_ids
+        },
+    };
+
+    if target_ids.is_empty() {
+        tracing::info!("No songs to verify.");
+        return Ok(());
+    }
+
+    tracing::info!("Verifying audio for {} song(s)...", target_ids.len());
+
+    let mut ok = 0usize;
+    let mut err_count = 0usize;
+    for id in &target_ids {
+        match store.get_song_audio(id).await {
+            Ok(Some((data, fmt))) => {
+                tracing::info!("  ✓ {id}: {} bytes, format={fmt}", data.len());
+                ok += 1;
+            },
+            Ok(None) => {
+                tracing::error!("  ✗ {id}: audio not found");
+                err_count += 1;
+            },
+            Err(err) => {
+                tracing::error!("  ✗ {id}: {err}");
+                err_count += 1;
+            },
+        }
+    }
+
+    tracing::info!("{ok}/{} songs verified OK", target_ids.len());
+    if err_count > 0 {
+        bail!("{err_count} song(s) failed audio verification");
+    }
+    Ok(())
+}

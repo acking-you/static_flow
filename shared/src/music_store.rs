@@ -313,7 +313,8 @@ async fn ensure_table(
             );
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-            let mut builder = db.create_table(table_name, Box::new(batches) as Box<dyn RecordBatchReader + Send>);
+            let mut builder =
+                db.create_table(table_name, Box::new(batches) as Box<dyn RecordBatchReader + Send>);
             for &(k, v) in storage_options {
                 builder = builder.storage_option(k, v);
             }

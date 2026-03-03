@@ -524,4 +524,22 @@ pub enum DbCommands {
         /// Target version number.
         version: u64,
     },
+    /// Run blob v2 compaction e2e test with synthetic data.
+    TestBlobCompact {
+        /// Number of synthetic songs to insert (default: 5).
+        #[arg(long, default_value = "5")]
+        count: usize,
+        /// Size of each synthetic audio blob in bytes (default: 5MB).
+        #[arg(long, default_value = "5242880")]
+        blob_size: usize,
+    },
+    /// Verify audio data retrieval for songs in the database.
+    VerifyAudio {
+        /// Only verify specific song IDs (comma-separated).
+        #[arg(long)]
+        ids: Option<String>,
+        /// Maximum number of songs to verify (default: all).
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }

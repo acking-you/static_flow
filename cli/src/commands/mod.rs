@@ -290,6 +290,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                 table,
                 version,
             } => db_manage::restore_table(&db_path, &table, version).await,
+            DbCommands::TestBlobCompact {
+                count,
+                blob_size,
+            } => db_manage::test_blob_compact(&db_path, count, blob_size).await,
+            DbCommands::VerifyAudio {
+                ids,
+                limit,
+            } => db_manage::verify_audio(&db_path, ids, limit).await,
         },
     }
 }

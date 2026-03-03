@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     sync::Arc,
     time::{Duration, Instant},
@@ -406,9 +406,7 @@ fn spawn_table_compactor(
     let config = CompactConfig {
         fragment_threshold: threshold,
         prune_older_than_hours: 2,
-        // songs table uses blob v2 encoding (data_storage_version=2.2) which
-        // the current lance version cannot compact yet.
-        skip_tables: ["songs"].iter().map(|s| s.to_string()).collect(),
+        skip_tables: HashSet::new(),
     };
 
     tokio::spawn(async move {

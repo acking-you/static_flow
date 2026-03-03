@@ -13,8 +13,7 @@ const SAFE_COMPACTION_MAX_BYTES_PER_FILE: usize = 512 * 1024 * 1024;
 pub struct CompactConfig {
     pub fragment_threshold: usize,
     pub prune_older_than_hours: i64,
-    /// Tables to skip during compaction (e.g. tables with blob v2 encoding
-    /// that the current lance version cannot compact).
+    /// Tables to skip during compaction.
     pub skip_tables: HashSet<String>,
 }
 
