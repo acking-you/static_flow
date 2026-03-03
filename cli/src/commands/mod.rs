@@ -280,6 +280,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 limit,
                 dry_run,
             } => db_manage::reembed_svg_images(&db_path, limit, dry_run).await,
+            DbCommands::MigrateImagesVectorNullable {
+                dry_run,
+            } => db_manage::migrate_images_vector_nullable(&db_path, dry_run).await,
+            DbCommands::ReembedImageVectors {
+                limit,
+                dry_run,
+                all,
+                batch_size,
+            } => db_manage::reembed_image_vectors(&db_path, limit, dry_run, all, batch_size).await,
             DbCommands::UpsertArticle {
                 json,
             } => db_manage::upsert_article_json(&db_path, &json).await,

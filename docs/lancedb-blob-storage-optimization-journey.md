@@ -5,7 +5,7 @@ tags: ["LanceDB", "Rust", "blob-storage", "performance", "storage-optimization"]
 category: "Engineering"
 author: "ackingliu"
 date: "2026-03-01"
-featured_image: ""
+featured_image: "images/2b6b7dd0af52d9b69fc9c83b1fb09c4256d329d54aced5d9e04b601d8a20e5dc"
 read_time: 35
 ---
 

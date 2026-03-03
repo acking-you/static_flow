@@ -240,10 +240,21 @@ async fn sync_notes(
         let embedding_language = config
             .language
             .unwrap_or_else(|| detect_language(&combined_text));
-        let embedding = embed_text_with_language(&combined_text, embedding_language);
-        let (vector_en, vector_zh) = match embedding_language {
-            TextEmbeddingLanguage::English => (Some(embedding), None),
-            TextEmbeddingLanguage::Chinese => (None, Some(embedding)),
+        let embedding = match embed_text_with_language(&combined_text, embedding_language) {
+            Ok(vector) => Some(vector),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to embed synced article {}; writing NULL vectors: {}",
+                    article_id,
+                    err
+                );
+                None
+            },
+        };
+        let (vector_en, vector_zh) = match (embedding_language, embedding) {
+            (TextEmbeddingLanguage::English, Some(vector)) => (Some(vector), None),
+            (TextEmbeddingLanguage::Chinese, Some(vector)) => (None, Some(vector)),
+            (_, None) => (None, None),
         };
 
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -439,7 +450,18 @@ fn build_image_record(path: &Path, config: &SyncConfig) -> Result<ImageRecord> {
         } else {
             None
         };
-        (static_flow_shared::embedding::embed_image_bytes(&rasterized.png_bytes), thumb)
+        let vector = match static_flow_shared::embedding::embed_image_bytes(&rasterized.png_bytes) {
+            Ok(vector) => Some(vector),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to embed image {}; writing NULL vector: {}",
+                    path.display(),
+                    err
+                );
+                None
+            },
+        };
+        (vector, thumb)
     } else {
         match image::load_from_memory(&bytes) {
             Ok(img) => {
@@ -451,9 +473,33 @@ fn build_image_record(path: &Path, config: &SyncConfig) -> Result<ImageRecord> {
                 } else {
                     None
                 };
-                (static_flow_shared::embedding::embed_image_bytes(&bytes), thumb)
+                let vector = match static_flow_shared::embedding::embed_image_bytes(&bytes) {
+                    Ok(vector) => Some(vector),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to embed image {}; writing NULL vector: {}",
+                            path.display(),
+                            err
+                        );
+                        None
+                    },
+                };
+                (vector, thumb)
             },
-            Err(_) => (static_flow_shared::embedding::embed_image_bytes(&bytes), None),
+            Err(_) => {
+                let vector = match static_flow_shared::embedding::embed_image_bytes(&bytes) {
+                    Ok(vector) => Some(vector),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to embed undecodable image {}; writing NULL vector: {}",
+                            path.display(),
+                            err
+                        );
+                        None
+                    },
+                };
+                (vector, None)
+            },
         }
     };
 

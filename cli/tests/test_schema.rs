@@ -75,6 +75,7 @@ mod tests {
             },
             other => panic!("unexpected vector type: {other:?}"),
         }
+        assert!(vector.is_nullable());
     }
 
     #[test]

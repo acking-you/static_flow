@@ -1260,7 +1260,8 @@ impl StaticFlowDataStore {
         let table = self.images_table().await?;
         let total_started = Instant::now();
 
-        let query_embedding = embed_text_with_model(query, TextEmbeddingModel::ClipVitB32);
+        let query_embedding = embed_text_with_model(query, TextEmbeddingModel::ClipVitB32)
+            .context("failed to embed text query for image search")?;
 
         let index_diag = inspect_index_for_column(&table, "vector", false).await;
         let path = if index_diag.is_some() { "vector_index" } else { "vector_scan" };
@@ -1903,7 +1904,10 @@ async fn run_semantic_vector_search_with_fallback(
     enhanced_highlight: bool,
 ) -> Result<SemanticVectorSelection> {
     let mut search_language = choose_primary_search_language(keyword);
-    let mut query_embedding = embed_text_with_language(keyword, search_language);
+    let mut query_embedding =
+        embed_text_with_language(keyword, search_language).with_context(|| {
+            format!("failed to embed semantic query for language {:?}", search_language)
+        })?;
     let primary_column = vector_column_for_language(search_language);
     let primary_index = inspect_index_for_column(table, primary_column, false).await;
     let primary_path = if primary_index.is_some() { "vector_index" } else { "vector_scan" };
@@ -1958,7 +1962,13 @@ async fn run_semantic_vector_search_with_fallback(
         );
         log_query_path("semantic_search.fallback", fallback_path, "vector_index", &fallback_reason);
 
-        let fallback_embedding = embed_text_with_language(keyword, fallback_language);
+        let fallback_embedding = embed_text_with_language(keyword, fallback_language)
+            .with_context(|| {
+                format!(
+                    "failed to embed semantic fallback query for language {:?}",
+                    fallback_language
+                )
+            })?;
         let fallback_started = Instant::now();
         let fallback_rows = run_semantic_vector_search(
             table,
@@ -3080,7 +3090,17 @@ fn extract_semantic_highlight(
     let mut best_score = f32::NEG_INFINITY;
 
     for candidate in candidates.iter().take(MAX_CANDIDATES) {
-        let candidate_embedding = embed_text_with_language(candidate, language);
+        let candidate_embedding = match embed_text_with_language(candidate, language) {
+            Ok(vector) => vector,
+            Err(err) => {
+                tracing::debug!(
+                    "semantic highlight embedding failed for snippet candidate (len={}): {}",
+                    candidate.len(),
+                    err
+                );
+                continue;
+            },
+        };
         let semantic_score = cosine_similarity(query_embedding, candidate_embedding.as_slice());
         let lexical_score = semantic_keyword_overlap_score(candidate, keyword);
         let score = semantic_score + lexical_score * 0.15;

@@ -15,6 +15,7 @@ pub fn home_page() -> Html {
     let total_tags = use_state(|| 0usize);
     let total_categories = use_state(|| 0usize);
     let total_music = use_state(|| 0usize);
+    let total_images = use_state(|| 0usize);
     let stats_loaded = use_state(|| false);
 
     {
@@ -22,6 +23,7 @@ pub fn home_page() -> Html {
         let total_tags = total_tags.clone();
         let total_categories = total_categories.clone();
         let total_music = total_music.clone();
+        let total_images = total_images.clone();
         let stats_loaded = stats_loaded.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
@@ -42,6 +44,15 @@ pub fn home_page() -> Html {
                     },
                     Err(e) => {
                         console::error_1(&format!("Failed to fetch music stats: {}", e).into());
+                    },
+                }
+
+                match crate::api::fetch_images_page(Some(1), Some(0)).await {
+                    Ok(resp) => {
+                        total_images.set(resp.total);
+                    },
+                    Err(e) => {
+                        console::error_1(&format!("Failed to fetch image stats: {}", e).into());
                     },
                 }
 
@@ -70,6 +81,12 @@ pub fn home_page() -> Html {
             total_music.to_string(),
             t::STATS_MUSIC.to_string(),
             Some(Route::MediaAudio),
+        ),
+        (
+            IconName::Folder,
+            total_images.to_string(),
+            t::STATS_IMAGES.to_string(),
+            Some(Route::MediaImage),
         ),
     ];
 
@@ -386,6 +403,13 @@ pub fn home_page() -> Html {
                                         <i class="fas fa-headphones mr-2"></i>
                                         { t::BTN_MEDIA_AUDIO }
                                     </Link<Route>>
+                                    <Link<Route>
+                                        to={Route::MediaImage}
+                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                    >
+                                        <i class="fas fa-image mr-2"></i>
+                                        { t::BTN_MEDIA_IMAGE }
+                                    </Link<Route>>
                                 </div>
 
                                 // Social links as terminal output
@@ -453,7 +477,7 @@ pub fn home_page() -> Html {
                                     "grid",
                                     "gap-5",
                                     "grid-cols-1",
-                                    "md:grid-cols-4",
+                                    "md:grid-cols-5",
                                     "w-full"
                                 )}>
                                     { for stats.into_iter().map(|(_icon, value, label, route)| {

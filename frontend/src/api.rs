@@ -848,6 +848,50 @@ pub async fn fetch_images_page(
     }
 }
 
+/// Fetch random image recommendations.
+pub async fn fetch_random_images_page(limit: Option<usize>) -> Result<ImagePage, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(ImagePage {
+            images: vec![],
+            total: 0,
+            offset: 0,
+            limit: limit.unwrap_or(10),
+            has_more: false,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/images/random", API_BASE);
+        if let Some(limit) = limit {
+            url.push_str(&format!("?limit={limit}"));
+        }
+
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+
+        let json_response: ImageListResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+
+        Ok(ImagePage {
+            images: json_response.images,
+            total: json_response.total,
+            offset: json_response.offset,
+            limit: json_response.limit,
+            has_more: json_response.has_more,
+        })
+    }
+}
+
 /// Search images by an existing image id.
 #[allow(dead_code)]
 pub async fn search_images_by_id(
@@ -1083,6 +1127,14 @@ pub struct ApiBehaviorConfig {
     pub retention_days: i64,
     pub default_days: usize,
     pub max_days: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CompactionRuntimeConfig {
+    pub enabled: bool,
+    pub scan_interval_seconds: u64,
+    pub fragment_threshold: usize,
+    pub prune_older_than_hours: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -1749,6 +1801,62 @@ pub async fn update_admin_api_behavior_config(
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/api-behavior-config", admin_base());
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(config)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_compaction_runtime_config() -> Result<CompactionRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(CompactionRuntimeConfig {
+            enabled: true,
+            scan_interval_seconds: 180,
+            fragment_threshold: 10,
+            prune_older_than_hours: 2,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/compaction-config", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn update_admin_compaction_runtime_config(
+    config: &CompactionRuntimeConfig,
+) -> Result<CompactionRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(config.clone())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/compaction-config", admin_base());
         let response = api_post(&url)
             .header("Content-Type", "application/json")
             .json(config)

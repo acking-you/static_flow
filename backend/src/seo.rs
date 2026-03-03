@@ -169,14 +169,29 @@ fn replace_title(html: &str, new_title: &str) -> String {
 }
 
 fn replace_canonical_href(html: &str, new_href: &str) -> String {
-    let needle = r#"rel="canonical" href=""#;
-    if let Some(start) = html.find(needle) {
-        let href_start = start + needle.len();
-        if let Some(end_quote) = html[href_start..].find('"') {
-            let before = &html[..href_start];
-            let after = &html[href_start + end_quote..];
-            return format!("{}{}{}", before, html_attr_escape(new_href), after);
+    let mut search_from = 0usize;
+    while let Some(rel_pos) = html[search_from..].find(r#"rel="canonical""#) {
+        let abs_rel = search_from + rel_pos;
+        let tag_start = html[..abs_rel].rfind("<link").unwrap_or(abs_rel);
+        let tag_end = match html[abs_rel..].find('>') {
+            Some(pos) => abs_rel + pos,
+            None => {
+                search_from = abs_rel + 1;
+                continue;
+            },
+        };
+        let tag = &html[tag_start..=tag_end];
+
+        if let Some(href_pos) = tag.find(r#"href=""#) {
+            let value_start = tag_start + href_pos + r#"href=""#.len();
+            if let Some(value_end_rel) = html[value_start..].find('"') {
+                let before = &html[..value_start];
+                let after = &html[value_start + value_end_rel..];
+                return format!("{}{}{}", before, html_attr_escape(new_href), after);
+            }
         }
+
+        search_from = tag_end + 1;
     }
     html.to_string()
 }
@@ -399,11 +414,13 @@ pub async fn seo_article_page(State(state): State<AppState>, Path(id): Path<Stri
     let article = match state.store.get_article(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            // Article not found — fall through to SPA (let client-side handle 404)
+            // Article not found: return real 404 to avoid soft-404 indexing issues.
             if state.index_html_template.is_empty() {
                 return (StatusCode::NOT_FOUND, "Not Found").into_response();
             }
-            return Html(state.index_html_template.as_ref().clone()).into_response();
+            let path = format!("/posts/{}", urlencoding::encode(&id));
+            let html = inject_spa_route_seo(&state.index_html_template, &path);
+            return (StatusCode::NOT_FOUND, Html(html)).into_response();
         },
         Err(err) => {
             tracing::warn!("SEO page DB error for id={}: {}", id, err);
@@ -482,8 +499,7 @@ fn rewrite_origin_urls(html: &str, site_base: &str) -> String {
 
 /// GET / — serve homepage with corrected SEO URLs and visible <h1>
 pub async fn seo_homepage(State(state): State<AppState>) -> Response {
-    let base = site_base_url();
-    let mut html = rewrite_origin_urls(&state.index_html_template, &base);
+    let mut html = inject_spa_route_seo(&state.index_html_template, "/");
 
     // Inject visible <h1> after <body> for search engine indexing.
     // Yew replaces <body> on WASM load, so this disappears naturally.
@@ -498,4 +514,33 @@ pub async fn seo_homepage(State(state): State<AppState>) -> Response {
     }
 
     Html(html).into_response()
+}
+
+/// Render a SPA shell HTML and rewrite canonical/og:url to match the current
+/// path on this domain, so crawlers don't see stale GitHub Pages canonicals.
+pub fn inject_spa_route_seo(template: &str, request_path_and_query: &str) -> String {
+    if template.is_empty() {
+        return String::new();
+    }
+
+    let base = site_base_url();
+    let mut html = rewrite_origin_urls(template, &base);
+
+    let path_only = request_path_and_query
+        .split('?')
+        .next()
+        .unwrap_or(request_path_and_query)
+        .trim();
+    let normalized_path = if path_only.is_empty() {
+        "/"
+    } else if path_only.starts_with('/') {
+        path_only
+    } else {
+        "/"
+    };
+    let canonical = format!("{}{}", base.trim_end_matches('/'), normalized_path);
+
+    html = replace_canonical_href(&html, &canonical);
+    html = replace_meta_content(&html, "property", "og:url", &canonical);
+    html
 }

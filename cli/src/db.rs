@@ -7,6 +7,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Schema};
 use futures::TryStreamExt;
+use lance::dataset::ColumnAlteration;
 use lancedb::{
     connect,
     index::Index,
@@ -79,25 +80,55 @@ async fn ensure_table_columns(table: &Table, expected_schema: &Schema) -> Result
         missing_columns.push((field.name().to_string(), format!("cast(NULL as {sql_type})")));
     }
 
-    if missing_columns.is_empty() {
+    let mut nullable_relaxations = Vec::<String>::new();
+    for field in expected_schema.fields() {
+        let Ok(existing_field) = existing_schema.field_with_name(field.name()) else {
+            continue;
+        };
+
+        if field.is_nullable() && !existing_field.is_nullable() {
+            nullable_relaxations.push(field.name().to_string());
+        }
+    }
+
+    if missing_columns.is_empty() && nullable_relaxations.is_empty() {
         return Ok(());
     }
 
-    let preview = missing_columns
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    tracing::info!(
-        "Auto-migrating table `{}` by adding missing nullable columns: {}",
-        table.name(),
-        preview
-    );
+    if !nullable_relaxations.is_empty() {
+        tracing::info!(
+            "Auto-migrating table `{}` by relaxing nullability for columns: {}",
+            table.name(),
+            nullable_relaxations.join(", ")
+        );
+        let alterations = nullable_relaxations
+            .iter()
+            .map(|name| ColumnAlteration::new(name.clone()).set_nullable(true))
+            .collect::<Vec<_>>();
+        table.alter_columns(&alterations).await.with_context(|| {
+            format!("failed to relax nullable columns on table `{}`", table.name())
+        })?;
+    }
 
-    table
-        .add_columns(NewColumnTransform::SqlExpressions(missing_columns), None)
-        .await
-        .with_context(|| format!("failed to add missing columns to table `{}`", table.name()))?;
+    if !missing_columns.is_empty() {
+        let preview = missing_columns
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        tracing::info!(
+            "Auto-migrating table `{}` by adding missing nullable columns: {}",
+            table.name(),
+            preview
+        );
+
+        table
+            .add_columns(NewColumnTransform::SqlExpressions(missing_columns), None)
+            .await
+            .with_context(|| {
+                format!("failed to add missing columns to table `{}`", table.name())
+            })?;
+    }
 
     Ok(())
 }

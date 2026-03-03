@@ -126,6 +126,13 @@ pub enum Route {
     MediaAudio,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/media/image")]
+    MediaImage,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/media/image")]
+    MediaImage,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/media/audio/:id")]
     MusicPlayer { id: String },
     #[cfg(feature = "mock")]
@@ -189,6 +196,7 @@ fn switch(route: Route) -> Html {
         },
         Route::MediaVideo => html! { <pages::coming_soon::ComingSoonPage feature={"video"} /> },
         Route::MediaAudio => html! { <pages::music_library::MusicLibraryPage /> },
+        Route::MediaImage => html! { <pages::image_library::ImageLibraryPage /> },
         Route::MusicPlayer {
             id,
         } => html! { <pages::music_player::MusicPlayerPage id={id} /> },

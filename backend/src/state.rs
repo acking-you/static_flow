@@ -48,6 +48,16 @@ pub const DEFAULT_API_BEHAVIOR_DEFAULT_DAYS: usize = 30;
 pub const DEFAULT_API_BEHAVIOR_MAX_DAYS: usize = 180;
 pub const MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS: i64 = 3650;
 pub const MAX_CONFIGURABLE_API_BEHAVIOR_DAYS: usize = 365;
+pub const DEFAULT_TABLE_COMPACT_ENABLED: bool = true;
+pub const DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 180;
+pub const MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 30;
+pub const MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 86_400;
+pub const DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10;
+pub const MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 2;
+pub const MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10_000;
+pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 2;
+pub const MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
+pub const MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 8_760;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewAnalyticsRuntimeConfig {
@@ -117,6 +127,25 @@ impl Default for MusicRuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionRuntimeConfig {
+    pub enabled: bool,
+    pub scan_interval_seconds: u64,
+    pub fragment_threshold: usize,
+    pub prune_older_than_hours: i64,
+}
+
+impl Default for CompactionRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_TABLE_COMPACT_ENABLED,
+            scan_interval_seconds: DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS,
+            fragment_threshold: DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD,
+            prune_older_than_hours: DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdminAccessConfig {
     pub local_only: bool,
@@ -134,6 +163,7 @@ pub struct AppState {
     pub(crate) view_analytics_config: Arc<RwLock<ViewAnalyticsRuntimeConfig>>,
     pub(crate) comment_runtime_config: Arc<RwLock<CommentRuntimeConfig>>,
     pub(crate) api_behavior_runtime_config: Arc<RwLock<ApiBehaviorRuntimeConfig>>,
+    pub(crate) compaction_runtime_config: Arc<RwLock<CompactionRuntimeConfig>>,
     pub(crate) comment_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) comment_worker_tx: mpsc::Sender<String>,
     pub(crate) admin_access: AdminAccessConfig,
@@ -172,6 +202,8 @@ impl AppState {
         let comment_runtime_config = Arc::new(RwLock::new(read_comment_runtime_config_from_env()));
         let api_behavior_runtime_config =
             Arc::new(RwLock::new(read_api_behavior_runtime_config_from_env()));
+        let compaction_runtime_config =
+            Arc::new(RwLock::new(read_compaction_runtime_config_from_env()));
         let comment_worker_tx = comment_worker::spawn_comment_worker(
             comment_store.clone(),
             CommentAiWorkerConfig::from_env(content_db_uri.to_string()),
@@ -204,6 +236,7 @@ impl AppState {
             music_store.clone(),
             music_wish_store.clone(),
             article_request_store.clone(),
+            compaction_runtime_config.clone(),
             shutdown_rx,
         );
 
@@ -217,6 +250,7 @@ impl AppState {
             view_analytics_config: Arc::new(RwLock::new(ViewAnalyticsRuntimeConfig::default())),
             comment_runtime_config,
             api_behavior_runtime_config,
+            compaction_runtime_config,
             comment_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             comment_worker_tx,
             admin_access,
@@ -306,6 +340,41 @@ fn read_api_behavior_runtime_config_from_env() -> ApiBehaviorRuntimeConfig {
     }
 }
 
+fn read_compaction_runtime_config_from_env() -> CompactionRuntimeConfig {
+    let enabled = parse_bool_env("TABLE_COMPACT_ENABLED", DEFAULT_TABLE_COMPACT_ENABLED);
+    let scan_interval_seconds = env::var("TABLE_COMPACT_SCAN_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| {
+            *value >= MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS
+                && *value <= MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS
+        })
+        .unwrap_or(DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS);
+    let fragment_threshold = env::var("TABLE_COMPACT_FRAGMENT_THRESHOLD")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| {
+            *value >= MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD
+                && *value <= MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD
+        })
+        .unwrap_or(DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD);
+    let prune_older_than_hours = env::var("TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| {
+            *value >= MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS
+                && *value <= MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS
+        })
+        .unwrap_or(DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS);
+
+    CompactionRuntimeConfig {
+        enabled,
+        scan_interval_seconds,
+        fragment_threshold,
+        prune_older_than_hours,
+    }
+}
+
 /// Buffered writer for api_behavior_events.
 ///
 /// Events are collected via an mpsc channel and flushed as a single batch
@@ -391,24 +460,15 @@ fn spawn_behavior_event_flusher(
     tx
 }
 
-const DEFAULT_SCAN_INTERVAL_SECS: u64 = 180;
-
 fn spawn_table_compactor(
     store: Arc<StaticFlowDataStore>,
     comment_store: Arc<CommentDataStore>,
     music_store: Arc<MusicDataStore>,
     music_wish_store: Arc<MusicWishStore>,
     article_request_store: Arc<ArticleRequestStore>,
+    compaction_runtime_config: Arc<RwLock<CompactionRuntimeConfig>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let interval_secs = env_u64("TABLE_COMPACT_SCAN_INTERVAL_SECS", DEFAULT_SCAN_INTERVAL_SECS, 30);
-    let threshold = env_usize("TABLE_COMPACT_FRAGMENT_THRESHOLD", 10, 2);
-    let config = CompactConfig {
-        fragment_threshold: threshold,
-        prune_older_than_hours: 2,
-        skip_tables: HashSet::new(),
-    };
-
     tokio::spawn(async move {
         // Startup delay to avoid racing with schema migrations
         tokio::select! {
@@ -421,14 +481,30 @@ fn spawn_table_compactor(
             }
             _ = tokio::time::sleep(Duration::from_secs(60)) => {}
         }
+
+        let startup_config = compaction_runtime_config.read().await.clone();
         tracing::info!(
-            "table compactor started (scan_interval={interval_secs}s, threshold={threshold})"
+            "table compactor started (enabled={}, scan_interval={}s, threshold={}, \
+             prune_older_than_hours={})",
+            startup_config.enabled,
+            startup_config.scan_interval_seconds,
+            startup_config.fragment_threshold,
+            startup_config.prune_older_than_hours
         );
 
         loop {
             let started = Instant::now();
+            let runtime = compaction_runtime_config.read().await.clone();
+            let config = CompactConfig {
+                enabled: runtime.enabled,
+                fragment_threshold: runtime.fragment_threshold,
+                prune_older_than_hours: runtime.prune_older_than_hours,
+                skip_tables: HashSet::new(),
+            };
 
+            let mut total_tables = 0usize;
             let mut total_compacted = 0usize;
+            let mut total_failed = 0usize;
 
             // Scan each DB group sequentially
             for (db_label, conn, tables) in [
@@ -443,26 +519,50 @@ fn spawn_table_compactor(
                 ("music", music_wish_store.connection(), music_wish_store::MUSIC_WISH_TABLE_NAMES),
             ] {
                 let results = scan_and_compact_tables(conn, tables, &config).await;
-                for r in &results {
-                    if let Some(err) = &r.error {
-                        tracing::warn!("compactor {db_label}/{}: {err}", r.table);
-                    } else if r.compacted {
-                        tracing::info!(
-                            "compacted {db_label}/{} (had {} small fragments)",
-                            r.table,
-                            r.small_fragments
-                        );
+                for r in results {
+                    total_tables += 1;
+                    if r.compacted {
                         total_compacted += 1;
+                    }
+
+                    if let Some(err) = r.error {
+                        total_failed += 1;
+                        tracing::warn!(
+                            "compactor {db_label}/{} action={} compacted={} small_fragments={} \
+                             elapsed_ms={} error={}",
+                            r.table,
+                            r.action.as_str(),
+                            r.compacted,
+                            r.small_fragments,
+                            r.elapsed_ms,
+                            err
+                        );
+                    } else {
+                        tracing::info!(
+                            "compactor {db_label}/{} action={} compacted={} small_fragments={} \
+                             elapsed_ms={}",
+                            r.table,
+                            r.action.as_str(),
+                            r.compacted,
+                            r.small_fragments,
+                            r.elapsed_ms
+                        );
                     }
                 }
             }
 
-            if total_compacted > 0 {
-                tracing::info!(
-                    "compactor cycle: {total_compacted} tables compacted in {:.1}s",
-                    started.elapsed().as_secs_f64()
-                );
-            }
+            tracing::info!(
+                "compactor cycle done: tables={} compacted={} failed={} elapsed_ms={} enabled={} \
+                 scan_interval={}s threshold={} prune_older_than_hours={}",
+                total_tables,
+                total_compacted,
+                total_failed,
+                started.elapsed().as_millis(),
+                runtime.enabled,
+                runtime.scan_interval_seconds,
+                runtime.fragment_threshold,
+                runtime.prune_older_than_hours
+            );
 
             // Wait for next cycle or shutdown
             tokio::select! {
@@ -473,24 +573,8 @@ fn spawn_table_compactor(
                         return;
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_secs(interval_secs)) => {}
+                _ = tokio::time::sleep(Duration::from_secs(runtime.scan_interval_seconds)) => {}
             }
         }
     });
-}
-
-fn env_u64(key: &str, default: u64, min: u64) -> u64 {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|v| *v >= min)
-        .unwrap_or(default)
-}
-
-fn env_usize(key: &str, default: usize, min: usize) -> usize {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v >= min)
-        .unwrap_or(default)
 }

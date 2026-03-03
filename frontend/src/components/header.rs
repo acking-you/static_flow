@@ -13,21 +13,6 @@ use crate::{
     router::Route,
 };
 
-/// SPA-navigate to `href` via pushState + popstate (no full page reload).
-fn spa_search_click(href: String) -> Callback<MouseEvent> {
-    Callback::from(move |e: MouseEvent| {
-        e.prevent_default();
-        if let Some(window) = web_sys::window() {
-            if let Ok(history) = window.history() {
-                let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&href));
-                if let Ok(event) = web_sys::Event::new("popstate") {
-                    let _ = window.dispatch_event(&event);
-                }
-            }
-        }
-    })
-}
-
 #[function_component(Header)]
 pub fn header() -> Html {
     let mobile_menu_open = use_state(|| false);
@@ -215,7 +200,6 @@ pub fn header() -> Html {
         (t::NAV_CATEGORIES, Route::Categories, "fa-folder-open"),
         (t::NAV_MUSIC, Route::MediaAudio, "fa-music"),
     ];
-    let image_search_href = crate::config::route_path("/search?mode=image");
 
     let mobile_search_input = on_search_input.clone();
     let mobile_search_keypress = {
@@ -321,10 +305,9 @@ pub fn header() -> Html {
                                     </Link<Route>>
                                 }
                             }) }
-                            <a
-                                href={image_search_href.clone()}
-                                onclick={spa_search_click(image_search_href.clone())}
-                                class={classes!(
+                            <Link<Route>
+                                to={Route::MediaImage}
+                                classes={classes!(
                                     "nav-icon-btn",
                                     "w-10",
                                     "h-10",
@@ -340,8 +323,8 @@ pub fn header() -> Html {
                                     "hover:scale-110"
                                 )}
                             >
-                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_SEARCH_TITLE}></i>
-                            </a>
+                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_LIBRARY_TITLE}></i>
+                            </Link<Route>>
                         </nav>
 
                         // Search
@@ -574,10 +557,9 @@ pub fn header() -> Html {
                             }
                         }) }
                         <div onclick={close_mobile_menu.clone()}>
-                            <a
-                                href={image_search_href.clone()}
-                                onclick={spa_search_click(image_search_href.clone())}
-                                class={classes!(
+                            <Link<Route>
+                                to={Route::MediaImage}
+                                classes={classes!(
                                     "mobile-nav-item",
                                     "flex",
                                     "items-center",
@@ -593,8 +575,8 @@ pub fn header() -> Html {
                                 )}
                             >
                                 <i class={classes!("fas", "fa-image", "text-[var(--muted)]", "w-5")}></i>
-                                <span class="font-medium">{ t::IMAGE_SEARCH_TITLE }</span>
-                            </a>
+                                <span class="font-medium">{ t::IMAGE_LIBRARY_TITLE }</span>
+                            </Link<Route>>
                         </div>
                     </nav>
 
@@ -631,6 +613,7 @@ fn build_search_url(
 
     let is_music_context =
         matches!(route, Some(Route::MediaAudio) | Some(Route::MusicPlayer { .. }));
+    let is_image_context = matches!(route, Some(Route::MediaImage));
 
     if matches!(route, Some(Route::Search)) {
         if let Some(current) = location.and_then(|loc| loc.query::<HeaderSearchQuery>().ok()) {
@@ -674,6 +657,8 @@ fn build_search_url(
         }
     } else if is_music_context {
         params.push("mode=music".to_string());
+    } else if is_image_context {
+        params.push("mode=image".to_string());
     }
     crate::config::route_path(&format!("/search?{}", params.join("&")))
 }

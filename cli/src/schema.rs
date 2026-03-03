@@ -38,7 +38,7 @@ pub struct ImageRecord {
     pub filename: String,
     pub data: Vec<u8>,
     pub thumbnail: Option<Vec<u8>>,
-    pub vector: Vec<f32>,
+    pub vector: Option<Vec<f32>>,
     pub metadata: String,
     pub created_at: i64,
 }
@@ -105,7 +105,7 @@ pub fn image_schema() -> Arc<Schema> {
                 Arc::new(Field::new("item", DataType::Float32, false)),
                 IMAGE_VECTOR_DIM as i32,
             ),
-            false,
+            true,
         ),
         Field::new("metadata", DataType::Utf8, false),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
@@ -272,17 +272,27 @@ pub fn build_image_batch(records: &[ImageRecord]) -> Result<RecordBatch> {
             thumb_builder.append_null();
         }
 
-        if record.vector.len() != IMAGE_VECTOR_DIM {
-            anyhow::bail!(
-                "image vector length {} does not match {}",
-                record.vector.len(),
-                IMAGE_VECTOR_DIM
-            );
+        match &record.vector {
+            Some(vector) => {
+                if vector.len() != IMAGE_VECTOR_DIM {
+                    anyhow::bail!(
+                        "image vector length {} does not match {}",
+                        vector.len(),
+                        IMAGE_VECTOR_DIM
+                    );
+                }
+                for value in vector {
+                    vector_builder.values().append_value(*value);
+                }
+                vector_builder.append(true);
+            },
+            None => {
+                for _ in 0..IMAGE_VECTOR_DIM {
+                    vector_builder.values().append_value(0.0);
+                }
+                vector_builder.append(false);
+            },
         }
-        for value in &record.vector {
-            vector_builder.values().append_value(*value);
-        }
-        vector_builder.append(true);
 
         metadata_builder.append_value(&record.metadata);
         created_at_builder.append_value(record.created_at);

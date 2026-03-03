@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     convert::Infallible,
+    hash::{Hash, Hasher},
     net::IpAddr,
     time::{Duration, Instant},
 };
@@ -52,12 +53,18 @@ use crate::{
     email::{normalize_frontend_page_url_input, normalize_requester_email_input},
     memory_profiler::{self, MemoryProfilerConfigUpdate},
     state::{
-        ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, MusicRuntimeConfig,
-        ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
+        ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, CompactionRuntimeConfig,
+        MusicRuntimeConfig, ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
         MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS,
         MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_LIST_LIMIT,
-        MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS, MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS,
-        MAX_CONFIGURABLE_VIEW_TREND_DAYS,
+        MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS,
+        MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD,
+        MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
+        MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS,
+        MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS, MAX_CONFIGURABLE_VIEW_TREND_DAYS,
+        MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD,
+        MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
+        MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS,
     },
 };
 
@@ -86,6 +93,12 @@ pub struct ImageListQuery {
     pub limit: Option<usize>,
     #[serde(default)]
     pub offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImageRandomQuery {
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,6 +312,37 @@ pub struct UpdateApiBehaviorConfigRequest {
     pub default_days: Option<usize>,
     #[serde(default)]
     pub max_days: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CompactionRuntimeConfigResponse {
+    pub enabled: bool,
+    pub scan_interval_seconds: u64,
+    pub fragment_threshold: usize,
+    pub prune_older_than_hours: i64,
+}
+
+impl From<CompactionRuntimeConfig> for CompactionRuntimeConfigResponse {
+    fn from(value: CompactionRuntimeConfig) -> Self {
+        Self {
+            enabled: value.enabled,
+            scan_interval_seconds: value.scan_interval_seconds,
+            fragment_threshold: value.fragment_threshold,
+            prune_older_than_hours: value.prune_older_than_hours,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateCompactionRuntimeConfigRequest {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub scan_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub fragment_threshold: Option<usize>,
+    #[serde(default)]
+    pub prune_older_than_hours: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -835,6 +879,30 @@ pub async fn update_api_behavior_config(
     let next = apply_api_behavior_config_update(current, request)?;
     {
         let mut writer = state.api_behavior_runtime_config.write().await;
+        *writer = next.clone();
+    }
+    Ok(Json(next.into()))
+}
+
+pub async fn get_compaction_runtime_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CompactionRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let config = state.compaction_runtime_config.read().await.clone();
+    Ok(Json(config.into()))
+}
+
+pub async fn update_compaction_runtime_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateCompactionRuntimeConfigRequest>,
+) -> Result<Json<CompactionRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let current = state.compaction_runtime_config.read().await.clone();
+    let next = apply_compaction_runtime_config_update(current, request)?;
+    {
+        let mut writer = state.compaction_runtime_config.write().await;
         *writer = next.clone();
     }
     Ok(Json(next.into()))
@@ -2416,6 +2484,69 @@ pub async fn list_images(
     }))
 }
 
+pub async fn random_images(
+    State(state): State<AppState>,
+    Query(query): Query<ImageRandomQuery>,
+) -> Result<Json<ImageListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = normalize_limit(query.limit).unwrap_or(10).min(100);
+    if limit == 0 {
+        return Ok(Json(ImageListResponse {
+            total: 0,
+            offset: 0,
+            limit: 0,
+            has_more: false,
+            images: vec![],
+        }));
+    }
+
+    let (all_images, total, _) = state
+        .store
+        .list_images_paged(None, 0)
+        .await
+        .map_err(|e| internal_error("Failed to fetch random images", e))?;
+
+    if all_images.is_empty() {
+        return Ok(Json(ImageListResponse {
+            total,
+            offset: 0,
+            limit: 0,
+            has_more: false,
+            images: vec![],
+        }));
+    }
+
+    let now = chrono::Utc::now();
+    let seed = now
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| now.timestamp_millis().saturating_mul(1_000_000))
+        .unsigned_abs();
+
+    let mut scored = all_images
+        .into_iter()
+        .map(|image| {
+            let mut hasher = DefaultHasher::new();
+            seed.hash(&mut hasher);
+            image.id.hash(&mut hasher);
+            (hasher.finish(), image)
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by_key(|(score, _)| *score);
+
+    let images = scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, image)| image)
+        .collect::<Vec<_>>();
+
+    Ok(Json(ImageListResponse {
+        total,
+        offset: 0,
+        limit: resolve_page_limit(Some(limit), images.len()),
+        has_more: false,
+        images,
+    }))
+}
+
 pub async fn search_images(
     State(state): State<AppState>,
     Query(query): Query<ImageSearchQuery>,
@@ -3347,6 +3478,49 @@ fn apply_api_behavior_config_update(
 
     if next.default_days > next.max_days {
         return Err(bad_request("`default_days` must be less than or equal to `max_days`"));
+    }
+
+    Ok(next)
+}
+
+fn apply_compaction_runtime_config_update(
+    current: CompactionRuntimeConfig,
+    request: UpdateCompactionRuntimeConfigRequest,
+) -> Result<CompactionRuntimeConfig, (StatusCode, Json<ErrorResponse>)> {
+    let mut next = current;
+
+    if let Some(value) = request.enabled {
+        next.enabled = value;
+    }
+
+    if let Some(value) = request.scan_interval_seconds {
+        if !(MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS
+            ..=MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS)
+            .contains(&value)
+        {
+            return Err(bad_request("`scan_interval_seconds` must be between 30 and 86400"));
+        }
+        next.scan_interval_seconds = value;
+    }
+
+    if let Some(value) = request.fragment_threshold {
+        if !(MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD
+            ..=MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD)
+            .contains(&value)
+        {
+            return Err(bad_request("`fragment_threshold` must be between 2 and 10000"));
+        }
+        next.fragment_threshold = value;
+    }
+
+    if let Some(value) = request.prune_older_than_hours {
+        if !(MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS
+            ..=MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS)
+            .contains(&value)
+        {
+            return Err(bad_request("`prune_older_than_hours` must be between 1 and 8760"));
+        }
+        next.prune_older_than_hours = value;
     }
 
     Ok(next)
@@ -4794,12 +4968,15 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     use super::{
-        apply_api_behavior_config_update, apply_view_analytics_config_update,
-        build_submit_rate_limit_key, extract_client_ip, is_local_host_header,
-        normalize_public_nickname_input, parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
+        apply_api_behavior_config_update, apply_compaction_runtime_config_update,
+        apply_view_analytics_config_update, build_submit_rate_limit_key, extract_client_ip,
+        is_local_host_header, normalize_public_nickname_input, parse_raw_markdown_lang,
+        UpdateApiBehaviorConfigRequest, UpdateCompactionRuntimeConfigRequest,
         UpdateViewAnalyticsConfigRequest,
     };
-    use crate::state::{ApiBehaviorRuntimeConfig, ViewAnalyticsRuntimeConfig};
+    use crate::state::{
+        ApiBehaviorRuntimeConfig, CompactionRuntimeConfig, ViewAnalyticsRuntimeConfig,
+    };
 
     #[test]
     fn extract_client_ip_prefers_x_forwarded_for() {
@@ -4946,6 +5123,50 @@ mod tests {
             },
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_compaction_runtime_config_rejects_invalid_ranges() {
+        let result = apply_compaction_runtime_config_update(
+            CompactionRuntimeConfig::default(),
+            UpdateCompactionRuntimeConfigRequest {
+                enabled: None,
+                scan_interval_seconds: Some(5),
+                fragment_threshold: None,
+                prune_older_than_hours: None,
+            },
+        );
+        assert!(result.is_err());
+
+        let result = apply_compaction_runtime_config_update(
+            CompactionRuntimeConfig::default(),
+            UpdateCompactionRuntimeConfigRequest {
+                enabled: None,
+                scan_interval_seconds: Some(60),
+                fragment_threshold: Some(1),
+                prune_older_than_hours: None,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_compaction_runtime_config_applies_partial_update() {
+        let config = apply_compaction_runtime_config_update(
+            CompactionRuntimeConfig::default(),
+            UpdateCompactionRuntimeConfigRequest {
+                enabled: Some(false),
+                scan_interval_seconds: Some(300),
+                fragment_threshold: None,
+                prune_older_than_hours: Some(6),
+            },
+        )
+        .expect("should apply partial compaction config update");
+
+        assert!(!config.enabled);
+        assert_eq!(config.scan_interval_seconds, 300);
+        assert_eq!(config.fragment_threshold, 10);
+        assert_eq!(config.prune_older_than_hours, 6);
     }
 
     #[test]

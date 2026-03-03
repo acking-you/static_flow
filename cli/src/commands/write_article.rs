@@ -259,16 +259,26 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         } else {
             match language {
                 TextEmbeddingLanguage::English => {
-                    vector_en = Some(embed_text_with_language(
-                        &combined_text,
-                        TextEmbeddingLanguage::English,
-                    ));
+                    match embed_text_with_language(&combined_text, TextEmbeddingLanguage::English) {
+                        Ok(vector) => vector_en = Some(vector),
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to embed article text (id={id}, lang=en); writing NULL \
+                                 vector_en: {err}"
+                            );
+                        },
+                    }
                 },
                 TextEmbeddingLanguage::Chinese => {
-                    vector_zh = Some(embed_text_with_language(
-                        &combined_text,
-                        TextEmbeddingLanguage::Chinese,
-                    ));
+                    match embed_text_with_language(&combined_text, TextEmbeddingLanguage::Chinese) {
+                        Ok(vector) => vector_zh = Some(vector),
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to embed article text (id={id}, lang=zh); writing NULL \
+                                 vector_zh: {err}"
+                            );
+                        },
+                    }
                 },
             }
         }
@@ -727,7 +737,18 @@ fn build_image_record(path: &Path, config: &ImageImportConfig) -> Result<ImageRe
         } else {
             None
         };
-        (embed_image_bytes(&rasterized.png_bytes), thumb)
+        let vector = match embed_image_bytes(&rasterized.png_bytes) {
+            Ok(vector) => Some(vector),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to embed image {}; writing NULL vector: {}",
+                    path.display(),
+                    err
+                );
+                None
+            },
+        };
+        (vector, thumb)
     } else {
         match image::load_from_memory(&bytes) {
             Ok(img) => {
@@ -739,9 +760,33 @@ fn build_image_record(path: &Path, config: &ImageImportConfig) -> Result<ImageRe
                 } else {
                     None
                 };
-                (embed_image_bytes(&bytes), thumb)
+                let vector = match embed_image_bytes(&bytes) {
+                    Ok(vector) => Some(vector),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to embed image {}; writing NULL vector: {}",
+                            path.display(),
+                            err
+                        );
+                        None
+                    },
+                };
+                (vector, thumb)
             },
-            Err(_) => (embed_image_bytes(&bytes), None),
+            Err(_) => {
+                let vector = match embed_image_bytes(&bytes) {
+                    Ok(vector) => Some(vector),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to embed undecodable image {}; writing NULL vector: {}",
+                            path.display(),
+                            err
+                        );
+                        None
+                    },
+                };
+                (vector, None)
+            },
         }
     };
 

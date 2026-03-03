@@ -8,13 +8,18 @@ use arrow_array::{
 use arrow_schema::{DataType, TimeUnit};
 use chrono::Duration as ChronoDuration;
 use futures::TryStreamExt;
+use lance::dataset::ColumnAlteration;
 use lancedb::{
     query::{ExecutableQuery, QueryBase, Select},
     table::{CompactionOptions, OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
-use static_flow_shared::embedding::{
-    embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage,
+use static_flow_shared::{
+    embedding::{embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage},
+    image_vector_maintenance::{
+        reembed_image_vectors as reembed_image_vectors_in_table, ImageReembedOptions,
+        ImageReembedScope,
+    },
 };
 
 use crate::{
@@ -530,7 +535,17 @@ pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: b
                 filename,
                 data: bytes,
                 thumbnail,
-                vector: embed_image_bytes(&rasterized.png_bytes),
+                vector: match embed_image_bytes(&rasterized.png_bytes) {
+                    Ok(vector) => Some(vector),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to embed rasterized SVG {}; writing NULL vector: {}",
+                            ids.value(row),
+                            err
+                        );
+                        None
+                    },
+                },
                 metadata: metadata_value.to_string(),
                 created_at: created.value(row),
             });
@@ -569,6 +584,90 @@ pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: b
         candidates,
         scanned,
         skipped_rasterize
+    );
+    Ok(())
+}
+
+pub async fn migrate_images_vector_nullable(db_path: &Path, dry_run: bool) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, "images").await?;
+    let schema = table.schema().await?;
+    let field = schema
+        .field_with_name("vector")
+        .context("`images` table missing required `vector` column")?;
+
+    if !matches!(field.data_type(), DataType::FixedSizeList(_, _)) {
+        bail!(
+            "`images.vector` has unsupported type `{}` (expected fixed_size_list<float32, {}>)",
+            field.data_type(),
+            static_flow_shared::embedding::IMAGE_VECTOR_DIM
+        );
+    }
+
+    if field.is_nullable() {
+        tracing::info!("`images.vector` is already nullable; no migration needed.");
+        return Ok(());
+    }
+
+    let before_version = table.version().await?;
+    if dry_run {
+        tracing::info!(
+            "Dry run: `images.vector` would be migrated to nullable=true (current version={}).",
+            before_version
+        );
+        return Ok(());
+    }
+
+    let _ = table
+        .alter_columns(&[ColumnAlteration::new("vector".into()).set_nullable(true)])
+        .await
+        .context("failed to alter `images.vector` nullability")?;
+
+    let after_version = table.version().await?;
+    tracing::info!(
+        "Migrated `images.vector` to nullable=true (version {} -> {}).",
+        before_version,
+        after_version
+    );
+    Ok(())
+}
+
+pub async fn reembed_image_vectors(
+    db_path: &Path,
+    limit: Option<usize>,
+    dry_run: bool,
+    all: bool,
+    batch_size: usize,
+) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, "images").await?;
+
+    let scope = if all { ImageReembedScope::All } else { ImageReembedScope::MissingOnly };
+    let stats = reembed_image_vectors_in_table(&table, ImageReembedOptions {
+        scope,
+        limit,
+        dry_run,
+        batch_size,
+    })
+    .await?;
+
+    if !dry_run && stats.updated_rows > 0 {
+        if let Err(err) = ensure_vector_index(&table, "vector").await {
+            tracing::warn!("Failed to ensure vector index after image re-embed: {err}");
+        }
+    }
+
+    tracing::info!(
+        "Image vector re-embed completed: scope={:?}, dry_run={}, scanned={}, embedded_ok={}, \
+         embedded_failed={}, update_candidates={}, updated={}, skipped_failed={}",
+        scope,
+        dry_run,
+        stats.scanned_rows,
+        stats.embedded_rows,
+        stats.embedding_failed_rows,
+        stats.update_candidates,
+        stats.updated_rows,
+        stats.skipped_failed_rows
     );
     Ok(())
 }
@@ -652,16 +751,35 @@ pub async fn backfill_article_vectors(
             }
 
             if should_fill_vector_zh {
-                let vector = embed_text_with_language(content, TextEmbeddingLanguage::Chinese);
-                updates_vector_zh.push((id.clone(), vector));
-                filled_vector_zh += 1;
+                match embed_text_with_language(content, TextEmbeddingLanguage::Chinese) {
+                    Ok(vector) => {
+                        updates_vector_zh.push((id.clone(), vector));
+                        filled_vector_zh += 1;
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to embed article vector_zh for id `{}`; leaving NULL: {}",
+                            id,
+                            err
+                        );
+                    },
+                }
             }
             if should_fill_vector_en {
                 if let Some(content_en) = &content_en {
-                    let vector =
-                        embed_text_with_language(content_en, TextEmbeddingLanguage::English);
-                    updates_vector_en.push((id.clone(), vector));
-                    filled_vector_en += 1;
+                    match embed_text_with_language(content_en, TextEmbeddingLanguage::English) {
+                        Ok(vector) => {
+                            updates_vector_en.push((id.clone(), vector));
+                            filled_vector_en += 1;
+                        },
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to embed article vector_en for id `{}`; leaving NULL: {}",
+                                id,
+                                err
+                            );
+                        },
+                    }
                 }
             }
 

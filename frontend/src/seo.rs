@@ -300,6 +300,7 @@ fn route_path_for(route: &Route) -> String {
         Route::NotFound => config::route_path("/404"),
         Route::MediaVideo => config::route_path("/media/video"),
         Route::MediaAudio => config::route_path("/media/audio"),
+        Route::MediaImage => config::route_path("/media/image"),
         Route::MusicPlayer {
             id,
         } => config::route_path(&format!("/media/audio/{}", urlencoding::encode(id))),
@@ -501,6 +502,18 @@ pub fn apply_route_seo(route: Option<&Route>) {
                 &canonical_url,
                 "website",
                 "noindex,nofollow,noarchive",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::MediaImage => {
+            apply_common_seo(
+                "Image Library · StaticFlow",
+                "图片库 — 浏览与检索本地图片资源。",
+                &canonical_url,
+                "website",
+                "noindex,nofollow",
                 "zh-CN",
                 &og_image,
             );

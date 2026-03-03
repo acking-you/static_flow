@@ -6,8 +6,6 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(not(target_arch = "wasm32"))]
 use fastembed::{ImageEmbedding, ImageEmbeddingModel, ImageInitOptions};
 
-use super::utils::normalize_vector;
-
 /// Image embedding models backed by fastembed.
 ///
 /// Variants map directly to `fastembed::ImageEmbeddingModel`.
@@ -56,71 +54,70 @@ pub const DEFAULT_IMAGE_MODEL: ImageEmbeddingModelChoice = ImageEmbeddingModelCh
 pub const IMAGE_VECTOR_DIM: usize = DEFAULT_IMAGE_MODEL.dim();
 
 #[cfg(not(target_arch = "wasm32"))]
-static FASTEMBED_IMAGE_MODEL: OnceLock<
-    Mutex<HashMap<ImageEmbeddingModelChoice, Option<ImageEmbedding>>>,
-> = OnceLock::new();
+static FASTEMBED_IMAGE_MODEL: OnceLock<Mutex<HashMap<ImageEmbeddingModelChoice, ImageEmbedding>>> =
+    OnceLock::new();
 
 /// Generate a semantic embedding for an image (bytes should be an encoded
 /// image).
 ///
 /// Use `embed_image_bytes_with_model` if you need a specific vision model.
-pub fn embed_image_bytes(bytes: &[u8]) -> Vec<f32> {
+pub fn embed_image_bytes(bytes: &[u8]) -> anyhow::Result<Vec<f32>> {
     embed_image_bytes_with_model(bytes, DEFAULT_IMAGE_MODEL)
 }
 
 /// Generate a semantic embedding for an image using a specific fastembed vision
 /// model.
-pub fn embed_image_bytes_with_model(bytes: &[u8], model: ImageEmbeddingModelChoice) -> Vec<f32> {
+pub fn embed_image_bytes_with_model(
+    bytes: &[u8],
+    model: ImageEmbeddingModelChoice,
+) -> anyhow::Result<Vec<f32>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(vector) = fastembed_image_embedding(bytes, model) {
-            return vector;
-        }
+        fastembed_image_embedding(bytes, model)
     }
 
-    hashed_image_embedding(bytes, model.dim())
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = bytes;
+        let _ = model;
+        anyhow::bail!("image embedding is not supported on wasm32")
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fastembed_image_embedding(bytes: &[u8], model: ImageEmbeddingModelChoice) -> Option<Vec<f32>> {
+fn fastembed_image_embedding(
+    bytes: &[u8],
+    model: ImageEmbeddingModelChoice,
+) -> anyhow::Result<Vec<f32>> {
     let lock = FASTEMBED_IMAGE_MODEL.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = lock.lock().ok()?;
+    let mut guard = lock
+        .lock()
+        .map_err(|err| anyhow::anyhow!("image embedding mutex poisoned: {err}"))?;
 
     if let std::collections::hash_map::Entry::Vacant(entry) = guard.entry(model) {
         // Initialize the model once to avoid repeated downloads and warmups.
         let options = ImageInitOptions::new(model.to_fastembed());
-        match ImageEmbedding::try_new(options) {
-            Ok(instance) => {
-                entry.insert(Some(instance));
-            },
-            Err(err) => {
-                tracing::warn!("fastembed image init failed, using hash embedding fallback: {err}");
-                entry.insert(None);
-                return None;
-            },
-        }
+        let instance = ImageEmbedding::try_new(options).map_err(|err| {
+            anyhow::anyhow!("failed to initialize image embedding model {:?}: {err}", model)
+        })?;
+        entry.insert(instance);
     }
 
-    let instance = guard.get_mut(&model)?.as_mut()?;
-    match instance.embed_bytes(&[bytes], None) {
-        Ok(mut embeddings) => embeddings.pop(),
-        Err(err) => {
-            tracing::warn!(
-                "fastembed image embedding failed, using hash embedding fallback: {err}"
-            );
-            None
-        },
-    }
-}
+    let instance = guard
+        .get_mut(&model)
+        .ok_or_else(|| anyhow::anyhow!("missing cached image embedding model: {:?}", model))?;
 
-fn hashed_image_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
-    let mut vector = vec![0.0f32; dim];
-    for (idx, byte) in bytes.iter().enumerate() {
-        let bucket = (idx * 31 + (*byte as usize)) % dim;
-        vector[bucket] += 1.0;
-    }
-    normalize_vector(&mut vector);
-    vector
+    let mut embeddings = instance.embed_bytes(&[bytes], None).map_err(|err| {
+        anyhow::anyhow!(
+            "image embedding failed for model {:?}; input bytes={}: {err}",
+            model,
+            bytes.len()
+        )
+    })?;
+
+    embeddings.pop().ok_or_else(|| {
+        anyhow::anyhow!("image embedding model {:?} returned empty embedding result", model)
+    })
 }
 
 #[cfg(test)]
@@ -136,15 +133,8 @@ mod tests {
     ];
 
     #[test]
-    fn image_embedding_is_deterministic() {
-        let first = hashed_image_embedding(TEST_PNG_BYTES, IMAGE_VECTOR_DIM);
-        let second = hashed_image_embedding(TEST_PNG_BYTES, IMAGE_VECTOR_DIM);
-        assert_eq!(first, second);
-    }
-
-    #[test]
     fn embed_image_bytes_has_expected_shape() {
-        let vector = embed_image_bytes(TEST_PNG_BYTES);
+        let vector = embed_image_bytes(TEST_PNG_BYTES).expect("embed image");
         assert_eq!(vector.len(), IMAGE_VECTOR_DIM);
         assert!(vector.iter().any(|v| *v != 0.0));
         assert!(vector.iter().all(|v| v.is_finite()));
@@ -154,7 +144,7 @@ mod tests {
     fn fastembed_image_smoke_if_available() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(vector) = fastembed_image_embedding(TEST_PNG_BYTES, DEFAULT_IMAGE_MODEL) {
+            if let Ok(vector) = fastembed_image_embedding(TEST_PNG_BYTES, DEFAULT_IMAGE_MODEL) {
                 assert_eq!(vector.len(), IMAGE_VECTOR_DIM);
                 assert!(vector.iter().all(|v| v.is_finite()));
                 assert!(vector.iter().any(|v| *v != 0.0));

@@ -1,4 +1,5 @@
 use axum::{
+    extract::OriginalUri,
     http::{HeaderValue, Method},
     middleware,
     response::{Html, IntoResponse},
@@ -65,6 +66,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/stats", get(handlers::get_stats))
         .route("/api/search", get(handlers::search_articles))
         .route("/api/semantic-search", get(handlers::semantic_search))
+        .route("/api/images/random", get(handlers::random_images))
         .route("/api/images/:filename", get(handlers::serve_image))
         .route("/api/images", get(handlers::list_images))
         .route("/api/image-search", get(handlers::search_images))
@@ -98,6 +100,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/api-behavior-config",
             get(handlers::get_api_behavior_config).post(handlers::update_api_behavior_config),
+        )
+        .route(
+            "/admin/compaction-config",
+            get(handlers::get_compaction_runtime_config).post(handlers::update_compaction_runtime_config),
         )
         .route("/admin/api-behavior/overview", get(handlers::admin_api_behavior_overview))
         .route("/admin/api-behavior/events", get(handlers::admin_list_api_behavior_events))
@@ -236,8 +242,18 @@ pub fn create_router(state: AppState) -> Router {
         std::env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "../frontend/dist".to_string());
     let spa_fallback = ServeDir::new(&frontend_dist_dir);
 
-    let spa_index_fallback =
-        move || async move { Html(spa_state.index_html_template.as_ref().clone()).into_response() };
+    let spa_index_fallback = move |OriginalUri(uri): OriginalUri| {
+        let spa_state = spa_state.clone();
+        async move {
+            let path_and_query = uri
+                .path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/");
+            let html =
+                seo::inject_spa_route_seo(spa_state.index_html_template.as_ref(), path_and_query);
+            Html(html).into_response()
+        }
+    };
 
     // Merge: API first, then SEO, then static files, then SPA index fallback
     api_router

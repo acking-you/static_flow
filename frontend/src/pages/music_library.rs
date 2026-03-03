@@ -8,7 +8,7 @@ use crate::{
         image_with_loading::ImageWithLoading,
         pagination::Pagination,
     },
-    i18n::current::music_wish as wish_t,
+    i18n::current::{header as header_t, music_wish as wish_t},
     music_context::{MusicAction, MusicPlayerContext},
     router::Route,
 };
@@ -583,6 +583,13 @@ pub fn music_library_page() -> Html {
                         {"Refresh Random"}
                     </button>
                 }
+                <Link<Route>
+                    to={Route::MediaImage}
+                    classes="px-3 py-2 rounded-lg text-xs font-medium bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-alt)] transition-colors no-underline"
+                >
+                    <i class="fas fa-image mr-1"></i>
+                    { header_t::IMAGE_LIBRARY_TITLE }
+                </Link<Route>>
             </div>
 
             // Hero search box

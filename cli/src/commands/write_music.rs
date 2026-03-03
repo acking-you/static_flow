@@ -84,14 +84,35 @@ pub async fn run(db_path: &Path, file: &Path, opts: WriteMusicOptions) -> Result
 
     // Generate vector embeddings for semantic search
     let lang = detect_language(&searchable_text);
-    let primary_vector = embed_text_with_language(&searchable_text, lang);
+    let primary_vector = match embed_text_with_language(&searchable_text, lang) {
+        Ok(vector) => Some(vector),
+        Err(err) => {
+            tracing::warn!(
+                "failed to embed searchable_text with primary language {:?}; writing NULL vector: \
+                 {}",
+                lang,
+                err
+            );
+            None
+        },
+    };
     let (vector_en, vector_zh) = match lang {
         TextEmbeddingLanguage::Chinese => {
             let en_vector =
-                embed_text_with_language(&searchable_text, TextEmbeddingLanguage::English);
-            (Some(en_vector), Some(primary_vector))
+                match embed_text_with_language(&searchable_text, TextEmbeddingLanguage::English) {
+                    Ok(vector) => Some(vector),
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to embed searchable_text with English fallback; writing NULL \
+                             vector_en: {}",
+                            err
+                        );
+                        None
+                    },
+                };
+            (en_vector, primary_vector)
         },
-        TextEmbeddingLanguage::English => (Some(primary_vector), None),
+        TextEmbeddingLanguage::English => (primary_vector, None),
     };
 
     // Handle cover image: --cover-url takes priority, then --cover filename

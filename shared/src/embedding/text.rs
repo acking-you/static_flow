@@ -2,15 +2,9 @@
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-};
 
 #[cfg(not(target_arch = "wasm32"))]
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
-
-use super::utils::normalize_vector;
 
 /// Text embedding language selector.
 ///
@@ -99,26 +93,32 @@ static FASTEMBED_TEXT_MODEL: OnceLock<Mutex<HashMap<TextEmbeddingModel, TextEmbe
 ///
 /// Use `embed_text_with_language` or `embed_text_with_model` if you need a
 /// specific language or model.
-pub fn embed_text(text: &str) -> Vec<f32> {
+pub fn embed_text(text: &str) -> anyhow::Result<Vec<f32>> {
     embed_text_with_language(text, DEFAULT_TEXT_LANGUAGE)
 }
 
 /// Generate a semantic embedding for text using a language-specific default
 /// model.
-pub fn embed_text_with_language(text: &str, language: TextEmbeddingLanguage) -> Vec<f32> {
+pub fn embed_text_with_language(
+    text: &str,
+    language: TextEmbeddingLanguage,
+) -> anyhow::Result<Vec<f32>> {
     embed_text_with_model(text, language.default_model())
 }
 
 /// Generate a semantic embedding for text using an explicit model selection.
-pub fn embed_text_with_model(text: &str, model: TextEmbeddingModel) -> Vec<f32> {
+pub fn embed_text_with_model(text: &str, model: TextEmbeddingModel) -> anyhow::Result<Vec<f32>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(vector) = fastembed_embedding(text, model) {
-            return vector;
-        }
+        fastembed_embedding(text, model)
     }
 
-    hashed_embedding(text, model.dim())
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = text;
+        let _ = model;
+        anyhow::bail!("text embedding is not supported on wasm32")
+    }
 }
 
 /// Detect language with a lightweight heuristic.
@@ -149,70 +149,30 @@ fn is_cjk(ch: char) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fastembed_embedding(text: &str, model: TextEmbeddingModel) -> Option<Vec<f32>> {
+fn fastembed_embedding(text: &str, model: TextEmbeddingModel) -> anyhow::Result<Vec<f32>> {
     let lock = FASTEMBED_TEXT_MODEL.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = lock.lock().ok()?;
+    let mut guard = lock
+        .lock()
+        .map_err(|err| anyhow::anyhow!("text embedding mutex poisoned: {err}"))?;
 
     if let std::collections::hash_map::Entry::Vacant(entry) = guard.entry(model) {
         // Model initialization is expensive; cache the instance for reuse.
         let options = TextInitOptions::new(model.to_fastembed());
-        match TextEmbedding::try_new(options) {
-            Ok(instance) => {
-                entry.insert(instance);
-            },
-            Err(err) => {
-                tracing::warn!(
-                    "fastembed initialization failed, using hash embedding fallback: {err}"
-                );
-                return None;
-            },
-        }
+        let instance = TextEmbedding::try_new(options).map_err(|err| {
+            anyhow::anyhow!("failed to initialize text embedding model {:?}: {err}", model)
+        })?;
+        entry.insert(instance);
     }
 
-    let instance = guard.get_mut(&model)?;
-    match instance.embed(vec![text], None) {
-        Ok(mut embeddings) => embeddings.pop(),
-        Err(err) => {
-            tracing::warn!("fastembed embed failed, using hash embedding fallback: {err}");
-            None
-        },
-    }
-}
-
-fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
-    let mut vector = vec![0.0f32; dim];
-
-    for token in tokenize(text) {
-        let mut hasher = DefaultHasher::new();
-        token.hash(&mut hasher);
-        let index = (hasher.finish() as usize) % dim;
-        vector[index] += 1.0;
-    }
-
-    normalize_vector(&mut vector);
-    vector
-}
-
-fn tokenize(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-
-    for ch in text.chars() {
-        if ch.is_alphanumeric() {
-            for lower in ch.to_lowercase() {
-                current.push(lower);
-            }
-        } else if !current.is_empty() {
-            tokens.push(current.clone());
-            current.clear();
-        }
-    }
-
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    tokens
+    let instance = guard
+        .get_mut(&model)
+        .ok_or_else(|| anyhow::anyhow!("missing cached text embedding model: {:?}", model))?;
+    let mut embeddings = instance
+        .embed(vec![text], None)
+        .map_err(|err| anyhow::anyhow!("text embedding failed for model {:?}: {err}", model))?;
+    embeddings.pop().ok_or_else(|| {
+        anyhow::anyhow!("text embedding model {:?} returned empty embedding result", model)
+    })
 }
 
 #[cfg(test)]
@@ -220,15 +180,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hashed_embedding_is_deterministic() {
-        let first = hashed_embedding("hello world", TEXT_VECTOR_DIM_EN);
-        let second = hashed_embedding("hello world", TEXT_VECTOR_DIM_EN);
-        assert_eq!(first, second);
-    }
-
-    #[test]
     fn embed_text_has_expected_shape() {
-        let vector = embed_text("StaticFlow embeddings");
+        let vector = embed_text("StaticFlow embeddings").expect("embed text");
         assert_eq!(vector.len(), TEXT_VECTOR_DIM_EN);
         assert!(vector.iter().any(|v| *v != 0.0));
         assert!(vector.iter().all(|v| v.is_finite()));
@@ -236,7 +189,8 @@ mod tests {
 
     #[test]
     fn embed_text_with_language_matches_language_dim() {
-        let vector = embed_text_with_language("中文内容", TextEmbeddingLanguage::Chinese);
+        let vector = embed_text_with_language("中文内容", TextEmbeddingLanguage::Chinese)
+            .expect("embed text");
         let expected_dim = TextEmbeddingLanguage::Chinese.default_model().dim();
         assert_eq!(vector.len(), expected_dim);
         assert!(vector.iter().any(|v| *v != 0.0));
@@ -247,7 +201,7 @@ mod tests {
     fn fastembed_smoke_if_available() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(vector) = fastembed_embedding("fastembed smoke", DEFAULT_TEXT_MODEL) {
+            if let Ok(vector) = fastembed_embedding("fastembed smoke", DEFAULT_TEXT_MODEL) {
                 assert_eq!(vector.len(), TEXT_VECTOR_DIM_EN);
                 assert!(vector.iter().all(|v| v.is_finite()));
                 assert!(vector.iter().any(|v| *v != 0.0));

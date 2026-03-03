@@ -52,6 +52,7 @@ pub mod header {
     pub const NAV_MUSIC: &str = "音乐";
     pub const NAV_MAIN_ARIA: &str = "主导航";
     pub const IMAGE_SEARCH_TITLE: &str = "图片搜索";
+    pub const IMAGE_LIBRARY_TITLE: &str = "图片库";
     pub const SEARCH_ARIA: &str = "搜索";
     pub const CLEAR_ARIA: &str = "清空";
     pub const OPEN_MENU_ARIA: &str = "打开菜单";
@@ -65,6 +66,7 @@ pub mod home {
     pub const STATS_TAGS: &str = "标签";
     pub const STATS_CATEGORIES: &str = "分类";
     pub const STATS_MUSIC: &str = "音乐库";
+    pub const STATS_IMAGES: &str = "图片库";
 
     pub const TERMINAL_TITLE: &str = "system_info.sh";
     pub const CMD_SHOW_AVATAR: &str = "cat ./profile/avatar.jpg";
@@ -90,6 +92,7 @@ pub mod home {
     pub const CMD_SHOW_MEDIA_HUB: &str = "ls -l ./media-hub/";
     pub const BTN_MEDIA_VIDEO: &str = "视频中心";
     pub const BTN_MEDIA_AUDIO: &str = "音频中心";
+    pub const BTN_MEDIA_IMAGE: &str = "图片库";
     pub const CMD_SHOW_WRAPPED: &str = "./scripts/github-wrapped.sh --list-years";
     pub const CMD_SHOW_STATS: &str = "cat /proc/system/stats";
 
@@ -346,6 +349,25 @@ pub mod coming_soon_page {
     pub const DESC_DEFAULT: &str = "该功能模块正在开发中，敬请期待。";
     pub const CMD_AVAILABLE_ROUTES: &str = "ls -l ./available_routes/";
     pub const BTN_HOME: &str = "返回首页";
+    pub const BTN_IMAGE_LIBRARY: &str = "图片库";
+}
+
+pub mod image_library_page {
+    pub const TITLE: &str = "图片库";
+    pub const SUBTITLE: &str = "浏览、检索并管理你的本地图片集合";
+    pub const MODE_RANDOM: &str = "随机 10 张";
+    pub const MODE_ALL: &str = "全部图片";
+    pub const BTN_REFRESH_RANDOM: &str = "换一组";
+    pub const BTN_CLEAR_SEARCH: &str = "清空搜索";
+    pub const SEARCH_PLACEHOLDER: &str = "搜索图片描述、关键词或文件名...";
+    pub const LABEL_SEARCH_RESULTS: &str = "搜索结果";
+    pub const LABEL_RANDOM_HINT: &str = "默认随机展示 10 张图片，可点击“换一组”刷新";
+    pub const LABEL_TOTAL_IMAGES: &str = "图片总数";
+    pub const LOAD_ERROR_PREFIX: &str = "加载失败";
+    pub const EMPTY_LIBRARY: &str = "暂无图片，请先入库图片资源";
+    pub const EMPTY_SEARCH: &str = "未找到匹配的图片";
+    pub const BTN_AUDIO_LIBRARY: &str = "音频库";
+    pub const BTN_VIDEO_LIBRARY: &str = "视频库";
 }
 
 pub mod music_wish {

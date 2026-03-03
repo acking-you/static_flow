@@ -1,6 +1,5 @@
 pub mod image;
 pub mod text;
-mod utils;
 
 pub use image::{
     embed_image_bytes, embed_image_bytes_with_model, ImageEmbeddingModelChoice,

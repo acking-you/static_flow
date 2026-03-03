@@ -1279,7 +1279,8 @@ impl MusicDataStore {
             TextEmbeddingLanguage::English => ("vector_en", "vector_zh"),
         };
 
-        let vector = embed_text_with_language(query_text, lang);
+        let vector = embed_text_with_language(query_text, lang)
+            .with_context(|| format!("failed to embed semantic music query with {:?}", lang))?;
 
         let results = self
             .run_vector_search(&table, cols, &vector, primary_col, effective_limit, max_distance)
@@ -1294,7 +1295,10 @@ impl MusicDataStore {
             TextEmbeddingLanguage::Chinese => TextEmbeddingLanguage::English,
             TextEmbeddingLanguage::English => TextEmbeddingLanguage::Chinese,
         };
-        let fallback_vector = embed_text_with_language(query_text, fallback_lang);
+        let fallback_vector =
+            embed_text_with_language(query_text, fallback_lang).with_context(|| {
+                format!("failed to embed semantic music fallback query with {:?}", fallback_lang)
+            })?;
         self.run_vector_search(
             &table,
             cols,
@@ -1737,32 +1741,100 @@ impl MusicDataStore {
 
             match lang {
                 TextEmbeddingLanguage::Chinese => {
-                    let en_vector = embed_text_with_language(text, TextEmbeddingLanguage::English);
-                    let en_vals = vec_en_builder.values();
-                    for v in &en_vector {
-                        en_vals.append_value(*v);
-                    }
-                    vec_en_builder.append(true);
+                    let en_vector =
+                        match embed_text_with_language(text, TextEmbeddingLanguage::English) {
+                            Ok(vector) => Some(vector),
+                            Err(err) => {
+                                tracing::warn!(
+                                    "song vector backfill English embedding failed for id `{}`; \
+                                     leaving vector_en NULL: {}",
+                                    ids[i],
+                                    err
+                                );
+                                None
+                            },
+                        };
+                    let zh_vector = match primary_vector {
+                        Ok(vector) => Some(vector),
+                        Err(err) => {
+                            tracing::warn!(
+                                "song vector backfill Chinese embedding failed for id `{}`; \
+                                 leaving vector_zh NULL: {}",
+                                ids[i],
+                                err
+                            );
+                            None
+                        },
+                    };
 
-                    let zh_vals = vec_zh_builder.values();
-                    for v in &primary_vector {
-                        zh_vals.append_value(*v);
+                    match en_vector {
+                        Some(vector) => {
+                            let en_vals = vec_en_builder.values();
+                            for value in &vector {
+                                en_vals.append_value(*value);
+                            }
+                            vec_en_builder.append(true);
+                        },
+                        None => {
+                            let en_vals = vec_en_builder.values();
+                            for _ in 0..TEXT_VECTOR_DIM_EN {
+                                en_vals.append_value(0.0);
+                            }
+                            vec_en_builder.append(false);
+                        },
                     }
-                    vec_zh_builder.append(true);
+
+                    match zh_vector {
+                        Some(vector) => {
+                            let zh_vals = vec_zh_builder.values();
+                            for value in &vector {
+                                zh_vals.append_value(*value);
+                            }
+                            vec_zh_builder.append(true);
+                        },
+                        None => {
+                            let zh_vals = vec_zh_builder.values();
+                            for _ in 0..TEXT_VECTOR_DIM_ZH {
+                                zh_vals.append_value(0.0);
+                            }
+                            vec_zh_builder.append(false);
+                        },
+                    }
                 },
-                TextEmbeddingLanguage::English => {
-                    let en_vals = vec_en_builder.values();
-                    for v in &primary_vector {
-                        en_vals.append_value(*v);
-                    }
-                    vec_en_builder.append(true);
+                TextEmbeddingLanguage::English => match primary_vector {
+                    Ok(vector) => {
+                        let en_vals = vec_en_builder.values();
+                        for value in &vector {
+                            en_vals.append_value(*value);
+                        }
+                        vec_en_builder.append(true);
 
-                    // NULL zh vector: fill zeros + append(false)
-                    let zh_vals = vec_zh_builder.values();
-                    for _ in 0..TEXT_VECTOR_DIM_ZH {
-                        zh_vals.append_value(0.0);
-                    }
-                    vec_zh_builder.append(false);
+                        let zh_vals = vec_zh_builder.values();
+                        for _ in 0..TEXT_VECTOR_DIM_ZH {
+                            zh_vals.append_value(0.0);
+                        }
+                        vec_zh_builder.append(false);
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            "song vector backfill embedding failed for id `{}`; leaving vectors \
+                             NULL: {}",
+                            ids[i],
+                            err
+                        );
+
+                        let en_vals = vec_en_builder.values();
+                        for _ in 0..TEXT_VECTOR_DIM_EN {
+                            en_vals.append_value(0.0);
+                        }
+                        vec_en_builder.append(false);
+
+                        let zh_vals = vec_zh_builder.values();
+                        for _ in 0..TEXT_VECTOR_DIM_ZH {
+                            zh_vals.append_value(0.0);
+                        }
+                        vec_zh_builder.append(false);
+                    },
                 },
             }
 

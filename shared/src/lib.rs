@@ -20,6 +20,9 @@ pub mod article_request_store;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod optimize;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod image_vector_maintenance;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LocalizedText {
     pub zh: Option<String>,

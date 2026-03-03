@@ -505,6 +505,32 @@ pub enum DbCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Migrate `images.vector` from non-nullable to nullable.
+    ///
+    /// Required once before writing NULL vectors when image embedding fails.
+    MigrateImagesVectorNullable {
+        /// Show planned action only, do not execute migration.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Recompute image vectors for `images` table.
+    ///
+    /// Default mode only scans rows where `vector IS NULL`.
+    /// Pass `--all` to force full-table re-embed.
+    ReembedImageVectors {
+        /// Optional upper bound of rows to process in this run.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Print candidates only, do not write changes.
+        #[arg(long)]
+        dry_run: bool,
+        /// Process all rows, not only rows with NULL vector.
+        #[arg(long)]
+        all: bool,
+        /// Update batch size for merge-upsert.
+        #[arg(long, default_value = "32")]
+        batch_size: usize,
+    },
     /// Upsert one article row from JSON payload.
     UpsertArticle {
         /// Full JSON object matching `ArticleRecord` fields.

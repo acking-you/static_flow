@@ -85,6 +85,16 @@ pub fn coming_soon_page(props: &Props) -> Html {
                             <i class="fas fa-home mr-2"></i>
                             { t::BTN_HOME }
                         </Link<Route>>
+                        <Link<Route>
+                            to={Route::MediaImage}
+                            classes={classes!(
+                                "btn-fluent-secondary",
+                                "!px-6", "!py-2.5", "!text-sm"
+                            )}
+                        >
+                            <i class="fas fa-image mr-2"></i>
+                            { t::BTN_IMAGE_LIBRARY }
+                        </Link<Route>>
                     </div>
 
                     <div class="terminal-line" style="margin-top: 1.5rem;">

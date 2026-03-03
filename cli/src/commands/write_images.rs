@@ -59,7 +59,18 @@ pub async fn run(
             } else {
                 None
             };
-            (embed_image_bytes(&rasterized.png_bytes), thumb)
+            let vector = match embed_image_bytes(&rasterized.png_bytes) {
+                Ok(vector) => Some(vector),
+                Err(err) => {
+                    tracing::warn!(
+                        "Embedding failed for SVG image {}; writing NULL vector: {}",
+                        path.display(),
+                        err
+                    );
+                    None
+                },
+            };
+            (vector, thumb)
         } else {
             match image::load_from_memory(&bytes) {
                 Ok(img) => {
@@ -73,11 +84,34 @@ pub async fn run(
                     } else {
                         None
                     };
-                    (embed_image_bytes(&bytes), thumb)
+                    let vector = match embed_image_bytes(&bytes) {
+                        Ok(vector) => Some(vector),
+                        Err(err) => {
+                            tracing::warn!(
+                                "Embedding failed for image {}; writing NULL vector: {}",
+                                path.display(),
+                                err
+                            );
+                            None
+                        },
+                    };
+                    (vector, thumb)
                 },
                 Err(_) => {
                     metadata["format"] = serde_json::json!(None::<String>);
-                    (embed_image_bytes(&bytes), None)
+                    let vector = match embed_image_bytes(&bytes) {
+                        Ok(vector) => Some(vector),
+                        Err(err) => {
+                            tracing::warn!(
+                                "Embedding failed for undecodable image {}; writing NULL vector: \
+                                 {}",
+                                path.display(),
+                                err
+                            );
+                            None
+                        },
+                    };
+                    (vector, None)
                 },
             }
         };

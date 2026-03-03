@@ -30,20 +30,21 @@ use crate::{
         fetch_admin_article_requests, fetch_admin_comment_audit_logs,
         fetch_admin_comment_runtime_config, fetch_admin_comment_task,
         fetch_admin_comment_task_ai_output, fetch_admin_comment_tasks_grouped,
-        fetch_admin_memory_profiler_functions, fetch_admin_memory_profiler_modules,
-        fetch_admin_memory_profiler_overview, fetch_admin_memory_profiler_stacks,
-        fetch_admin_music_wishes, fetch_admin_published_comments,
-        fetch_admin_view_analytics_config, patch_admin_comment_task, patch_admin_published_comment,
-        update_admin_api_behavior_config, update_admin_comment_runtime_config,
+        fetch_admin_compaction_runtime_config, fetch_admin_memory_profiler_functions,
+        fetch_admin_memory_profiler_modules, fetch_admin_memory_profiler_overview,
+        fetch_admin_memory_profiler_stacks, fetch_admin_music_wishes,
+        fetch_admin_published_comments, fetch_admin_view_analytics_config,
+        patch_admin_comment_task, patch_admin_published_comment, update_admin_api_behavior_config,
+        update_admin_comment_runtime_config, update_admin_compaction_runtime_config,
         update_admin_view_analytics_config, AdminApiBehaviorCleanupRequest, AdminApiBehaviorEvent,
         AdminApiBehaviorEventsQuery, AdminApiBehaviorOverviewResponse, AdminCleanupRequest,
         AdminCommentAuditLog, AdminCommentTask, AdminCommentTaskAiOutputResponse,
         AdminCommentTaskGroup, AdminPatchCommentTaskRequest, AdminPatchPublishedCommentRequest,
         AdminTaskActionRequest, ApiBehaviorBucket, ApiBehaviorConfig, ArticleComment,
-        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, MemoryFunctionEntry,
-        MemoryFunctionReport, MemoryModuleEntry, MemoryModuleReport, MemoryProfilerConfigSnapshot,
-        MemoryProfilerConfigUpdate, MemoryProfilerOverview, MemoryStackEntry, MemoryStackReport,
-        MusicWishItem, ViewAnalyticsConfig,
+        ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, CompactionRuntimeConfig,
+        MemoryFunctionEntry, MemoryFunctionReport, MemoryModuleEntry, MemoryModuleReport,
+        MemoryProfilerConfigSnapshot, MemoryProfilerConfigUpdate, MemoryProfilerOverview,
+        MemoryStackEntry, MemoryStackReport, MusicWishItem, ViewAnalyticsConfig,
     },
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
@@ -290,6 +291,7 @@ pub fn admin_page() -> Html {
     let view_config = use_state(|| None::<ViewAnalyticsConfig>);
     let comment_config = use_state(|| None::<CommentRuntimeConfig>);
     let behavior_config = use_state(|| None::<ApiBehaviorConfig>);
+    let compaction_config = use_state(|| None::<CompactionRuntimeConfig>);
     let behavior_overview = use_state(|| None::<AdminApiBehaviorOverviewResponse>);
     let behavior_events = use_state(Vec::<AdminApiBehaviorEvent>::new);
     let behavior_days = use_state(|| "30".to_string());
@@ -803,6 +805,8 @@ pub fn admin_page() -> Html {
         let load_error = load_error.clone();
         let view_config = view_config.clone();
         let comment_config = comment_config.clone();
+        let behavior_config = behavior_config.clone();
+        let compaction_config = compaction_config.clone();
         let task_groups = task_groups.clone();
         let grouped_status_counts = grouped_status_counts.clone();
         let published_comments = published_comments.clone();
@@ -826,6 +830,8 @@ pub fn admin_page() -> Html {
             let load_error = load_error.clone();
             let view_config = view_config.clone();
             let comment_config = comment_config.clone();
+            let behavior_config = behavior_config.clone();
+            let compaction_config = compaction_config.clone();
             let task_groups = task_groups.clone();
             let grouped_status_counts = grouped_status_counts.clone();
             let published_comments = published_comments.clone();
@@ -862,6 +868,8 @@ pub fn admin_page() -> Html {
                 let p_offset = (p_page - 1) * PAGE_SIZE;
                 let view_result = fetch_admin_view_analytics_config().await;
                 let comment_result = fetch_admin_comment_runtime_config().await;
+                let behavior_result = fetch_admin_api_behavior_config().await;
+                let compaction_result = fetch_admin_compaction_runtime_config().await;
                 let grouped_result = fetch_admin_comment_tasks_grouped(
                     if status.is_empty() { None } else { Some(status.as_str()) },
                     Some(PAGE_SIZE),
@@ -876,13 +884,29 @@ pub fn admin_page() -> Html {
                     return;
                 }
 
-                match (view_result, comment_result, grouped_result, published_result) {
-                    (Ok(view), Ok(comment), Ok(grouped), Ok(published)) => {
+                match (
+                    view_result,
+                    comment_result,
+                    behavior_result,
+                    compaction_result,
+                    grouped_result,
+                    published_result,
+                ) {
+                    (
+                        Ok(view),
+                        Ok(comment),
+                        Ok(behavior),
+                        Ok(compaction),
+                        Ok(grouped),
+                        Ok(published),
+                    ) => {
                         if *refresh_all_seq.borrow() != request_id {
                             return;
                         }
                         view_config.set(Some(view));
                         comment_config.set(Some(comment));
+                        behavior_config.set(Some(behavior));
+                        compaction_config.set(Some(compaction));
                         grouped_status_counts.set(grouped.status_counts);
                         tasks_total.set(grouped.total_articles);
                         tasks_has_more.set(grouped.has_more);
@@ -945,15 +969,24 @@ pub fn admin_page() -> Html {
                         }
                         load_error.set(None);
                     },
-                    (view_err, comment_err, grouped_err, published_err) => {
+                    (
+                        view_err,
+                        comment_err,
+                        behavior_err,
+                        compaction_err,
+                        grouped_err,
+                        published_err,
+                    ) => {
                         if *refresh_all_seq.borrow() != request_id {
                             return;
                         }
                         load_error.set(Some(format!(
-                            "Admin API unavailable. view={:?}, comment={:?}, grouped={:?}, \
-                             published={:?}",
+                            "Admin API unavailable. view={:?}, comment={:?}, behavior={:?}, \
+                             compaction={:?}, grouped={:?}, published={:?}",
                             view_err.err(),
                             comment_err.err(),
+                            behavior_err.err(),
+                            compaction_err.err(),
                             grouped_err.err(),
                             published_err.err()
                         )));
@@ -1044,6 +1077,7 @@ pub fn admin_page() -> Html {
         let view_config = view_config.clone();
         let comment_config = comment_config.clone();
         let behavior_config = behavior_config.clone();
+        let compaction_config = compaction_config.clone();
         let load_error = load_error.clone();
         let saving = saving.clone();
         let refresh_all = refresh_all.clone();
@@ -1058,6 +1092,9 @@ pub fn admin_page() -> Html {
             let Some(behavior_config_value) = (*behavior_config).clone() else {
                 return;
             };
+            let Some(compaction_config_value) = (*compaction_config).clone() else {
+                return;
+            };
 
             let load_error = load_error.clone();
             let saving = saving.clone();
@@ -1070,18 +1107,21 @@ pub fn admin_page() -> Html {
                     update_admin_comment_runtime_config(&comment_config_value).await;
                 let behavior_result =
                     update_admin_api_behavior_config(&behavior_config_value).await;
-                match (view_result, comment_result, behavior_result) {
-                    (Ok(_), Ok(_), Ok(_)) => {
+                let compaction_result =
+                    update_admin_compaction_runtime_config(&compaction_config_value).await;
+                match (view_result, comment_result, behavior_result, compaction_result) {
+                    (Ok(_), Ok(_), Ok(_), Ok(_)) => {
                         load_error.set(None);
                         refresh_all.emit((None, None));
                         refresh_behavior.emit(None);
                     },
-                    (view_err, comment_err, behavior_err) => {
+                    (view_err, comment_err, behavior_err, compaction_err) => {
                         load_error.set(Some(format!(
-                            "Save failed. view={:?}, comment={:?}, behavior={:?}",
+                            "Save failed. view={:?}, comment={:?}, behavior={:?}, compaction={:?}",
                             view_err.err(),
                             comment_err.err(),
-                            behavior_err.err()
+                            behavior_err.err(),
+                            compaction_err.err()
                         )));
                     },
                 }
@@ -1890,7 +1930,7 @@ pub fn admin_page() -> Html {
                 "mb-5"
             )}>
                 <h2 class={classes!("m-0", "mb-4", "text-lg", "font-semibold")}>{ "Runtime Config" }</h2>
-                <div class={classes!("grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-3")}>
+                <div class={classes!("grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-4")}>
                     <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
                         <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
                             { "View Analytics" }
@@ -2108,6 +2148,102 @@ pub fn admin_page() -> Html {
                                                         cfg.max_days = v;
                                                     }
                                                     behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                        } else {
+                            <p class={classes!("text-sm", "text-[var(--muted)]", "m-0")}>{ "Unavailable" }</p>
+                        }
+                    </div>
+
+                    <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                        <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                            { "Table Compaction" }
+                        </h3>
+                        if let Some(cfg) = (*compaction_config).clone() {
+                            <label class={classes!("mb-3", "flex", "items-center", "gap-2", "text-sm")}>
+                                <input
+                                    type="checkbox"
+                                    checked={cfg.enabled}
+                                    class={classes!("h-4", "w-4")}
+                                    oninput={{
+                                        let compaction_config = compaction_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                let mut next = (*compaction_config).clone();
+                                                if let Some(cfg) = next.as_mut() {
+                                                    cfg.enabled = target.checked();
+                                                }
+                                                compaction_config.set(next);
+                                            }
+                                        })
+                                    }}
+                                />
+                                <span>{ "enabled" }</span>
+                            </label>
+                            <label class={classes!("block", "text-sm", "mb-2")}>
+                                { "scan_interval_seconds" }
+                                <input
+                                    type="number"
+                                    value={cfg.scan_interval_seconds.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let compaction_config = compaction_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<u64>() {
+                                                    let mut next = (*compaction_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.scan_interval_seconds = v;
+                                                    }
+                                                    compaction_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm", "mb-2")}>
+                                { "fragment_threshold" }
+                                <input
+                                    type="number"
+                                    value={cfg.fragment_threshold.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let compaction_config = compaction_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*compaction_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.fragment_threshold = v;
+                                                    }
+                                                    compaction_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm")}>
+                                { "prune_older_than_hours" }
+                                <input
+                                    type="number"
+                                    value={cfg.prune_older_than_hours.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let compaction_config = compaction_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<i64>() {
+                                                    let mut next = (*compaction_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.prune_older_than_hours = v;
+                                                    }
+                                                    compaction_config.set(next);
                                                 }
                                             }
                                         })
