@@ -36,6 +36,8 @@ StaticFlow 音乐模块需要存储 ~500 首歌 × 10MB/首的音频数据。
 **本文聚焦**：如何在 lance fork 中实现 blob v2 **零拷贝 compaction**——
 让 compaction 过程中 `.blob` 音频文件一个字节都不拷贝，峰值磁盘开销从 2× 降到 ~0。
 
+> Blob v2 社区原始提案文档（参考）：[Blob v2 Design Doc](https://docs.google.com/document/d/1JckrGy5dGSd43MNj5g2YQZoyx66aBzCLz3j6yqTS_nA/edit?tab=t.0)
+
 ---
 
 ## 2. 前置知识：Blob V2 核心概念
@@ -217,6 +219,20 @@ Compaction 后（零拷贝）:
 | 格式变更 | 无 | 无 | 大 | **无**（复用已有字段） |
 | 向后兼容 | ✅ | ✅ | ❌ | **✅** |
 | 跨文件系统 | ✅ | ❌ (9P) | ✅ | **✅** |
+
+### 4.6 社区原始提案语境下的 Dedicated 取舍
+
+结合社区原始 Blob v2 提案文档可以看到，第一阶段优先的是统一 blob 的读写语义与事务行为；
+而在 compaction / vacuum 的可达性跟踪上，文中明确写到当前方案不追踪
+BlobManifest，并把 BlobManifest 放在 `Future possibilities`。同时，
+`Unresolved questions` 里也在讨论 Dedicated 与 Packed 的边界，这说明
+Dedicated 的完整生命周期治理并不是第一阶段就闭环的目标。
+
+StaticFlow 的场景刚好相反：它是 local-first、本地自管的数据系统，
+音频大对象是主路径，不是边缘路径。真正的瓶颈是 fragment 膨胀后的查询退化，
+以及 compact 时的磁盘峰值开销。因此这里采用了一个更贴近当前问题的落地策略：
+先用 `blob_uri` + `blob_source_keys` 打通 Dedicated 的零拷贝 compaction，
+先解决可用性与成本问题，再把更通用的 BlobManifest 方案留到后续演进。
 
 ---
 

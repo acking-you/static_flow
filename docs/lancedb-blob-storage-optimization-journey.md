@@ -14,6 +14,8 @@ read_time: 35
 > 400 首歌的音频存进 LanceDB 后，数据库膨胀到了 27GB，查询延迟飙升到 10 秒以上。
 > 从 blob v1 到 blob v2，从上游 issue 到 fork 修复，这篇文章记录了整个优化过程中
 > 对 LanceDB blob 存储内部原理的理解和工程实践。
+>
+> Blob v2 设计文档（参考）：[Blob v2 Design Doc](https://docs.google.com/document/d/1JckrGy5dGSd43MNj5g2YQZoyx66aBzCLz3j6yqTS_nA/edit?tab=t.0)
 
 ---
 
