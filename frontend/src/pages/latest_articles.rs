@@ -24,6 +24,17 @@ use crate::{
 const PAGE_SIZE: usize = 12;
 const REQUEST_PAGE_SIZE: usize = 12;
 
+fn article_request_has_article(req: &ArticleRequestItem) -> bool {
+    req.ingested_article_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|id| !id.is_empty())
+}
+
+fn article_request_done_without_article(req: &ArticleRequestItem) -> bool {
+    req.status == "done" && !article_request_has_article(req)
+}
+
 #[derive(Properties, PartialEq)]
 struct RequestCardProps {
     pub req: ArticleRequestItem,
@@ -37,40 +48,52 @@ fn request_card(props: &RequestCardProps) -> Html {
     let req = &props.req;
     let show_modal = use_state(|| false);
 
-    let (status_class, status_dot) = match req.status.as_str() {
-        "done" => (
-            "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 \
-             dark:text-emerald-300 dark:ring-emerald-500/25",
-            "bg-emerald-500",
-        ),
-        "running" => (
-            "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 \
-             dark:ring-sky-500/25",
-            "bg-sky-500 animate-pulse",
-        ),
-        "failed" => (
-            "bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 \
-             dark:ring-red-500/25",
-            "bg-red-500",
-        ),
-        "rejected" => (
-            "bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-400 \
-             dark:ring-gray-500/25",
-            "bg-gray-400",
-        ),
-        _ => (
+    let (status_class, status_dot) = if article_request_done_without_article(req) {
+        (
             "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 \
              dark:text-amber-300 dark:ring-amber-500/25",
             "bg-amber-500",
-        ),
+        )
+    } else {
+        match req.status.as_str() {
+            "done" => (
+                "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 \
+                 dark:text-emerald-300 dark:ring-emerald-500/25",
+                "bg-emerald-500",
+            ),
+            "running" => (
+                "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 \
+                 dark:ring-sky-500/25",
+                "bg-sky-500 animate-pulse",
+            ),
+            "failed" => (
+                "bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 \
+                 dark:ring-red-500/25",
+                "bg-red-500",
+            ),
+            "rejected" => (
+                "bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-400 \
+                 dark:ring-gray-500/25",
+                "bg-gray-400",
+            ),
+            _ => (
+                "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 \
+                 dark:text-amber-300 dark:ring-amber-500/25",
+                "bg-amber-500",
+            ),
+        }
     };
-    let status_text = match req.status.as_str() {
-        "pending" => ar_t::STATUS_PENDING,
-        "approved" => ar_t::STATUS_APPROVED,
-        "running" => ar_t::STATUS_RUNNING,
-        "done" => ar_t::STATUS_DONE,
-        "failed" => ar_t::STATUS_FAILED,
-        _ => &req.status,
+    let status_text = if article_request_done_without_article(req) {
+        ar_t::STATUS_DONE_NO_ARTICLE
+    } else {
+        match req.status.as_str() {
+            "pending" => ar_t::STATUS_PENDING,
+            "approved" => ar_t::STATUS_APPROVED,
+            "running" => ar_t::STATUS_RUNNING,
+            "done" => ar_t::STATUS_DONE,
+            "failed" => ar_t::STATUS_FAILED,
+            _ => &req.status,
+        }
     };
 
     let open_modal = {
@@ -147,6 +170,13 @@ fn request_card(props: &RequestCardProps) -> Html {
                                 <span>{summary}</span>
                             </div>
                         }
+                        if article_request_done_without_article(req) {
+                            <div class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm \
+                                        text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 \
+                                        dark:text-amber-200">
+                                {ar_t::NO_ARTICLE_NOTICE}
+                            </div>
+                        }
                         // URL
                         <div>
                             <p class="text-[11px] font-medium text-gray-400 dark:text-[var(--muted)] uppercase tracking-wider mb-1">
@@ -189,13 +219,15 @@ fn request_card(props: &RequestCardProps) -> Html {
                         // Ingested article link
                         if req.status == "done" {
                             if let Some(ref aid) = req.ingested_article_id {
-                                <div>
+                                if !aid.trim().is_empty() {
+                                    <div>
                                     <Link<Route> to={Route::ArticleDetail { id: aid.clone() }}
                                         classes="inline-flex items-center gap-1 text-sm text-blue-600 \
                                                  dark:text-[var(--primary)] hover:underline font-medium">
                                         {ar_t::VIEW_ARTICLE}
                                     </Link<Route>>
-                                </div>
+                                    </div>
+                                }
                             }
                         }
                         // Region
@@ -259,10 +291,12 @@ fn request_card(props: &RequestCardProps) -> Html {
             // Ingested article link
             if req.status == "done" {
                 if let Some(ref aid) = req.ingested_article_id {
-                    <Link<Route> to={Route::ArticleDetail { id: aid.clone() }}
-                        classes="text-xs text-blue-600 dark:text-[var(--primary)] hover:underline font-medium">
-                        {ar_t::VIEW_ARTICLE}
-                    </Link<Route>>
+                    if !aid.trim().is_empty() {
+                        <Link<Route> to={Route::ArticleDetail { id: aid.clone() }}
+                            classes="text-xs text-blue-600 dark:text-[var(--primary)] hover:underline font-medium">
+                            {ar_t::VIEW_ARTICLE}
+                        </Link<Route>>
+                    }
                 }
             }
             // Action row: detail button + follow-up

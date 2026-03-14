@@ -26,6 +26,9 @@ pub struct ArticleRecord {
     pub date: String,
     pub featured_image: Option<String>,
     pub read_time: i32,
+    pub article_kind: Option<String>,
+    pub source_url: Option<String>,
+    pub interactive_page_id: Option<String>,
     pub vector_en: Option<Vec<f32>>,
     pub vector_zh: Option<Vec<f32>>,
     pub created_at: i64,
@@ -72,6 +75,9 @@ pub fn article_schema() -> Arc<Schema> {
         Field::new("date", DataType::Utf8, false),
         Field::new("featured_image", DataType::Utf8, true),
         Field::new("read_time", DataType::Int32, false),
+        Field::new("article_kind", DataType::Utf8, true),
+        Field::new("source_url", DataType::Utf8, true),
+        Field::new("interactive_page_id", DataType::Utf8, true),
         Field::new(
             "vector_en",
             DataType::FixedSizeList(
@@ -137,6 +143,9 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
     let mut date_builder = StringBuilder::new();
     let mut featured_builder = StringBuilder::new();
     let mut read_time_builder = Int32Builder::new();
+    let mut article_kind_builder = StringBuilder::new();
+    let mut source_url_builder = StringBuilder::new();
+    let mut interactive_page_id_builder = StringBuilder::new();
     let mut vector_en_builder =
         FixedSizeListBuilder::new(Float32Builder::new(), TEXT_VECTOR_DIM_EN as i32)
             .with_field(Field::new_list_field(DataType::Float32, false));
@@ -178,6 +187,21 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
         }
 
         read_time_builder.append_value(record.read_time);
+        if let Some(article_kind) = &record.article_kind {
+            article_kind_builder.append_value(article_kind);
+        } else {
+            article_kind_builder.append_null();
+        }
+        if let Some(source_url) = &record.source_url {
+            source_url_builder.append_value(source_url);
+        } else {
+            source_url_builder.append_null();
+        }
+        if let Some(interactive_page_id) = &record.interactive_page_id {
+            interactive_page_id_builder.append_value(interactive_page_id);
+        } else {
+            interactive_page_id_builder.append_null();
+        }
 
         match &record.vector_en {
             Some(vector) => {
@@ -241,6 +265,9 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
         Arc::new(date_builder.finish()),
         Arc::new(featured_builder.finish()),
         Arc::new(read_time_builder.finish()),
+        Arc::new(article_kind_builder.finish()),
+        Arc::new(source_url_builder.finish()),
+        Arc::new(interactive_page_id_builder.finish()),
         Arc::new(vector_en_builder.finish()),
         Arc::new(vector_zh_builder.finish()),
         Arc::new(created_at_builder.finish()),

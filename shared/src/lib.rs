@@ -18,6 +18,9 @@ pub mod music_wish_store;
 pub mod article_request_store;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod interactive_store;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod optimize;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -50,6 +53,14 @@ impl LocalizedText {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ArticleKind {
+    #[default]
+    Markdown,
+    InteractiveRepost,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Article {
     pub id: String,
@@ -64,6 +75,12 @@ pub struct Article {
     pub date: String,
     pub featured_image: Option<String>,
     pub read_time: u32,
+    #[serde(default)]
+    pub article_kind: ArticleKind,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub interactive_page_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,6 +94,10 @@ pub struct ArticleListItem {
     pub date: String,
     pub featured_image: Option<String>,
     pub read_time: u32,
+    #[serde(default)]
+    pub article_kind: ArticleKind,
+    #[serde(default)]
+    pub interactive_page_id: Option<String>,
 }
 
 impl From<Article> for ArticleListItem {
@@ -91,6 +112,8 @@ impl From<Article> for ArticleListItem {
             date: a.date,
             featured_image: a.featured_image,
             read_time: a.read_time,
+            article_kind: a.article_kind,
+            interactive_page_id: a.interactive_page_id,
         }
     }
 }

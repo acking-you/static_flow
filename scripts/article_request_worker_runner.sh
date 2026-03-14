@@ -52,11 +52,23 @@ INSTRUCTIONS:
 3) Execute the skill workflow to fetch, process, and ingest the article.
 4) Write a JSON result (UTF-8, non-empty) atomically (temp file then rename) to:
    ${result_path}
-5) Result schema: { "ingested_article_id": "<id or null>", "reply_markdown": "<task_status_markdown>" }
-6) \`reply_markdown\` is an operator-facing status summary; it does not relax any skill rules.
+5) Result schema:
+   {
+     "status": "success|blocked|failed",
+     "ingested_article_id": "<article id or null>",
+     "reply_markdown": "<task_status_markdown>",
+     "failure_reason": "<optional short reason>"
+   }
+6) Use \`status=success\` only when an article write/update completed and
+   \`ingested_article_id\` is the target article id.
+7) Use \`status=blocked\` when the skill correctly refuses to write because the
+   source is incomplete, paywalled, ambiguous, or otherwise fails policy.
+8) Use \`status=failed\` for unexpected execution failures.
+9) \`reply_markdown\` is an operator-facing status summary; it does not relax any skill rules.
 
 Notes:
-- Backend judges success by result file content, not stdout.
+- Backend only treats the run as a successful ingestion when \`status=success\`
+  and \`ingested_article_id\` is non-empty.
 - Keep stdout/stderr streaming for execution trace.
 - Do not install/copy/remove skill files at runtime.
 - Before starting, read any of these if present in workdir: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md

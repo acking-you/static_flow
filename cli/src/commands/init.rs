@@ -5,6 +5,7 @@ use lancedb::{
     index::scalar::FullTextSearchQuery,
     query::{ExecutableQuery, QueryBase},
 };
+use static_flow_shared::interactive_store::InteractivePageStore;
 
 use crate::{
     db::{connect_db, ensure_fts_index, ensure_table, ensure_vector_index},
@@ -17,6 +18,7 @@ pub async fn run(db_path: &Path) -> Result<()> {
     let articles_table = ensure_table(&db, "articles", article_schema()).await?;
     let images_table = ensure_table(&db, "images", image_schema()).await?;
     ensure_table(&db, "taxonomies", taxonomy_schema()).await?;
+    let _interactive_store = InteractivePageStore::connect(&db_path.to_string_lossy()).await?;
 
     if let Err(err) = ensure_fts_index(&articles_table, "content").await {
         tracing::warn!("Failed to create FTS index on articles: {err}");

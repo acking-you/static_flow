@@ -27,7 +27,7 @@ use crate::{
         detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
         TextEmbeddingModel,
     },
-    normalize_taxonomy_key, Article, ArticleListItem, LocalizedText,
+    normalize_taxonomy_key, Article, ArticleKind, ArticleListItem, LocalizedText,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1640,6 +1640,8 @@ async fn fetch_article_list(
             "date",
             "featured_image",
             "read_time",
+            "article_kind",
+            "interactive_page_id",
         ]))
         .execute()
         .await?;
@@ -1713,6 +1715,9 @@ async fn fetch_article_detail(table: &Table, id: &str) -> Result<Option<Article>
         "date",
         "featured_image",
         "read_time",
+        "article_kind",
+        "source_url",
+        "interactive_page_id",
     ];
     let base_columns = [
         "id",
@@ -1738,6 +1743,9 @@ async fn fetch_article_detail(table: &Table, id: &str) -> Result<Option<Article>
             let err_text = err.to_string();
             let has_missing_new_columns = err_text.contains("content_en")
                 || err_text.contains("detailed_summary")
+                || err_text.contains("article_kind")
+                || err_text.contains("source_url")
+                || err_text.contains("interactive_page_id")
                 || err_text.contains("missing column");
             if !has_missing_new_columns {
                 return Err(err.into());
@@ -2268,6 +2276,8 @@ fn batches_to_article_list(batches: &[RecordBatch]) -> Result<Vec<ArticleListIte
         let date = string_array(batch, "date")?;
         let featured = string_array(batch, "featured_image")?;
         let read_time = int32_array(batch, "read_time")?;
+        let article_kind = optional_string_array(batch, "article_kind");
+        let interactive_page_id = optional_string_array(batch, "interactive_page_id");
 
         for row in 0..batch.num_rows() {
             articles.push(ArticleListItem {
@@ -2280,6 +2290,13 @@ fn batches_to_article_list(batches: &[RecordBatch]) -> Result<Vec<ArticleListIte
                 date: value_string(date, row),
                 featured_image: value_string_opt(featured, row),
                 read_time: read_time.value(row) as u32,
+                article_kind: article_kind
+                    .and_then(|array| value_string_opt(array, row))
+                    .as_deref()
+                    .map(parse_article_kind)
+                    .unwrap_or_default(),
+                interactive_page_id: interactive_page_id
+                    .and_then(|array| value_string_opt(array, row)),
             });
         }
     }
@@ -2301,6 +2318,9 @@ fn batches_to_articles(batches: &[RecordBatch]) -> Result<Vec<Article>> {
         let date = string_array(batch, "date")?;
         let featured = string_array(batch, "featured_image")?;
         let read_time = int32_array(batch, "read_time")?;
+        let article_kind = optional_string_array(batch, "article_kind");
+        let source_url = optional_string_array(batch, "source_url");
+        let interactive_page_id = optional_string_array(batch, "interactive_page_id");
 
         for row in 0..batch.num_rows() {
             articles.push(Article {
@@ -2318,6 +2338,14 @@ fn batches_to_articles(batches: &[RecordBatch]) -> Result<Vec<Article>> {
                 date: value_string(date, row),
                 featured_image: value_string_opt(featured, row),
                 read_time: read_time.value(row) as u32,
+                article_kind: article_kind
+                    .and_then(|array| value_string_opt(array, row))
+                    .as_deref()
+                    .map(parse_article_kind)
+                    .unwrap_or_default(),
+                source_url: source_url.and_then(|array| value_string_opt(array, row)),
+                interactive_page_id: interactive_page_id
+                    .and_then(|array| value_string_opt(array, row)),
             });
         }
     }
@@ -2327,6 +2355,13 @@ fn batches_to_articles(batches: &[RecordBatch]) -> Result<Vec<Article>> {
 fn batches_to_article_detail(batches: &[RecordBatch]) -> Result<Option<Article>> {
     let articles = batches_to_articles(batches)?;
     Ok(articles.into_iter().next())
+}
+
+fn parse_article_kind(value: &str) -> ArticleKind {
+    match value.trim() {
+        "interactive_repost" => ArticleKind::InteractiveRepost,
+        _ => ArticleKind::Markdown,
+    }
 }
 
 fn batches_to_images(batches: &[RecordBatch]) -> Result<Vec<ImageInfo>> {

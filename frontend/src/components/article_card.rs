@@ -2,7 +2,9 @@ use yew::prelude::*;
 use yew_router::prelude::{use_navigator, Link};
 
 use crate::{
-    components::image_with_loading::ImageWithLoading, models::ArticleListItem, router::Route,
+    components::image_with_loading::ImageWithLoading,
+    models::{ArticleKind, ArticleListItem},
+    router::Route,
     utils::image_url,
 };
 
@@ -16,6 +18,7 @@ pub struct ArticleCardProps {
 #[function_component(ArticleCard)]
 pub fn article_card(props: &ArticleCardProps) -> Html {
     let article = props.article.clone();
+    let is_interactive = matches!(article.article_kind, ArticleKind::InteractiveRepost);
     let detail_route = Route::ArticleDetail {
         id: article.id.clone(),
     };
@@ -52,6 +55,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
         <article
           class={classes!(
             "editorial-card",
+            is_interactive.then_some("editorial-card--interactive"),
             "bg-[var(--surface)]",
             "liquid-glass",
             "border",
@@ -100,6 +104,20 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                                 )}
                                 container_class={classes!("w-full", "h-full")}
                             />
+                            {
+                                if is_interactive {
+                                    html! {
+                                        <span class="interactive-card-seal" aria-hidden="true">
+                                            <span class="interactive-card-seal__icon">
+                                                <span class="interactive-card-seal__core"></span>
+                                            </span>
+                                            <span class="interactive-card-seal__label">{ "Interactive" }</span>
+                                        </span>
+                                    }
+                                } else {
+                                    html! {}
+                                }
+                            }
                         </a>
                     }
                 } else {
@@ -108,16 +126,42 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
             }
 
             <div class={classes!("p-6", "flex", "flex-col", "gap-3", "flex-1")}>
-                // Date badge - 日期徽章
-                <time class={classes!(
-                    "text-xs",
-                    "tracking-[0.2em]",
-                    "uppercase",
-                    "text-[var(--muted)]",
-                    "font-semibold"
-                )}>
-                    { &article.date }
-                </time>
+                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                    // Date badge - 日期徽章
+                    <time class={classes!(
+                        "text-xs",
+                        "tracking-[0.2em]",
+                        "uppercase",
+                        "text-[var(--muted)]",
+                        "font-semibold",
+                        "pt-1"
+                    )}>
+                        { &article.date }
+                    </time>
+
+                    {
+                        if is_interactive {
+                            html! {
+                                <div
+                                    class="interactive-card-badge"
+                                    role="note"
+                                    aria-label="交互式文章，包含可运行演示"
+                                    title="交互式文章：进入后可打开独立交互页"
+                                >
+                                    <span class="interactive-card-badge__icon" aria-hidden="true">
+                                        <span class="interactive-card-badge__core"></span>
+                                    </span>
+                                    <span class="interactive-card-badge__copy">
+                                        <span class="interactive-card-badge__eyebrow">{ "Interactive" }</span>
+                                        <span class="interactive-card-badge__label">{ "含可运行演示" }</span>
+                                    </span>
+                                </div>
+                            }
+                        } else {
+                            html! {}
+                        }
+                    }
+                </div>
 
                 // Title with Fraunces font - 使用 Fraunces 字体的标题
                 <h3 class={classes!("m-0", "leading-tight")}>
@@ -149,6 +193,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                     "text-sm",
                     "text-[var(--muted)]",
                     "pb-3",
+                    is_interactive.then_some("interactive-card-meta"),
                     "border-b",
                     "border-[var(--border)]"
                 )}>
@@ -173,6 +218,19 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
                         { &article.category }
                     </Link<Route>>
                 </div>
+
+                {
+                    if is_interactive {
+                        html! {
+                            <div class="interactive-card-note">
+                                <span class="interactive-card-note__pulse" aria-hidden="true"></span>
+                                <span>{ "文章内可直接打开交互镜像" }</span>
+                            </div>
+                        }
+                    } else {
+                        html! {}
+                    }
+                }
 
                 // Summary - 摘要
                 <p class={classes!(

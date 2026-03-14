@@ -263,6 +263,14 @@ pub enum Commands {
         #[command(subcommand)]
         command: ApiCommands,
     },
+    /// Interactive external-page ingestion commands.
+    Interactive {
+        /// LanceDB directory path.
+        #[arg(long, default_value = "./data/lancedb")]
+        db_path: PathBuf,
+        #[command(subcommand)]
+        command: InteractiveCommands,
+    },
     /// Database-style management commands for LanceDB tables.
     Db {
         /// LanceDB directory path.
@@ -337,6 +345,91 @@ pub enum ApiCommands {
         /// Output file path (defaults to current dir + image filename).
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
+pub enum InteractiveCommands {
+    /// Ingest a JS-heavy external page as bilingual article + local interactive
+    /// mirror.
+    IngestPage {
+        /// Source URL of the original page.
+        #[arg(long)]
+        url: String,
+        /// Stable article id in `articles.id`.
+        #[arg(long)]
+        article_id: String,
+        /// Chinese article markdown file path.
+        #[arg(long)]
+        file: PathBuf,
+        /// Article summary.
+        #[arg(long)]
+        summary: String,
+        /// Comma-separated tags.
+        #[arg(long)]
+        tags: String,
+        /// Article category.
+        #[arg(long)]
+        category: String,
+        /// Category description metadata.
+        #[arg(long)]
+        category_description: String,
+        /// Path to normalized English markdown for `content_en`.
+        #[arg(long)]
+        content_en_file: PathBuf,
+        /// Path to Chinese detailed summary markdown.
+        #[arg(long)]
+        summary_zh_file: Option<PathBuf>,
+        /// Path to English detailed summary markdown.
+        #[arg(long)]
+        summary_en_file: Option<PathBuf>,
+        /// Article title override. Defaults to source capture title.
+        #[arg(long)]
+        title: Option<String>,
+        /// Author name.
+        #[arg(long, default_value = "ackingliu")]
+        author: String,
+        /// Article publication/import date in YYYY-MM-DD format.
+        #[arg(long)]
+        date: Option<String>,
+        /// Source language of the interactive page.
+        #[arg(long, default_value = "en")]
+        source_lang: String,
+        /// Path to Playwright capture script.
+        #[arg(long, default_value = "scripts/capture_interactive_page.mjs")]
+        capture_script: PathBuf,
+        /// Existing capture manifest JSON path. Skips Playwright capture when
+        /// provided.
+        #[arg(long)]
+        capture_manifest: Option<PathBuf>,
+        /// Output directory for temporary capture artifacts.
+        #[arg(long)]
+        capture_dir: Option<PathBuf>,
+        /// Require host to match this expected host before mirroring.
+        #[arg(long)]
+        allow_host: Option<String>,
+        /// Mirror policy label to store.
+        #[arg(long, default_value = "whitelisted")]
+        mirror_policy: String,
+        /// Disable automatic index optimization after write.
+        #[arg(long)]
+        no_auto_optimize: bool,
+    },
+    /// Add or update a localized interactive variant for an existing mirror.
+    AddLocale {
+        /// Interactive page id, for example `ipg-bloom-filters`.
+        #[arg(long)]
+        page_id: String,
+        /// Locale identifier, for example `zh` or `en`.
+        #[arg(long)]
+        locale: String,
+        /// Localized title shown in the interactive wrapper.
+        #[arg(long)]
+        title: String,
+        /// Capture-manifest style JSON that describes the localized assets.
+        #[arg(long)]
+        manifest: PathBuf,
     },
 }
 

@@ -18,6 +18,7 @@ Probe sequence (stop on first full-source success):
 2. In-page source link scan (`.md`, `.mdx`, `raw`, `view source`, `edit`, `amp`, `rss`, `feed`).
 3. Repo/source inference when page links to GitHub.
 4. Content-negotiation attempt (`Accept: text/markdown`, if supported).
+5. Reader-mirror fallback for blocked or shell-only pages (`https://r.jina.ai/http://<url>` or `https://r.jina.ai/https://<url>`).
 
 If Markdown source is found: save as `source_raw.md`, normalize into `source_canonical_<lang>.md`.
 
@@ -39,7 +40,7 @@ Cleanup rules:
 Complete all downgrade stages before refusing:
 1. Retry same source path (transient-timeout hypothesis).
 2. Downgrade extractor path on same source (semantic → readability → structured).
-3. Downgrade source path (canonical variants, search variants, mirrors).
+3. Downgrade source path (canonical variants, search variants, mirrors such as `r.jina.ai`).
 
 Refusal is allowed only after cross-path failure convergence.
 

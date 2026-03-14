@@ -32,6 +32,7 @@ Update only in-scope fields; preserve everything else.
 
 ### Rule 2: Web-tool-first extraction + best-effort retry
 - Use `web.search_query` + `web.open`/`web.click`/`web.find` first; no `curl`/`wget` as primary path.
+- When the original page is blocked, incomplete, or renders only a shell, try a Jina Reader mirror form such as `https://r.jina.ai/http://<url>` or `https://r.jina.ai/https://<url>` before refusing.
 - Follow Flow B retry and downgrade protocol; single timeout is never enough to refuse.
 
 ### Rule 3: Full-text fidelity + source grounding

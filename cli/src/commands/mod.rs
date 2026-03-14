@@ -4,6 +4,7 @@ pub mod db_manage;
 pub mod embed_songs;
 pub mod ensure_indexes;
 pub mod init;
+pub mod interactive;
 pub mod query;
 pub mod rebuild_songs;
 pub mod sync_notes;
@@ -13,7 +14,7 @@ pub mod write_music;
 
 use anyhow::Result;
 
-use crate::cli::{Cli, Commands, DbCommands};
+use crate::cli::{Cli, Commands, DbCommands, InteractiveCommands};
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -48,6 +49,8 @@ pub async fn run(cli: Cli) -> Result<()> {
             write_article::run(&db_path, &file, write_article::WriteArticleOptions {
                 id,
                 summary,
+                title_override: None,
+                author_override: None,
                 tags,
                 category,
                 category_description,
@@ -64,6 +67,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 vector_zh,
                 language,
                 auto_optimize: !no_auto_optimize,
+                article_kind: None,
+                source_url: None,
+                interactive_page_id: None,
             })
             .await
         },
@@ -187,6 +193,74 @@ pub async fn run(cli: Cli) -> Result<()> {
             db_path,
             command,
         } => api::run(&db_path, command).await,
+        Commands::Interactive {
+            db_path,
+            command,
+        } => match command {
+            InteractiveCommands::IngestPage {
+                url,
+                article_id,
+                file,
+                summary,
+                tags,
+                category,
+                category_description,
+                content_en_file,
+                summary_zh_file,
+                summary_en_file,
+                title,
+                author,
+                date,
+                source_lang,
+                capture_script,
+                capture_manifest,
+                capture_dir,
+                allow_host,
+                mirror_policy,
+                no_auto_optimize,
+            } => {
+                interactive::ingest_page(&db_path, interactive::IngestInteractivePageOptions {
+                    url,
+                    article_id,
+                    file,
+                    summary,
+                    tags,
+                    category,
+                    category_description,
+                    content_en_file,
+                    summary_zh_file,
+                    summary_en_file,
+                    title,
+                    author,
+                    date,
+                    source_lang,
+                    capture_script,
+                    capture_manifest,
+                    capture_dir,
+                    allow_host,
+                    mirror_policy,
+                    auto_optimize: !no_auto_optimize,
+                })
+                .await
+            },
+            InteractiveCommands::AddLocale {
+                page_id,
+                locale,
+                title,
+                manifest,
+            } => {
+                interactive::add_page_locale(
+                    &db_path,
+                    interactive::AddInteractivePageLocaleOptions {
+                        page_id,
+                        locale,
+                        title,
+                        manifest,
+                    },
+                )
+                .await
+            },
+        },
         Commands::Db {
             db_path,
             command,

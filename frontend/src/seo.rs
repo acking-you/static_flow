@@ -264,6 +264,9 @@ fn route_path_for(route: &Route) -> String {
         Route::ArticleDetail {
             id,
         } => config::route_path(&format!("/posts/{}", urlencoding::encode(id))),
+        Route::ArticleInteractive {
+            id,
+        } => config::route_path(&format!("/posts/{}/interactive", urlencoding::encode(id))),
         Route::ArticleRaw {
             id,
             lang,
@@ -442,6 +445,20 @@ pub fn apply_route_seo(route: Option<&Route>) {
                 &canonical_url,
                 "article",
                 "index,follow,max-image-preview:large",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::ArticleInteractive {
+            id,
+        } => {
+            apply_common_seo(
+                &format!("{} · Interactive Mirror · StaticFlow", normalize_meta_text(id, 48)),
+                "交互镜像页面，保留原始页面的可执行前端交互。",
+                &canonical_url,
+                "article",
+                "noindex,follow,max-image-preview:large",
                 "zh-CN",
                 &og_image,
             );

@@ -42,6 +42,13 @@ pub enum Route {
     ArticleDetail { id: String },
 
     #[cfg(not(feature = "mock"))]
+    #[at("/posts/:id/interactive")]
+    ArticleInteractive { id: String },
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/posts/:id/interactive")]
+    ArticleInteractive { id: String },
+
+    #[cfg(not(feature = "mock"))]
     #[at("/posts/:id/raw/:lang")]
     ArticleRaw { id: String, lang: String },
     #[cfg(feature = "mock")]
@@ -158,6 +165,11 @@ fn switch(route: Route) -> Html {
             id,
         } => {
             html! { <pages::article_detail::ArticleDetailPage id={id} /> }
+        },
+        Route::ArticleInteractive {
+            id,
+        } => {
+            html! { <pages::interactive_article::InteractiveArticlePage id={id} /> }
         },
         Route::ArticleRaw {
             id,

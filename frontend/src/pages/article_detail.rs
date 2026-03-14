@@ -1,5 +1,5 @@
 use gloo_timers::{callback::Timeout, future::TimeoutFuture};
-use static_flow_shared::{Article, ArticleListItem};
+use static_flow_shared::{Article, ArticleKind, ArticleListItem};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
     window, Element, HtmlImageElement, HtmlSelectElement, HtmlTextAreaElement, KeyboardEvent, Node,
@@ -83,6 +83,14 @@ fn normalize_excerpt(value: &str, max_chars: usize) -> Option<String> {
         return None;
     }
     Some(compact.chars().take(max_chars).collect::<String>())
+}
+
+fn interactive_page_url(page_id: &str, language: ArticleContentLanguage) -> String {
+    let lang = match language {
+        ArticleContentLanguage::Zh => "zh",
+        ArticleContentLanguage::En => "en",
+    };
+    crate::config::route_path(&format!("/interactive-pages/{page_id}?lang={lang}"))
 }
 
 fn extract_anchor_context(
@@ -602,6 +610,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let is_lightbox_open = use_state(|| false);
     let is_brief_open = use_state(|| false);
     let is_trend_open = use_state(|| false);
+    let interactive_prompt_open = use_state(|| false);
+    let interactive_prompt_dismissed = use_state(|| false);
     let markdown_copied = use_state(|| false);
     let preview_image_url = use_state_eq(|| None::<String>);
     let preview_image_failed = use_state(|| false);
@@ -664,6 +674,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     {
         let is_brief_open = is_brief_open.clone();
         let is_trend_open = is_trend_open.clone();
+        let interactive_prompt_open = interactive_prompt_open.clone();
+        let interactive_prompt_dismissed = interactive_prompt_dismissed.clone();
         let trend_granularity = trend_granularity.clone();
         let footer_comment_input = footer_comment_input.clone();
         let footer_submit_feedback = footer_submit_feedback.clone();
@@ -675,6 +687,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         use_effect_with(article_id.clone(), move |_| {
             is_brief_open.set(false);
             is_trend_open.set(false);
+            interactive_prompt_open.set(false);
+            interactive_prompt_dismissed.set(false);
             trend_granularity.set(TrendGranularity::Day);
             footer_comment_input.set(String::new());
             footer_submit_feedback.set(None);
@@ -685,6 +699,27 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             selection_submit_feedback.set(None);
             || ()
         });
+    }
+
+    {
+        let article_data = article_data.clone();
+        let interactive_prompt_open = interactive_prompt_open.clone();
+        let interactive_prompt_dismissed = interactive_prompt_dismissed.clone();
+        use_effect_with(
+            (article_data.clone(), *interactive_prompt_dismissed),
+            move |(article_opt, dismissed)| {
+                let should_open = article_opt.as_ref().is_some_and(|article| {
+                    article.article_kind == ArticleKind::InteractiveRepost
+                        && article
+                            .interactive_page_id
+                            .as_deref()
+                            .map(|value| !value.trim().is_empty())
+                            .unwrap_or(false)
+                }) && !*dismissed;
+                interactive_prompt_open.set(should_open);
+                || ()
+            },
+        );
     }
 
     let open_image_preview = {
@@ -1449,8 +1484,86 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         </div>
     };
 
-    let is_overlay_open =
-        *is_lightbox_open || *is_brief_open || *is_trend_open || *selection_modal_open;
+    let is_overlay_open = *is_lightbox_open
+        || *is_brief_open
+        || *is_trend_open
+        || *selection_modal_open
+        || *interactive_prompt_open;
+    let interactive_prompt_title = if *content_language == ArticleContentLanguage::En {
+        t::INTERACTIVE_ALERT_TITLE_EN
+    } else {
+        t::INTERACTIVE_ALERT_TITLE_ZH
+    };
+    let interactive_prompt_desc = if *content_language == ArticleContentLanguage::En {
+        t::INTERACTIVE_ALERT_DESC_EN
+    } else {
+        t::INTERACTIVE_ALERT_DESC_ZH
+    };
+    let interactive_prompt_note = if *content_language == ArticleContentLanguage::En {
+        t::INTERACTIVE_ALERT_NOTE_EN
+    } else {
+        t::INTERACTIVE_ALERT_NOTE_ZH
+    };
+    let interactive_prompt_open_label = if *content_language == ArticleContentLanguage::En {
+        t::INTERACTIVE_ALERT_OPEN_EN
+    } else {
+        t::INTERACTIVE_ALERT_OPEN_ZH
+    };
+    let interactive_prompt_stay_label = if *content_language == ArticleContentLanguage::En {
+        t::INTERACTIVE_ALERT_STAY_EN
+    } else {
+        t::INTERACTIVE_ALERT_STAY_ZH
+    };
+    let interactive_prompt_page_url = article_data.as_ref().and_then(|article| {
+        article
+            .interactive_page_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|page_id| interactive_page_url(page_id, *content_language))
+    });
+    let open_interactive_prompt_click = {
+        let navigator = navigator.clone();
+        let article_id = article_id.clone();
+        let interactive_prompt_open = interactive_prompt_open.clone();
+        let interactive_prompt_dismissed = interactive_prompt_dismissed.clone();
+        let interactive_prompt_page_url = interactive_prompt_page_url.clone();
+        Callback::from(move |_| {
+            interactive_prompt_open.set(false);
+            interactive_prompt_dismissed.set(true);
+            if let Some(url) = interactive_prompt_page_url.as_ref() {
+                if let Some(win) = window() {
+                    if win.location().set_href(url).is_ok() {
+                        return;
+                    }
+                }
+            }
+            if let Some(nav) = navigator.as_ref() {
+                nav.push(&Route::ArticleInteractive {
+                    id: article_id.clone(),
+                });
+            }
+        })
+    };
+    let dismiss_interactive_prompt_modal_click = {
+        let interactive_prompt_open = interactive_prompt_open.clone();
+        let interactive_prompt_dismissed = interactive_prompt_dismissed.clone();
+        Callback::from(move |_| {
+            interactive_prompt_open.set(false);
+            interactive_prompt_dismissed.set(true);
+        })
+    };
+    let stop_interactive_prompt_bubble =
+        Callback::from(|event: MouseEvent| event.stop_propagation());
+    let show_interactive_prompt_modal = *interactive_prompt_open
+        && article_data.as_ref().is_some_and(|article| {
+            article.article_kind == ArticleKind::InteractiveRepost
+                && article
+                    .interactive_page_id
+                    .as_deref()
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false)
+        });
 
     let body = if *loading {
         loading_view
@@ -1565,9 +1678,48 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         } else {
             t::OPEN_RAW_MARKDOWN_BUTTON_ZH
         };
+        let interactive_button_text = if *content_language == ArticleContentLanguage::En {
+            t::OPEN_INTERACTIVE_BUTTON_EN
+        } else {
+            t::OPEN_INTERACTIVE_BUTTON_ZH
+        };
+        let interactive_alert_title = if *content_language == ArticleContentLanguage::En {
+            t::INTERACTIVE_ALERT_TITLE_EN
+        } else {
+            t::INTERACTIVE_ALERT_TITLE_ZH
+        };
+        let interactive_alert_desc = if *content_language == ArticleContentLanguage::En {
+            t::INTERACTIVE_ALERT_DESC_EN
+        } else {
+            t::INTERACTIVE_ALERT_DESC_ZH
+        };
+        let interactive_alert_note = if *content_language == ArticleContentLanguage::En {
+            t::INTERACTIVE_ALERT_NOTE_EN
+        } else {
+            t::INTERACTIVE_ALERT_NOTE_ZH
+        };
+        let interactive_alert_open = if *content_language == ArticleContentLanguage::En {
+            t::INTERACTIVE_ALERT_OPEN_EN
+        } else {
+            t::INTERACTIVE_ALERT_OPEN_ZH
+        };
+        let interactive_alert_stay = if *content_language == ArticleContentLanguage::En {
+            t::INTERACTIVE_ALERT_STAY_EN
+        } else {
+            t::INTERACTIVE_ALERT_STAY_ZH
+        };
+        let has_interactive_mirror = article
+            .interactive_page_id
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let show_interactive_alert =
+            article.article_kind == ArticleKind::InteractiveRepost && has_interactive_mirror;
         let can_export_markdown = !active_content.trim().is_empty();
-        let show_article_actions =
-            show_language_toggle || has_detailed_summary || can_export_markdown;
+        let show_article_actions = show_language_toggle
+            || has_detailed_summary
+            || can_export_markdown
+            || has_interactive_mirror;
         let show_side_actions_rail = show_article_actions && !is_overlay_open;
         let export_button_label = if *markdown_copied {
             if *content_language == ArticleContentLanguage::En {
@@ -1694,6 +1846,42 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                 }
             })
         };
+        let open_interactive_click = {
+            let navigator = navigator.clone();
+            let article_id = article.id.clone();
+            let interactive_prompt_open = interactive_prompt_open.clone();
+            let interactive_prompt_dismissed = interactive_prompt_dismissed.clone();
+            let interactive_page_url = article
+                .interactive_page_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|page_id| interactive_page_url(page_id, *content_language));
+            Callback::from(move |_| {
+                interactive_prompt_open.set(false);
+                interactive_prompt_dismissed.set(true);
+                if let Some(url) = interactive_page_url.as_ref() {
+                    if let Some(win) = window() {
+                        if win.location().set_href(url).is_ok() {
+                            return;
+                        }
+                    }
+                }
+                if let Some(nav) = navigator.as_ref() {
+                    nav.push(&Route::ArticleInteractive {
+                        id: article_id.clone(),
+                    });
+                }
+            })
+        };
+        let dismiss_interactive_prompt_click = {
+            let interactive_prompt_open = interactive_prompt_open.clone();
+            let interactive_prompt_dismissed = interactive_prompt_dismissed.clone();
+            Callback::from(move |_| {
+                interactive_prompt_open.set(false);
+                interactive_prompt_dismissed.set(true);
+            })
+        };
         let render_article_actions = |side_rail: bool| -> Html {
             let stack_class = if side_rail {
                 classes!(
@@ -1806,6 +1994,42 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     >
                                         <i class={classes!("fas", "fa-list-check")} aria-hidden="true"></i>
                                         { brief_button_text }
+                                    </button>
+                                }
+                            } else {
+                                html! {}
+                            }
+                        }
+                        {
+                            if has_interactive_mirror {
+                                html! {
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "article-action-btn",
+                                            "inline-flex",
+                                            "items-center",
+                                            "justify-center",
+                                            "gap-2",
+                                            "rounded-full",
+                                            "border",
+                                            "border-[var(--primary)]/35",
+                                            "bg-[var(--primary)]/10",
+                                            "px-3",
+                                            "py-2",
+                                            "text-xs",
+                                            "font-semibold",
+                                            "uppercase",
+                                            "tracking-[0.08em]",
+                                            "text-[var(--primary)]",
+                                            "transition-[var(--transition-base)]",
+                                            "hover:bg-[var(--primary)]",
+                                            "hover:text-white"
+                                        )}
+                                        onclick={open_interactive_click.clone()}
+                                    >
+                                        <i class={classes!("fas", "fa-laptop-code")} aria-hidden="true"></i>
+                                        { interactive_button_text }
                                     </button>
                                 }
                             } else {
@@ -2077,8 +2301,129 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                         }
                                     }
                                 </span>
+                                {
+                                    if let Some(source_url) = article
+                                        .source_url
+                                        .clone()
+                                        .filter(|value| !value.trim().is_empty())
+                                    {
+                                        html! {
+                                            <a
+                                                href={source_url}
+                                                target="_blank"
+                                                rel="noreferrer noopener"
+                                                class={classes!(
+                                                    "inline-flex",
+                                                    "items-center",
+                                                    "gap-[0.35rem]"
+                                                )}
+                                            >
+                                                <i class={classes!("fas", "fa-arrow-up-right-from-square")} aria-hidden="true"></i>
+                                                { t::SOURCE_LINK_TEXT }
+                                            </a>
+                                        }
+                                    } else {
+                                        html! {}
+                                    }
+                                }
                             </div>
                         </header>
+
+                        {
+                            if show_interactive_alert {
+                                html! {
+                                    <section class={classes!(
+                                        "mb-6",
+                                        "rounded-[26px]",
+                                        "border",
+                                        "border-[var(--primary)]/22",
+                                        "bg-[linear-gradient(135deg,rgba(15,123,95,0.12),rgba(250,240,214,0.92))]",
+                                        "p-5",
+                                        "shadow-[0_18px_40px_rgba(15,123,95,0.12)]",
+                                        "sm:mb-5",
+                                        "sm:p-4"
+                                    )}>
+                                        <div class={classes!("flex", "flex-wrap", "items-start", "justify-between", "gap-4")}>
+                                            <div class={classes!("max-w-3xl", "space-y-2")}>
+                                                <p class={classes!(
+                                                    "m-0",
+                                                    "text-[0.72rem]",
+                                                    "font-semibold",
+                                                    "uppercase",
+                                                    "tracking-[0.22em]",
+                                                    "text-[var(--primary)]"
+                                                )}>
+                                                    { t::INTERACTIVE_ALERT_BADGE }
+                                                </p>
+                                                <h2 class={classes!("m-0", "text-[1.35rem]", "leading-[1.2]", "sm:text-[1.12rem]")}>
+                                                    { interactive_alert_title }
+                                                </h2>
+                                                <p class={classes!("m-0", "text-[0.98rem]", "leading-[1.7]", "text-[var(--muted)]")}>
+                                                    { interactive_alert_desc }
+                                                </p>
+                                                <p class={classes!("m-0", "text-sm", "font-medium", "text-[var(--primary)]")}>
+                                                    { interactive_alert_note }
+                                                </p>
+                                            </div>
+                                            <div class={classes!("flex", "flex-wrap", "items-center", "gap-2")}>
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "inline-flex",
+                                                        "items-center",
+                                                        "justify-center",
+                                                        "gap-2",
+                                                        "rounded-full",
+                                                        "border",
+                                                        "border-[var(--primary)]",
+                                                        "bg-[var(--primary)]",
+                                                        "px-4",
+                                                        "py-2.5",
+                                                        "text-sm",
+                                                        "font-semibold",
+                                                        "text-white",
+                                                        "shadow-[0_14px_28px_rgba(15,123,95,0.18)]",
+                                                        "transition-[var(--transition-base)]",
+                                                        "hover:translate-y-[-1px]",
+                                                        "hover:bg-[var(--link)]"
+                                                    )}
+                                                    onclick={open_interactive_click.clone()}
+                                                >
+                                                    <i class={classes!("fas", "fa-laptop-code")} aria-hidden="true"></i>
+                                                    { interactive_alert_open }
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "inline-flex",
+                                                        "items-center",
+                                                        "justify-center",
+                                                        "gap-2",
+                                                        "rounded-full",
+                                                        "border",
+                                                        "border-[var(--border)]",
+                                                        "bg-white/70",
+                                                        "px-4",
+                                                        "py-2.5",
+                                                        "text-sm",
+                                                        "font-medium",
+                                                        "text-[var(--muted)]",
+                                                        "transition-[var(--transition-base)]",
+                                                        "hover:border-[var(--primary)]",
+                                                        "hover:text-[var(--primary)]"
+                                                    )}
+                                                    onclick={dismiss_interactive_prompt_click.clone()}
+                                                >
+                                                    { interactive_alert_stay }
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </section>
+                                }
+                            } else {
+                                html! {}
+                            }
+                        }
 
                         <section
                             key={markdown_render_key.clone()}
@@ -2765,6 +3110,158 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             <div class={classes!("container", "article-page-container")}>
                 { body }
             </div>
+            {
+                if show_interactive_prompt_modal {
+                    html! {
+                        <div
+                            class={classes!(
+                                "fixed",
+                                "inset-0",
+                                "z-[96]",
+                                "flex",
+                                "items-center",
+                                "justify-center",
+                                "bg-[linear-gradient(180deg,rgba(9,22,17,0.28),rgba(9,22,17,0.64))]",
+                                "p-4",
+                                "backdrop-blur-sm"
+                            )}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label={t::INTERACTIVE_ALERT_MODAL_ARIA}
+                            onclick={dismiss_interactive_prompt_modal_click.clone()}
+                        >
+                            <section
+                                class={classes!(
+                                    "w-full",
+                                    "max-w-2xl",
+                                    "overflow-hidden",
+                                    "rounded-[34px]",
+                                    "border",
+                                    "border-[var(--primary)]/22",
+                                    "bg-[linear-gradient(135deg,rgba(250,245,232,0.98),rgba(255,255,255,0.98))]",
+                                    "p-6",
+                                    "shadow-[0_32px_90px_rgba(11,33,25,0.28)]",
+                                    "sm:rounded-[26px]",
+                                    "sm:p-5"
+                                )}
+                                onclick={stop_interactive_prompt_bubble.clone()}
+                            >
+                                <div class={classes!("flex", "items-start", "justify-between", "gap-4")}>
+                                    <div class={classes!("space-y-3")}>
+                                        <p class={classes!(
+                                            "m-0",
+                                            "text-[0.72rem]",
+                                            "font-semibold",
+                                            "uppercase",
+                                            "tracking-[0.24em]",
+                                            "text-[var(--primary)]"
+                                        )}>
+                                            { t::INTERACTIVE_ALERT_BADGE }
+                                        </p>
+                                        <h2 class={classes!("m-0", "text-[1.7rem]", "leading-[1.08]", "sm:text-[1.35rem]")}>
+                                            { interactive_prompt_title }
+                                        </h2>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "inline-flex",
+                                            "h-11",
+                                            "w-11",
+                                            "items-center",
+                                            "justify-center",
+                                            "rounded-full",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-white/70",
+                                            "text-[var(--muted)]",
+                                            "transition-[var(--transition-base)]",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:text-[var(--primary)]"
+                                        )}
+                                        aria-label={t::INTERACTIVE_ALERT_CLOSE_ARIA}
+                                        onclick={dismiss_interactive_prompt_modal_click.clone()}
+                                    >
+                                        <i class={classes!("fas", "fa-xmark")} aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class={classes!(
+                                    "mt-5",
+                                    "rounded-[28px]",
+                                    "border",
+                                    "border-[var(--border)]/70",
+                                    "bg-white/72",
+                                    "p-5",
+                                    "shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]",
+                                    "sm:rounded-[22px]",
+                                    "sm:p-4"
+                                )}>
+                                    <p class={classes!("m-0", "text-[1rem]", "leading-[1.8]", "text-[var(--ink)]")}>
+                                        { interactive_prompt_desc }
+                                    </p>
+                                    <p class={classes!("m-0", "mt-3", "text-sm", "font-medium", "leading-[1.7]", "text-[var(--primary)]")}>
+                                        { interactive_prompt_note }
+                                    </p>
+                                </div>
+                                <div class={classes!("mt-5", "flex", "flex-wrap", "items-center", "gap-3")}>
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "inline-flex",
+                                            "items-center",
+                                            "justify-center",
+                                            "gap-2",
+                                            "rounded-full",
+                                            "border",
+                                            "border-[var(--primary)]",
+                                            "bg-[var(--primary)]",
+                                            "px-5",
+                                            "py-3",
+                                            "text-sm",
+                                            "font-semibold",
+                                            "text-white",
+                                            "shadow-[0_18px_32px_rgba(15,123,95,0.18)]",
+                                            "transition-[var(--transition-base)]",
+                                            "hover:translate-y-[-1px]",
+                                            "hover:bg-[var(--link)]"
+                                        )}
+                                        onclick={open_interactive_prompt_click.clone()}
+                                    >
+                                        <i class={classes!("fas", "fa-arrow-up-right-from-square")} aria-hidden="true"></i>
+                                        { interactive_prompt_open_label }
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class={classes!(
+                                            "inline-flex",
+                                            "items-center",
+                                            "justify-center",
+                                            "gap-2",
+                                            "rounded-full",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-white/70",
+                                            "px-5",
+                                            "py-3",
+                                            "text-sm",
+                                            "font-medium",
+                                            "text-[var(--muted)]",
+                                            "transition-[var(--transition-base)]",
+                                            "hover:border-[var(--primary)]",
+                                            "hover:text-[var(--primary)]"
+                                        )}
+                                        onclick={dismiss_interactive_prompt_modal_click.clone()}
+                                    >
+                                        { interactive_prompt_stay_label }
+                                    </button>
+                                </div>
+                            </section>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }
+            }
             {
                 if !is_overlay_open {
                     if let (Some((left, top)), Some(_)) = (*selection_button_pos, (*selection_draft).clone()) {

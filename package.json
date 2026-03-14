@@ -1,1 +1,11 @@
-{}
+{
+  "name": "static_flow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "capture:interactive": "node scripts/capture_interactive_page.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

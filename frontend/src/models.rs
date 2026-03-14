@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 #[cfg_attr(not(feature = "mock"), allow(unused_imports))]
-pub use static_flow_shared::{Article, ArticleListItem};
+pub use static_flow_shared::{Article, ArticleKind, ArticleListItem};
 
 #[cfg(feature = "mock")]
 use crate::api::{CategoryInfo, SearchResult, TagInfo};
@@ -83,6 +83,9 @@ fn mock_articles_full() -> Vec<Article> {
             None
         };
 
+        let is_interactive = i % 4 == 0;
+        let interactive_page_id = is_interactive.then(|| format!("ipg-{}", id));
+
         items.push(Article {
             id,
             title,
@@ -96,6 +99,13 @@ fn mock_articles_full() -> Vec<Article> {
             date,
             featured_image,
             read_time,
+            article_kind: if is_interactive {
+                ArticleKind::InteractiveRepost
+            } else {
+                ArticleKind::Markdown
+            },
+            source_url: None,
+            interactive_page_id,
         });
     }
 

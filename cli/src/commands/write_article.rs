@@ -35,6 +35,8 @@ const OBSIDIAN_IMAGE_LINK_PATTERN: &str = r"!\[\[([^\]]+)\]\]";
 pub struct WriteArticleOptions {
     pub id: Option<String>,
     pub summary: Option<String>,
+    pub title_override: Option<String>,
+    pub author_override: Option<String>,
     pub tags: Option<String>,
     pub category: Option<String>,
     pub category_description: Option<String>,
@@ -51,6 +53,9 @@ pub struct WriteArticleOptions {
     pub vector_zh: Option<String>,
     pub language: Option<String>,
     pub auto_optimize: bool,
+    pub article_kind: Option<String>,
+    pub source_url: Option<String>,
+    pub interactive_page_id: Option<String>,
 }
 
 struct ImageImportConfig {
@@ -70,6 +75,8 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
     let WriteArticleOptions {
         id,
         summary,
+        title_override,
+        author_override,
         tags,
         category,
         category_description,
@@ -86,6 +93,9 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         vector_zh,
         language,
         auto_optimize,
+        article_kind,
+        source_url,
+        interactive_page_id,
     } = options;
 
     let db = connect_db(db_path).await?;
@@ -115,7 +125,9 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         read_time,
     } = frontmatter;
 
-    let title = resolve_title(file, frontmatter_title.as_deref().unwrap_or_default(), &body);
+    let title = title_override.unwrap_or_else(|| {
+        resolve_title(file, frontmatter_title.as_deref().unwrap_or_default(), &body)
+    });
 
     let id = id.unwrap_or_else(|| {
         file.file_stem()
@@ -229,7 +241,10 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()))
         .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
-    let author = author.unwrap_or_else(|| "Unknown".to_string());
+    let author = author_override
+        .or(author)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Unknown".to_string());
 
     let combined_text = format!("{} {} {}", title, summary, body);
     let language = match language.as_deref() {
@@ -298,6 +313,9 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
         date,
         featured_image,
         read_time,
+        article_kind,
+        source_url,
+        interactive_page_id,
         vector_en,
         vector_zh,
         created_at: now_ms,

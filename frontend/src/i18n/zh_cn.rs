@@ -277,6 +277,26 @@ pub mod article_detail_page {
     pub const DETAILED_SUMMARY_TITLE_EN: &str = "Quick Brief";
     pub const OPEN_BRIEF_BUTTON_ZH: &str = "查看导读";
     pub const OPEN_BRIEF_BUTTON_EN: &str = "Open Brief";
+    pub const OPEN_INTERACTIVE_BUTTON_ZH: &str = "打开交互原版";
+    pub const OPEN_INTERACTIVE_BUTTON_EN: &str = "Open Interactive";
+    pub const INTERACTIVE_ALERT_BADGE: &str = "Interactive First";
+    pub const INTERACTIVE_ALERT_TITLE_ZH: &str = "这篇内容请优先切换到交互界面";
+    pub const INTERACTIVE_ALERT_TITLE_EN: &str = "Open The Interactive View First";
+    pub const INTERACTIVE_ALERT_DESC_ZH: &str =
+        "正文更适合检索与引用；核心图示、参数拖拽和 Bloom Filter 演示都在交互界面里。";
+    pub const INTERACTIVE_ALERT_DESC_EN: &str = "Use the text version for search and quoting. The \
+                                                 key graphs, sliders, and bloom-filter demos live \
+                                                 in the interactive view.";
+    pub const INTERACTIVE_ALERT_NOTE_ZH: &str =
+        "交互页内支持直接切换中文 / English，阅读体验会完整很多。";
+    pub const INTERACTIVE_ALERT_NOTE_EN: &str =
+        "The interactive page lets you switch between 中文 and English directly.";
+    pub const INTERACTIVE_ALERT_OPEN_ZH: &str = "立即进入交互界面";
+    pub const INTERACTIVE_ALERT_OPEN_EN: &str = "Open Interactive Now";
+    pub const INTERACTIVE_ALERT_STAY_ZH: &str = "暂时留在本文页";
+    pub const INTERACTIVE_ALERT_STAY_EN: &str = "Stay On This Page";
+    pub const INTERACTIVE_ALERT_MODAL_ARIA: &str = "交互模式提醒";
+    pub const INTERACTIVE_ALERT_CLOSE_ARIA: &str = "关闭交互提示";
     pub const OPEN_RAW_MARKDOWN_BUTTON_ZH: &str = "查看原始 Markdown";
     pub const OPEN_RAW_MARKDOWN_BUTTON_EN: &str = "View Raw Markdown";
     pub const CLOSE_BRIEF_ARIA: &str = "关闭快速导读";
@@ -307,6 +327,21 @@ pub mod article_detail_page {
     pub const LIGHTBOX_ZOOM_RESET_ARIA: &str = "重置图片缩放";
     pub const DEFAULT_IMAGE_ALT: &str = "文章图片";
     pub const IMAGE_PREVIEW_FAILED: &str = "图片加载失败，可尝试在新标签打开：{}";
+    pub const SOURCE_LINK_TEXT: &str = "原文来源";
+}
+
+pub mod interactive_article_page {
+    pub const BADGE: &str = "Interactive Mirror";
+    pub const TITLE_NOTE: &str = "站内镜像保留原页面交互，并支持在界面内切换中文 / English。";
+    pub const BACK_TO_ARTICLE: &str = "返回文章";
+    pub const OPEN_SOURCE: &str = "打开来源";
+    pub const LOADING: &str = "正在加载交互页...";
+    pub const REDIRECT_NOTE: &str =
+        "正在为你打开交互镜像；如果浏览器没有自动跳转，可以直接点下面的按钮。";
+    pub const OPEN_INTERACTIVE: &str = "进入交互镜像";
+    pub const NOT_AVAILABLE_TITLE: &str = "交互页不可用";
+    pub const NOT_AVAILABLE_DESC: &str = "当前文章没有关联交互镜像，或镜像尚未准备完成。";
+    pub const LOAD_ERROR_PREFIX: &str = "加载失败";
 }
 
 pub mod article_raw_page {
@@ -419,6 +454,7 @@ pub mod article_request {
     pub const STATUS_APPROVED: &str = "已通过";
     pub const STATUS_RUNNING: &str = "入库中";
     pub const STATUS_DONE: &str = "已入库";
+    pub const STATUS_DONE_NO_ARTICLE: &str = "已处理（未入库）";
     pub const STATUS_FAILED: &str = "入库失败";
     pub const VIEW_ARTICLE: &str = "查看文章 →";
     pub const EMPTY_LIST: &str = "还没有人提交请求，来做第一个吧！";
@@ -440,6 +476,8 @@ pub mod article_request {
     pub const LABEL_MESSAGE: &str = "推荐理由";
     pub const LABEL_AI_REPLY: &str = "AI 回复";
     pub const LABEL_REGION: &str = "来源";
+    pub const NO_ARTICLE_NOTICE: &str =
+        "这次请求已处理完成，但没有产出入库文章。请查看下方 AI 回复了解原因。";
 }
 
 pub mod mock {

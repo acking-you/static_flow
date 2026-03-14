@@ -15,6 +15,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+STANDALONE_SRC_DIR="$FRONTEND_DIR/standalone"
+STANDALONE_DIST_DIR="$FRONTEND_DIR/dist/standalone"
 OUTPUT_DIR=""
 SKIP_NPM="false"
 NPM_CACHE_DIR="${NPM_CACHE_DIR:-$ROOT_DIR/tmp/npm-cache}"
@@ -56,6 +58,16 @@ cd "$FRONTEND_DIR"
 NPM_CONFIG_CACHE="$NPM_CACHE_DIR" \
 STATICFLOW_API_BASE="/api" \
 trunk build --release
+
+# Copy standalone pages that are linked from the SPA homepage.
+rm -rf "$STANDALONE_DIST_DIR"
+mkdir -p "$STANDALONE_DIST_DIR"
+if [[ -d "$STANDALONE_SRC_DIR" ]]; then
+  cp -r "$STANDALONE_SRC_DIR/." "$STANDALONE_DIST_DIR/"
+  log "Copied standalone pages: $STANDALONE_SRC_DIR -> $STANDALONE_DIST_DIR"
+else
+  log "No standalone source directory found at $STANDALONE_SRC_DIR; leaving dist/standalone empty"
+fi
 
 log "Build complete: $FRONTEND_DIR/dist/"
 

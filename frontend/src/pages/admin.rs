@@ -125,6 +125,42 @@ fn status_badge_class(status: &str) -> Classes {
     }
 }
 
+fn article_request_has_article(req: &ArticleRequestItem) -> bool {
+    req.ingested_article_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|id| !id.is_empty())
+}
+
+fn article_request_status_badge_class(req: &ArticleRequestItem) -> Classes {
+    if req.status == "done" && !article_request_has_article(req) {
+        classes!(
+            "inline-flex",
+            "items-center",
+            "rounded-full",
+            "px-2",
+            "py-0.5",
+            "text-xs",
+            "font-semibold",
+            "uppercase",
+            "tracking-[0.06em]",
+            "bg-amber-500/15",
+            "text-amber-700",
+            "dark:text-amber-200"
+        )
+    } else {
+        status_badge_class(&req.status)
+    }
+}
+
+fn article_request_status_label(req: &ArticleRequestItem) -> String {
+    if req.status == "done" && !article_request_has_article(req) {
+        "done/no-article".to_string()
+    } else {
+        req.status.clone()
+    }
+}
+
 fn to_view_points(buckets: &[ApiBehaviorBucket]) -> Vec<ArticleViewPoint> {
     buckets
         .iter()
@@ -3463,7 +3499,11 @@ pub fn admin_page() -> Html {
                                                     </td>
                                                     <td class={classes!("py-2", "pr-3", "max-w-[150px]", "truncate")}>{ req.title_hint.clone().unwrap_or_default() }</td>
                                                     <td class={classes!("py-2", "pr-3")}>{ req.nickname.clone() }</td>
-                                                    <td class={classes!("py-2", "pr-3")}><span class={status_badge_class(&req.status)}>{ req.status.clone() }</span></td>
+                                                    <td class={classes!("py-2", "pr-3")}>
+                                                        <span class={article_request_status_badge_class(req)}>
+                                                            { article_request_status_label(req) }
+                                                        </span>
+                                                    </td>
                                                     <td class={classes!("py-2", "pr-3")}>{ req.ip_region.clone() }</td>
                                                     <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(req.created_at) }</td>
                                                     <td class={classes!("py-2", "pr-3")}>

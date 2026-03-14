@@ -217,6 +217,12 @@ pub struct ArticleQuery {
     pub offset: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct InteractivePageLangQuery {
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ViewTrendQuery {
     #[serde(default)]
@@ -736,6 +742,518 @@ pub async fn get_article_raw_markdown(
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(raw))
         .unwrap())
+}
+
+pub async fn get_interactive_page_entry(
+    State(state): State<AppState>,
+    Path(page_id): Path<String>,
+    Query(query): Query<InteractivePageLangQuery>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let page = state
+        .interactive_store
+        .get_page(&page_id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch interactive page", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Interactive page not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+
+    if page.status != "ready" {
+        return Err(conflict_error("interactive page is not ready"));
+    }
+
+    let locale_variants = state
+        .interactive_store
+        .list_page_locales(&page_id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch interactive page locales", e))?;
+    let locales = collect_interactive_locale_views(&page, &locale_variants);
+    let selected_locale = pick_interactive_locale(
+        locales.as_slice(),
+        page.source_lang.as_str(),
+        query.lang.as_deref(),
+    );
+    let html = build_interactive_page_shell_html(&page, locales.as_slice(), &selected_locale);
+
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(html))
+        .map_err(|e| {
+            internal_error("Failed to build interactive page response", format!("{e:?}"))
+        })?;
+    response.headers_mut().insert(
+        header::HeaderName::from_static("content-security-policy"),
+        header::HeaderValue::from_static(
+            "default-src 'self' data: blob: 'unsafe-inline'; img-src 'self' data: blob:; \
+             style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-src \
+             'self'; connect-src 'self'; frame-ancestors 'self';",
+        ),
+    );
+    Ok(response)
+}
+
+pub async fn get_interactive_page_embedded_entry(
+    State(state): State<AppState>,
+    Path(page_id): Path<String>,
+    Query(query): Query<InteractivePageLangQuery>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let page = state
+        .interactive_store
+        .get_page(&page_id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch interactive page", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Interactive page not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+
+    if page.status != "ready" {
+        return Err(conflict_error("interactive page is not ready"));
+    }
+
+    let locale_variants = state
+        .interactive_store
+        .list_page_locales(&page_id)
+        .await
+        .map_err(|e| internal_error("Failed to fetch interactive page locales", e))?;
+    let locales = collect_interactive_locale_views(&page, &locale_variants);
+    let selected_locale = pick_interactive_locale(
+        locales.as_slice(),
+        page.source_lang.as_str(),
+        query.lang.as_deref(),
+    );
+    let asset = state
+        .interactive_store
+        .get_asset_blob(&page_id, selected_locale.entry_asset_path.as_str())
+        .await
+        .map_err(|e| internal_error("Failed to fetch interactive page entry asset", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Interactive page entry asset not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+
+    let mut response = build_interactive_asset_response(asset, true)?;
+    response.headers_mut().insert(
+        header::HeaderName::from_static("content-security-policy"),
+        header::HeaderValue::from_static(
+            "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: \
+             blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' \
+             'unsafe-eval'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self';",
+        ),
+    );
+    Ok(response)
+}
+
+pub async fn get_interactive_page_asset(
+    State(state): State<AppState>,
+    Path(asset_path): Path<String>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let normalized_path = asset_path.trim_start_matches('/').trim().to_string();
+    if normalized_path.is_empty() {
+        return Err(bad_request("interactive asset path is required"));
+    }
+    let (page_id, logical_path) = normalized_path.split_once("/assets/").ok_or_else(|| {
+        bad_request("interactive asset path must match `<page_id>/assets/<path>`")
+    })?;
+    let logical_path = logical_path.trim().trim_start_matches('/').to_string();
+    if logical_path.is_empty() {
+        return Err(bad_request("interactive logical asset path is required"));
+    }
+
+    let asset = state
+        .interactive_store
+        .get_asset_blob(page_id, &logical_path)
+        .await
+        .map_err(|e| internal_error("Failed to fetch interactive page asset", e))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Interactive asset not found".to_string(),
+                    code: 404,
+                }),
+            )
+        })?;
+
+    build_interactive_asset_response(asset, false)
+}
+
+#[derive(Debug, Clone)]
+struct InteractiveLocaleView {
+    locale: String,
+    title: String,
+    entry_asset_path: String,
+}
+
+fn collect_interactive_locale_views(
+    page: &static_flow_shared::interactive_store::InteractivePageRecord,
+    locale_variants: &[static_flow_shared::interactive_store::InteractivePageLocaleRecord],
+) -> Vec<InteractiveLocaleView> {
+    let mut by_locale: HashMap<String, InteractiveLocaleView> = HashMap::new();
+    let source_locale = normalize_interactive_locale(page.source_lang.as_str());
+    by_locale.insert(source_locale.clone(), InteractiveLocaleView {
+        locale: source_locale,
+        title: page.title.clone(),
+        entry_asset_path: page.entry_asset_path.clone(),
+    });
+
+    for record in locale_variants {
+        let locale = normalize_interactive_locale(record.locale.as_str());
+        if locale.is_empty() {
+            continue;
+        }
+        by_locale.insert(locale.clone(), InteractiveLocaleView {
+            locale,
+            title: record.title.clone(),
+            entry_asset_path: record.entry_asset_path.clone(),
+        });
+    }
+
+    let mut locales = by_locale.into_values().collect::<Vec<_>>();
+    locales.sort_by(|left, right| {
+        interactive_locale_rank(left.locale.as_str())
+            .cmp(&interactive_locale_rank(right.locale.as_str()))
+            .then_with(|| left.locale.cmp(&right.locale))
+    });
+    locales
+}
+
+fn pick_interactive_locale(
+    locales: &[InteractiveLocaleView],
+    source_lang: &str,
+    requested_lang: Option<&str>,
+) -> InteractiveLocaleView {
+    if let Some(requested) = requested_lang.map(normalize_interactive_locale) {
+        if let Some(found) = locales.iter().find(|locale| locale.locale == requested) {
+            return found.clone();
+        }
+    }
+
+    if let Some(found) = locales.iter().find(|locale| locale.locale == "zh") {
+        return found.clone();
+    }
+
+    let source_lang = normalize_interactive_locale(source_lang);
+    if let Some(found) = locales.iter().find(|locale| locale.locale == source_lang) {
+        return found.clone();
+    }
+
+    locales
+        .first()
+        .cloned()
+        .unwrap_or_else(|| InteractiveLocaleView {
+            locale: "en".to_string(),
+            title: String::new(),
+            entry_asset_path: "index.html".to_string(),
+        })
+}
+
+fn build_interactive_page_shell_html(
+    page: &static_flow_shared::interactive_store::InteractivePageRecord,
+    locales: &[InteractiveLocaleView],
+    selected_locale: &InteractiveLocaleView,
+) -> String {
+    let shell_title =
+        if selected_locale.locale == "zh" { "交互镜像" } else { "Interactive Mirror" };
+    let shell_note = if selected_locale.locale == "zh" {
+        "核心图示、滑杆与按钮演示都在这里。可以直接在界面内切换中文或 English。"
+    } else {
+        "The graphs, sliders, and bloom-filter demos live here. Switch between English and 中文 \
+         directly in this interface."
+    };
+    let shell_hint = if selected_locale.locale == "zh" {
+        "文字稿更适合检索与引用；理解这篇内容，请优先阅读交互版。"
+    } else {
+        "The article page is better for search and quoting; use this interactive view for the full \
+         reading experience."
+    };
+    let source_label = if selected_locale.locale == "zh" { "原文来源" } else { "Source" };
+    let raw_entry_label = if selected_locale.locale == "zh" {
+        "直接打开当前语言原始渲染"
+    } else {
+        "Open Current-Language Raw Render"
+    };
+    let entry_src = format!("/interactive-pages/{}/entry?lang={}", page.id, selected_locale.locale);
+    let buttons = locales
+        .iter()
+        .map(|locale| {
+            let active = if locale.locale == selected_locale.locale {
+                " lang-chip--active"
+            } else {
+                ""
+            };
+            format!(
+                r#"<a class="lang-chip{active}" href="/interactive-pages/{page_id}?lang={lang}">{label}</a>"#,
+                active = active,
+                page_id = page.id,
+                lang = locale.locale,
+                label = escape_html(interactive_locale_label(locale.locale.as_str()).as_str()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!(
+        r#"<!doctype html>
+<html lang="{lang}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --shell-bg: #f4efe2;
+      --shell-ink: #1d2b21;
+      --shell-muted: #5d6f63;
+      --shell-card: rgba(255, 252, 244, 0.92);
+      --shell-border: rgba(29, 43, 33, 0.14);
+      --shell-accent: #0f7b5f;
+      --shell-accent-strong: #085340;
+      --shell-shadow: 0 24px 60px rgba(29, 43, 33, 0.12);
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    html, body {{
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top left, rgba(236, 205, 150, 0.55), transparent 32%),
+        linear-gradient(180deg, #f7f1e3 0%, var(--shell-bg) 100%);
+      color: var(--shell-ink);
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }}
+    body {{
+      padding: 18px;
+    }}
+    .shell {{
+      max-width: 1440px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }}
+    .hero {{
+      display: grid;
+      gap: 14px;
+      padding: 22px 24px;
+      border: 1px solid var(--shell-border);
+      border-radius: 28px;
+      background: var(--shell-card);
+      box-shadow: var(--shell-shadow);
+    }}
+    .eyebrow {{
+      margin: 0;
+      font-size: 0.72rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--shell-accent);
+      font-weight: 700;
+    }}
+    .hero h1 {{
+      margin: 0;
+      font-size: clamp(1.7rem, 3vw, 3rem);
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }}
+    .hero p {{
+      margin: 0;
+      max-width: 72rem;
+      color: var(--shell-muted);
+      font-size: 1rem;
+      line-height: 1.65;
+    }}
+    .hero-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }}
+    .lang-row {{
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .lang-chip {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 92px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--shell-border);
+      background: rgba(255, 255, 255, 0.78);
+      color: var(--shell-muted);
+      text-decoration: none;
+      font-size: 0.92rem;
+      font-weight: 700;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, color 120ms ease;
+    }}
+    .lang-chip:hover {{
+      transform: translateY(-1px);
+      border-color: rgba(15, 123, 95, 0.42);
+      color: var(--shell-accent);
+    }}
+    .lang-chip--active {{
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--shell-accent) 0%, var(--shell-accent-strong) 100%);
+      color: #fff;
+      box-shadow: 0 10px 22px rgba(15, 123, 95, 0.22);
+    }}
+    .source-link {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--shell-accent);
+      font-weight: 700;
+      text-decoration: none;
+    }}
+    .hero-actions {{
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }}
+    .raw-entry-link {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--shell-accent) 0%, var(--shell-accent-strong) 100%);
+      color: #fff;
+      font-weight: 700;
+      text-decoration: none;
+      box-shadow: 0 12px 24px rgba(15, 123, 95, 0.18);
+    }}
+    .raw-entry-link:hover {{
+      transform: translateY(-1px);
+    }}
+    .frame-card {{
+      overflow: hidden;
+      border: 1px solid var(--shell-border);
+      border-radius: 30px;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: var(--shell-shadow);
+    }}
+    iframe {{
+      display: block;
+      width: 100%;
+      min-height: calc(100vh - 220px);
+      border: 0;
+      background: #fff;
+    }}
+    @media (max-width: 860px) {{
+      body {{
+        padding: 10px;
+      }}
+      .hero {{
+        padding: 18px;
+        border-radius: 22px;
+      }}
+      .frame-card {{
+        border-radius: 24px;
+      }}
+      iframe {{
+        min-height: calc(100vh - 180px);
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <p class="eyebrow">{shell_title}</p>
+          <h1>{page_title}</h1>
+        </div>
+        <nav class="lang-row" aria-label="Interactive languages">
+          {buttons}
+        </nav>
+      </div>
+      <p>{shell_note}</p>
+      <p>{shell_hint}</p>
+      <div class="hero-actions">
+        <a class="raw-entry-link" href="{entry_src}">{raw_entry_label}</a>
+        <a class="source-link" href="{source_url}" target="_blank" rel="noreferrer noopener">{source_label}</a>
+      </div>
+    </section>
+    <section class="frame-card">
+      <iframe
+        src="{entry_src}"
+        title="{iframe_title}"
+        loading="eager"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    </section>
+  </main>
+</body>
+</html>"#,
+        lang = escape_html(selected_locale.locale.as_str()),
+        title = escape_html(format!("{shell_title} · {}", selected_locale.title).as_str()),
+        shell_title = escape_html(shell_title),
+        page_title = escape_html(selected_locale.title.as_str()),
+        shell_note = escape_html(shell_note),
+        shell_hint = escape_html(shell_hint),
+        buttons = buttons,
+        source_url = escape_html(page.source_url.as_str()),
+        source_label = escape_html(source_label),
+        raw_entry_label = escape_html(raw_entry_label),
+        entry_src = escape_html(entry_src.as_str()),
+        iframe_title =
+            escape_html(format!("Interactive mirror for {}", selected_locale.title).as_str()),
+    )
+}
+
+fn interactive_locale_rank(locale: &str) -> u8 {
+    match locale {
+        "zh" => 0,
+        "en" => 1,
+        _ => 2,
+    }
+}
+
+fn interactive_locale_label(locale: &str) -> String {
+    match locale {
+        "zh" => "中文".to_string(),
+        "en" => "English".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+fn normalize_interactive_locale(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 pub async fn track_article_view(
@@ -3148,6 +3666,30 @@ fn conflict_error(message: &str) -> (StatusCode, Json<ErrorResponse>) {
             code: 409,
         }),
     )
+}
+
+fn build_interactive_asset_response(
+    asset: static_flow_shared::interactive_store::InteractiveAssetBlob,
+    is_entry_html: bool,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let cache_control =
+        if is_entry_html { "no-store" } else { "public, max-age=31536000, immutable" };
+
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, asset.meta.mime_type.as_str())
+        .header(header::CACHE_CONTROL, cache_control);
+
+    if let Some(etag) = asset.meta.etag.as_deref() {
+        builder = builder.header(header::ETAG, etag);
+    }
+    if let Some(last_modified) = asset.meta.last_modified.as_deref() {
+        builder = builder.header(header::LAST_MODIFIED, last_modified);
+    }
+
+    builder
+        .body(Body::from(asset.bytes))
+        .map_err(|e| internal_error("Failed to build interactive asset response", format!("{e:?}")))
 }
 
 fn map_comment_action_error(

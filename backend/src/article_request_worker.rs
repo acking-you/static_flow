@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use static_flow_shared::article_request_store::{
     ArticleRequestRecord, ArticleRequestStore, NewArticleRequestAiRunChunkInput,
     NewArticleRequestAiRunInput, REQUEST_AI_RUN_STATUS_FAILED, REQUEST_AI_RUN_STATUS_SUCCESS,
@@ -119,6 +119,30 @@ struct RunnerProcessOutput {
     result_file_path: PathBuf,
 }
 
+#[derive(Debug, Deserialize)]
+struct ArticleRequestRunnerResultRaw {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    ingested_article_id: Option<String>,
+    #[serde(default)]
+    reply_markdown: Option<String>,
+    #[serde(default)]
+    failure_reason: Option<String>,
+}
+
+#[derive(Debug)]
+enum ArticleRequestRunnerOutcome {
+    Success { ingested_article_id: String },
+    Failed { failure_reason: String },
+}
+
+#[derive(Debug)]
+struct ArticleRequestRunnerResult {
+    outcome: ArticleRequestRunnerOutcome,
+    reply_markdown: String,
+}
+
 const RUN_CHUNK_MAX_SEGMENTS: usize = 4096;
 
 pub fn spawn_article_request_worker(
@@ -185,7 +209,7 @@ async fn process_one_request(
         .await
     {
         let reason = format!("failed to create article request ai run: {err}");
-        mark_request_failed(&store, request_id, reason).await;
+        mark_request_failed(&store, request_id, &reason, None).await;
         return Ok(());
     }
 
@@ -196,55 +220,26 @@ async fn process_one_request(
             let is_timeout = reason.contains("timed out");
 
             // On timeout, check if the result file was already written before giving up.
-            // The runner may have completed the actual work (e.g. song ingestion) but
-            // exceeded the wall-clock limit during post-verification steps.
+            // The runner may have completed ingestion but exceeded the wall-clock limit
+            // during post-verification steps.
             if is_timeout {
                 let result_path = build_result_file_path(&config.result_dir, request_id);
-                if let Ok(result_json) = read_result_json(&result_path).await {
+                if let Ok(result) = read_runner_result(&result_path).await {
                     tracing::info!(
                         "article request runner timed out but result file exists for \
-                         {request_id}, treating as success"
+                         {request_id}, applying persisted result"
                     );
-                    let ingested_article_id = result_json
-                        .get("ingested_article_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let reply_markdown = result_json
-                        .get("reply_markdown")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    if let Err(e) = store
-                        .transition_request(
-                            request_id,
-                            REQUEST_STATUS_DONE,
-                            None,
-                            None,
-                            ingested_article_id.as_deref(),
-                            Some(&reply_markdown),
-                        )
-                        .await
-                    {
-                        tracing::warn!("failed to mark timed-out request as done: {e}");
-                    }
-                    send_request_done_notification(
+                    let did_ingest = apply_runner_result(
+                        &store,
                         email_notifier.as_ref(),
                         &request,
-                        ingested_article_id.as_deref(),
-                        &reply_markdown,
+                        request_id,
+                        &run_id,
+                        None,
+                        result,
                     )
                     .await;
-                    let _ = store
-                        .finalize_ai_run(
-                            &run_id,
-                            REQUEST_AI_RUN_STATUS_SUCCESS,
-                            None,
-                            None,
-                            Some(&reply_markdown),
-                        )
-                        .await;
-                    if config.cleanup_result_file_on_success {
+                    if did_ingest && config.cleanup_result_file_on_success {
                         let _ = tokio::fs::remove_file(&result_path).await;
                     }
                     return Ok(());
@@ -254,13 +249,13 @@ async fn process_one_request(
             let _ = store
                 .finalize_ai_run(&run_id, REQUEST_AI_RUN_STATUS_FAILED, None, Some(&reason), None)
                 .await;
-            mark_request_failed(&store, request_id, reason).await;
+            mark_request_failed(&store, request_id, &reason, None).await;
             return Ok(());
         },
     };
 
-    let result_json = match read_result_json(&run_output.result_file_path).await {
-        Ok(j) => j,
+    let result = match read_runner_result(&run_output.result_file_path).await {
+        Ok(result) => result,
         Err(err) => {
             let reason = format!(
                 "article request result file invalid: {err} path={} exit_code={:?}",
@@ -276,64 +271,23 @@ async fn process_one_request(
                     None,
                 )
                 .await;
-            mark_request_failed(&store, request_id, reason).await;
+            mark_request_failed(&store, request_id, &reason, None).await;
             return Ok(());
         },
     };
 
-    let ingested_article_id = result_json
-        .get("ingested_article_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let reply_markdown = result_json
-        .get("reply_markdown")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if let Err(err) = store
-        .transition_request(
-            request_id,
-            REQUEST_STATUS_DONE,
-            None,
-            None,
-            ingested_article_id.as_deref(),
-            Some(&reply_markdown),
-        )
-        .await
-    {
-        let reason = format!("failed to mark request done: {err}");
-        let _ = store
-            .finalize_ai_run(
-                &run_id,
-                REQUEST_AI_RUN_STATUS_FAILED,
-                run_output.exit_code,
-                Some(&reason),
-                Some(&reply_markdown),
-            )
-            .await;
-        mark_request_failed(&store, request_id, reason).await;
-        return Ok(());
-    }
-    send_request_done_notification(
+    let did_ingest = apply_runner_result(
+        &store,
         email_notifier.as_ref(),
         &request,
-        ingested_article_id.as_deref(),
-        &reply_markdown,
+        request_id,
+        &run_id,
+        run_output.exit_code,
+        result,
     )
     .await;
 
-    let _ = store
-        .finalize_ai_run(
-            &run_id,
-            REQUEST_AI_RUN_STATUS_SUCCESS,
-            run_output.exit_code,
-            None,
-            Some(&reply_markdown),
-        )
-        .await;
-
-    if config.cleanup_result_file_on_success {
+    if did_ingest && config.cleanup_result_file_on_success {
         let _ = tokio::fs::remove_file(&run_output.result_file_path).await;
     }
 
@@ -470,6 +424,12 @@ async fn read_result_json(path: &Path) -> Result<serde_json::Value> {
         .with_context(|| format!("result file is not valid JSON: {}", path.display()))
 }
 
+async fn read_runner_result(path: &Path) -> Result<ArticleRequestRunnerResult> {
+    let raw = read_result_json(path).await?;
+    ArticleRequestRunnerResult::from_json(raw)
+        .with_context(|| format!("result schema is invalid: {}", path.display()))
+}
+
 fn build_result_file_path(result_dir: &Path, request_id: &str) -> PathBuf {
     let safe = sanitize_id_for_path(request_id);
     result_dir.join(format!("request-{safe}.json"))
@@ -541,9 +501,89 @@ async fn pump_child_stream(
     Ok(collected)
 }
 
-async fn mark_request_failed(store: &ArticleRequestStore, request_id: &str, message: String) {
+async fn apply_runner_result(
+    store: &ArticleRequestStore,
+    email_notifier: Option<&Arc<EmailNotifier>>,
+    request: &ArticleRequestRecord,
+    request_id: &str,
+    run_id: &str,
+    exit_code: Option<i32>,
+    result: ArticleRequestRunnerResult,
+) -> bool {
+    match result.outcome {
+        ArticleRequestRunnerOutcome::Success {
+            ingested_article_id,
+        } => {
+            if let Err(err) = store
+                .transition_request(
+                    request_id,
+                    REQUEST_STATUS_DONE,
+                    None,
+                    None,
+                    Some(&ingested_article_id),
+                    Some(&result.reply_markdown),
+                )
+                .await
+            {
+                let reason = format!("failed to mark request done: {err}");
+                let _ = store
+                    .finalize_ai_run(
+                        run_id,
+                        REQUEST_AI_RUN_STATUS_FAILED,
+                        exit_code,
+                        Some(&reason),
+                        Some(&result.reply_markdown),
+                    )
+                    .await;
+                mark_request_failed(store, request_id, &reason, Some(&result.reply_markdown)).await;
+                return false;
+            }
+            send_request_done_notification(
+                email_notifier,
+                request,
+                Some(&ingested_article_id),
+                &result.reply_markdown,
+            )
+            .await;
+
+            let _ = store
+                .finalize_ai_run(
+                    run_id,
+                    REQUEST_AI_RUN_STATUS_SUCCESS,
+                    exit_code,
+                    None,
+                    Some(&result.reply_markdown),
+                )
+                .await;
+            true
+        },
+        ArticleRequestRunnerOutcome::Failed {
+            failure_reason,
+        } => {
+            let _ = store
+                .finalize_ai_run(
+                    run_id,
+                    REQUEST_AI_RUN_STATUS_FAILED,
+                    exit_code,
+                    Some(&failure_reason),
+                    Some(&result.reply_markdown),
+                )
+                .await;
+            mark_request_failed(store, request_id, &failure_reason, Some(&result.reply_markdown))
+                .await;
+            false
+        },
+    }
+}
+
+async fn mark_request_failed(
+    store: &ArticleRequestStore,
+    request_id: &str,
+    message: &str,
+    ai_reply: Option<&str>,
+) {
     let _ = store
-        .transition_request(request_id, REQUEST_STATUS_FAILED, None, Some(&message), None, None)
+        .transition_request(request_id, REQUEST_STATUS_FAILED, None, Some(message), None, ai_reply)
         .await;
 }
 
@@ -596,5 +636,131 @@ async fn send_request_done_notification(
             request.request_id,
             err
         );
+    }
+}
+
+impl ArticleRequestRunnerResult {
+    fn from_json(value: serde_json::Value) -> Result<Self> {
+        let raw: ArticleRequestRunnerResultRaw =
+            serde_json::from_value(value).context("failed to decode article request result")?;
+        let status = normalize_optional_string(raw.status);
+        let ingested_article_id = normalize_optional_string(raw.ingested_article_id);
+        let reply_markdown = normalize_optional_string(raw.reply_markdown).unwrap_or_default();
+        let failure_reason = normalize_optional_string(raw.failure_reason);
+
+        let outcome = match status.as_deref() {
+            Some("success") => {
+                let article_id = ingested_article_id.ok_or_else(|| {
+                    anyhow::anyhow!("result marked success but ingested_article_id is missing")
+                })?;
+                ArticleRequestRunnerOutcome::Success {
+                    ingested_article_id: article_id,
+                }
+            },
+            Some("blocked" | "failed") => ArticleRequestRunnerOutcome::Failed {
+                failure_reason: failure_reason
+                    .or_else(|| {
+                        if reply_markdown.is_empty() {
+                            None
+                        } else {
+                            Some(reply_markdown.clone())
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        "article request runner reported failure without a reason".to_string()
+                    }),
+            },
+            Some(other) => {
+                anyhow::bail!("unsupported result status `{other}`");
+            },
+            None => match ingested_article_id {
+                Some(article_id) => ArticleRequestRunnerOutcome::Success {
+                    ingested_article_id: article_id,
+                },
+                None => ArticleRequestRunnerOutcome::Failed {
+                    failure_reason: failure_reason
+                        .or_else(|| {
+                            if reply_markdown.is_empty() {
+                                Some(
+                                    "article request runner completed without ingested_article_id"
+                                        .to_string(),
+                                )
+                            } else {
+                                Some(reply_markdown.clone())
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            "article request runner completed without ingested_article_id"
+                                .to_string()
+                        }),
+                },
+            },
+        };
+
+        Ok(Self {
+            outcome,
+            reply_markdown,
+        })
+    }
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ArticleRequestRunnerOutcome, ArticleRequestRunnerResult};
+
+    #[test]
+    fn parses_legacy_success_result_with_article_id() {
+        let result = ArticleRequestRunnerResult::from_json(serde_json::json!({
+            "ingested_article_id": "article-123",
+            "reply_markdown": "done"
+        }))
+        .expect("result should parse");
+
+        match result.outcome {
+            ArticleRequestRunnerOutcome::Success {
+                ingested_article_id,
+            } => assert_eq!(ingested_article_id, "article-123"),
+            ArticleRequestRunnerOutcome::Failed {
+                failure_reason,
+            } => {
+                panic!("expected success, got failure: {failure_reason}")
+            },
+        }
+    }
+
+    #[test]
+    fn treats_legacy_missing_article_id_as_failure() {
+        let result = ArticleRequestRunnerResult::from_json(serde_json::json!({
+            "reply_markdown": "no write performed"
+        }))
+        .expect("result should parse");
+
+        match result.outcome {
+            ArticleRequestRunnerOutcome::Success {
+                ingested_article_id,
+            } => panic!("expected failure, got success: {ingested_article_id}"),
+            ArticleRequestRunnerOutcome::Failed {
+                failure_reason,
+            } => {
+                assert_eq!(failure_reason, "no write performed");
+            },
+        }
+    }
+
+    #[test]
+    fn rejects_success_status_without_article_id() {
+        let err = ArticleRequestRunnerResult::from_json(serde_json::json!({
+            "status": "success",
+            "reply_markdown": "missing id"
+        }))
+        .expect_err("result should fail validation");
+
+        assert!(err.to_string().contains("ingested_article_id is missing"));
     }
 }

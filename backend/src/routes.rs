@@ -55,6 +55,15 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
         .route("/api/articles/:id/raw/:lang", get(handlers::get_article_raw_markdown))
+        .route("/interactive-pages/:page_id", get(handlers::get_interactive_page_entry))
+        .route(
+            "/interactive-pages/:page_id/entry",
+            get(handlers::get_interactive_page_embedded_entry),
+        )
+        .route(
+            "/api/interactive-pages/*asset_path",
+            get(handlers::get_interactive_page_asset),
+        )
         .route("/api/articles/:id/view", post(handlers::track_article_view))
         .route("/api/articles/:id/view-trend", get(handlers::get_article_view_trend))
         .route("/api/articles/:id/related", get(handlers::related_articles))

@@ -8,7 +8,7 @@ mod tests {
     #[test]
     fn article_schema_has_expected_fields() {
         let schema = schema::article_schema();
-        assert_eq!(schema.fields().len(), 16);
+        assert_eq!(schema.fields().len(), 19);
 
         let id_field = schema.field_with_name("id").expect("id field");
         assert_eq!(id_field.data_type(), &DataType::Utf8);
@@ -50,6 +50,24 @@ mod tests {
             .field_with_name("created_at")
             .expect("created_at field");
         assert_eq!(created_at.data_type(), &DataType::Timestamp(TimeUnit::Millisecond, None));
+
+        let article_kind = schema
+            .field_with_name("article_kind")
+            .expect("article_kind field");
+        assert_eq!(article_kind.data_type(), &DataType::Utf8);
+        assert!(article_kind.is_nullable());
+
+        let source_url = schema
+            .field_with_name("source_url")
+            .expect("source_url field");
+        assert_eq!(source_url.data_type(), &DataType::Utf8);
+        assert!(source_url.is_nullable());
+
+        let interactive_page_id = schema
+            .field_with_name("interactive_page_id")
+            .expect("interactive_page_id field");
+        assert_eq!(interactive_page_id.data_type(), &DataType::Utf8);
+        assert!(interactive_page_id.is_nullable());
     }
 
     #[test]
@@ -96,6 +114,9 @@ mod tests {
                 date: "2024-01-01".to_string(),
                 featured_image: Some("hero.jpg".to_string()),
                 read_time: 3,
+                article_kind: Some("interactive".to_string()),
+                source_url: Some("https://example.com/post-1".to_string()),
+                interactive_page_id: Some("page-1".to_string()),
                 vector_en: Some(vec![0.1; TEXT_VECTOR_DIM_EN]),
                 vector_zh: None,
                 created_at: 1,
@@ -114,6 +135,9 @@ mod tests {
                 date: "2024-02-01".to_string(),
                 featured_image: None,
                 read_time: 5,
+                article_kind: None,
+                source_url: None,
+                interactive_page_id: None,
                 vector_en: None,
                 vector_zh: Some(vec![0.2; TEXT_VECTOR_DIM_ZH]),
                 created_at: 3,

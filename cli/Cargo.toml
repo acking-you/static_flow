@@ -28,6 +28,7 @@ regex = "1"
 resvg = "0.45"
 rand = "0.8"
 lofty = "0.23"
+url = "2.5"
 
 [dev-dependencies]
 tempfile = "3.10"

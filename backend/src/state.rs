@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use static_flow_shared::{
     article_request_store::{self, ArticleRequestStore},
     comments_store::{self, CommentDataStore},
+    interactive_store::{self, InteractivePageStore},
     lancedb_api::{
         self, CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
@@ -153,6 +154,16 @@ pub struct AdminAccessConfig {
 }
 
 #[derive(Clone)]
+struct TableCompactorStores {
+    content_store: Arc<StaticFlowDataStore>,
+    comment_store: Arc<CommentDataStore>,
+    music_store: Arc<MusicDataStore>,
+    music_wish_store: Arc<MusicWishStore>,
+    article_request_store: Arc<ArticleRequestStore>,
+    interactive_store: Arc<InteractivePageStore>,
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub(crate) store: Arc<StaticFlowDataStore>,
     pub(crate) comment_store: Arc<CommentDataStore>,
@@ -177,6 +188,7 @@ pub struct AppState {
     pub(crate) article_request_store: Arc<ArticleRequestStore>,
     pub(crate) article_request_worker_tx: mpsc::Sender<String>,
     pub(crate) article_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) interactive_store: Arc<InteractivePageStore>,
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
     pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
     pub(crate) shutdown_tx: watch::Sender<bool>,
@@ -195,6 +207,7 @@ impl AppState {
         let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
         let music_wish_store = Arc::new(MusicWishStore::connect(music_db_uri).await?);
         let article_request_store = Arc::new(ArticleRequestStore::connect(content_db_uri).await?);
+        let interactive_store = Arc::new(InteractivePageStore::connect(content_db_uri).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
         let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
@@ -231,11 +244,14 @@ impl AppState {
         let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
 
         spawn_table_compactor(
-            store.clone(),
-            comment_store.clone(),
-            music_store.clone(),
-            music_wish_store.clone(),
-            article_request_store.clone(),
+            TableCompactorStores {
+                content_store: store.clone(),
+                comment_store: comment_store.clone(),
+                music_store: music_store.clone(),
+                music_wish_store: music_wish_store.clone(),
+                article_request_store: article_request_store.clone(),
+                interactive_store: interactive_store.clone(),
+            },
             compaction_runtime_config.clone(),
             shutdown_rx,
         );
@@ -264,6 +280,7 @@ impl AppState {
             article_request_store,
             article_request_worker_tx,
             article_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
+            interactive_store,
             email_notifier,
             behavior_event_tx,
             shutdown_tx,
@@ -461,11 +478,7 @@ fn spawn_behavior_event_flusher(
 }
 
 fn spawn_table_compactor(
-    store: Arc<StaticFlowDataStore>,
-    comment_store: Arc<CommentDataStore>,
-    music_store: Arc<MusicDataStore>,
-    music_wish_store: Arc<MusicWishStore>,
-    article_request_store: Arc<ArticleRequestStore>,
+    stores: TableCompactorStores,
     compaction_runtime_config: Arc<RwLock<CompactionRuntimeConfig>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
@@ -508,15 +521,28 @@ fn spawn_table_compactor(
 
             // Scan each DB group sequentially
             for (db_label, conn, tables) in [
-                ("content", store.connection(), lancedb_api::CONTENT_TABLE_NAMES),
+                ("content", stores.content_store.connection(), lancedb_api::CONTENT_TABLE_NAMES),
                 (
                     "content",
-                    article_request_store.connection(),
+                    stores.article_request_store.connection(),
                     article_request_store::ARTICLE_REQUEST_TABLE_NAMES,
                 ),
-                ("comments", comment_store.connection(), comments_store::COMMENT_TABLE_NAMES),
-                ("music", music_store.connection(), music_store::MUSIC_TABLE_NAMES),
-                ("music", music_wish_store.connection(), music_wish_store::MUSIC_WISH_TABLE_NAMES),
+                (
+                    "content",
+                    stores.interactive_store.connection(),
+                    interactive_store::INTERACTIVE_TABLE_NAMES,
+                ),
+                (
+                    "comments",
+                    stores.comment_store.connection(),
+                    comments_store::COMMENT_TABLE_NAMES,
+                ),
+                ("music", stores.music_store.connection(), music_store::MUSIC_TABLE_NAMES),
+                (
+                    "music",
+                    stores.music_wish_store.connection(),
+                    music_wish_store::MUSIC_WISH_TABLE_NAMES,
+                ),
             ] {
                 let results = scan_and_compact_tables(conn, tables, &config).await;
                 for r in results {
