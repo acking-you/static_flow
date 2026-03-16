@@ -134,9 +134,11 @@ impl InteractivePageStore {
     }
 
     async fn pages_table(&self) -> Result<Table> {
-        let table =
-            ensure_table(&self.db, INTERACTIVE_PAGES_TABLE, interactive_pages_schema(), &[])
-                .await?;
+        let table = ensure_table(&self.db, INTERACTIVE_PAGES_TABLE, interactive_pages_schema(), &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ])
+        .await?;
 
         let schema = table.schema().await?;
         if schema.field_with_name("content_sha256").is_err() {
@@ -169,7 +171,10 @@ impl InteractivePageStore {
             &self.db,
             INTERACTIVE_PAGE_LOCALES_TABLE,
             interactive_page_locales_schema(),
-            &[],
+            &[
+                ("new_table_enable_stable_row_ids", "true"),
+                ("new_table_enable_v2_manifest_paths", "true"),
+            ],
         )
         .await
     }

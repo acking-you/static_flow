@@ -790,11 +790,19 @@ impl MusicDataStore {
     }
 
     async fn plays_table(&self) -> Result<Table> {
-        ensure_table(&self.db, MUSIC_PLAYS_TABLE, music_plays_schema(), &[]).await
+        ensure_table(&self.db, MUSIC_PLAYS_TABLE, music_plays_schema(), &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ])
+        .await
     }
 
     async fn comments_table(&self) -> Result<Table> {
-        ensure_table(&self.db, MUSIC_COMMENTS_TABLE, music_comments_schema(), &[]).await
+        ensure_table(&self.db, MUSIC_COMMENTS_TABLE, music_comments_schema(), &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ])
+        .await
     }
 
     // -- Song CRUD --

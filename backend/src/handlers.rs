@@ -1589,11 +1589,11 @@ pub async fn admin_cleanup_api_behavior(
         .await
         .map_err(|e| internal_error("Failed to cleanup api behavior events", e))?;
 
-    // Compact after cleanup to merge fragments and reduce open file descriptors
     if deleted > 0 {
-        if let Err(e) = state.store.compact_api_behavior_table().await {
-            tracing::warn!("Failed to compact api_behavior_events after cleanup: {e}");
-        }
+        tracing::warn!(
+            "Skipping api_behavior_events compaction after cleanup because Lance frag reuse \
+             metadata can corrupt filtered reads on this table"
+        );
     }
 
     Ok(Json(AdminApiBehaviorCleanupResponse {
@@ -1604,16 +1604,18 @@ pub async fn admin_cleanup_api_behavior(
 }
 
 pub async fn admin_compact_api_behavior(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    ensure_admin_access(&state, &headers)?;
-    state
-        .store
-        .compact_api_behavior_table()
-        .await
-        .map_err(|e| internal_error("Failed to compact api_behavior_events table", e))?;
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+    ensure_admin_access(&_state, &headers)?;
+    tracing::warn!(
+        "Ignoring manual api_behavior_events compaction request because Lance frag reuse metadata \
+         can corrupt filtered reads on this table"
+    );
+    Ok(Json(serde_json::json!({
+        "status": "skipped",
+        "reason": "api_behavior_compaction_disabled_due_to_frag_reuse_bug"
+    })))
 }
 
 pub async fn get_geoip_status(
@@ -1629,7 +1631,7 @@ pub async fn admin_memory_profiler_overview(
     headers: HeaderMap,
 ) -> Result<Json<memory_profiler::MemoryProfilerOverview>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let profiler = memory_profiler::profiler()
+    let profiler = memory_profiler::global_profiler()
         .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
     Ok(Json(profiler.overview()))
 }
@@ -1640,7 +1642,7 @@ pub async fn admin_memory_profiler_stacks(
     Query(query): Query<AdminMemoryTopQuery>,
 ) -> Result<Json<memory_profiler::MemoryStackReport>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let profiler = memory_profiler::profiler()
+    let profiler = memory_profiler::global_profiler()
         .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
     let top = memory_profiler::normalized_top_or_default(query.top);
     Ok(Json(profiler.stacks_report(top)))
@@ -1652,7 +1654,7 @@ pub async fn admin_memory_profiler_functions(
     Query(query): Query<AdminMemoryTopQuery>,
 ) -> Result<Json<memory_profiler::MemoryFunctionReport>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let profiler = memory_profiler::profiler()
+    let profiler = memory_profiler::global_profiler()
         .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
     let top = memory_profiler::normalized_top_or_default(query.top);
     Ok(Json(profiler.functions_report(top)))
@@ -1664,7 +1666,7 @@ pub async fn admin_memory_profiler_modules(
     Query(query): Query<AdminMemoryTopQuery>,
 ) -> Result<Json<memory_profiler::MemoryModuleReport>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let profiler = memory_profiler::profiler()
+    let profiler = memory_profiler::global_profiler()
         .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
     let top = memory_profiler::normalized_top_or_default(query.top);
     Ok(Json(profiler.modules_report(top)))
@@ -1675,7 +1677,7 @@ pub async fn admin_reset_memory_profiler(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let profiler = memory_profiler::profiler()
+    let profiler = memory_profiler::global_profiler()
         .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
     profiler.reset();
     Ok(Json(serde_json::json!({ "status": "ok" })))
@@ -1688,7 +1690,7 @@ pub async fn admin_update_memory_profiler_config(
 ) -> Result<Json<memory_profiler::MemoryProfilerConfigSnapshot>, (StatusCode, Json<ErrorResponse>)>
 {
     ensure_admin_access(&state, &headers)?;
-    let profiler = memory_profiler::profiler()
+    let profiler = memory_profiler::global_profiler()
         .ok_or_else(|| internal_error_message("Memory profiler unavailable"))?;
     let config = profiler
         .update_config(request)

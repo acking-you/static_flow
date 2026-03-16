@@ -17,7 +17,7 @@ use lancedb::{
     connect,
     index::scalar::FullTextSearchQuery,
     query::{ExecutableQuery, QueryBase, Select},
-    table::OptimizeAction,
+    table::{CompactionOptions, OptimizeAction},
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
@@ -229,6 +229,8 @@ pub struct ImageBlob {
 
 pub const CONTENT_TABLE_NAMES: &[&str] =
     &["articles", "images", "taxonomies", "article_views", "api_behavior_events"];
+pub const CONTENT_COMPACTION_TABLE_NAMES: &[&str] =
+    &["articles", "images", "taxonomies", "article_views"];
 
 pub struct StaticFlowDataStore {
     db: Connection,
@@ -300,6 +302,8 @@ impl StaticFlowDataStore {
                         &self.article_views_table,
                         Box::new(batches) as Box<dyn RecordBatchReader + Send>,
                     )
+                    .storage_option("new_table_enable_stable_row_ids", "true")
+                    .storage_option("new_table_enable_v2_manifest_paths", "true")
                     .execute()
                     .await
                     .context("failed to create article_views table")?;
@@ -324,6 +328,8 @@ impl StaticFlowDataStore {
                         &self.api_behavior_table,
                         Box::new(batches) as Box<dyn RecordBatchReader + Send>,
                     )
+                    .storage_option("new_table_enable_stable_row_ids", "true")
+                    .storage_option("new_table_enable_v2_manifest_paths", "true")
                     .execute()
                     .await
                     .context("failed to create api_behavior_events table")?;
@@ -481,8 +487,20 @@ impl StaticFlowDataStore {
     /// performance.
     pub async fn compact_api_behavior_table(&self) -> Result<()> {
         let table = self.api_behavior_table().await?;
+        let defer_index_remap = table_uses_stable_row_ids(&table)
+            .await
+            .map(|stable| !stable)
+            .unwrap_or(true);
         table
-            .optimize(OptimizeAction::All)
+            .optimize(OptimizeAction::Compact {
+                options: CompactionOptions {
+                    num_threads: Some(1),
+                    batch_size: Some(1024),
+                    defer_index_remap,
+                    ..CompactionOptions::default()
+                },
+                remap_options: None,
+            })
             .await
             .context("failed to compact api_behavior_events table")?;
         table
@@ -2942,6 +2960,17 @@ fn normalize_required_text(value: String, max_chars: usize, fallback: &str) -> S
     }
 }
 
+async fn table_uses_stable_row_ids(table: &Table) -> Result<bool> {
+    let ds_wrapper = table
+        .dataset()
+        .ok_or_else(|| anyhow::anyhow!("table `{}` has no native dataset", table.name()))?;
+    let dataset = ds_wrapper
+        .get()
+        .await
+        .with_context(|| format!("failed to load dataset for `{}`", table.name()))?;
+    Ok(dataset.manifest().uses_stable_row_ids())
+}
+
 fn extract_highlight(text: &str, keyword: &str) -> String {
     const CONTEXT_CHARS: usize = 40;
     const FALLBACK_EXCERPT_CHARS: usize = 100;
@@ -3367,8 +3396,15 @@ mod tests {
         alternate_embedding_language, choose_primary_search_language, cosine_similarity,
         extract_highlight, extract_semantic_highlight, find_case_insensitive_match_range,
         is_pure_english_query, semantic_query_tokens, split_text_by_sentence_or_size,
-        vector_column_for_language, TextEmbeddingLanguage,
+        vector_column_for_language, TextEmbeddingLanguage, CONTENT_COMPACTION_TABLE_NAMES,
+        CONTENT_TABLE_NAMES,
     };
+
+    #[test]
+    fn content_compaction_tables_skip_api_behavior_events() {
+        assert!(CONTENT_TABLE_NAMES.contains(&"api_behavior_events"));
+        assert!(!CONTENT_COMPACTION_TABLE_NAMES.contains(&"api_behavior_events"));
+    }
 
     #[test]
     fn highlight_marks_ascii_case_insensitive_keyword() {

@@ -436,6 +436,8 @@ async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> Resul
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
             db.create_table(name, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+                .storage_option("new_table_enable_stable_row_ids", "true")
+                .storage_option("new_table_enable_v2_manifest_paths", "true")
                 .execute()
                 .await
                 .with_context(|| format!("failed to create table {name}"))?;

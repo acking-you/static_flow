@@ -2408,7 +2408,7 @@ dependencies = [
 
 [[package]]
 name = "fsst"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-array",
  "rand 0.9.2",
@@ -3727,7 +3727,7 @@ dependencies = [
 
 [[package]]
 name = "lance"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -3779,7 +3779,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "snafu",
+ "snafu 0.9.0",
  "tantivy",
  "tokio",
  "tokio-stream",
@@ -3791,7 +3791,7 @@ dependencies = [
 
 [[package]]
 name = "lance-arrow"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -3801,6 +3801,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "bytes",
+ "futures",
  "getrandom 0.2.16",
  "half",
  "jsonb",
@@ -3810,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "lance-bitpacking"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrayref",
  "paste",
@@ -3819,7 +3820,7 @@ dependencies = [
 
 [[package]]
 name = "lance-core"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -3845,7 +3846,7 @@ dependencies = [
  "rand 0.9.2",
  "roaring",
  "serde_json",
- "snafu",
+ "snafu 0.9.0",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -3856,7 +3857,7 @@ dependencies = [
 
 [[package]]
 name = "lance-datafusion"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -3879,14 +3880,14 @@ dependencies = [
  "pin-project",
  "prost",
  "prost-build",
- "snafu",
+ "snafu 0.9.0",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "lance-datagen"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -3904,7 +3905,7 @@ dependencies = [
 
 [[package]]
 name = "lance-encoding"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -3931,7 +3932,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "rand 0.9.2",
- "snafu",
+ "snafu 0.9.0",
  "strum",
  "tokio",
  "tracing",
@@ -3941,7 +3942,7 @@ dependencies = [
 
 [[package]]
 name = "lance-file"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -3966,14 +3967,14 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "snafu",
+ "snafu 0.9.0",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "lance-index"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -4025,7 +4026,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec 1.15.1",
- "snafu",
+ "snafu 0.9.0",
  "tantivy",
  "tempfile",
  "tokio",
@@ -4036,7 +4037,7 @@ dependencies = [
 
 [[package]]
 name = "lance-io"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -4064,7 +4065,7 @@ dependencies = [
  "prost",
  "rand 0.9.2",
  "serde",
- "snafu",
+ "snafu 0.9.0",
  "tempfile",
  "tokio",
  "tracing",
@@ -4073,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "lance-linalg"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4089,19 +4090,19 @@ dependencies = [
 
 [[package]]
 name = "lance-namespace"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "async-trait",
  "bytes",
  "lance-core",
  "lance-namespace-reqwest-client",
- "snafu",
+ "snafu 0.9.0",
 ]
 
 [[package]]
 name = "lance-namespace-impls"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -4120,7 +4121,7 @@ dependencies = [
  "object_store",
  "rand 0.9.2",
  "serde_json",
- "snafu",
+ "snafu 0.9.0",
  "tokio",
  "url",
 ]
@@ -4140,7 +4141,7 @@ dependencies = [
 
 [[package]]
 name = "lance-table"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -4168,7 +4169,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "snafu",
+ "snafu 0.9.0",
  "tokio",
  "tracing",
  "url",
@@ -4177,7 +4178,7 @@ dependencies = [
 
 [[package]]
 name = "lance-testing"
-version = "4.0.0-beta.5"
+version = "4.0.0-beta.7"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -4239,7 +4240,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "snafu",
+ "snafu 0.8.9",
  "tempfile",
  "tokio",
  "url",
@@ -6467,7 +6468,16 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e84b3f4eacbf3a1ce05eac6763b4d629d60cbc94d632e4092c54ade71f1e1a2"
 dependencies = [
- "snafu-derive",
+ "snafu-derive 0.8.9",
+]
+
+[[package]]
+name = "snafu"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1d4bced6a69f90b2056c03dcff2c4737f98d6fb9e0853493996e1d253ca29c6"
+dependencies = [
+ "snafu-derive 0.9.0",
 ]
 
 [[package]]
@@ -6475,6 +6485,18 @@ name = "snafu-derive"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "snafu-derive"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54254b8531cafa275c5e096f62d48c81435d1015405a91198ddb11e967301d40"
 dependencies = [
  "heck",
  "proc-macro2",

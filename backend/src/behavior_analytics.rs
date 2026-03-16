@@ -1,6 +1,10 @@
 use std::{
+    env,
     net::IpAddr,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, OnceLock,
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,6 +15,7 @@ use axum::{
     response::Response,
 };
 use static_flow_shared::lancedb_api::NewApiBehaviorEventInput;
+use tokio::sync::Semaphore;
 
 use crate::{
     request_context::{REQUEST_ID_HEADER, TRACE_ID_HEADER},
@@ -20,6 +25,8 @@ use crate::{
 const CLIENT_SOURCE_HEADER: &str = "x-sf-client";
 const PAGE_PATH_HEADER: &str = "x-sf-page";
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+const DEFAULT_BEHAVIOR_GEOIP_MAX_CONCURRENCY: usize = 16;
+static GEOIP_LOOKUP_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 pub async fn behavior_analytics_middleware(
     State(state): State<AppState>,
@@ -48,53 +55,91 @@ pub async fn behavior_analytics_middleware(
     let status_code = response.status().as_u16() as i32;
     let latency_ms = started_at.elapsed().as_millis().min(i32::MAX as u128) as i32;
     let response_headers = response.headers().clone();
+    let request_id = header_value(&response_headers, REQUEST_ID_HEADER)
+        .or_else(|| header_value(&headers, REQUEST_ID_HEADER))
+        .unwrap_or_else(|| "unknown".to_string());
+    let trace_id = header_value(&response_headers, TRACE_ID_HEADER)
+        .or_else(|| header_value(&headers, TRACE_ID_HEADER))
+        .unwrap_or_else(|| "unknown".to_string());
+    let client_source =
+        header_value(&headers, CLIENT_SOURCE_HEADER).unwrap_or_else(|| "unknown".to_string());
+    let page_path =
+        header_value(&headers, PAGE_PATH_HEADER).unwrap_or_else(|| "unknown".to_string());
+    let referrer = header_value(&headers, header::REFERER.as_str());
+    let ua_raw = header_value(&headers, header::USER_AGENT.as_str());
+    let (device_type, os_family, browser_family) = parse_user_agent(ua_raw.as_deref());
+    let occurred_at = chrono::Utc::now().timestamp_millis();
+    let event_id = generate_event_id();
+    let geoip = state.geoip.clone();
+    let behavior_event_tx = state.behavior_event_tx.clone();
 
-    // Build event and send to buffered flusher — non-blocking, no spawn needed
-    tokio::spawn(async move {
-        let occurred_at = chrono::Utc::now().timestamp_millis();
-        let ip_region = state.geoip.resolve_region(&client_ip).await;
-        let ua_raw = header_value(&headers, header::USER_AGENT.as_str());
-        let (device_type, os_family, browser_family) = parse_user_agent(ua_raw.as_deref());
+    let fallback_input = NewApiBehaviorEventInput {
+        event_id: event_id.clone(),
+        occurred_at,
+        client_source: client_source.clone(),
+        method: method.clone(),
+        path: path.clone(),
+        query: query.clone(),
+        page_path: page_path.clone(),
+        referrer: referrer.clone(),
+        status_code,
+        latency_ms,
+        client_ip: client_ip.clone(),
+        ip_region: "Unknown".to_string(),
+        ua_raw: ua_raw.clone(),
+        device_type: device_type.clone(),
+        os_family: os_family.clone(),
+        browser_family: browser_family.clone(),
+        request_id: request_id.clone(),
+        trace_id: trace_id.clone(),
+    };
 
-        let request_id = header_value(&response_headers, REQUEST_ID_HEADER)
-            .or_else(|| header_value(&headers, REQUEST_ID_HEADER))
-            .unwrap_or_else(|| "unknown".to_string());
-        let trace_id = header_value(&response_headers, TRACE_ID_HEADER)
-            .or_else(|| header_value(&headers, TRACE_ID_HEADER))
-            .unwrap_or_else(|| "unknown".to_string());
-        let client_source =
-            header_value(&headers, CLIENT_SOURCE_HEADER).unwrap_or_else(|| "unknown".to_string());
-        let page_path =
-            header_value(&headers, PAGE_PATH_HEADER).unwrap_or_else(|| "unknown".to_string());
-        let referrer = header_value(&headers, header::REFERER.as_str());
+    if let Ok(permit) = behavior_geoip_semaphore().clone().try_acquire_owned() {
+        tokio::spawn(async move {
+            let _permit = permit;
+            let ip_region = geoip.resolve_region(&client_ip).await;
 
-        let input = NewApiBehaviorEventInput {
-            event_id: generate_event_id(),
-            occurred_at,
-            client_source,
-            method,
-            path,
-            query,
-            page_path,
-            referrer,
-            status_code,
-            latency_ms,
-            client_ip,
-            ip_region,
-            ua_raw,
-            device_type,
-            os_family,
-            browser_family,
-            request_id,
-            trace_id,
-        };
+            let input = NewApiBehaviorEventInput {
+                event_id,
+                occurred_at,
+                client_source,
+                method,
+                path,
+                query,
+                page_path,
+                referrer,
+                status_code,
+                latency_ms,
+                client_ip,
+                ip_region,
+                ua_raw,
+                device_type,
+                os_family,
+                browser_family,
+                request_id,
+                trace_id,
+            };
 
-        if let Err(err) = state.behavior_event_tx.try_send(input) {
-            tracing::warn!("behavior event channel full or closed: {err}");
-        }
-    });
+            if let Err(err) = behavior_event_tx.try_send(input) {
+                tracing::warn!("behavior event channel full or closed: {err}");
+            }
+        });
+    } else if let Err(err) = behavior_event_tx.try_send(fallback_input) {
+        tracing::warn!("behavior event channel full or closed: {err}");
+    }
 
     response
+}
+
+fn behavior_geoip_semaphore() -> &'static Arc<Semaphore> {
+    GEOIP_LOOKUP_SEMAPHORE.get_or_init(|| {
+        let max_concurrency = env::var("BEHAVIOR_GEOIP_MAX_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_BEHAVIOR_GEOIP_MAX_CONCURRENCY);
+        Arc::new(Semaphore::new(max_concurrency))
+    })
 }
 
 fn generate_event_id() -> String {

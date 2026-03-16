@@ -25,6 +25,7 @@ const DEFAULT_MAX_TRACKED_ALLOCATIONS: usize = 200_000;
 const DEFAULT_STACK_SKIP: usize = 8;
 const DEFAULT_TOP_LIMIT: usize = 50;
 const MAX_TOP_LIMIT: usize = 500;
+const MAX_CACHED_SYMBOLS: usize = 16_384;
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq)]
 struct StackKey {
@@ -273,6 +274,12 @@ impl MemoryProfiler {
     ) -> Result<MemoryProfilerConfigSnapshot, String> {
         if let Some(enabled) = update.enabled {
             self.enabled.store(enabled, Ordering::Relaxed);
+            if !enabled {
+                let Some(_guard) = ReentryGuard::enter() else {
+                    return Ok(self.config_snapshot());
+                };
+                self.clear_retained_state();
+            }
         }
         if let Some(sample_rate) = update.sample_rate {
             if sample_rate == 0 || sample_rate > 10_000 {
@@ -301,15 +308,26 @@ impl MemoryProfiler {
         let Some(_guard) = ReentryGuard::enter() else {
             return;
         };
+        self.clear_retained_state();
+    }
+
+    fn clear_retained_state(&self) {
         self.allocations.clear();
+        self.allocations.shrink_to_fit();
         self.stacks.clear();
+        self.stacks.shrink_to_fit();
         self.symbols.clear();
+        self.symbols.shrink_to_fit();
         self.allocation_seq.store(0, Ordering::Relaxed);
         self.tracked_allocations.store(0, Ordering::Relaxed);
         self.dropped_allocations.store(0, Ordering::Relaxed);
         self.sampled_alloc_events.store(0, Ordering::Relaxed);
         self.sampled_dealloc_events.store(0, Ordering::Relaxed);
         self.sampled_realloc_events.store(0, Ordering::Relaxed);
+        // Encourage mimalloc to release freed profiler pages after a full reset.
+        unsafe {
+            better_mimalloc_sys::mi_collect(true);
+        }
     }
 
     pub fn overview(&self) -> MemoryProfilerOverview {
@@ -641,9 +659,14 @@ impl MemoryProfiler {
             return false;
         };
         self.tracked_allocations.fetch_sub(1, Ordering::Relaxed);
+        let mut drop_stack = false;
         if let Some(mut stats) = self.stacks.get_mut(&meta.stack) {
             stats.live_bytes = stats.live_bytes.saturating_sub(meta.weighted_bytes);
             stats.free_count = stats.free_count.saturating_add(1);
+            drop_stack = stats.live_bytes == 0;
+        }
+        if drop_stack {
+            self.stacks.remove(&meta.stack);
         }
         true
     }
@@ -692,7 +715,9 @@ impl MemoryProfiler {
                 .unwrap_or(raw);
             resolved = strip_rust_symbol_hash(&demangled);
         });
-        self.symbols.insert(addr, resolved.clone());
+        if self.symbols.len() < MAX_CACHED_SYMBOLS {
+            self.symbols.insert(addr, resolved.clone());
+        }
         resolved
     }
 
@@ -806,6 +831,10 @@ pub fn init_from_env() -> &'static MemoryProfiler {
 
 pub fn profiler() -> Option<&'static MemoryProfiler> {
     PROFILER.get().filter(|p| p.enabled.load(Ordering::Relaxed))
+}
+
+pub fn global_profiler() -> Option<&'static MemoryProfiler> {
+    PROFILER.get()
 }
 
 fn parse_bool_env(key: &str, default_value: bool) -> bool {
@@ -936,4 +965,75 @@ fn now_ms() -> i64 {
 
 pub fn normalized_top_or_default(top: Option<usize>) -> usize {
     normalize_top(top.unwrap_or(DEFAULT_TOP_LIMIT))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use super::{AllocationMeta, MemoryProfiler, MemoryProfilerConfigUpdate, StackKey, StackStats};
+
+    #[test]
+    fn disabling_profiler_clears_retained_state() {
+        let profiler = MemoryProfiler::from_env();
+        let mut stack = StackKey {
+            len: 1,
+            ..StackKey::default()
+        };
+        stack.frames[0] = 0x1234;
+
+        profiler.allocations.insert(1, AllocationMeta {
+            stack,
+            weighted_bytes: 512,
+        });
+        profiler.stacks.insert(stack, StackStats {
+            live_bytes: 512,
+            alloc_bytes_total: 512,
+            alloc_count: 1,
+            free_count: 0,
+        });
+        profiler.symbols.insert(0x1234, "symbol".to_string());
+        profiler.tracked_allocations.store(1, Ordering::Relaxed);
+
+        let snapshot = profiler
+            .update_config(MemoryProfilerConfigUpdate {
+                enabled: Some(false),
+                sample_rate: None,
+                min_alloc_bytes: None,
+                max_tracked_allocations: None,
+            })
+            .expect("disable profiler");
+
+        assert!(!snapshot.enabled);
+        assert!(profiler.allocations.is_empty());
+        assert!(profiler.stacks.is_empty());
+        assert!(profiler.symbols.is_empty());
+        assert_eq!(profiler.tracked_allocations.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn removing_last_allocation_drops_stack_entry() {
+        let profiler = MemoryProfiler::from_env();
+        let mut stack = StackKey {
+            len: 1,
+            ..StackKey::default()
+        };
+        stack.frames[0] = 0xBEEF;
+
+        profiler.allocations.insert(42, AllocationMeta {
+            stack,
+            weighted_bytes: 1024,
+        });
+        profiler.stacks.insert(stack, StackStats {
+            live_bytes: 1024,
+            alloc_bytes_total: 1024,
+            alloc_count: 1,
+            free_count: 0,
+        });
+        profiler.tracked_allocations.store(1, Ordering::Relaxed);
+
+        assert!(profiler.remove_allocation(42));
+        assert!(!profiler.stacks.contains_key(&stack));
+        assert_eq!(profiler.tracked_allocations.load(Ordering::Relaxed), 0);
+    }
 }

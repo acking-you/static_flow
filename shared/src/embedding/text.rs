@@ -1,10 +1,13 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
+use std::env;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(not(target_arch = "wasm32"))]
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
+
+#[cfg(not(target_arch = "wasm32"))]
+use super::cache::SmallModelCache;
 
 /// Text embedding language selector.
 ///
@@ -86,8 +89,12 @@ pub const TEXT_VECTOR_DIM_EN: usize = TextEmbeddingLanguage::English.default_mod
 pub const TEXT_VECTOR_DIM_ZH: usize = TextEmbeddingLanguage::Chinese.default_model().dim();
 
 #[cfg(not(target_arch = "wasm32"))]
-static FASTEMBED_TEXT_MODEL: OnceLock<Mutex<HashMap<TextEmbeddingModel, TextEmbedding>>> =
+static FASTEMBED_TEXT_MODEL: OnceLock<Mutex<SmallModelCache<TextEmbeddingModel, TextEmbedding>>> =
     OnceLock::new();
+#[cfg(not(target_arch = "wasm32"))]
+static FASTEMBED_TEXT_MODEL_CACHE_LIMIT: OnceLock<usize> = OnceLock::new();
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_MAX_CACHED_TEXT_MODELS: usize = 3;
 
 /// Generate a semantic embedding for text using the default language/model.
 ///
@@ -150,28 +157,35 @@ fn is_cjk(ch: char) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fastembed_embedding(text: &str, model: TextEmbeddingModel) -> anyhow::Result<Vec<f32>> {
-    let lock = FASTEMBED_TEXT_MODEL.get_or_init(|| Mutex::new(HashMap::new()));
+    let lock = FASTEMBED_TEXT_MODEL
+        .get_or_init(|| Mutex::new(SmallModelCache::new(text_model_cache_limit())));
     let mut guard = lock
         .lock()
         .map_err(|err| anyhow::anyhow!("text embedding mutex poisoned: {err}"))?;
 
-    if let std::collections::hash_map::Entry::Vacant(entry) = guard.entry(model) {
-        // Model initialization is expensive; cache the instance for reuse.
+    let instance = guard.get_or_try_insert_mut(model, || {
+        // Model initialization is expensive; cache a small LRU set for reuse.
         let options = TextInitOptions::new(model.to_fastembed());
-        let instance = TextEmbedding::try_new(options).map_err(|err| {
+        TextEmbedding::try_new(options).map_err(|err| {
             anyhow::anyhow!("failed to initialize text embedding model {:?}: {err}", model)
-        })?;
-        entry.insert(instance);
-    }
-
-    let instance = guard
-        .get_mut(&model)
-        .ok_or_else(|| anyhow::anyhow!("missing cached text embedding model: {:?}", model))?;
+        })
+    })?;
     let mut embeddings = instance
         .embed(vec![text], None)
         .map_err(|err| anyhow::anyhow!("text embedding failed for model {:?}: {err}", model))?;
     embeddings.pop().ok_or_else(|| {
         anyhow::anyhow!("text embedding model {:?} returned empty embedding result", model)
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn text_model_cache_limit() -> usize {
+    *FASTEMBED_TEXT_MODEL_CACHE_LIMIT.get_or_init(|| {
+        env::var("FASTEMBED_MAX_CACHED_TEXT_MODELS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_CACHED_TEXT_MODELS)
     })
 }
 

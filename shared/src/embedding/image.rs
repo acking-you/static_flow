@@ -1,10 +1,13 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
+use std::env;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(not(target_arch = "wasm32"))]
 use fastembed::{ImageEmbedding, ImageEmbeddingModel, ImageInitOptions};
+
+#[cfg(not(target_arch = "wasm32"))]
+use super::cache::SmallModelCache;
 
 /// Image embedding models backed by fastembed.
 ///
@@ -54,8 +57,13 @@ pub const DEFAULT_IMAGE_MODEL: ImageEmbeddingModelChoice = ImageEmbeddingModelCh
 pub const IMAGE_VECTOR_DIM: usize = DEFAULT_IMAGE_MODEL.dim();
 
 #[cfg(not(target_arch = "wasm32"))]
-static FASTEMBED_IMAGE_MODEL: OnceLock<Mutex<HashMap<ImageEmbeddingModelChoice, ImageEmbedding>>> =
-    OnceLock::new();
+static FASTEMBED_IMAGE_MODEL: OnceLock<
+    Mutex<SmallModelCache<ImageEmbeddingModelChoice, ImageEmbedding>>,
+> = OnceLock::new();
+#[cfg(not(target_arch = "wasm32"))]
+static FASTEMBED_IMAGE_MODEL_CACHE_LIMIT: OnceLock<usize> = OnceLock::new();
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_MAX_CACHED_IMAGE_MODELS: usize = 1;
 
 /// Generate a semantic embedding for an image (bytes should be an encoded
 /// image).
@@ -89,23 +97,20 @@ fn fastembed_image_embedding(
     bytes: &[u8],
     model: ImageEmbeddingModelChoice,
 ) -> anyhow::Result<Vec<f32>> {
-    let lock = FASTEMBED_IMAGE_MODEL.get_or_init(|| Mutex::new(HashMap::new()));
+    let lock = FASTEMBED_IMAGE_MODEL
+        .get_or_init(|| Mutex::new(SmallModelCache::new(image_model_cache_limit())));
     let mut guard = lock
         .lock()
         .map_err(|err| anyhow::anyhow!("image embedding mutex poisoned: {err}"))?;
 
-    if let std::collections::hash_map::Entry::Vacant(entry) = guard.entry(model) {
-        // Initialize the model once to avoid repeated downloads and warmups.
+    let instance = guard.get_or_try_insert_mut(model, || {
+        // Keep a tiny LRU cache so rarely used vision models do not stay resident
+        // forever.
         let options = ImageInitOptions::new(model.to_fastembed());
-        let instance = ImageEmbedding::try_new(options).map_err(|err| {
+        ImageEmbedding::try_new(options).map_err(|err| {
             anyhow::anyhow!("failed to initialize image embedding model {:?}: {err}", model)
-        })?;
-        entry.insert(instance);
-    }
-
-    let instance = guard
-        .get_mut(&model)
-        .ok_or_else(|| anyhow::anyhow!("missing cached image embedding model: {:?}", model))?;
+        })
+    })?;
 
     let mut embeddings = instance.embed_bytes(&[bytes], None).map_err(|err| {
         anyhow::anyhow!(
@@ -117,6 +122,17 @@ fn fastembed_image_embedding(
 
     embeddings.pop().ok_or_else(|| {
         anyhow::anyhow!("image embedding model {:?} returned empty embedding result", model)
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn image_model_cache_limit() -> usize {
+    *FASTEMBED_IMAGE_MODEL_CACHE_LIMIT.get_or_init(|| {
+        env::var("FASTEMBED_MAX_CACHED_IMAGE_MODELS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_CACHED_IMAGE_MODELS)
     })
 }
 

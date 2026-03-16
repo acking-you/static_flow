@@ -521,7 +521,11 @@ fn spawn_table_compactor(
 
             // Scan each DB group sequentially
             for (db_label, conn, tables) in [
-                ("content", stores.content_store.connection(), lancedb_api::CONTENT_TABLE_NAMES),
+                (
+                    "content",
+                    stores.content_store.connection(),
+                    lancedb_api::CONTENT_COMPACTION_TABLE_NAMES,
+                ),
                 (
                     "content",
                     stores.article_request_store.connection(),
@@ -589,6 +593,16 @@ fn spawn_table_compactor(
                 runtime.fragment_threshold,
                 runtime.prune_older_than_hours
             );
+
+            if total_compacted > 0 {
+                unsafe {
+                    better_mimalloc_sys::mi_collect(true);
+                }
+                tracing::info!(
+                    "compactor forced mimalloc collection after {} compacted table(s)",
+                    total_compacted
+                );
+            }
 
             // Wait for next cycle or shutdown
             tokio::select! {

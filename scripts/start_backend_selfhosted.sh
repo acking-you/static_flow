@@ -159,8 +159,9 @@ export MUSIC_LANCEDB_URI="$MUSIC_DB_PATH"
 export SITE_BASE_URL
 export FRONTEND_DIST_DIR
 export COMMENT_AI_CONTENT_API_BASE
-# Memory profiler: enabled by default for release-backend builds (has debug symbols)
-export MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-1}"
+# Memory profiler is opt-in for long-running processes. Enable it explicitly
+# when investigating allocator growth.
+export MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}"
 export COMMENT_AI_CODEX_SANDBOX
 export COMMENT_AI_CODEX_JSON_STREAM
 export COMMENT_AI_CODEX_BYPASS
