@@ -1,8 +1,9 @@
 # StaticFlow CLI 使用手册（LanceDB）
 
 > 本文档面向 `sf-cli` 二进制使用方式，覆盖：
-> - `sf-cli` 管理的三张核心表（`articles` / `images` / `taxonomies`）
-> - backend 运行时统计表（`article_views`）
+> - 内容主表与资源表（`articles` / `images` / `taxonomies`）
+> - backend 运行时与请求表（`article_views` / `api_behavior_events` / `article_requests*`）
+> - 交互镜像表（`interactive_pages` / `interactive_page_locales` / `interactive_assets`）
 > - backend 评论体系表（`comment_tasks` / `comment_published` / `comment_audit_logs`，位于评论专用 DB）
 > - 全量 CRUD（增删改查）命令
 > - 每个字段的语义与来源
@@ -30,13 +31,14 @@ make bin-cli
 ./bin/sf-cli init --db-path ./data/lancedb
 ```
 
-会自动创建并初始化：
+会自动创建并初始化内容导入直接依赖的基础表：
 - `articles`
 - `images`
 - `taxonomies`
 
 说明：
-- `article_views` 不由 `sf-cli init` 创建；会在 backend 首次处理 `/api/articles/:id/view` 时自动创建。
+- `article_views`、`api_behavior_events`、`article_requests*`、`interactive_*` 属于运行时/专项流程表，不依赖 `sf-cli init` 预创建。
+- 这些表会在对应 backend/worker/interactive 流程首次写入时自动创建。
 
 ### 1.3 一键全量测试（推荐）
 
@@ -62,13 +64,24 @@ CLI_BIN=./bin/sf-cli WORKDIR=./tmp/cli-e2e ./scripts/test_cli_e2e.sh
 
 ## 2. 数据模型总览（无硬编码词典）
 
-当前数据模型分两组：
+当前数据模型分四组：
 
 主内容库（`LANCEDB_URI`）：
-- `articles`：文章主体、元数据、文本向量
-- `images`：图片二进制、缩略图、图像向量
+- `articles`：文章主体、元数据、文本向量、双语字段、转载/交互关联字段
+- `images`：原图 blob v2、缩略图二进制、图像向量
 - `taxonomies`：分类/标签元数据（含 `description`）
 - `article_views`：浏览事件与趋势分桶（按天/小时，`Asia/Shanghai`）
+- `api_behavior_events`：API 行为监控与请求性能事件
+
+内容请求库（同一 Content DB，独立 worker 使用）：
+- `article_requests`：用户提交的文章请求
+- `article_request_ai_runs`：文章请求 worker 执行批次
+- `article_request_ai_run_chunks`：worker 输出分片
+
+交互镜像库（同一 Content DB，独立 HTML 入口）：
+- `interactive_pages`：交互页元数据与入口配置
+- `interactive_page_locales`：交互页多语言版本元数据
+- `interactive_assets`：交互页 HTML/CSS/JS/图片/字体等资源；资源字节采用 blob v2
 
 评论库（`COMMENTS_LANCEDB_URI`）：
 - `comment_tasks`：评论任务队列（待审核、处理中、失败等状态）
@@ -79,6 +92,8 @@ CLI_BIN=./bin/sf-cli WORKDIR=./tmp/cli-e2e ./scripts/test_cli_e2e.sh
 
 说明：
 - 评论库由 backend 自动创建和维护；`sf-cli init` 只初始化主内容库表。
+- 当前生产库的所有表都启用了 stable row ID。
+- 当前 blob v2 表为：`images.data`、`interactive_assets.bytes`、`songs.audio_data`。
 
 ### 2.1 数据库表关系图（ER）
 
@@ -104,7 +119,7 @@ erDiagram
     IMAGES {
       string id PK
       string filename
-      binary data
+      blob_v2 data
       binary thumbnail
       vector vector
       string metadata
@@ -250,13 +265,18 @@ flowchart LR
 | `id` | `Utf8` | 是 | 文章主键 | `write-article --id` 或文件名/相对路径推导 |
 | `title` | `Utf8` | 是 | 标题 | frontmatter `title` / 首个 heading / 文件名 |
 | `content` | `Utf8` | 是 | Markdown 正文 | Markdown body |
+| `content_en` | `Utf8?` | 否 | 英文正文 | frontmatter / `--content-en-file` / bilingual 更新 |
 | `summary` | `Utf8` | 是 | 摘要 | CLI 参数/frontmatter/自动摘要（sync） |
+| `detailed_summary` | `Utf8?` | 否 | 双语详细摘要 JSON | `--summary-zh-file` + `--summary-en-file` / bilingual 更新 |
 | `tags` | `List<Utf8>` | 是 | 标签数组 | CLI 参数或 frontmatter |
 | `category` | `Utf8` | 是 | 分类名 | CLI 参数或 frontmatter |
 | `author` | `Utf8` | 是 | 作者 | frontmatter 或默认值 |
 | `date` | `Utf8` | 是 | 日期字符串（YYYY-MM-DD） | `--date` > frontmatter > 当前日期 |
 | `featured_image` | `Utf8?` | 否 | 封面图引用 | 常见形态：`images/<image_id>` |
 | `read_time` | `Int32` | 是 | 预计阅读分钟 | frontmatter 或自动估算 |
+| `article_kind` | `Utf8?` | 否 | 文章类型 | 普通文章 / 外部转载 / 交互转载 |
+| `source_url` | `Utf8?` | 否 | 原始来源 URL | external/interactive 流程写入 |
+| `interactive_page_id` | `Utf8?` | 否 | 交互镜像关联 ID | 关联 `interactive_pages.id` |
 | `vector_en` | `FixedSizeList<Float32>?` | 否 | 英文语义向量 | 自动 embedding 或显式传入 |
 | `vector_zh` | `FixedSizeList<Float32>?` | 否 | 中文语义向量 | 自动 embedding 或显式传入 |
 | `created_at` | `Timestamp(ms)` | 是 | 创建时间戳 | 写入时生成 |
@@ -268,9 +288,9 @@ flowchart LR
 |---|---|---:|---|
 | `id` | `Utf8` | 是 | 图片主键（通常为内容 hash） |
 | `filename` | `Utf8` | 是 | 原始文件名 |
-| `data` | `Binary` | 是 | 原图二进制 |
+| `data` | `Blob v2` | 是 | 原图二进制；物理上写入 `.blob` sidecar |
 | `thumbnail` | `Binary?` | 否 | 缩略图二进制 |
-| `vector` | `FixedSizeList<Float32>` | 是 | 图像向量 |
+| `vector` | `FixedSizeList<Float32>?` | 否 | 图像向量 |
 | `metadata` | `Utf8` | 是 | JSON 字符串（宽高、来源、字节数等） |
 | `created_at` | `Timestamp(ms)` | 是 | 创建时间戳 |
 
@@ -278,7 +298,8 @@ flowchart LR
 
 - 仅在 `write-images --generate-thumbnail` 或 `sync-notes --generate-thumbnail` 时生成缩略图；默认不生成。
 - 尺寸由 `--thumbnail-size` 控制（默认 `256`），使用等比缩放到 `size x size` 边界框内。
-- 缩略图统一编码为 **PNG 二进制**，存储在 `images.thumbnail`；原图二进制存储在 `images.data`。
+- 缩略图统一编码为 **PNG 二进制**，存储在 `images.thumbnail`；原图存储在 blob v2 列 `images.data`。
+- 查询/调试时，若 scanner 使用 `AllBinary`，blob v2 列会被物化成 `Binary/LargeBinary` 供读取；表 schema 仍然显示为 blob 扩展类型。
 - 读取时（backend 与 `sf-cli api get-image` 一致）：`?thumb=true` 会优先返回 `thumbnail`，若 `thumbnail` 为空自动回退 `data` 原图。
 - 当前实现中，HTTP `Content-Type` 按 `filename` 后缀推断；因此当原图是 `jpg` 且 `thumb=true` 时，响应头可能是 `image/jpeg`，但响应字节实际是 PNG（实现细节，调试时请留意）。
 
@@ -698,15 +719,41 @@ CLI 会返回：
 
 ### 13.1 什么时候需要重建
 
-- **Schema 变更**：列类型从 `Binary` 迁移到 `LargeBinary`、向量维度变更等无法通过 `NewColumnTransform` 原地完成的改动
+- **Schema 变更**：如 `Binary` 迁移到 blob v2、向量维度变更等无法通过 `NewColumnTransform` 原地完成的改动
 - **Fragment 膨胀**：大量增量写入导致 `.lance` 目录内碎片过多，`optimize` 已无法有效收敛
 - **编码修正**：历史数据使用了不合适的 Arrow 类型（如小二进制列存储大文件），需要统一编码
 
 > 常规的”增列 + 补空”需求不需要重建——使用 `NewColumnTransform::AllNulls` 即可。
 
-### 13.2 已有命令：`rebuild-songs-table`
+### 13.2 当前常用命令
 
-该命令用于重建 Music DB 的 `songs` 表，将 `audio_data` 列从 `Binary` 迁移为 `LargeBinary`，同时消除碎片。
+`sf-cli` 当前已经提供两类正式命令：
+
+1. 通用 stable-row-id 重建：
+
+```bash
+sf-cli db --db-path /mnt/e/static-flow-data/lancedb \
+  rebuild-table-stable images
+```
+
+2. 专项 schema/storage 迁移：
+
+```bash
+sf-cli db --db-path /mnt/e/static-flow-data/lancedb \
+  migrate-images-blob-v2
+```
+
+说明：
+- `migrate-images-blob-v2` 会把 `images.data` 从旧 `Binary` 重写为 blob v2
+- `images.thumbnail` 保持普通 `Binary`
+- 当前生产 `songs` 已经是 blob v2，不再需要文档里旧的“Binary -> LargeBinary”描述
+
+### 13.3 历史命令：`rebuild-songs-table`
+
+该命令是早期 Music DB 迁移阶段保留的专项重建命令。当前应理解为：
+- 用于对 `songs` 表做整表重建与碎片整理
+- 目标布局是 `audio_data` blob v2，而不是旧文档里写的 `Binary -> LargeBinary`
+- 日常情况下优先使用正常 `optimize`；只有 schema/layout 修正时才需要整表 rebuild
 
 ```bash
 # 默认 batch_size=10，适合内存有限的机器
@@ -723,7 +770,7 @@ sf-cli rebuild-songs-table --db-path /mnt/e/static-flow-data/lancedb-music --bat
 | `--db-path` | `./data/lancedb-music` | Music LanceDB 目录 |
 | `--batch-size` | `10` | 每批读写的行数，控制内存峰值 |
 
-### 13.3 内部执行流程
+### 13.4 内部执行流程
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -746,7 +793,7 @@ sf-cli rebuild-songs-table --db-path /mnt/e/static-flow-data/lancedb-music --bat
 - **旧表保留**：`songs.lance.bak` 需手动确认后删除
 - **幂等启动**：若临时目录已存在（上次中断），会先清理再重建
 
-### 13.4 为其他表实现重建的参考模板
+### 13.5 为其他表实现重建的参考模板
 
 当需要对 `articles`、`images` 等表执行类似重建时，可参照以下步骤在 `shared/` 和 `cli/` 中实现：
 
@@ -800,7 +847,7 @@ Commands::RebuildXxxTable { db_path, batch_size } =>
     rebuild_xxx::run(&db_path, batch_size).await,
 ```
 
-### 13.5 重建后验证清单
+### 13.6 重建后验证清单
 
 ```bash
 # 1. 确认行数一致
@@ -819,7 +866,7 @@ sf-cli api --db-path <db_path> search --q “关键词”
 rm -rf <db_path>/<table>.lance.bak
 ```
 
-### 13.6 注意事项
+### 13.7 注意事项
 
 - **batch_size 选择**：含二进制大字段（如 `audio_data`、`images.data`）时建议 5–20；纯文本表可设到 100–500
 - **磁盘空间**：重建期间需要约 2× 表空间（原表 + 临时表 + 备份）

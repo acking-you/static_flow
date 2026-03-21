@@ -71,6 +71,35 @@ pub struct CompactResult {
     pub error: Option<String>,
 }
 
+pub async fn compact_table_with_fallback(table: &Table) -> Result<CompactAction, String> {
+    table
+        .repair_missing_frag_reuse_index()
+        .await
+        .map_err(|err| format!("failed to repair stale frag_reuse metadata: {err:#}"))?;
+    let optimize_path = optimize_compaction_with_fallback(table).await?;
+    Ok(match optimize_path {
+        OptimizePath::Maintenance => CompactAction::CompactedMaintenance,
+        OptimizePath::SafeFallback => CompactAction::CompactedSafeFallback,
+    })
+}
+
+pub async fn prune_table_versions(
+    table: &Table,
+    older_than_hours: i64,
+    delete_unverified: bool,
+    error_if_tagged_old_versions: bool,
+) -> Result<(), String> {
+    table
+        .optimize(OptimizeAction::Prune {
+            older_than: Some(chrono::Duration::hours(older_than_hours)),
+            delete_unverified: Some(delete_unverified),
+            error_if_tagged_old_versions: Some(error_if_tagged_old_versions),
+        })
+        .await
+        .map_err(|err| format!("prune failed: {err:#}"))?;
+    Ok(())
+}
+
 /// Scan tables, compact only those exceeding the fragment threshold.
 pub async fn scan_and_compact_tables(
     db: &Connection,
@@ -124,8 +153,31 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
             )
         },
     };
+    check_opened_table_and_compact(&table, config).await
+}
 
-    let small = match count_small_fragments(&table).await {
+pub async fn check_opened_table_and_compact(
+    table: &Table,
+    config: &CompactConfig,
+) -> CompactResult {
+    let started = Instant::now();
+    let finalize = |action: CompactAction,
+                    small_fragments: usize,
+                    compacted: bool,
+                    error: Option<String>| CompactResult {
+        table: table.name().to_string(),
+        small_fragments,
+        action,
+        elapsed_ms: started.elapsed().as_millis(),
+        compacted,
+        error,
+    };
+
+    if !config.enabled {
+        return finalize(CompactAction::CompactionDisabled, 0, false, None);
+    }
+
+    let small = match count_small_fragments(table).await {
         Ok(count) => count,
         Err(err) => {
             return finalize(
@@ -140,31 +192,16 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
         return finalize(CompactAction::SkippedBelowThreshold, small, false, None);
     }
 
-    let optimize_path = match optimize_compaction_with_fallback(&table).await {
-        Ok(path) => path,
+    let action = match compact_table_with_fallback(table).await {
+        Ok(action) => action,
         Err(err) => return finalize(CompactAction::CompactFailed, small, false, Some(err)),
     };
 
-    if let Err(err) = table
-        .optimize(OptimizeAction::Prune {
-            older_than: Some(chrono::Duration::hours(config.prune_older_than_hours)),
-            delete_unverified: Some(false),
-            error_if_tagged_old_versions: Some(false),
-        })
-        .await
+    if let Err(err) = prune_table_versions(table, config.prune_older_than_hours, false, false).await
     {
-        return finalize(
-            CompactAction::CompactedPruneFailed,
-            small,
-            true,
-            Some(format!("prune failed: {err:#}")),
-        );
+        return finalize(CompactAction::CompactedPruneFailed, small, true, Some(err));
     }
 
-    let action = match optimize_path {
-        OptimizePath::Maintenance => CompactAction::CompactedMaintenance,
-        OptimizePath::SafeFallback => CompactAction::CompactedSafeFallback,
-    };
     finalize(action, small, true, None)
 }
 

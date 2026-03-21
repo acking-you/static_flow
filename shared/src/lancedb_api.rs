@@ -1,5 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    path::PathBuf,
     sync::Arc,
     time::Instant,
 };
@@ -7,27 +9,34 @@ use std::{
 use anyhow::{Context, Result};
 use arrow_array::{
     builder::{Int32Builder, StringBuilder, TimestampMillisecondBuilder},
-    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int32Array, ListArray,
-    RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, TimestampMillisecondArray,
+    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int32Array, LargeBinaryArray,
+    ListArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray,
+    TimestampMillisecondArray, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::{Duration as ChronoDuration, FixedOffset, NaiveDate, Utc};
+use fs2::FileExt;
 use futures::TryStreamExt;
 use lancedb::{
     connect,
     index::scalar::FullTextSearchQuery,
     query::{ExecutableQuery, QueryBase, Select},
-    table::{CompactionOptions, OptimizeAction},
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 use crate::{
     embedding::{
         detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
         TextEmbeddingModel,
     },
-    normalize_taxonomy_key, Article, ArticleKind, ArticleListItem, LocalizedText,
+    normalize_taxonomy_key,
+    optimize::{
+        check_opened_table_and_compact, compact_table_with_fallback, prune_table_versions,
+        scan_and_compact_tables, CompactAction, CompactConfig, CompactResult,
+    },
+    Article, ArticleKind, ArticleListItem, LocalizedText,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -230,7 +239,9 @@ pub struct ImageBlob {
 pub const CONTENT_TABLE_NAMES: &[&str] =
     &["articles", "images", "taxonomies", "article_views", "api_behavior_events"];
 pub const CONTENT_COMPACTION_TABLE_NAMES: &[&str] =
-    &["articles", "images", "taxonomies", "article_views"];
+    &["articles", "images", "taxonomies", "article_views", "api_behavior_events"];
+pub const CONTENT_BACKGROUND_COMPACTION_TABLE_NAMES: &[&str] =
+    &["articles", "images", "taxonomies"];
 
 pub struct StaticFlowDataStore {
     db: Connection,
@@ -239,6 +250,8 @@ pub struct StaticFlowDataStore {
     taxonomies_table: String,
     article_views_table: String,
     api_behavior_table: String,
+    article_views_gate: Arc<RwLock<()>>,
+    api_behavior_gate: Arc<RwLock<()>>,
 }
 
 impl StaticFlowDataStore {
@@ -259,6 +272,8 @@ impl StaticFlowDataStore {
             taxonomies_table: "taxonomies".to_string(),
             article_views_table: "article_views".to_string(),
             api_behavior_table: "api_behavior_events".to_string(),
+            article_views_gate: Arc::new(RwLock::new(())),
+            api_behavior_gate: Arc::new(RwLock::new(())),
         })
     }
 
@@ -318,7 +333,10 @@ impl StaticFlowDataStore {
 
     async fn api_behavior_table(&self) -> Result<Table> {
         match self.db.open_table(&self.api_behavior_table).execute().await {
-            Ok(table) => Ok(table),
+            Ok(table) => {
+                repair_api_behavior_frag_reuse_if_needed(&table).await?;
+                Ok(table)
+            },
             Err(_) => {
                 let schema = api_behavior_schema();
                 let batch = RecordBatch::new_empty(schema.clone());
@@ -333,11 +351,14 @@ impl StaticFlowDataStore {
                     .execute()
                     .await
                     .context("failed to create api_behavior_events table")?;
-                self.db
+                let table = self
+                    .db
                     .open_table(&self.api_behavior_table)
                     .execute()
                     .await
-                    .context("failed to open api_behavior_events table")
+                    .context("failed to open api_behavior_events table")?;
+                repair_api_behavior_frag_reuse_if_needed(&table).await?;
+                Ok(table)
             },
         }
     }
@@ -353,6 +374,10 @@ impl StaticFlowDataStore {
         if inputs.is_empty() {
             return Ok(());
         }
+        let _guard = self.api_behavior_gate.read().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.api_behavior_table, TableAccessMode::Shared)
+                .await?;
         let table = self.api_behavior_table().await?;
         let now_ms = Utc::now().timestamp_millis();
         let records: Vec<ApiBehaviorRecord> = inputs
@@ -409,6 +434,10 @@ impl StaticFlowDataStore {
         &self,
         filter: Option<String>,
     ) -> Result<usize> {
+        let _guard = self.api_behavior_gate.read().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.api_behavior_table, TableAccessMode::Shared)
+                .await?;
         let table = self.api_behavior_table().await?;
         let total = table
             .count_rows(filter)
@@ -423,6 +452,10 @@ impl StaticFlowDataStore {
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Result<Vec<ApiBehaviorEvent>> {
+        let _guard = self.api_behavior_gate.read().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.api_behavior_table, TableAccessMode::Shared)
+                .await?;
         let table = self.api_behavior_table().await?;
         let mut q = table.query();
         if let Some(filter) = filter {
@@ -463,6 +496,10 @@ impl StaticFlowDataStore {
     }
 
     pub async fn cleanup_api_behavior_before(&self, before_ms: i64) -> Result<usize> {
+        let _guard = self.api_behavior_gate.write().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.api_behavior_table, TableAccessMode::Exclusive)
+                .await?;
         let table = self.api_behavior_table().await?;
         let filter =
             format!("occurred_at < arrow_cast({before_ms}, 'Timestamp(Millisecond, None)')");
@@ -485,33 +522,127 @@ impl StaticFlowDataStore {
     /// Compact the api_behavior_events table to merge small fragments.
     /// This reduces the number of open file descriptors and improves query
     /// performance.
-    pub async fn compact_api_behavior_table(&self) -> Result<()> {
+    pub async fn compact_api_behavior_table(&self) -> Result<CompactAction> {
+        let _guard = self.api_behavior_gate.write().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.api_behavior_table, TableAccessMode::Exclusive)
+                .await?;
         let table = self.api_behavior_table().await?;
-        let defer_index_remap = table_uses_stable_row_ids(&table)
+        let action = compact_table_with_fallback(&table)
             .await
-            .map(|stable| !stable)
-            .unwrap_or(true);
-        table
-            .optimize(OptimizeAction::Compact {
-                options: CompactionOptions {
-                    num_threads: Some(1),
-                    batch_size: Some(1024),
-                    defer_index_remap,
-                    ..CompactionOptions::default()
-                },
-                remap_options: None,
-            })
-            .await
+            .map_err(anyhow::Error::msg)
             .context("failed to compact api_behavior_events table")?;
-        table
-            .optimize(OptimizeAction::Prune {
-                older_than: Some(ChronoDuration::hours(1)),
-                delete_unverified: Some(false),
-                error_if_tagged_old_versions: Some(false),
-            })
+        prune_table_versions(&table, 1, false, false)
             .await
+            .map_err(anyhow::Error::msg)
             .context("failed to prune api_behavior_events table")?;
-        Ok(())
+        Ok(action)
+    }
+
+    pub async fn compact_article_views_table(&self) -> Result<CompactAction> {
+        let _guard = self.article_views_gate.write().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.article_views_table, TableAccessMode::Exclusive)
+                .await?;
+        let table = self.article_views_table().await?;
+        let action = compact_table_with_fallback(&table)
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("failed to compact article_views table")?;
+        prune_table_versions(&table, 1, false, false)
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("failed to prune article_views table")?;
+        Ok(action)
+    }
+
+    pub async fn scan_and_compact_managed_content_tables(
+        &self,
+        config: &CompactConfig,
+    ) -> Vec<CompactResult> {
+        let mut results = scan_and_compact_tables(
+            self.connection(),
+            CONTENT_BACKGROUND_COMPACTION_TABLE_NAMES,
+            config,
+        )
+        .await;
+        results.push(self.check_and_compact_article_views(config).await);
+        results.push(self.check_and_compact_api_behavior(config).await);
+        results
+    }
+
+    async fn check_and_compact_article_views(&self, config: &CompactConfig) -> CompactResult {
+        if config
+            .skip_tables
+            .contains(self.article_views_table.as_str())
+        {
+            return skipped_compact_result(&self.article_views_table);
+        }
+        if !config.enabled {
+            return disabled_compact_result(&self.article_views_table);
+        }
+
+        let _guard = self.article_views_gate.write().await;
+        let _file_guard = match acquire_table_access_file_lock(
+            &self.article_views_table,
+            TableAccessMode::Exclusive,
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(err) => {
+                return CompactResult {
+                    table: self.article_views_table.clone(),
+                    small_fragments: 0,
+                    action: CompactAction::CompactFailed,
+                    elapsed_ms: 0,
+                    compacted: false,
+                    error: Some(format!("table lock failed: {err:#}")),
+                }
+            },
+        };
+        let table = match self.article_views_table().await {
+            Ok(table) => table,
+            Err(err) => return open_failed_compact_result(&self.article_views_table, err),
+        };
+        check_opened_table_and_compact(&table, config).await
+    }
+
+    async fn check_and_compact_api_behavior(&self, config: &CompactConfig) -> CompactResult {
+        if config
+            .skip_tables
+            .contains(self.api_behavior_table.as_str())
+        {
+            return skipped_compact_result(&self.api_behavior_table);
+        }
+        if !config.enabled {
+            return disabled_compact_result(&self.api_behavior_table);
+        }
+
+        let _guard = self.api_behavior_gate.write().await;
+        let _file_guard = match acquire_table_access_file_lock(
+            &self.api_behavior_table,
+            TableAccessMode::Exclusive,
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(err) => {
+                return CompactResult {
+                    table: self.api_behavior_table.clone(),
+                    small_fragments: 0,
+                    action: CompactAction::CompactFailed,
+                    elapsed_ms: 0,
+                    compacted: false,
+                    error: Some(format!("table lock failed: {err:#}")),
+                }
+            },
+        };
+        let table = match self.api_behavior_table().await {
+            Ok(table) => table,
+            Err(err) => return open_failed_compact_result(&self.api_behavior_table, err),
+        };
+        check_opened_table_and_compact(&table, config).await
     }
 
     pub async fn track_article_view(
@@ -522,6 +653,10 @@ impl StaticFlowDataStore {
         dedupe_window_seconds: u64,
         max_daily_window_days: usize,
     ) -> Result<ArticleViewTrackResponse> {
+        let _guard = self.article_views_gate.read().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.article_views_table, TableAccessMode::Shared)
+                .await?;
         let table = self.article_views_table().await?;
         let now = Utc::now();
         let now_ms = now.timestamp_millis();
@@ -596,6 +731,10 @@ impl StaticFlowDataStore {
         days: usize,
         max_days: usize,
     ) -> Result<ArticleViewTrendResponse> {
+        let _guard = self.article_views_gate.read().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.article_views_table, TableAccessMode::Shared)
+                .await?;
         let table = self.article_views_table().await?;
         let now_local = Utc::now().with_timezone(&shanghai_tz());
         let today_bucket = now_local.format("%Y-%m-%d").to_string();
@@ -628,6 +767,10 @@ impl StaticFlowDataStore {
         NaiveDate::parse_from_str(day, "%Y-%m-%d")
             .with_context(|| format!("invalid day format: {day}; expected YYYY-MM-DD"))?;
 
+        let _guard = self.article_views_gate.read().await;
+        let _file_guard =
+            acquire_table_access_file_lock(&self.article_views_table, TableAccessMode::Shared)
+                .await?;
         let table = self.article_views_table().await?;
         let hour_counts = fetch_article_view_hour_counts_for_day(&table, article_id, day).await?;
         let points = (0..24)
@@ -1455,6 +1598,12 @@ impl StaticFlowDataStore {
         prefer_thumbnail: bool,
     ) -> Result<Option<ImageBlob>> {
         let table = self.images_table().await?;
+        let dataset = table
+            .dataset()
+            .context("images table has no native dataset")?
+            .get()
+            .await
+            .context("failed to load native images dataset")?;
         let path = "id_or_filename_filter_scan";
         let reason = format!("prefer_thumbnail={prefer_thumbnail}");
         log_query_path("get_image", path, path, &reason);
@@ -1462,16 +1611,61 @@ impl StaticFlowDataStore {
         let escaped = escape_literal(id_or_filename);
         let filter = format!("filename = '{}' OR id = '{}'", escaped, escaped);
         let started = Instant::now();
-        let batches = table
-            .query()
-            .only_if(filter)
-            .limit(1)
-            .select(Select::columns(&["data", "thumbnail", "filename"]))
-            .execute()
+        let mut scanner = dataset.scan();
+        scanner.project(&["filename", "thumbnail"])?;
+        scanner.filter(filter.as_str())?;
+        scanner.limit(Some(1), None)?;
+        scanner.with_row_address();
+        let batch_list = scanner
+            .try_into_stream()
+            .await?
+            .try_collect::<Vec<_>>()
             .await?;
 
-        let batch_list = batches.try_collect::<Vec<_>>().await?;
-        let image = extract_image_bytes(&batch_list, prefer_thumbnail)?;
+        let mut row_addr = None;
+        let mut filename = None;
+        let mut thumbnail = None;
+        for batch in &batch_list {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            row_addr = batch
+                .column_by_name("_rowaddr")
+                .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
+                .map(|array| array.value(0));
+            filename = batch
+                .column_by_name("filename")
+                .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+                .map(|array| array.value(0).to_string());
+            thumbnail = binary_like_value(batch, "thumbnail", 0)?;
+            break;
+        }
+
+        let image = match (row_addr, filename) {
+            (Some(_), Some(name)) if prefer_thumbnail && thumbnail.is_some() => {
+                Some((thumbnail.expect("thumbnail already checked"), name))
+            },
+            (Some(addr), Some(name)) => {
+                let blobs = Arc::new(dataset.clone())
+                    .take_blobs_by_addresses(&[addr], "data")
+                    .await
+                    .context("failed to read image blob by row address")?;
+                let blob = match blobs.into_iter().next() {
+                    Some(blob) => blob,
+                    None => {
+                        log_query_result("get_image", path, 0, started.elapsed().as_millis());
+                        return Ok(None);
+                    },
+                };
+                let bytes = blob
+                    .read()
+                    .await
+                    .context("image blob read failed")?
+                    .to_vec();
+                Some((bytes, name))
+            },
+            _ => None,
+        };
         log_query_result(
             "get_image",
             path,
@@ -2727,27 +2921,6 @@ fn extract_vector(batches: &[RecordBatch], column: &str) -> Option<Vec<f32>> {
     None
 }
 
-fn extract_image_bytes(
-    batches: &[RecordBatch],
-    prefer_thumbnail: bool,
-) -> Result<Option<(Vec<u8>, String)>> {
-    for batch in batches {
-        if batch.num_rows() == 0 {
-            continue;
-        }
-        let data = binary_array(batch, "data")?;
-        let thumb = binary_array(batch, "thumbnail")?;
-        let filename = string_array(batch, "filename")?;
-        let name = value_string(filename, 0);
-
-        if prefer_thumbnail && !thumb.is_null(0) {
-            return Ok(Some((thumb.value(0).to_vec(), name)));
-        }
-        return Ok(Some((data.value(0).to_vec(), name)));
-    }
-    Ok(None)
-}
-
 fn batches_to_api_behavior_events(batches: &[RecordBatch]) -> Result<Vec<ApiBehaviorEvent>> {
     let mut events = Vec::new();
     for batch in batches {
@@ -2842,11 +3015,15 @@ fn timestamp_ms_array<'a>(
         .with_context(|| format!("column {name} is not TimestampMillisecondArray"))
 }
 
-fn binary_array<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a BinaryArray> {
-    column(batch, name)?
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .with_context(|| format!("column {name} is not BinaryArray"))
+fn binary_like_value(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<Vec<u8>>> {
+    let column = column(batch, name)?;
+    if let Some(array) = column.as_any().downcast_ref::<BinaryArray>() {
+        return Ok((!array.is_null(row)).then(|| array.value(row).to_vec()));
+    }
+    if let Some(array) = column.as_any().downcast_ref::<LargeBinaryArray>() {
+        return Ok((!array.is_null(row)).then(|| array.value(row).to_vec()));
+    }
+    Err(anyhow::anyhow!("column {name} is not BinaryArray/LargeBinaryArray"))
 }
 
 fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {
@@ -2960,6 +3137,113 @@ fn normalize_required_text(value: String, max_chars: usize, fallback: &str) -> S
     }
 }
 
+fn skipped_compact_result(table: &str) -> CompactResult {
+    CompactResult {
+        table: table.to_string(),
+        small_fragments: 0,
+        action: CompactAction::SkippedByConfig,
+        elapsed_ms: 0,
+        compacted: false,
+        error: None,
+    }
+}
+
+fn disabled_compact_result(table: &str) -> CompactResult {
+    CompactResult {
+        table: table.to_string(),
+        small_fragments: 0,
+        action: CompactAction::CompactionDisabled,
+        elapsed_ms: 0,
+        compacted: false,
+        error: None,
+    }
+}
+
+fn open_failed_compact_result(table: &str, err: anyhow::Error) -> CompactResult {
+    CompactResult {
+        table: table.to_string(),
+        small_fragments: 0,
+        action: CompactAction::OpenFailed,
+        elapsed_ms: 0,
+        compacted: false,
+        error: Some(format!("open failed: {err:#}")),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TableAccessMode {
+    Shared,
+    Exclusive,
+}
+
+struct TableAccessFileGuard {
+    file: File,
+}
+
+impl Drop for TableAccessFileGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+async fn acquire_table_access_file_lock(
+    table: &str,
+    mode: TableAccessMode,
+) -> Result<TableAccessFileGuard> {
+    let table = table.to_string();
+    tokio::task::spawn_blocking(move || -> Result<TableAccessFileGuard> {
+        let path = table_access_lock_path(&table);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create table lock dir `{}`", parent.display())
+            })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("failed to open table lock file `{}`", path.display()))?;
+        match mode {
+            TableAccessMode::Shared => file
+                .lock_shared()
+                .with_context(|| format!("failed to acquire shared lock for `{table}`"))?,
+            TableAccessMode::Exclusive => file
+                .lock_exclusive()
+                .with_context(|| format!("failed to acquire exclusive lock for `{table}`"))?,
+        }
+        Ok(TableAccessFileGuard {
+            file,
+        })
+    })
+    .await
+    .context("table lock task join failed")?
+}
+
+fn table_access_lock_path(table: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("staticflow-table-locks")
+        .join(format!("{table}.lock"))
+}
+
+async fn repair_api_behavior_frag_reuse_if_needed(table: &Table) -> Result<()> {
+    if table
+        .repair_missing_frag_reuse_index()
+        .await
+        .with_context(|| {
+            format!("failed to repair stale frag_reuse metadata for `{}`", table.name())
+        })?
+    {
+        tracing::warn!(
+            table = table.name(),
+            "Repaired stale frag_reuse metadata for api_behavior_events"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 async fn table_uses_stable_row_ids(table: &Table) -> Result<bool> {
     let ds_wrapper = table
         .dataset()
@@ -3392,18 +3676,29 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use anyhow::Result;
+    use tokio::sync::Barrier;
+
     use super::{
         alternate_embedding_language, choose_primary_search_language, cosine_similarity,
         extract_highlight, extract_semantic_highlight, find_case_insensitive_match_range,
         is_pure_english_query, semantic_query_tokens, split_text_by_sentence_or_size,
-        vector_column_for_language, TextEmbeddingLanguage, CONTENT_COMPACTION_TABLE_NAMES,
-        CONTENT_TABLE_NAMES,
+        table_uses_stable_row_ids, vector_column_for_language, CompactAction,
+        NewApiBehaviorEventInput, StaticFlowDataStore, TextEmbeddingLanguage,
+        CONTENT_COMPACTION_TABLE_NAMES, CONTENT_TABLE_NAMES,
     };
 
     #[test]
-    fn content_compaction_tables_skip_api_behavior_events() {
+    fn content_compaction_tables_include_api_behavior_events() {
         assert!(CONTENT_TABLE_NAMES.contains(&"api_behavior_events"));
-        assert!(!CONTENT_COMPACTION_TABLE_NAMES.contains(&"api_behavior_events"));
+        assert!(CONTENT_COMPACTION_TABLE_NAMES.contains(&"api_behavior_events"));
     }
 
     #[test]
@@ -3514,5 +3809,276 @@ mod tests {
             TextEmbeddingLanguage::English
         );
         assert_eq!(choose_primary_search_language("Rust 异步编程"), TextEmbeddingLanguage::Chinese);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn api_behavior_compaction_preserves_filtered_reads_under_concurrent_access() {
+        const BATCHES: usize = 240;
+        const ROWS_PER_BATCH: usize = 8;
+        const TOTAL_ROWS: usize = BATCHES * ROWS_PER_BATCH;
+
+        let dir = temp_db_dir();
+        fs::create_dir_all(&dir).expect("create temp db dir");
+        let uri = dir.to_string_lossy().to_string();
+        let store = Arc::new(
+            StaticFlowDataStore::connect(&uri)
+                .await
+                .expect("connect temp db"),
+        );
+        let base_ms = 1_710_000_000_000i64;
+
+        for batch_idx in 0..BATCHES {
+            let mut batch = Vec::with_capacity(ROWS_PER_BATCH);
+            for row_idx in 0..ROWS_PER_BATCH {
+                let index = batch_idx * ROWS_PER_BATCH + row_idx;
+                let occurred_at = base_ms + index as i64 * 1_000;
+                batch.push(make_api_behavior_input(index, occurred_at));
+            }
+            store
+                .append_api_behavior_events(batch)
+                .await
+                .expect("append api behavior batch");
+        }
+
+        let table_before = store
+            .connection()
+            .open_table("api_behavior_events")
+            .execute()
+            .await
+            .expect("open api behavior table before compaction");
+        assert!(
+            table_uses_stable_row_ids(&table_before)
+                .await
+                .expect("detect stable row ids"),
+            "api_behavior_events must use stable row ids"
+        );
+        let fragment_count_before = table_before
+            .dataset()
+            .expect("dataset wrapper")
+            .get()
+            .await
+            .expect("load dataset before compaction")
+            .get_fragments()
+            .len();
+        assert!(
+            fragment_count_before >= BATCHES,
+            "expected many fragments before compaction, got {fragment_count_before}"
+        );
+
+        let cleanup_cutoff = TOTAL_ROWS / 3;
+        let cleanup_before_ms = base_ms + cleanup_cutoff as i64 * 1_000;
+        let deleted = store
+            .cleanup_api_behavior_before(cleanup_before_ms)
+            .await
+            .expect("cleanup api behavior rows");
+        assert_eq!(deleted, cleanup_cutoff);
+
+        let until_ms = base_ms + TOTAL_ROWS as i64 * 1_000 + 1_000;
+        let filter = api_behavior_filter(cleanup_before_ms, until_ms);
+        let expected_total = TOTAL_ROWS - cleanup_cutoff;
+        let expected_matching = (cleanup_cutoff..TOTAL_ROWS)
+            .filter(|index| index % 3 == 0)
+            .count();
+
+        let barrier = Arc::new(Barrier::new(4));
+        let reader_one = tokio::spawn(run_filtered_read_stress(
+            Arc::clone(&store),
+            Arc::clone(&barrier),
+            filter.clone(),
+            cleanup_before_ms,
+            until_ms,
+            expected_matching,
+        ));
+        let reader_two = tokio::spawn(run_filtered_read_stress(
+            Arc::clone(&store),
+            Arc::clone(&barrier),
+            filter.clone(),
+            cleanup_before_ms,
+            until_ms,
+            expected_matching,
+        ));
+        let reader_three = tokio::spawn(run_filtered_read_stress(
+            Arc::clone(&store),
+            Arc::clone(&barrier),
+            filter.clone(),
+            cleanup_before_ms,
+            until_ms,
+            expected_matching,
+        ));
+
+        let compactor_store = Arc::clone(&store);
+        let compactor_barrier = Arc::clone(&barrier);
+        let compactor = tokio::spawn(async move {
+            compactor_barrier.wait().await;
+            compactor_store.compact_api_behavior_table().await
+        });
+
+        let (reader_one, reader_two, reader_three, compactor) =
+            tokio::join!(reader_one, reader_two, reader_three, compactor);
+        reader_one
+            .expect("reader one task")
+            .expect("reader one success");
+        reader_two
+            .expect("reader two task")
+            .expect("reader two success");
+        reader_three
+            .expect("reader three task")
+            .expect("reader three success");
+
+        let action = compactor
+            .expect("compactor task")
+            .expect("compactor success");
+        assert!(matches!(
+            action,
+            CompactAction::CompactedMaintenance | CompactAction::CompactedSafeFallback
+        ));
+
+        let total_after = store
+            .count_api_behavior_events_with_filter(None)
+            .await
+            .expect("count total rows after compaction");
+        assert_eq!(total_after, expected_total);
+
+        let filtered_after = store
+            .count_api_behavior_events_with_filter(Some(filter.clone()))
+            .await
+            .expect("count filtered rows after compaction");
+        assert_eq!(filtered_after, expected_matching);
+
+        let table_after = store
+            .connection()
+            .open_table("api_behavior_events")
+            .execute()
+            .await
+            .expect("open api behavior table after compaction");
+        let dataset_after = table_after
+            .dataset()
+            .expect("dataset wrapper after compaction")
+            .get()
+            .await
+            .expect("load dataset after compaction");
+        let fragment_count_after = dataset_after.get_fragments().len();
+        assert!(
+            fragment_count_after < fragment_count_before,
+            "expected compaction to reduce fragments: before={fragment_count_before}, \
+             after={fragment_count_after}"
+        );
+        assert!(
+            count_regular_files(&dir.join("api_behavior_events.lance/_indices")) == 0,
+            "stable-row-id compaction should not leave frag_reuse index files behind"
+        );
+
+        fs::remove_dir_all(&dir).expect("cleanup temp db dir");
+    }
+
+    fn temp_db_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("staticflow-api-behavior-test-{nanos}"))
+    }
+
+    fn make_api_behavior_input(index: usize, occurred_at: i64) -> NewApiBehaviorEventInput {
+        let matching = index % 3 == 0;
+        NewApiBehaviorEventInput {
+            event_id: format!("evt-{index:06}"),
+            occurred_at,
+            client_source: "web".to_string(),
+            method: if matching { "GET" } else { "POST" }.to_string(),
+            path: if matching {
+                format!("/admin/api-behavior/{index}")
+            } else {
+                format!("/articles/{index}")
+            },
+            query: format!("offset={index}"),
+            page_path: if matching {
+                format!("/dashboard/analytics/{}", index % 7)
+            } else {
+                format!("/notes/{}", index % 11)
+            },
+            referrer: Some("https://static-flow.local".to_string()),
+            status_code: if matching { 200 } else { 500 },
+            latency_ms: 10 + (index % 50) as i32,
+            client_ip: if matching {
+                format!("10.0.0.{}", index % 255)
+            } else {
+                format!("172.16.0.{}", index % 255)
+            },
+            ip_region: "CN-Shanghai".to_string(),
+            ua_raw: Some("StaticFlowTest/1.0".to_string()),
+            device_type: if matching { "desktop" } else { "mobile" }.to_string(),
+            os_family: "Linux".to_string(),
+            browser_family: "Chromium".to_string(),
+            request_id: format!("req-{index:06}"),
+            trace_id: format!("trace-{index:06}"),
+        }
+    }
+
+    fn api_behavior_filter(since_ms: i64, until_ms: i64) -> String {
+        format!(
+            "occurred_at >= arrow_cast({since_ms}, 'Timestamp(Millisecond, None)') AND \
+             occurred_at < arrow_cast({until_ms}, 'Timestamp(Millisecond, None)') AND path LIKE \
+             '/admin/%' AND page_path LIKE '/dashboard/%' AND client_ip LIKE '10.0.%' AND \
+             device_type = 'desktop' AND method = 'GET' AND status_code = 200"
+        )
+    }
+
+    async fn run_filtered_read_stress(
+        store: Arc<StaticFlowDataStore>,
+        barrier: Arc<Barrier>,
+        filter: String,
+        since_ms: i64,
+        until_ms: i64,
+        expected_matching: usize,
+    ) -> Result<()> {
+        barrier.wait().await;
+        for offset in [0_usize, 7, 13].into_iter().cycle().take(48) {
+            let total = store
+                .count_api_behavior_events_with_filter(Some(filter.clone()))
+                .await?;
+            assert_eq!(total, expected_matching);
+
+            let rows = store
+                .query_api_behavior_events(Some(filter.clone()), Some(25), Some(offset))
+                .await?;
+            assert_eq!(rows.len(), expected_matching.saturating_sub(offset).min(25));
+            assert!(rows.iter().all(|event| {
+                event.occurred_at >= since_ms
+                    && event.occurred_at < until_ms
+                    && event.path.starts_with("/admin/")
+                    && event.page_path.starts_with("/dashboard/")
+                    && event.client_ip.starts_with("10.0.")
+                    && event.device_type == "desktop"
+                    && event.method == "GET"
+                    && event.status_code == 200
+            }));
+
+            let window_rows = store
+                .list_api_behavior_events(Some(since_ms), Some(until_ms), Some(32))
+                .await?;
+            assert!(window_rows
+                .iter()
+                .all(|event| { event.occurred_at >= since_ms && event.occurred_at < until_ms }));
+
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    }
+
+    fn count_regular_files(path: &PathBuf) -> usize {
+        let Ok(entries) = fs::read_dir(path) else {
+            return 0;
+        };
+
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .map(|entry_path| match fs::metadata(&entry_path) {
+                Ok(meta) if meta.is_file() => 1,
+                Ok(meta) if meta.is_dir() => count_regular_files(&entry_path),
+                _ => 0,
+            })
+            .sum()
     }
 }

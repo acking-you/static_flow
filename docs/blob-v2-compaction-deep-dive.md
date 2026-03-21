@@ -2,6 +2,11 @@
 
 > **代码版本**: 基于 `acking-you/lance` fork, branch `feat/static-flow`
 > **适用场景**: 包含大型二进制数据（音频、图片）的 Lance 数据集 compaction
+>
+> **状态更新（2026-03-21）**:
+> 本文前半部分先从“上游尚不支持 blob v2 compaction”的故障现场展开，这是历史背景。
+> 当前 StaticFlow fork 已实现并验证 blob v2 compaction，生产中的 `songs`、`images`
+> 与 `interactive_assets` 都可以正常执行 compaction。
 
 ### 导航
 
@@ -26,9 +31,9 @@ StaticFlow 音乐模块需要存储 ~500 首歌 × 10MB/首的音频数据。
 独立存放，存储降到 **4.7GB**——但随之暴露了新问题：
 
 每首歌通过 `append` 写入产生一个独立的 fragment。500 首歌 = 500 个 fragment，
-查询性能线性下降。**Compaction**（合并小 fragment）是必须的，但 lance 上游
-**不支持含 blob v2 列的 compaction**（[issue #4947](https://github.com/lancedb/lance/issues/4947)）。
-标准路径要么直接拒绝，要么 schema 不匹配崩溃。
+查询性能线性下降。**Compaction**（合并小 fragment）是必须的。本文就是从当时
+“lance 上游尚不支持含 blob v2 列的 compaction”（[issue #4947](https://github.com/lancedb/lance/issues/4947)）
+这个起点出发，解释后来在 fork 中如何把它补齐的。
 
 > 关于 blob v1 → v2 的完整迁移过程、存储原理对比、和 fork 决策，
 > 详见 [LanceDB Blob 存储演进实战](./lancedb-blob-storage-optimization-journey.md)。

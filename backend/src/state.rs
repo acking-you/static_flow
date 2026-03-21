@@ -12,7 +12,7 @@ use static_flow_shared::{
     comments_store::{self, CommentDataStore},
     interactive_store::{self, InteractivePageStore},
     lancedb_api::{
-        self, CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
+        CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
@@ -520,12 +520,42 @@ fn spawn_table_compactor(
             let mut total_failed = 0usize;
 
             // Scan each DB group sequentially
+            for r in stores
+                .content_store
+                .scan_and_compact_managed_content_tables(&config)
+                .await
+            {
+                total_tables += 1;
+                if r.compacted {
+                    total_compacted += 1;
+                }
+
+                if let Some(err) = r.error {
+                    total_failed += 1;
+                    tracing::warn!(
+                        "compactor content/{} action={} compacted={} small_fragments={} \
+                         elapsed_ms={} error={}",
+                        r.table,
+                        r.action.as_str(),
+                        r.compacted,
+                        r.small_fragments,
+                        r.elapsed_ms,
+                        err
+                    );
+                } else {
+                    tracing::info!(
+                        "compactor content/{} action={} compacted={} small_fragments={} \
+                         elapsed_ms={}",
+                        r.table,
+                        r.action.as_str(),
+                        r.compacted,
+                        r.small_fragments,
+                        r.elapsed_ms
+                    );
+                }
+            }
+
             for (db_label, conn, tables) in [
-                (
-                    "content",
-                    stores.content_store.connection(),
-                    lancedb_api::CONTENT_COMPACTION_TABLE_NAMES,
-                ),
                 (
                     "content",
                     stores.article_request_store.connection(),

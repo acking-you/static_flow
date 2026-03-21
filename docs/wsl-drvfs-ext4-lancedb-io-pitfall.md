@@ -18,6 +18,10 @@ date: "2026-02-17"
 
 # WSL 挂载盘踩坑复盘：为什么 LanceDB 在 DrvFs 上会触发 metadata ENOENT，而 ext4 正常
 
+> 状态说明（2026-03-21）：
+> 本文记录的是 `images` 仍以旧写入路径运行时的故障现场。
+> 当前生产 `images.data` 已迁移为 blob v2；这篇文章依然成立，但应按“历史 incident 复盘”阅读。
+
 ## 1. 背景
 
 在 StaticFlow 的图片入库流程中，我们使用 `sf-cli write-images` 把图片写入 LanceDB 的 `images` 表。数据库目录最初放在 WSL 挂载盘：

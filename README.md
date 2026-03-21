@@ -32,18 +32,22 @@ static-flow/
 
 `static-flow` website: <https://acking-you.github.io/>
 
-This project keeps runtime data in **two** separate Hugging Face dataset repos:
+This project keeps runtime data in **two** Hugging Face dataset repos plus one
+local-only music DB:
 
-- Content DB (articles/images/taxonomies/views)
+- Content DB (content + request + interactive mirror tables)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
   - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
   - Local path: `/mnt/e/static-flow-data/lancedb`
-  - Format: `articles.lance/`, `images.lance/`, `taxonomies.lance/`, `article_views.lance/`
+  - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`
 - Comments DB (comment moderation + AI run traces)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/static-flow-comments>
   - Remote: `git@hf.co:datasets/LB7666/static-flow-comments`
   - Local path: `/mnt/e/static-flow-data/lancedb-comments`
-  - Format: `comment_tasks.lance/`, `comment_published.lance/`, `comment_audit_logs.lance/`, `comment_ai_runs.lance/`, `comment_ai_run_chunks.lance/`
+  - Tables: `comment_tasks`, `comment_published`, `comment_audit_logs`, `comment_ai_runs`, `comment_ai_run_chunks`
+- Music DB (local-first media store; not mirrored to HF by default)
+  - Local path: `/mnt/e/static-flow-data/lancedb-music`
+  - Tables: `songs`, `music_plays`, `music_comments`, `music_wishes`, `music_wish_ai_runs`, `music_wish_ai_run_chunks`
 
 Recommended workflow:
 
@@ -212,7 +216,8 @@ cd cli
 # - articles.vector_en / articles.vector_zh (vector)
 # - images.vector (vector)
 # - taxonomies table stores category/tag metadata (no vector index)
-# - article_views is a backend runtime analytics table (no CLI index management required)
+# - article_views scalar indexes are also managed here
+# - runtime/request/interactive tables are handled by `sf-cli db ensure-indexes`
 ../target/release/sf-cli ensure-indexes --db-path ../data/lancedb
 
 # By default, write-article / write-images / sync-notes auto-run index-only optimize
@@ -251,6 +256,7 @@ cd cli
 
 # Thumbnail implementation details
 # - Generated only with --generate-thumbnail; size controlled by --thumbnail-size (default 256)
+# - Original image bytes live in blob v2 sidecars via images.data
 # - Stored as PNG bytes in images.thumbnail
 # - GET /api/images/:id-or-filename?thumb=true prefers thumbnail and falls back to original data
 
@@ -281,17 +287,20 @@ cd cli
 ../target/release/sf-cli db --db-path ../data/lancedb ensure-indexes
 ../target/release/sf-cli db --db-path ../data/lancedb optimize articles
 ../target/release/sf-cli db --db-path ../data/lancedb optimize images
+# One-time schema/storage migration for legacy image tables
+../target/release/sf-cli db --db-path ../data/lancedb migrate-images-blob-v2
 # One-command orphan cleanup (prune-only, no full rewrite)
 ../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans --table images
 # Run orphan cleanup across all cleanup target tables (includes article_views; skips if missing)
 ../target/release/sf-cli db --db-path ../data/lancedb cleanup-orphans
 
-# Managed tables (sf-cli)
-# - articles: article body/metadata + vectors
-# - images: binary image data + vectors
+# Content DB table groups
+# - articles: article body/metadata + vectors + bilingual/repost fields
+# - images: blob v2 original payloads + binary thumbnails + vectors
 # - taxonomies: category/tag metadata (`kind`, `key`, `name`, `description`)
-# Runtime table (backend)
-# - article_views: backend analytics table (view events, day/hour buckets; lazily created on first /api/articles/:id/view call)
+# - article_views / api_behavior_events: backend runtime analytics
+# - article_requests / article_request_ai_*: article request worker runtime tables
+# - interactive_pages / interactive_page_locales / interactive_assets: standalone interactive mirror pages and localized assets
 
 # Backend-like API debug commands
 ../target/release/sf-cli api --db-path ../data/lancedb list-articles --category "Tech"

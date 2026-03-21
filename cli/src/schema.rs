@@ -9,6 +9,7 @@ use arrow_array::{
     ArrayRef, RecordBatch,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use lance::{blob_field, BlobArrayBuilder};
 use serde::{Deserialize, Serialize};
 use static_flow_shared::embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
 
@@ -103,7 +104,7 @@ pub fn image_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("filename", DataType::Utf8, false),
-        Field::new("data", DataType::Binary, false),
+        blob_field("data", false),
         Field::new("thumbnail", DataType::Binary, true),
         Field::new(
             "vector",
@@ -280,7 +281,7 @@ pub fn build_article_batch(records: &[ArticleRecord]) -> Result<RecordBatch> {
 pub fn build_image_batch(records: &[ImageRecord]) -> Result<RecordBatch> {
     let mut id_builder = StringBuilder::new();
     let mut filename_builder = StringBuilder::new();
-    let mut data_builder = BinaryBuilder::new();
+    let mut data_builder = BlobArrayBuilder::new(records.len());
     let mut thumb_builder = BinaryBuilder::new();
     let mut vector_builder =
         FixedSizeListBuilder::new(Float32Builder::new(), IMAGE_VECTOR_DIM as i32)
@@ -291,7 +292,7 @@ pub fn build_image_batch(records: &[ImageRecord]) -> Result<RecordBatch> {
     for record in records {
         id_builder.append_value(&record.id);
         filename_builder.append_value(&record.filename);
-        data_builder.append_value(&record.data);
+        data_builder.push_bytes(&record.data)?;
 
         if let Some(thumb) = &record.thumbnail {
             thumb_builder.append_value(thumb);
@@ -329,7 +330,7 @@ pub fn build_image_batch(records: &[ImageRecord]) -> Result<RecordBatch> {
     let arrays: Vec<ArrayRef> = vec![
         Arc::new(id_builder.finish()),
         Arc::new(filename_builder.finish()),
-        Arc::new(data_builder.finish()),
+        data_builder.finish()?,
         Arc::new(thumb_builder.finish()),
         Arc::new(vector_builder.finish()),
         Arc::new(metadata_builder.finish()),

@@ -11,6 +11,11 @@ read_time: 35
 
 # LanceDB Blob 存储演进实战 — 从 27GB 到 4.7GB 的优化之旅
 
+> 状态更新（2026-03-21）：
+> 本文包含一段“blob v2 compaction 仍不可用、需要 skip_tables 绕过”的历史阶段描述。
+> 当前 StaticFlow fork 已经补齐 blob v2 compaction 路径，生产中的 `songs`、`images`
+> 与 `interactive_assets` 都按正常 `optimize --all --prune-now` 维护；历史段落请按“问题演进过程”理解。
+>
 > 400 首歌的音频存进 LanceDB 后，数据库膨胀到了 27GB，查询延迟飙升到 10 秒以上。
 > 从 blob v1 到 blob v2，从上游 issue 到 fork 修复，这篇文章记录了整个优化过程中
 > 对 LanceDB blob 存储内部原理的理解和工程实践。
@@ -797,7 +802,8 @@ graph TD
 
 ### 解决方案：skip_tables
 
-既然 blob v2 compaction 暂时不能工作，我在 compaction 配置中增加了 `skip_tables` 机制：
+在当时 blob v2 compaction 还没补齐的阶段，我曾在 compaction 配置中增加
+`skip_tables` 机制作为过渡方案：
 
 ```rust
 // shared/src/optimize.rs:13-19
@@ -810,7 +816,7 @@ pub struct CompactConfig {
 }
 ```
 
-后台 compaction 任务中配置跳过 `songs` 表：
+当时的后台 compaction 任务里，`songs` 表会被显式跳过：
 
 ```rust
 // backend/src/state.rs:406-412
@@ -823,7 +829,7 @@ let config = CompactConfig {
 };
 ```
 
-扫描时遇到 skip_tables 中的表直接跳过：
+也就是说，在那个历史阶段，扫描时遇到 skip_tables 中的表会直接跳过：
 
 ```rust
 // shared/src/optimize.rs:46-48
@@ -1008,7 +1014,8 @@ compact failed: External error: lance::Error::IO: failed to read metadata for
 
 2. **拥抱不稳定版本（v2.2）**：blob v2 是 unstable feature，但个人项目的风险容忍度更高。通过 fork 锁定版本、可控升级。
 
-3. **skip_tables 绕过 compaction bug**：blob v2 compaction 的 schema 不匹配不是短期能修复的（涉及 encoder/decoder 的深层逻辑）。`skip_tables` 是务实的 workaround，结合低频写入模式可以接受。
+3. **先用 `skip_tables` 兜底，再在 fork 中补齐 compaction**：`skip_tables`
+   是过渡期 workaround，不是最终形态。它帮助系统在修复落地前保持稳定，随后再由 fork 中的 blob v2 compaction 实现替代。
 
 4. **Fork 作为 git submodule**：比 `[patch]` 更可控 —— 可以随心所欲地改代码、加特性、修 bug，不受上游发布节奏制约。砍掉不需要的 cloud SDK 依赖，锁定到确切 commit 避免上游 breaking change。
 
@@ -1016,7 +1023,7 @@ compact failed: External error: lance::Error::IO: failed to read metadata for
 
 ### 后续计划
 
-- **Blob v2 compaction 支持**：在 fork 中开发完整的 blob v2 compaction 实现，解决 encoder/decoder schema 不匹配的管线断层问题，让 songs 表恢复自动 compaction
+- **Blob v2 compaction 支持**：已在 fork 中补齐并用于生产；后续重点从“能不能 compact”转向“持续验证更多 blob v2 表和边界场景”
 - **Fragment 增长监控**：在不能 compact 的过渡期，需要告警机制提醒手动重建
 - **回馈上游**：当 blob v2 compaction 在 fork 中正确实现并经过验证后，可以尝试将这部分工作回馈给 lance 上游社区
 

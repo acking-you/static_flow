@@ -279,6 +279,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             DbCommands::DescribeTable {
                 table,
             } => db_manage::describe_table(&db_path, &table).await,
+            DbCommands::AuditStorage {
+                table,
+            } => db_manage::audit_storage(&db_path, table.as_deref()).await,
             DbCommands::CountRows {
                 table,
                 where_clause,
@@ -373,6 +376,22 @@ pub async fn run(cli: Cli) -> Result<()> {
                 table,
                 version,
             } => db_manage::restore_table(&db_path, &table, version).await,
+            DbCommands::RebuildArticleViewsStable {
+                force,
+            } => db_manage::rebuild_article_views_stable(&db_path, force).await,
+            DbCommands::MigrateImagesBlobV2 {
+                force,
+                batch_size,
+            } => db_manage::migrate_images_blob_v2(&db_path, force, batch_size).await,
+            DbCommands::RepairLegacyBlobFilenames {
+                table,
+                dry_run,
+            } => db_manage::repair_legacy_blob_filenames(&db_path, &table, dry_run).await,
+            DbCommands::RebuildTableStable {
+                table,
+                force,
+                batch_size,
+            } => db_manage::rebuild_table_stable(&db_path, &table, force, batch_size).await,
             DbCommands::TestBlobCompact {
                 count,
                 blob_size,

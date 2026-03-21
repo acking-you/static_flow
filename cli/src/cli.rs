@@ -462,6 +462,13 @@ pub enum DbCommands {
         /// Table name.
         table: String,
     },
+    /// Inspect table storage health (stable row ids, fragments, versions,
+    /// indexes).
+    AuditStorage {
+        /// Optional table name. If omitted, audits all tables in the DB.
+        #[arg(long)]
+        table: Option<String>,
+    },
     /// Count rows with optional SQL filter.
     CountRows {
         /// Table name.
@@ -546,7 +553,8 @@ pub enum DbCommands {
     },
     /// Ensure indexes for managed tables.
     EnsureIndexes {
-        /// Optional table filter (`articles`, `images`, or `taxonomies`).
+        /// Optional managed table filter. If omitted, applies index policy to
+        /// all known tables present in the DB.
         #[arg(long)]
         table: Option<String>,
     },
@@ -642,6 +650,44 @@ pub enum DbCommands {
         table: String,
         /// Target version number.
         version: u64,
+    },
+    /// Rebuild `article_views` as a stable-row-id table with a filesystem
+    /// backup.
+    RebuildArticleViewsStable {
+        /// Skip the "already stable" no-op check and rebuild anyway.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Migrate `images.data` to blob v2 while preserving thumbnails as normal
+    /// binary.
+    MigrateImagesBlobV2 {
+        /// Skip the no-op check and rebuild even if the table already matches
+        /// the requested layout.
+        #[arg(long)]
+        force: bool,
+        /// Number of rows to copy per batch.
+        #[arg(long, default_value_t = 256)]
+        batch_size: usize,
+    },
+    /// Rename legacy 8-hex blob sidecar filenames to the current blob v2
+    /// layout for a specific table.
+    RepairLegacyBlobFilenames {
+        /// Table name.
+        table: String,
+        /// Print the planned renames without changing files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Rebuild any table as a stable-row-id table with a filesystem backup.
+    RebuildTableStable {
+        /// Table name.
+        table: String,
+        /// Skip the "already stable" no-op check and rebuild anyway.
+        #[arg(long)]
+        force: bool,
+        /// Number of rows to copy per batch.
+        #[arg(long, default_value_t = 256)]
+        batch_size: usize,
     },
     /// Run blob v2 compaction e2e test with synthetic data.
     TestBlobCompact {

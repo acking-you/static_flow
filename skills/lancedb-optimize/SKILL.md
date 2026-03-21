@@ -22,7 +22,7 @@ All paths are relative to `DB_ROOT` (default: `/mnt/e/static-flow-data`).
 
 | DB | Path | Tables |
 |----|------|--------|
-| Content | `$DB_ROOT/lancedb` | `api_behavior_events`, `article_views`, `articles`, `images`, `taxonomies` |
+| Content | `$DB_ROOT/lancedb` | `api_behavior_events`, `article_request_ai_run_chunks`, `article_request_ai_runs`, `article_requests`, `article_views`, `articles`, `images`, `interactive_assets`, `interactive_page_locales`, `interactive_pages`, `taxonomies` |
 | Comments | `$DB_ROOT/lancedb-comments` | `comment_ai_run_chunks`, `comment_ai_runs`, `comment_audit_logs`, `comment_published`, `comment_tasks` |
 | Music | `$DB_ROOT/lancedb-music` | `music_comments`, `music_plays`, `music_wish_ai_run_chunks`, `music_wish_ai_runs`, `music_wishes`, `songs` |
 
@@ -41,10 +41,11 @@ All paths are relative to `DB_ROOT` (default: `/mnt/e/static-flow-data`).
 
 ### Step 1: Pre-check — Count Fragments
 
-For each DB root and each table, count fragment files to assess current state:
+For each DB root and each table, inspect fragment counts via Lance metadata
+instead of counting files under `data/`:
 
 ```bash
-ls <db_path>/<table>.lance/data/ | wc -l
+<cli> db --db-path <db_path> audit-storage --table <table>
 ```
 
 Report a summary table of fragment counts. Tables with <= 3 fragments can be
@@ -60,13 +61,15 @@ For each table that needs compaction:
 
 - `--all`: full optimization (compact fragments + rebuild indexes)
 - `--prune-now`: immediately remove old versions (older_than=0, delete_unverified=true)
+- On the current StaticFlow fork, blob v2 tables such as `songs`, `images`,
+  and `interactive_assets` are expected to compact normally.
 
 Run tables within the same DB sequentially (they share the same lock).
 Different DBs can run in parallel.
 
 ### Step 3: Post-check — Verify
 
-1. Re-count fragment files for each table.
+1. Re-check fragment counts with `audit-storage`.
 2. Verify row counts match pre-optimization counts:
    ```bash
    <cli> db --db-path <db_path> count-rows <table>

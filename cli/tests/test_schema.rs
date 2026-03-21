@@ -76,7 +76,12 @@ mod tests {
         assert_eq!(schema.fields().len(), 7);
 
         let data = schema.field_with_name("data").expect("data field");
-        assert_eq!(data.data_type(), &DataType::Binary);
+        assert_eq!(
+            data.metadata()
+                .get("ARROW:extension:name")
+                .map(String::as_str),
+            Some("lance.blob.v2")
+        );
         assert!(!data.is_nullable());
 
         let thumbnail = schema

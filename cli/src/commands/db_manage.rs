@@ -1,17 +1,24 @@
-use std::{fs, path::Path};
+use std::{
+    collections::{BTreeSet, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
-use arrow::util::pretty::pretty_format_batches;
+use arrow::{compute::cast, util::pretty::pretty_format_batches};
 use arrow_array::{
-    Array, BinaryArray, FixedSizeListArray, RecordBatch, StringArray, TimestampMillisecondArray,
+    Array, ArrayRef, BinaryArray, FixedSizeListArray, LargeBinaryArray, RecordBatch,
+    RecordBatchIterator, RecordBatchReader, StringArray, TimestampMillisecondArray,
 };
-use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::{DataType, Schema, TimeUnit};
 use chrono::Duration as ChronoDuration;
 use futures::TryStreamExt;
-use lance::dataset::ColumnAlteration;
+use lance::{dataset::ColumnAlteration, datatypes::BlobHandling, BlobArrayBuilder};
 use lancedb::{
     query::{ExecutableQuery, QueryBase, Select},
-    table::{CompactionOptions, OptimizeAction, OptimizeOptions},
+    table::{OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
 use static_flow_shared::{
@@ -20,22 +27,39 @@ use static_flow_shared::{
         reembed_image_vectors as reembed_image_vectors_in_table, ImageReembedOptions,
         ImageReembedScope,
     },
+    optimize::{compact_table_with_fallback, prune_table_versions},
 };
 
 use crate::{
     cli::QueryOutputFormat,
     db::{
-        connect_db, ensure_fts_index, ensure_table, ensure_vector_index, upsert_articles,
-        upsert_images,
+        connect_db, ensure_fts_index, ensure_scalar_index, ensure_table, ensure_vector_index,
+        upsert_articles, upsert_images,
     },
     schema::{article_schema, image_schema, taxonomy_schema, ArticleRecord, ImageRecord},
     utils::rasterize_svg_for_embedding,
 };
 
 const CLEANUP_TARGET_TABLES: [&str; 4] = ["articles", "images", "taxonomies", "article_views"];
-const SAFE_COMPACTION_BATCH_SIZE: usize = 8;
-const SAFE_COMPACTION_MAX_ROWS_PER_GROUP: usize = 8;
-const SAFE_COMPACTION_MAX_BYTES_PER_FILE: usize = 512 * 1024 * 1024;
+const DEFAULT_REBUILD_BATCH_SIZE: usize = 256;
+
+#[derive(Debug, Clone, Copy)]
+struct TablePolicy {
+    scalar_indexes: &'static [&'static str],
+    vector_indexes: &'static [&'static str],
+    fts_indexes: &'static [&'static str],
+    storage_options: &'static [(&'static str, &'static str)],
+}
+
+#[derive(Debug)]
+struct TableStorageAudit {
+    table: String,
+    stable_row_ids: bool,
+    row_count: usize,
+    version: u64,
+    fragments: usize,
+    indexes: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct QueryRowsOptions {
@@ -97,6 +121,42 @@ pub async fn describe_table(db_path: &Path, table: &str) -> Result<()> {
             field.name(),
             format_datatype(field.data_type()),
             if field.is_nullable() { " (nullable)" } else { "" }
+        );
+    }
+    Ok(())
+}
+
+pub async fn audit_storage(db_path: &Path, table: Option<&str>) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table_names = match table {
+        Some(name) => vec![name.to_string()],
+        None => db.table_names().limit(10_000).execute().await?,
+    };
+
+    if table_names.is_empty() {
+        tracing::info!("No tables found in {}", db_path.display());
+        return Ok(());
+    }
+
+    let mut audits = Vec::with_capacity(table_names.len());
+    for table_name in table_names {
+        let table = open_table(&db, &table_name).await?;
+        audits.push(audit_one_table(&table).await?);
+    }
+
+    audits.sort_by(|left, right| left.table.cmp(&right.table));
+    tracing::info!("Storage audit for `{}`:", db_path.display());
+    for audit in audits {
+        let indexes =
+            if audit.indexes.is_empty() { "none".to_string() } else { audit.indexes.join(", ") };
+        tracing::info!(
+            "- {} | stable_row_ids={} | rows={} | version={} | fragments={} | indexes={}",
+            audit.table,
+            audit.stable_row_ids,
+            audit.row_count,
+            audit.version,
+            audit.fragments,
+            indexes
         );
     }
     Ok(())
@@ -313,20 +373,9 @@ pub async fn delete_rows(
 
 pub async fn ensure_indexes(db_path: &Path, table: Option<String>) -> Result<()> {
     let db = connect_db(db_path).await?;
-
-    match table.as_deref() {
-        Some("articles") => ensure_article_indexes(&db).await?,
-        Some("images") => ensure_image_indexes(&db).await?,
-        Some("taxonomies") => {
-            tracing::info!("No indexes configured for `taxonomies` table.");
-        },
-        Some(other) => {
-            bail!("unsupported table `{other}`, expected `articles`, `images`, or `taxonomies`")
-        },
-        None => {
-            ensure_article_indexes(&db).await?;
-            ensure_image_indexes(&db).await?;
-        },
+    let targets = resolve_index_targets(&db, table.as_deref()).await?;
+    for target in targets {
+        ensure_indexes_for_table(&db, &target).await?;
     }
 
     tracing::info!("Index ensure run completed.");
@@ -380,33 +429,13 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
     let table = open_table(&db, table).await?;
 
     if all {
-        if let Err(err) = table.optimize(OptimizeAction::All).await {
-            let message = err.to_string();
-            if message.contains("Offset overflow error") {
-                tracing::warn!(
-                    "Full optimize failed for `{}` with offset overflow, retrying with safe \
-                     compaction settings",
-                    table.name()
-                );
-                let options = CompactionOptions {
-                    batch_size: Some(SAFE_COMPACTION_BATCH_SIZE),
-                    max_rows_per_group: SAFE_COMPACTION_MAX_ROWS_PER_GROUP,
-                    max_bytes_per_file: Some(SAFE_COMPACTION_MAX_BYTES_PER_FILE),
-                    ..CompactionOptions::default()
-                };
-                let _ = table
-                    .optimize(OptimizeAction::Compact {
-                        options,
-                        remap_options: None,
-                    })
-                    .await?;
-                let _ = table
-                    .optimize(OptimizeAction::Index(OptimizeOptions::default()))
-                    .await?;
-            } else {
-                return Err(err.into());
-            }
-        }
+        let action = compact_table_with_fallback(&table)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let _ = table
+            .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+            .await?;
+        tracing::info!("Compaction completed for `{}` via {}", table.name(), action.as_str());
     } else {
         let _ = table
             .optimize(OptimizeAction::Index(OptimizeOptions::default()))
@@ -414,17 +443,17 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
     }
 
     if prune_now {
-        let _ = table
-            .optimize(OptimizeAction::Prune {
-                older_than: Some(ChronoDuration::zero()),
-                delete_unverified: Some(true),
-                error_if_tagged_old_versions: Some(false),
-            })
-            .await?;
+        prune_table_versions(&table, 0, true, false)
+            .await
+            .map_err(anyhow::Error::msg)?;
         tracing::info!(
             "Immediate prune completed for `{}` (older_than=0, delete_unverified=true).",
             table.name()
         );
+    }
+
+    if table_policy(table.name()).is_some() {
+        ensure_indexes_for_table(&db, table.name()).await?;
     }
 
     tracing::info!(
@@ -470,12 +499,18 @@ pub async fn cleanup_orphans(db_path: &Path, table: Option<&str>) -> Result<()> 
 pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: bool) -> Result<()> {
     let db = connect_db(db_path).await?;
     let table = open_table(&db, "images").await?;
-
-    let batches = table
-        .query()
-        .only_if("filename LIKE '%.svg' OR filename LIKE '%.SVG'")
-        .select(Select::columns(&["id", "filename", "data", "thumbnail", "metadata", "created_at"]))
-        .execute()
+    let dataset = table
+        .dataset()
+        .ok_or_else(|| anyhow!("table `images` has no native dataset"))?
+        .get()
+        .await
+        .context("failed to load images dataset for SVG re-embed")?;
+    let mut scanner = dataset.scan();
+    scanner.project(&["id", "filename", "data", "thumbnail", "metadata", "created_at"])?;
+    scanner.filter("filename LIKE '%.svg' OR filename LIKE '%.SVG'")?;
+    scanner.blob_handling(BlobHandling::AllBinary);
+    let batches = scanner
+        .try_into_stream()
         .await?
         .try_collect::<Vec<_>>()
         .await?;
@@ -493,8 +528,6 @@ pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: b
     for batch in &batches {
         let ids = downcast_string(batch, "id")?;
         let filenames = downcast_string(batch, "filename")?;
-        let data = downcast_binary(batch, "data")?;
-        let thumbs = downcast_binary(batch, "thumbnail")?;
         let metadata = downcast_string(batch, "metadata")?;
         let created = downcast_timestamp_ms(batch, "created_at")?;
 
@@ -507,7 +540,7 @@ pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: b
             }
 
             let filename = filenames.value(row).to_string();
-            let bytes = data.value(row).to_vec();
+            let bytes = binary_like_value(batch, "data", row)?.to_vec();
             let Some(rasterized) =
                 rasterize_svg_for_embedding(Path::new(&filename), bytes.as_slice())?
             else {
@@ -527,8 +560,7 @@ pub async fn reembed_svg_images(db_path: &Path, limit: Option<usize>, dry_run: b
             metadata_value["height"] = serde_json::json!(rasterized.height);
             metadata_value["embedding_input"] = serde_json::json!("svg_rasterized_png");
 
-            let thumbnail =
-                if thumbs.is_null(row) { None } else { Some(thumbs.value(row).to_vec()) };
+            let thumbnail = binary_like_value_opt(batch, "thumbnail", row)?;
 
             updates.push(ImageRecord {
                 id: ids.value(row).to_string(),
@@ -956,6 +988,249 @@ pub async fn restore_table(db_path: &Path, table: &str, version: u64) -> Result<
     Ok(())
 }
 
+pub async fn rebuild_article_views_stable(db_path: &Path, force: bool) -> Result<()> {
+    rebuild_table_stable(db_path, "article_views", force, DEFAULT_REBUILD_BATCH_SIZE).await
+}
+
+pub async fn migrate_images_blob_v2(db_path: &Path, force: bool, batch_size: usize) -> Result<()> {
+    rebuild_table_with_target_schema(db_path, "images", image_schema(), force, batch_size).await
+}
+
+pub async fn repair_legacy_blob_filenames(
+    db_path: &Path,
+    table_name: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, table_name).await?;
+    let schema = table.schema().await?;
+    if !schema_requires_blob_v2_storage(schema.as_ref()) {
+        bail!("table `{table_name}` does not contain blob v2 columns");
+    }
+    if !table_uses_blob_v2_storage(&table).await? {
+        bail!("table `{table_name}` does not use blob v2 data storage version 2.2");
+    }
+
+    let data_dir = db_path.join(format!("{table_name}.lance")).join("data");
+    if !data_dir.exists() {
+        bail!("table data directory `{}` does not exist", data_dir.display());
+    }
+
+    let mut legacy_paths = Vec::new();
+    collect_legacy_blob_paths(&data_dir, &mut legacy_paths)?;
+    legacy_paths.sort();
+
+    if legacy_paths.is_empty() {
+        tracing::info!(
+            "No legacy blob filenames found for `{table_name}` under `{}`.",
+            data_dir.display()
+        );
+        return Ok(());
+    }
+
+    tracing::info!(
+        "Found {} legacy blob sidecar files for `{table_name}` under `{}`.",
+        legacy_paths.len(),
+        data_dir.display()
+    );
+
+    let mut renamed = 0usize;
+    for old_path in legacy_paths {
+        let stem = old_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| anyhow!("invalid blob file name `{}`", old_path.display()))?;
+        let blob_id = u32::from_str_radix(stem, 16)
+            .with_context(|| format!("failed to parse legacy blob id `{stem}`"))?;
+        let new_name = format!("{:032b}.blob", blob_id.reverse_bits());
+        let new_path = old_path.with_file_name(new_name);
+        if new_path.exists() {
+            bail!(
+                "refusing to overwrite existing blob sidecar `{}` while repairing `{}`",
+                new_path.display(),
+                table_name
+            );
+        }
+
+        tracing::info!("Repair blob sidecar: {} -> {}", old_path.display(), new_path.display());
+        if !dry_run {
+            fs::rename(&old_path, &new_path).with_context(|| {
+                format!(
+                    "failed to rename legacy blob sidecar `{}` -> `{}`",
+                    old_path.display(),
+                    new_path.display()
+                )
+            })?;
+        }
+        renamed += 1;
+    }
+
+    if dry_run {
+        tracing::info!("Dry run complete. Planned {} blob sidecar renames.", renamed);
+        return Ok(());
+    }
+
+    let mut remaining = Vec::new();
+    collect_legacy_blob_paths(&data_dir, &mut remaining)?;
+    if !remaining.is_empty() {
+        bail!(
+            "legacy blob sidecar filenames remain after repair for `{table_name}`: {} files",
+            remaining.len()
+        );
+    }
+
+    tracing::info!("Repaired {} legacy blob sidecar filenames for `{table_name}`.", renamed);
+    Ok(())
+}
+
+pub async fn rebuild_table_stable(
+    db_path: &Path,
+    table_name: &str,
+    force: bool,
+    batch_size: usize,
+) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, table_name).await?;
+    let current_schema = table.schema().await?;
+    rebuild_table_with_target_schema(db_path, table_name, current_schema, force, batch_size).await
+}
+
+async fn rebuild_table_with_target_schema(
+    db_path: &Path,
+    table_name: &str,
+    target_schema: Arc<Schema>,
+    force: bool,
+    batch_size: usize,
+) -> Result<()> {
+    let db = connect_db(db_path).await?;
+    let table = open_table(&db, table_name).await?;
+    let current_schema = table.schema().await?;
+    let already_stable = table_uses_stable_row_ids(&table).await?;
+    let schema_matches =
+        schema_is_compatible_with_target(current_schema.as_ref(), target_schema.as_ref());
+    if already_stable && schema_matches && !force {
+        tracing::info!(
+            "`{table_name}` already matches the requested stable schema; nothing to do."
+        );
+        return Ok(());
+    }
+
+    let row_count_before = table
+        .count_rows(None)
+        .await
+        .with_context(|| format!("failed to count `{table_name}` rows before rebuild"))?
+        as usize;
+    let backup_dir = table_backup_path(db_path, table_name)?;
+    let tmp_db_path = temp_rebuild_db_path(db_path, table_name)?;
+    let original_dir = db_path.join(format!("{table_name}.lance"));
+
+    if !original_dir.exists() {
+        bail!("expected table directory at `{}`", original_dir.display());
+    }
+    if tmp_db_path.exists() {
+        fs::remove_dir_all(&tmp_db_path).with_context(|| {
+            format!("failed to remove stale rebuild temp dir `{}`", tmp_db_path.display())
+        })?;
+    }
+
+    tracing::info!(
+        "Rebuilding `{table_name}` with target schema. rows={} backup=`{}` tmp_db=`{}` \
+         stable_before={} schema_matches_before={}",
+        row_count_before,
+        backup_dir.display(),
+        tmp_db_path.display(),
+        already_stable,
+        schema_matches
+    );
+
+    let rebuild_result = async {
+        rebuild_table_into_temp_db(&table, &target_schema, &tmp_db_path, table_name, batch_size)
+            .await?;
+        let tmp_db = connect_db(&tmp_db_path).await?;
+        ensure_indexes_for_table(&tmp_db, table_name).await?;
+        let tmp_table = open_table(&tmp_db, table_name).await?;
+        let tmp_count = tmp_table
+            .count_rows(None)
+            .await
+            .with_context(|| format!("failed to count rebuilt temp `{table_name}` rows"))?
+            as usize;
+        if tmp_count != row_count_before {
+            bail!(
+                "rebuilt temp `{table_name}` row count mismatch: before={} after={}",
+                row_count_before,
+                tmp_count
+            );
+        }
+        if !table_uses_stable_row_ids(&tmp_table).await? {
+            bail!("rebuilt temp `{table_name}` still does not use stable row ids");
+        }
+        validate_table_layout(&tmp_table, &target_schema, "rebuilt temp").await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    if let Err(err) = rebuild_result {
+        let _ = fs::remove_dir_all(&tmp_db_path);
+        return Err(err);
+    }
+
+    fs::create_dir_all(
+        backup_dir
+            .parent()
+            .ok_or_else(|| anyhow!("invalid backup path `{}`", backup_dir.display()))?,
+    )
+    .with_context(|| format!("failed to create backup parent for `{}`", backup_dir.display()))?;
+    fs::rename(&original_dir, &backup_dir).with_context(|| {
+        format!("failed to move `{}` to backup `{}`", original_dir.display(), backup_dir.display())
+    })?;
+
+    let tmp_table_dir = tmp_db_path.join(format!("{table_name}.lance"));
+    let swap_result = fs::rename(&tmp_table_dir, &original_dir).with_context(|| {
+        format!(
+            "failed to move rebuilt `{}` into place from `{}`",
+            table_name,
+            tmp_table_dir.display()
+        )
+    });
+    if let Err(err) = swap_result {
+        let rollback_err = fs::rename(&backup_dir, &original_dir).with_context(|| {
+            format!(
+                "rebuild failed and rollback also failed; backup remains at `{}`",
+                backup_dir.display()
+            )
+        });
+        let _ = fs::remove_dir_all(&tmp_db_path);
+        rollback_err?;
+        return Err(err);
+    }
+    let _ = fs::remove_dir_all(&tmp_db_path);
+
+    let db = connect_db(db_path).await?;
+    let rebuilt = open_table(&db, table_name).await?;
+    let row_count_after = rebuilt
+        .count_rows(None)
+        .await
+        .with_context(|| format!("failed to count rebuilt `{table_name}` rows"))?
+        as usize;
+    if row_count_after != row_count_before {
+        bail!(
+            "rebuilt `{table_name}` row count mismatch after swap: before={} after={}",
+            row_count_before,
+            row_count_after
+        );
+    }
+    if !table_uses_stable_row_ids(&rebuilt).await? {
+        bail!("rebuilt `{table_name}` still does not use stable row ids after swap");
+    }
+    validate_table_layout(&rebuilt, &target_schema, "rebuilt").await?;
+
+    tracing::info!(
+        "Rebuilt `{table_name}` successfully. Backup preserved at `{}`.",
+        backup_dir.display()
+    );
+    Ok(())
+}
+
 pub async fn upsert_image_json(db_path: &Path, json: &str) -> Result<()> {
     let mut record: ImageRecord = serde_json::from_str(json).context("invalid image JSON")?;
     if record.created_at == 0 {
@@ -969,27 +1244,588 @@ pub async fn upsert_image_json(db_path: &Path, json: &str) -> Result<()> {
     Ok(())
 }
 
-async fn ensure_article_indexes(db: &Connection) -> Result<()> {
-    let table = open_table(db, "articles").await?;
-    if let Err(err) = ensure_fts_index(&table, "content").await {
-        tracing::warn!("Failed to create FTS index on articles: {err}");
+async fn resolve_index_targets(db: &Connection, table: Option<&str>) -> Result<Vec<String>> {
+    match table {
+        Some(name) => {
+            if table_policy(name).is_none() {
+                bail!(
+                    "unsupported table `{name}` for index management; supported tables: {}",
+                    all_policy_table_names().join(", ")
+                );
+            }
+            Ok(vec![name.to_string()])
+        },
+        None => {
+            let existing = db.table_names().limit(10_000).execute().await?;
+            let mut targets = existing
+                .into_iter()
+                .filter(|name| table_policy(name).is_some())
+                .collect::<Vec<_>>();
+            targets.sort();
+            Ok(targets)
+        },
     }
-    if let Err(err) = ensure_vector_index(&table, "vector_en").await {
-        tracing::warn!("Failed to create vector index on articles (vector_en): {err}");
+}
+
+async fn ensure_indexes_for_table(db: &Connection, table_name: &str) -> Result<()> {
+    let Some(policy) = table_policy(table_name) else {
+        tracing::info!("No managed index policy for `{table_name}`, skipping.");
+        return Ok(());
+    };
+
+    let mut table = open_table(db, table_name).await?;
+    if drop_duplicate_indexes(&table).await? > 0 {
+        table = open_table(db, table_name).await?;
     }
-    if let Err(err) = ensure_vector_index(&table, "vector_zh").await {
-        tracing::warn!("Failed to create vector index on articles (vector_zh): {err}");
+    for column in policy.scalar_indexes {
+        if let Err(err) = ensure_scalar_index(&table, column).await {
+            tracing::warn!("Failed to create scalar index on `{}` ({column}): {err}", table.name());
+        }
+    }
+    for column in policy.fts_indexes {
+        if let Err(err) = ensure_fts_index(&table, column).await {
+            tracing::warn!("Failed to create FTS index on `{}` ({column}): {err}", table.name());
+        }
+    }
+    for column in policy.vector_indexes {
+        if let Err(err) = ensure_vector_index(&table, column).await {
+            tracing::warn!("Failed to create vector index on `{}` ({column}): {err}", table.name());
+        }
     }
     Ok(())
 }
 
-async fn ensure_image_indexes(db: &Connection) -> Result<()> {
-    let table = open_table(db, "images").await?;
-    if let Err(err) = ensure_vector_index(&table, "vector").await {
-        tracing::warn!("Failed to create vector index on images: {err}");
+async fn drop_duplicate_indexes(table: &Table) -> Result<usize> {
+    let indexes = table.list_indices().await?;
+    let mut seen = HashSet::<(String, String)>::new();
+    let mut duplicate_names = BTreeSet::<String>::new();
+
+    for index in indexes {
+        let key = (index.index_type.to_string(), index.columns.join(","));
+        if !seen.insert(key) {
+            duplicate_names.insert(index.name);
+        }
+    }
+
+    let mut dropped = 0usize;
+    for name in duplicate_names {
+        table.drop_index(&name).await.with_context(|| {
+            format!("failed to drop duplicate index `{name}` on `{}`", table.name())
+        })?;
+        dropped += 1;
+    }
+    Ok(dropped)
+}
+
+fn table_backup_path(db_path: &Path, table_name: &str) -> Result<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_secs();
+    let backup_root = db_path.parent().unwrap_or(db_path).join("lancedb-backups");
+    Ok(backup_root.join(format!("{table_name}-legacy-{stamp}.lance")))
+}
+
+async fn table_uses_stable_row_ids(table: &Table) -> Result<bool> {
+    let dataset = table
+        .dataset()
+        .ok_or_else(|| anyhow!("table `{}` has no native dataset", table.name()))?
+        .get()
+        .await
+        .with_context(|| format!("failed to load dataset for `{}`", table.name()))?;
+    Ok(dataset.manifest().uses_stable_row_ids())
+}
+
+async fn audit_one_table(table: &Table) -> Result<TableStorageAudit> {
+    let dataset = table
+        .dataset()
+        .ok_or_else(|| anyhow!("table `{}` has no native dataset", table.name()))?
+        .get()
+        .await
+        .with_context(|| format!("failed to load dataset for `{}`", table.name()))?;
+    let row_count = table
+        .count_rows(None)
+        .await
+        .with_context(|| format!("failed to count rows for `{}`", table.name()))?
+        as usize;
+    let version = table.version().await?;
+    let fragments = dataset.get_fragments().len();
+    let indexes = table
+        .list_indices()
+        .await?
+        .into_iter()
+        .map(|index| format!("{}:{}:[{}]", index.name, index.index_type, index.columns.join(",")))
+        .collect::<Vec<_>>();
+    Ok(TableStorageAudit {
+        table: table.name().to_string(),
+        stable_row_ids: dataset.manifest().uses_stable_row_ids(),
+        row_count,
+        version,
+        fragments,
+        indexes,
+    })
+}
+
+fn temp_rebuild_db_path(db_path: &Path, table_name: &str) -> Result<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_secs();
+    let name = db_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow!("invalid db path `{}`", db_path.display()))?;
+    let parent = db_path.parent().unwrap_or(db_path);
+    Ok(parent.join(format!("{name}-rebuild-{table_name}-{stamp}")))
+}
+
+fn collect_legacy_blob_paths(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("failed to read blob data directory `{}`", dir.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("failed to iterate directory `{}`", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to determine file type for `{}`", path.display()))?;
+        if file_type.is_dir() {
+            collect_legacy_blob_paths(&path, out)?;
+            continue;
+        }
+        if !file_type.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("blob") {
+            continue;
+        }
+
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if stem.len() == 8 && stem.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+            out.push(path);
+        }
     }
     Ok(())
 }
+
+async fn rebuild_table_into_temp_db(
+    table: &Table,
+    schema: &Arc<Schema>,
+    tmp_db_path: &Path,
+    table_name: &str,
+    batch_size: usize,
+) -> Result<()> {
+    let ds_wrapper = table
+        .dataset()
+        .ok_or_else(|| anyhow!("table `{}` has no native dataset", table.name()))?;
+    let dataset = ds_wrapper
+        .get()
+        .await
+        .with_context(|| format!("failed to load dataset for `{}`", table.name()))?;
+    let total = table.count_rows(None).await? as usize;
+    let tmp_db = connect_db(tmp_db_path).await?;
+    let mut tmp_table: Option<Table> = None;
+    let effective_batch_size = batch_size.max(1);
+    let use_all_binary = schema_has_blob_like_field(schema.as_ref());
+
+    if total == 0 {
+        let empty = RecordBatch::new_empty(schema.clone());
+        let reader = RecordBatchIterator::new(vec![Ok(empty)].into_iter(), schema.clone());
+        let mut builder =
+            tmp_db.create_table(table_name, Box::new(reader) as Box<dyn RecordBatchReader + Send>);
+        for &(key, value) in storage_options_for_table(table_name, schema.as_ref()) {
+            builder = builder.storage_option(key, value);
+        }
+        builder
+            .execute()
+            .await
+            .with_context(|| format!("failed to create empty rebuilt `{table_name}`"))?;
+        return Ok(());
+    }
+
+    let mut offset = 0usize;
+    while offset < total {
+        let mut scanner = dataset.scan();
+        scanner.limit(Some(effective_batch_size as i64), Some(offset as i64))?;
+        if use_all_binary {
+            scanner.blob_handling(lance::datatypes::BlobHandling::AllBinary);
+        }
+        let stream = scanner.try_into_stream().await?;
+        let source_batches = stream
+            .try_collect::<Vec<_>>()
+            .await
+            .with_context(|| format!("failed to read `{table_name}` batch at offset={offset}"))?;
+        if source_batches.is_empty() {
+            break;
+        }
+
+        let aligned_batches = source_batches
+            .into_iter()
+            .map(|batch| align_batch_to_schema(schema.clone(), batch))
+            .collect::<Result<Vec<_>>>()?;
+        let written_rows: usize = aligned_batches.iter().map(RecordBatch::num_rows).sum();
+        let reader = RecordBatchIterator::new(aligned_batches.into_iter().map(Ok), schema.clone());
+
+        match &tmp_table {
+            Some(existing) => {
+                existing
+                    .add(Box::new(reader) as Box<dyn RecordBatchReader + Send>)
+                    .execute()
+                    .await
+                    .with_context(|| {
+                        format!("failed to append rebuilt `{table_name}` batch at offset={offset}")
+                    })?;
+            },
+            None => {
+                let mut builder = tmp_db.create_table(
+                    table_name,
+                    Box::new(reader) as Box<dyn RecordBatchReader + Send>,
+                );
+                for &(key, value) in storage_options_for_table(table_name, schema.as_ref()) {
+                    builder = builder.storage_option(key, value);
+                }
+                let created = builder.execute().await.with_context(|| {
+                    format!("failed to create rebuilt temp table for `{table_name}`")
+                })?;
+                tmp_table = Some(created);
+            },
+        }
+
+        if written_rows == 0 {
+            break;
+        }
+        offset += written_rows;
+    }
+
+    Ok(())
+}
+
+fn align_batch_to_schema(schema: Arc<Schema>, batch: RecordBatch) -> Result<RecordBatch> {
+    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
+    let source_schema = batch.schema();
+    for field in schema.fields() {
+        let (idx, source_field) =
+            source_schema
+                .column_with_name(field.name())
+                .ok_or_else(|| {
+                    anyhow!("missing column `{}` while aligning rebuild batch", field.name())
+                })?;
+        let source = batch.column(idx).clone();
+        let array = if source_field.data_type() == field.data_type() {
+            source
+        } else if is_blob_v2_field(field.as_ref()) {
+            binary_like_array_to_blob_array(source.as_ref(), field.name())?
+        } else {
+            cast(source.as_ref(), field.data_type()).with_context(|| {
+                format!(
+                    "failed to cast column `{}` from `{}` to `{}` during rebuild",
+                    field.name(),
+                    source_field.data_type(),
+                    field.data_type()
+                )
+            })?
+        };
+        arrays.push(array);
+    }
+    RecordBatch::try_new(schema, arrays).context("failed to build aligned rebuild batch")
+}
+
+async fn validate_table_layout(table: &Table, target_schema: &Schema, label: &str) -> Result<()> {
+    let actual_schema = table.schema().await?;
+    if !schema_is_compatible_with_target(actual_schema.as_ref(), target_schema) {
+        bail!("{label} `{}` schema is not compatible with requested target layout", table.name());
+    }
+    if schema_requires_blob_v2_storage(target_schema) && !table_uses_blob_v2_storage(table).await? {
+        bail!("{label} `{}` does not use blob v2 data storage version 2.2", table.name());
+    }
+    Ok(())
+}
+
+fn schema_is_compatible_with_target(actual: &Schema, target: &Schema) -> bool {
+    target.fields().iter().all(|target_field| {
+        let Ok(actual_field) = actual.field_with_name(target_field.name()) else {
+            return false;
+        };
+        if actual_field.is_nullable() != target_field.is_nullable() {
+            return false;
+        }
+        if is_blob_v2_field(target_field) {
+            return !matches!(actual_field.data_type(), DataType::Binary | DataType::LargeBinary);
+        }
+        datatype_layout_matches(actual_field.data_type(), target_field.data_type())
+    })
+}
+
+fn schema_has_blob_like_field(schema: &Schema) -> bool {
+    schema.fields().iter().any(|field| {
+        matches!(field.data_type(), DataType::LargeBinary) || is_blob_v2_field(field.as_ref())
+    })
+}
+
+fn schema_requires_blob_v2_storage(schema: &Schema) -> bool {
+    schema
+        .fields()
+        .iter()
+        .any(|field| is_blob_v2_field(field.as_ref()))
+}
+
+fn datatype_layout_matches(actual: &DataType, target: &DataType) -> bool {
+    match (actual, target) {
+        (DataType::List(actual_field), DataType::List(target_field))
+        | (DataType::LargeList(actual_field), DataType::LargeList(target_field)) => {
+            datatype_layout_matches(actual_field.data_type(), target_field.data_type())
+        },
+        (
+            DataType::FixedSizeList(actual_field, actual_size),
+            DataType::FixedSizeList(target_field, target_size),
+        ) => {
+            actual_size == target_size
+                && datatype_layout_matches(actual_field.data_type(), target_field.data_type())
+        },
+        (DataType::Struct(actual_fields), DataType::Struct(target_fields)) => {
+            actual_fields.len() == target_fields.len()
+                && actual_fields.iter().zip(target_fields.iter()).all(
+                    |(actual_field, target_field)| {
+                        actual_field.name() == target_field.name()
+                            && datatype_layout_matches(
+                                actual_field.data_type(),
+                                target_field.data_type(),
+                            )
+                    },
+                )
+        },
+        _ => actual == target,
+    }
+}
+
+async fn table_uses_blob_v2_storage(table: &Table) -> Result<bool> {
+    let dataset = table
+        .dataset()
+        .ok_or_else(|| anyhow!("table `{}` has no native dataset", table.name()))?
+        .get()
+        .await
+        .with_context(|| format!("failed to load dataset for `{}`", table.name()))?;
+    Ok(dataset.manifest().data_storage_format.version == "2.2")
+}
+
+fn binary_like_array_to_blob_array(array: &dyn Array, column: &str) -> Result<ArrayRef> {
+    let mut builder = BlobArrayBuilder::new(array.len());
+    if let Some(binary) = array.as_any().downcast_ref::<BinaryArray>() {
+        for row in 0..binary.len() {
+            if binary.is_null(row) {
+                builder.push_null()?;
+            } else {
+                builder.push_bytes(binary.value(row))?;
+            }
+        }
+        return builder
+            .finish()
+            .context("failed to finish blob v2 array conversion");
+    }
+    if let Some(binary) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+        for row in 0..binary.len() {
+            if binary.is_null(row) {
+                builder.push_null()?;
+            } else {
+                builder.push_bytes(binary.value(row))?;
+            }
+        }
+        return builder
+            .finish()
+            .context("failed to finish blob v2 array conversion");
+    }
+    bail!("failed to convert column `{column}` from `{}` to blob v2 input", array.data_type());
+}
+
+fn is_blob_v2_field(field: &arrow_schema::Field) -> bool {
+    field
+        .metadata()
+        .get("ARROW:extension:name")
+        .map(|value| value == "lance.blob.v2")
+        .unwrap_or(false)
+}
+
+fn storage_options_for_table(
+    table_name: &str,
+    _schema: &Schema,
+) -> &'static [(&'static str, &'static str)] {
+    table_policy(table_name)
+        .map(|policy| policy.storage_options)
+        .unwrap_or(DEFAULT_STORAGE_OPTIONS)
+}
+
+fn table_policy(table_name: &str) -> Option<TablePolicy> {
+    match table_name {
+        "articles" => Some(TablePolicy {
+            scalar_indexes: &["id", "category"],
+            vector_indexes: &["vector_en", "vector_zh"],
+            fts_indexes: &["content"],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "images" => Some(TablePolicy {
+            scalar_indexes: &["id", "filename"],
+            vector_indexes: &["vector"],
+            fts_indexes: &[],
+            storage_options: BLOB_V2_STORAGE_OPTIONS,
+        }),
+        "taxonomies" => Some(TablePolicy {
+            scalar_indexes: &["id", "kind", "key"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "article_views" => Some(TablePolicy {
+            scalar_indexes: &["id", "article_id", "day_bucket"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "api_behavior_events" => Some(TablePolicy {
+            scalar_indexes: &["event_id", "occurred_at", "method", "status_code", "device_type"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "article_requests" => Some(TablePolicy {
+            scalar_indexes: &["request_id", "status", "parent_request_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "article_request_ai_runs" => Some(TablePolicy {
+            scalar_indexes: &["run_id", "request_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "article_request_ai_run_chunks" => Some(TablePolicy {
+            scalar_indexes: &["chunk_id", "run_id", "request_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "interactive_pages" => Some(TablePolicy {
+            scalar_indexes: &["id", "article_id", "source_url"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "interactive_page_locales" => Some(TablePolicy {
+            scalar_indexes: &["id", "page_id", "locale"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "interactive_assets" => Some(TablePolicy {
+            scalar_indexes: &["id", "page_id", "logical_path"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: BLOB_V2_STORAGE_OPTIONS,
+        }),
+        "comment_tasks" => Some(TablePolicy {
+            scalar_indexes: &["task_id", "article_id", "status"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "comment_published" => Some(TablePolicy {
+            scalar_indexes: &["comment_id", "task_id", "article_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "comment_audit_logs" => Some(TablePolicy {
+            scalar_indexes: &["log_id", "task_id", "action"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "comment_ai_runs" => Some(TablePolicy {
+            scalar_indexes: &["run_id", "task_id", "status"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "comment_ai_run_chunks" => Some(TablePolicy {
+            scalar_indexes: &["chunk_id", "run_id", "task_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "songs" => Some(TablePolicy {
+            scalar_indexes: &["id", "artist", "album"],
+            vector_indexes: &["vector_en", "vector_zh"],
+            fts_indexes: &["searchable_text"],
+            storage_options: BLOB_V2_STORAGE_OPTIONS,
+        }),
+        "music_plays" => Some(TablePolicy {
+            scalar_indexes: &["id", "song_id", "day_bucket"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "music_comments" => Some(TablePolicy {
+            scalar_indexes: &["id", "song_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "music_wishes" => Some(TablePolicy {
+            scalar_indexes: &["wish_id", "status"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "music_wish_ai_runs" => Some(TablePolicy {
+            scalar_indexes: &["run_id", "wish_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "music_wish_ai_run_chunks" => Some(TablePolicy {
+            scalar_indexes: &["chunk_id", "run_id", "wish_id"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        _ => None,
+    }
+}
+
+fn all_policy_table_names() -> Vec<&'static str> {
+    vec![
+        "api_behavior_events",
+        "article_request_ai_run_chunks",
+        "article_request_ai_runs",
+        "article_requests",
+        "article_views",
+        "articles",
+        "comment_ai_run_chunks",
+        "comment_ai_runs",
+        "comment_audit_logs",
+        "comment_published",
+        "comment_tasks",
+        "images",
+        "interactive_assets",
+        "interactive_page_locales",
+        "interactive_pages",
+        "music_comments",
+        "music_plays",
+        "music_wish_ai_run_chunks",
+        "music_wish_ai_runs",
+        "music_wishes",
+        "songs",
+        "taxonomies",
+    ]
+}
+
+const DEFAULT_STORAGE_OPTIONS: &[(&str, &str)] =
+    &[("new_table_enable_stable_row_ids", "true"), ("new_table_enable_v2_manifest_paths", "true")];
+
+const BLOB_V2_STORAGE_OPTIONS: &[(&str, &str)] = &[
+    ("new_table_data_storage_version", "2.2"),
+    ("new_table_enable_stable_row_ids", "true"),
+    ("new_table_enable_v2_manifest_paths", "true"),
+];
 
 fn resolve_cleanup_targets(table: Option<&str>) -> Result<Vec<&'static str>> {
     match table {
@@ -1307,16 +2143,34 @@ fn nullable_string(array: &StringArray, row: usize) -> Option<String> {
     }
 }
 
-fn downcast_binary<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a BinaryArray> {
+fn binary_like_value<'a>(batch: &'a RecordBatch, column: &str, row: usize) -> Result<&'a [u8]> {
     let index = batch
         .schema()
         .index_of(column)
         .with_context(|| format!("missing column `{column}`"))?;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or_else(|| anyhow!("column `{column}` is not BinaryArray"))
+    let array = batch.column(index);
+    if let Some(binary) = array.as_any().downcast_ref::<BinaryArray>() {
+        return Ok(binary.value(row));
+    }
+    if let Some(binary) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+        return Ok(binary.value(row));
+    }
+    Err(anyhow!("column `{column}` is not BinaryArray/LargeBinaryArray"))
+}
+
+fn binary_like_value_opt(batch: &RecordBatch, column: &str, row: usize) -> Result<Option<Vec<u8>>> {
+    let index = batch
+        .schema()
+        .index_of(column)
+        .with_context(|| format!("missing column `{column}`"))?;
+    let array = batch.column(index);
+    if let Some(binary) = array.as_any().downcast_ref::<BinaryArray>() {
+        return Ok((!binary.is_null(row)).then(|| binary.value(row).to_vec()));
+    }
+    if let Some(binary) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+        return Ok((!binary.is_null(row)).then(|| binary.value(row).to_vec()));
+    }
+    Err(anyhow!("column `{column}` is not BinaryArray/LargeBinaryArray"))
 }
 
 fn downcast_timestamp_ms<'a>(

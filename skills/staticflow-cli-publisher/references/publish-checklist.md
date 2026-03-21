@@ -24,6 +24,11 @@ Check DB tables:
 ```
 Required: `articles`, `images`, `taxonomies`
 
+Current content DB may also contain:
+- `article_views`, `api_behavior_events`
+- `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`
+- `interactive_pages`, `interactive_page_locales`, `interactive_assets`
+
 Init DB only with user approval:
 ```bash
 <cli> init --db-path <db_path>
@@ -159,6 +164,11 @@ Check images rows:
 <cli> db --db-path <db_path> query-rows images --limit 20
 ```
 
+Blob v2 note:
+- `images.data` uses blob v2 in current production layout
+- `images.thumbnail` remains plain `Binary`
+- use `<cli> api get-image <id-or-filename>` to validate readback end-to-end
+
 Table info:
 ```bash
 <cli> db --db-path <db_path> describe-table articles
@@ -217,6 +227,12 @@ Single table:
 All managed tables:
 ```bash
 <cli> db --db-path <db_path> cleanup-orphans
+```
+
+Schema/storage repair helpers:
+```bash
+<cli> db --db-path <db_path> rebuild-table-stable <table>
+<cli> db --db-path <db_path> migrate-images-blob-v2
 ```
 
 ## 7. Failure Recovery

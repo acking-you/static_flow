@@ -6,17 +6,16 @@ use anyhow::{Context, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use arrow_array::{
     builder::{FixedSizeListBuilder, Float32Builder, StringBuilder},
-    Array, BinaryArray, RecordBatch, RecordBatchIterator, StringArray,
+    Array, BinaryArray, LargeBinaryArray, RecordBatch, RecordBatchIterator, StringArray,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use arrow_schema::{DataType, Field, Schema};
 #[cfg(not(target_arch = "wasm32"))]
 use futures::TryStreamExt;
 #[cfg(not(target_arch = "wasm32"))]
-use lancedb::{
-    query::{ExecutableQuery, QueryBase, Select},
-    Table,
-};
+use lance::datatypes::BlobHandling;
+#[cfg(not(target_arch = "wasm32"))]
+use lancedb::Table;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::embedding::{embed_image_bytes, IMAGE_VECTOR_DIM};
@@ -72,18 +71,24 @@ pub async fn reembed_image_vectors(
         options.batch_size = 1;
     }
 
-    let mut query = table
-        .query()
-        .select(Select::columns(&["id", "filename", "data"]));
+    let dataset = table
+        .dataset()
+        .ok_or_else(|| anyhow::anyhow!("table `{}` has no native dataset", table.name()))?
+        .get()
+        .await
+        .context("failed to load images dataset for vector re-embed")?;
+    let mut scanner = dataset.scan();
+    scanner.project(&["id", "filename", "data"])?;
     if options.scope == ImageReembedScope::MissingOnly {
-        query = query.only_if("vector IS NULL");
+        scanner.filter("vector IS NULL")?;
     }
     if let Some(limit) = options.limit {
-        query = query.limit(limit);
+        scanner.limit(Some(limit as i64), None)?;
     }
+    scanner.blob_handling(BlobHandling::AllBinary);
 
-    let batches = query
-        .execute()
+    let batches = scanner
+        .try_into_stream()
         .await
         .context("failed to query image rows for vector re-embed")?
         .try_collect::<Vec<_>>()
@@ -96,13 +101,12 @@ pub async fn reembed_image_vectors(
     for batch in &batches {
         let ids = downcast_string(batch, "id")?;
         let filenames = downcast_string(batch, "filename")?;
-        let data = downcast_binary(batch, "data")?;
 
         for row in 0..batch.num_rows() {
             stats.scanned_rows += 1;
             let id = ids.value(row).to_string();
             let filename = filenames.value(row);
-            let image_bytes = data.value(row);
+            let image_bytes = binary_like_value(batch, "data", row)?;
 
             match embed_image_bytes(image_bytes) {
                 Ok(vector) => {
@@ -211,14 +215,17 @@ fn downcast_string<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a Strin
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn downcast_binary<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a BinaryArray> {
+fn binary_like_value<'a>(batch: &'a RecordBatch, column: &str, row: usize) -> Result<&'a [u8]> {
     let index = batch
         .schema()
         .index_of(column)
         .with_context(|| format!("missing column `{column}`"))?;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or_else(|| anyhow::anyhow!("column `{column}` is not BinaryArray"))
+    let array = batch.column(index);
+    if let Some(binary) = array.as_any().downcast_ref::<BinaryArray>() {
+        return Ok(binary.value(row));
+    }
+    if let Some(binary) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+        return Ok(binary.value(row));
+    }
+    Err(anyhow::anyhow!("column `{column}` is not BinaryArray/LargeBinaryArray"))
 }

@@ -19,6 +19,10 @@ date: "2026-02-23"
 # 从规避到根治：object_store fstat-after-rename 在 WSL DrvFs 上的源码级修复
 
 > 前篇：[WSL 挂载盘踩坑复盘：为什么 LanceDB 在 DrvFs 上会触发 metadata ENOENT，而 ext4 正常](./wsl-drvfs-ext4-lancedb-io-pitfall.md)
+>
+> 状态说明（2026-03-21）：
+> 本文讨论的是音乐表仍处于早期 `LargeBinary` 存储阶段时的故障现场。
+> 当前生产 `songs.audio_data` 已迁移为 blob v2；这里保留的是“当时为何需要修复 object_store”的历史背景。
 
 ## 1. 背景：同一个坑，第二次掉进去
 

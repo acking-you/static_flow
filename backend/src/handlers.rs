@@ -1590,9 +1590,15 @@ pub async fn admin_cleanup_api_behavior(
         .map_err(|e| internal_error("Failed to cleanup api behavior events", e))?;
 
     if deleted > 0 {
-        tracing::warn!(
-            "Skipping api_behavior_events compaction after cleanup because Lance frag reuse \
-             metadata can corrupt filtered reads on this table"
+        let action = state
+            .store
+            .compact_api_behavior_table()
+            .await
+            .map_err(|e| internal_error("Failed to compact api behavior events", e))?;
+        tracing::info!(
+            action = action.as_str(),
+            deleted_events = deleted,
+            "Compacted api_behavior_events after cleanup"
         );
     }
 
@@ -1604,17 +1610,18 @@ pub async fn admin_cleanup_api_behavior(
 }
 
 pub async fn admin_compact_api_behavior(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    ensure_admin_access(&_state, &headers)?;
-    tracing::warn!(
-        "Ignoring manual api_behavior_events compaction request because Lance frag reuse metadata \
-         can corrupt filtered reads on this table"
-    );
+    ensure_admin_access(&state, &headers)?;
+    let action = state
+        .store
+        .compact_api_behavior_table()
+        .await
+        .map_err(|e| internal_error("Failed to compact api behavior events", e))?;
     Ok(Json(serde_json::json!({
-        "status": "skipped",
-        "reason": "api_behavior_compaction_disabled_due_to_frag_reuse_bug"
+        "status": "ok",
+        "action": action.as_str()
     })))
 }
 

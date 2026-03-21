@@ -46,6 +46,8 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
 4. Verify DB tables:
    - `<cli> db --db-path <db_path> list-tables`
    - required: `articles`, `images`, `taxonomies`
+   - current content DB may also include runtime tables such as `article_views`,
+     `api_behavior_events`, `article_requests*`, and `interactive_*`
 5. If DB is uninitialized, ask user before:
    - `<cli> init --db-path <db_path>`
 
@@ -106,6 +108,11 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
 ### B) Image Batch (`write-images`)
 `<cli> write-images --db-path <db_path> --dir <image_dir> [--recursive] [--generate-thumbnail] [--thumbnail-size <n>] [--no-auto-optimize]`
 
+Storage note:
+- `images.data` is blob v2 in current production layout
+- `images.thumbnail` remains regular `Binary`
+- prefer verifying image readability through `<cli> api get-image ...` instead of assuming raw Arrow `Binary`
+
 ### C) Notes Sync (`sync-notes`)
 `<cli> sync-notes --db-path <db_path> --dir <notes_dir> [--recursive] [--generate-thumbnail] [--thumbnail-size <n>] [--language <en|zh>] [--default-category <name>] [--default-author <name>] [--no-auto-optimize]`
 
@@ -117,7 +124,7 @@ Use this skill to publish Markdown/blog notes into LanceDB and verify results.
   - bilingual: `update-article-bilingual --id <id> [--content-en-file ...] [--summary-zh-file ...] [--summary-en-file ...]`
   - vectors: `backfill-article-vectors [--limit N] [--dry-run]`
   - indexes: `ensure-indexes`, `list-indexes <table> [--with-stats]`, `drop-index <name>`
-  - maintenance: `optimize`, `cleanup-orphans [--table <table>]`
+  - maintenance: `optimize`, `cleanup-orphans [--table <table>]`, `rebuild-table-stable <table>`, `migrate-images-blob-v2`
   - special: `reembed-svg-images [--limit N] [--dry-run]`
   - schema: `create-table <table>`, `drop-table <table> --yes`
 - API-equivalent ops: `<cli> api --db-path <db_path> <subcommand>`

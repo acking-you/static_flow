@@ -5,7 +5,7 @@ use arrow_array::{
     new_null_array, Array, ArrayRef, RecordBatch, RecordBatchIterator, RecordBatchReader,
     StringArray,
 };
-use arrow_schema::{DataType, Schema};
+use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lance::dataset::ColumnAlteration;
 use lancedb::{
@@ -23,6 +23,8 @@ use crate::schema::{
 };
 
 const MIN_VECTOR_INDEX_TRAIN_ROWS: usize = 256;
+const ARROW_EXT_NAME_KEY: &str = "ARROW:extension:name";
+const BLOB_V2_EXT_NAME: &str = "lance.blob.v2";
 
 pub async fn connect_db(db_path: &Path) -> Result<Connection> {
     connect(db_path.to_string_lossy().as_ref())
@@ -37,11 +39,14 @@ pub async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> R
         Err(_) => {
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-            db.create_table(name, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            let mut builder = db
+                .create_table(name, Box::new(batches) as Box<dyn RecordBatchReader + Send>)
                 .storage_option("new_table_enable_stable_row_ids", "true")
-                .storage_option("new_table_enable_v2_manifest_paths", "true")
-                .execute()
-                .await?;
+                .storage_option("new_table_enable_v2_manifest_paths", "true");
+            if schema_has_blob_v2_field(schema.as_ref()) {
+                builder = builder.storage_option("new_table_data_storage_version", "2.2");
+            }
+            builder.execute().await?;
             db.open_table(name).execute().await?
         },
     };
@@ -135,6 +140,21 @@ async fn ensure_table_columns(table: &Table, expected_schema: &Schema) -> Result
     Ok(())
 }
 
+fn schema_has_blob_v2_field(schema: &Schema) -> bool {
+    schema
+        .fields()
+        .iter()
+        .any(|field| is_blob_v2_field(field.as_ref()))
+}
+
+fn is_blob_v2_field(field: &Field) -> bool {
+    field
+        .metadata()
+        .get(ARROW_EXT_NAME_KEY)
+        .map(|value| value == BLOB_V2_EXT_NAME)
+        .unwrap_or(false)
+}
+
 fn sql_type_for_column_cast(data_type: &DataType) -> Result<&'static str> {
     match data_type {
         DataType::Utf8 => Ok("string"),
@@ -188,6 +208,16 @@ pub async fn ensure_vector_index(table: &Table, column: &str) -> Result<()> {
             }
         },
     }
+}
+
+pub async fn ensure_scalar_index(table: &Table, column: &str) -> Result<()> {
+    let indices = table.list_indices().await?;
+    if indices.iter().any(|index| index.columns == [column]) {
+        return Ok(());
+    }
+
+    table.create_index(&[column], Index::Auto).execute().await?;
+    Ok(())
 }
 
 pub async fn optimize_table_indexes(table: &Table) -> Result<()> {
