@@ -732,14 +732,14 @@ CLI 会返回：
 1. 通用 stable-row-id 重建：
 
 ```bash
-sf-cli db --db-path /mnt/e/static-flow-data/lancedb \
+sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   rebuild-table-stable images
 ```
 
 2. 专项 schema/storage 迁移：
 
 ```bash
-sf-cli db --db-path /mnt/e/static-flow-data/lancedb \
+sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   migrate-images-blob-v2
 ```
 
@@ -757,10 +757,10 @@ sf-cli db --db-path /mnt/e/static-flow-data/lancedb \
 
 ```bash
 # 默认 batch_size=10，适合内存有限的机器
-sf-cli rebuild-songs-table --db-path /mnt/e/static-flow-data/lancedb-music
+sf-cli rebuild-songs-table --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music
 
 # 调大 batch_size 加速（需更多内存）
-sf-cli rebuild-songs-table --db-path /mnt/e/static-flow-data/lancedb-music --batch-size 50
+sf-cli rebuild-songs-table --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music --batch-size 50
 ```
 
 参数说明：

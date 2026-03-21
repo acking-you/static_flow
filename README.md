@@ -35,18 +35,21 @@ static-flow/
 This project keeps runtime data in **two** Hugging Face dataset repos plus one
 local-only music DB:
 
+Canonical local data root:
+- `/mnt/wsl/data4tb/static-flow-data`
+
 - Content DB (content + request + interactive mirror tables)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
   - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
-  - Local path: `/mnt/e/static-flow-data/lancedb`
+  - Local path: `/mnt/wsl/data4tb/static-flow-data/lancedb`
   - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`
 - Comments DB (comment moderation + AI run traces)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/static-flow-comments>
   - Remote: `git@hf.co:datasets/LB7666/static-flow-comments`
-  - Local path: `/mnt/e/static-flow-data/lancedb-comments`
+  - Local path: `/mnt/wsl/data4tb/static-flow-data/lancedb-comments`
   - Tables: `comment_tasks`, `comment_published`, `comment_audit_logs`, `comment_ai_runs`, `comment_ai_run_chunks`
 - Music DB (local-first media store; not mirrored to HF by default)
-  - Local path: `/mnt/e/static-flow-data/lancedb-music`
+  - Local path: `/mnt/wsl/data4tb/static-flow-data/lancedb-music`
   - Tables: `songs`, `music_plays`, `music_comments`, `music_wishes`, `music_wish_ai_runs`, `music_wish_ai_run_chunks`
 
 Recommended workflow:
@@ -68,7 +71,7 @@ chmod 600 ~/.ssh/known_hosts
 ssh -T git@hf.co
 
 # 2) Bind local CONTENT DB to HF dataset remote
-cd /mnt/e/static-flow-data/lancedb
+cd /mnt/wsl/data4tb/static-flow-data/lancedb
 git init -b main
 git remote remove origin 2>/dev/null || true
 git remote add origin git@hf.co:datasets/LB7666/my_lancedb_data
@@ -76,7 +79,7 @@ git fetch origin main
 git checkout -B main origin/main
 
 # 3) Bind local COMMENTS DB to HF dataset remote
-cd /mnt/e/static-flow-data/lancedb-comments
+cd /mnt/wsl/data4tb/static-flow-data/lancedb-comments
 git init -b main
 git remote remove origin 2>/dev/null || true
 git remote add origin git@hf.co:datasets/LB7666/static-flow-comments
@@ -89,19 +92,19 @@ export PATH="$HOME/.local/bin:$PATH"
 git xet install
 
 # 5) Configure tracking rules in BOTH repos
-cd /mnt/e/static-flow-data/lancedb
+cd /mnt/wsl/data4tb/static-flow-data/lancedb
 git xet track "*.lance" "*.txn" "*.manifest" "*.idx"
-cd /mnt/e/static-flow-data/lancedb-comments
+cd /mnt/wsl/data4tb/static-flow-data/lancedb-comments
 git xet track "*.lance" "*.txn" "*.manifest" "*.idx"
 
 # 6) Daily sync (content DB)
-cd /mnt/e/static-flow-data/lancedb
+cd /mnt/wsl/data4tb/static-flow-data/lancedb
 git add -A
 git commit -m "data(content): sync $(date '+%F %T')" || echo "no content changes"
 git push origin main
 
 # 7) Daily sync (comments DB)
-cd /mnt/e/static-flow-data/lancedb-comments
+cd /mnt/wsl/data4tb/static-flow-data/lancedb-comments
 git add -A
 git commit -m "data(comments): sync $(date '+%F %T')" || echo "no comments changes"
 git push origin main
@@ -353,7 +356,7 @@ cd cli
 ## Key Env Vars
 
 Backend (set automatically by `scripts/start_backend_selfhosted.sh`):
-- `DB_ROOT` (default `/mnt/e/static-flow-data`, auto-resolves content/comments/music DBs)
+- `DB_ROOT` (default `/mnt/wsl/data4tb/static-flow-data`, auto-resolves content/comments/music DBs)
 - `PORT` (default `39080`)
 - `HOST` (default `127.0.0.1`)
 - `SITE_BASE_URL` (default `https://ackingliu.top`, used for SEO injection)

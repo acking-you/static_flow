@@ -299,17 +299,17 @@ static-flow/
 
 ```bash
 # 查看数据库有哪些表
-sf-cli db --db-path /mnt/e/static-flow-data/lancedb list-tables
+sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb list-tables
 
 # 同步笔记目录：扫描 Markdown、导入图片、改写链接、upsert 文章
-sf-cli sync-notes --db-path /mnt/e/static-flow-data/lancedb \
+sf-cli sync-notes --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   --dir ./content --recursive --generate-thumbnail
 
 # 全文搜索
-sf-cli api --db-path /mnt/e/static-flow-data/lancedb search --q "coroutine"
+sf-cli api --db-path /mnt/wsl/data4tb/static-flow-data/lancedb search --q "coroutine"
 
 # 语义搜索
-sf-cli api --db-path /mnt/e/static-flow-data/lancedb semantic-search --q "协程实现"
+sf-cli api --db-path /mnt/wsl/data4tb/static-flow-data/lancedb semantic-search --q "协程实现"
 ```
 
 **台词**：
@@ -528,7 +528,7 @@ sequenceDiagram
 
 ```bash
 sf-cli write-article \
-  --db-path /mnt/e/static-flow-data/lancedb \
+  --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   --file ./content/cpp20-coroutine-deep-dive.md \
   --tags "c++,coroutine,async,promise_type" \
   --category "Language Deep Dive"
@@ -547,7 +547,7 @@ sf-cli write-article \
 **画面**：终端 + 浏览器
 
 ```bash
-sf-cli api --db-path /mnt/e/static-flow-data/lancedb \
+sf-cli api --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   semantic-search --q "协程 promise_type"
 ```
 

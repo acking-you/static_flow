@@ -2377,3 +2377,278 @@ fn rebuild_rows_to_batch(rows: &[RebuildRow], schema: &Arc<Schema>) -> Result<Re
     ])
     .context("failed to build rebuild batch")
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+
+    use anyhow::Context;
+    use tokio::{
+        sync::Barrier,
+        task::JoinSet,
+        time::{sleep, timeout},
+    };
+
+    use super::{MusicDataStore, SongRecord};
+    use crate::optimize::{compact_table_with_fallback, prune_table_versions, CompactAction};
+
+    const TEST_SONG_COUNT: usize = 10;
+    const TEST_AUDIO_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
+    const TEST_READER_TASKS: usize = 3;
+    const TEST_READER_PASSES: usize = 3;
+    const TEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
+    const TEST_COMPACT_TIMEOUT: Duration = Duration::from_secs(180);
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn song_audio_reads_complete_during_concurrent_compaction() {
+        let dir = temp_music_db_dir("music-concurrent-compaction");
+        fs::create_dir_all(&dir).expect("create temp db dir");
+        let db_uri = dir.to_string_lossy().to_string();
+
+        let seed_store = MusicDataStore::connect(&db_uri)
+            .await
+            .expect("connect seed music db");
+        seed_test_songs(&seed_store, TEST_SONG_COUNT, TEST_AUDIO_BYTES)
+            .await
+            .expect("seed test songs");
+
+        let fragment_count_before = seed_store
+            .songs_table()
+            .await
+            .expect("open songs table before compaction")
+            .dataset()
+            .expect("songs dataset wrapper before compaction")
+            .get()
+            .await
+            .expect("load songs dataset before compaction")
+            .get_fragments()
+            .len();
+        assert!(
+            fragment_count_before >= TEST_SONG_COUNT,
+            "expected many fragments before compaction, got {fragment_count_before}"
+        );
+        drop(seed_store);
+
+        let barrier = Arc::new(Barrier::new(TEST_READER_TASKS + 1));
+        let completed_reads = Arc::new(AtomicUsize::new(0));
+        let song_ids: Vec<String> = (0..TEST_SONG_COUNT).map(test_song_id).collect();
+
+        let mut readers = JoinSet::new();
+        for reader_idx in 0..TEST_READER_TASKS {
+            let barrier = Arc::clone(&barrier);
+            let completed_reads = Arc::clone(&completed_reads);
+            let db_uri = db_uri.clone();
+            let song_ids = song_ids.clone();
+            readers.spawn(async move {
+                let store = MusicDataStore::connect(&db_uri)
+                    .await
+                    .context("connect reader music db")?;
+                barrier.wait().await;
+
+                for pass in 0..TEST_READER_PASSES {
+                    for offset in 0..song_ids.len() {
+                        let song_idx = (reader_idx + pass + offset) % song_ids.len();
+                        let song_id = &song_ids[song_idx];
+                        let expected_byte = test_song_audio_byte(song_idx);
+
+                        let audio = timeout(TEST_READ_TIMEOUT, store.get_song_audio(song_id))
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "get_song_audio timed out for `{song_id}` during pass {pass}"
+                                )
+                            })?
+                            .with_context(|| format!("get_song_audio failed for `{song_id}`"))?;
+
+                        let (data, format) = audio.with_context(|| {
+                            format!("missing audio for `{song_id}` during concurrent compaction")
+                        })?;
+                        assert_eq!(format, "mp3", "unexpected format for `{song_id}`");
+                        assert_eq!(
+                            data.len(),
+                            TEST_AUDIO_BYTES,
+                            "unexpected audio size for `{song_id}`"
+                        );
+                        assert_eq!(
+                            data.first().copied(),
+                            Some(expected_byte),
+                            "unexpected first byte for `{song_id}`"
+                        );
+                        assert_eq!(
+                            data.last().copied(),
+                            Some(expected_byte),
+                            "unexpected last byte for `{song_id}`"
+                        );
+                        completed_reads.fetch_add(1, Ordering::AcqRel);
+                        tokio::task::yield_now().await;
+                    }
+                }
+
+                Ok::<(), anyhow::Error>(())
+            });
+        }
+
+        let compaction_barrier = Arc::clone(&barrier);
+        let compaction_db_uri = db_uri.clone();
+        let compaction = tokio::spawn(async move {
+            let store = MusicDataStore::connect(&compaction_db_uri)
+                .await
+                .context("connect compaction music db")?;
+            let table = store
+                .songs_table()
+                .await
+                .context("open songs table for compaction")?;
+            compaction_barrier.wait().await;
+
+            // Let readers enter `get_song_audio` first so the overlap window is
+            // deterministic.
+            sleep(Duration::from_millis(100)).await;
+
+            timeout(TEST_COMPACT_TIMEOUT, async {
+                let action = compact_table_with_fallback(&table)
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("compact songs table")?;
+                prune_table_versions(&table, 1, false, false)
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("prune songs table versions")?;
+                Ok::<CompactAction, anyhow::Error>(action)
+            })
+            .await
+            .context("songs compaction timed out")?
+        });
+
+        let compact_action = compaction
+            .await
+            .expect("join compaction task")
+            .expect("compaction succeeds");
+        assert!(matches!(
+            compact_action,
+            CompactAction::CompactedMaintenance | CompactAction::CompactedSafeFallback
+        ));
+
+        while let Some(result) = readers.join_next().await {
+            result.expect("join reader task").expect("reader succeeds");
+        }
+
+        assert!(
+            completed_reads.load(Ordering::Acquire) >= TEST_READER_TASKS * song_ids.len(),
+            "expected readers to complete enough concurrent reads"
+        );
+
+        let verify_store = MusicDataStore::connect(&db_uri)
+            .await
+            .expect("connect verification music db");
+        let fragment_count_after = verify_store
+            .songs_table()
+            .await
+            .expect("open songs table after compaction")
+            .dataset()
+            .expect("songs dataset wrapper after compaction")
+            .get()
+            .await
+            .expect("load songs dataset after compaction")
+            .get_fragments()
+            .len();
+        assert!(
+            fragment_count_after < fragment_count_before,
+            "expected compaction to reduce fragments: before={fragment_count_before}, \
+             after={fragment_count_after}"
+        );
+
+        for idx in 0..TEST_SONG_COUNT {
+            let song_id = test_song_id(idx);
+            let expected_byte = test_song_audio_byte(idx);
+            let (data, format) = verify_store
+                .get_song_audio(&song_id)
+                .await
+                .expect("verify audio call succeeds")
+                .expect("audio exists after compaction");
+            assert_eq!(format, "mp3", "unexpected format for `{song_id}`");
+            assert_eq!(
+                data.len(),
+                TEST_AUDIO_BYTES,
+                "unexpected audio size after compaction for `{song_id}`"
+            );
+            assert_eq!(
+                data.first().copied(),
+                Some(expected_byte),
+                "unexpected first byte after compaction for `{song_id}`"
+            );
+            assert_eq!(
+                data.last().copied(),
+                Some(expected_byte),
+                "unexpected last byte after compaction for `{song_id}`"
+            );
+        }
+
+        drop(verify_store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    async fn seed_test_songs(
+        store: &MusicDataStore,
+        count: usize,
+        audio_bytes: usize,
+    ) -> anyhow::Result<()> {
+        let now_ms = super::now_ms();
+        for idx in 0..count {
+            let byte = test_song_audio_byte(idx);
+            let record = SongRecord {
+                id: test_song_id(idx),
+                title: format!("Concurrent Compact Song {idx}"),
+                artist: "StaticFlow Test".to_string(),
+                album: "Concurrent Compaction".to_string(),
+                album_id: None,
+                cover_image: None,
+                duration_ms: 180_000,
+                format: "mp3".to_string(),
+                bitrate: 320,
+                lyrics_lrc: None,
+                lyrics_translation: None,
+                audio_data: vec![byte; audio_bytes],
+                source: "test".to_string(),
+                source_id: None,
+                tags: "test,compaction".to_string(),
+                searchable_text: format!("Concurrent Compact Song {idx} StaticFlow Test"),
+                vector_en: None,
+                vector_zh: None,
+                created_at: now_ms + idx as i64,
+                updated_at: now_ms + idx as i64,
+            };
+            store
+                .upsert_song(&record)
+                .await
+                .with_context(|| format!("seed song `{}`", record.id))?;
+        }
+        Ok(())
+    }
+
+    fn test_song_id(idx: usize) -> String {
+        format!("concurrent-compact-song-{idx:03}")
+    }
+
+    fn test_song_audio_byte(idx: usize) -> u8 {
+        (idx as u8).wrapping_add(33)
+    }
+
+    fn temp_music_db_dir(test_name: &str) -> PathBuf {
+        let base = std::env::var_os("STATICFLOW_TEST_DB_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        base.join(format!("{test_name}-{nanos}"))
+    }
+}

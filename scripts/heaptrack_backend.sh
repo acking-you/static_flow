@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-# ── Defaults (same as start_backend_from_tmp.sh) ──
-DB_ROOT="${DB_ROOT:-/mnt/e/static-flow-data}"
+# ── Defaults (same DB-root convention as start_backend_selfhosted.sh) ──
+DB_ROOT="${DB_ROOT:-/mnt/wsl/data4tb/static-flow-data}"
 DB_PATH="${DB_PATH:-${LANCEDB_URI:-$DB_ROOT/lancedb}}"
 COMMENTS_DB_PATH="${COMMENTS_DB_PATH:-${COMMENTS_LANCEDB_URI:-$DB_ROOT/lancedb-comments}}"
 MUSIC_DB_PATH="${MUSIC_DB_PATH:-${MUSIC_LANCEDB_URI:-$DB_ROOT/lancedb-music}}"

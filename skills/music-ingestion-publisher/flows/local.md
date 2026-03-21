@@ -8,7 +8,7 @@
 2. **Ingest**:
    ```bash
    sf-cli write-music \
-     --db-path /mnt/e/static-flow-data/lancedb-music \
+     --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
      --file /tmp/music/<decoded_file> \
      --source ncm_local
    ```
@@ -22,7 +22,7 @@
 1. **Ingest**:
    ```bash
    sf-cli write-music \
-     --db-path /mnt/e/static-flow-data/lancedb-music \
+     --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
      --file <audio_file> \
      --title "..." --artist "..." --album "..." --album-id "..."
    ```

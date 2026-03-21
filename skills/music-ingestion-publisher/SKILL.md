@@ -39,7 +39,7 @@ still use `ncmdump-cli lyric <netease_track_id>` for lyrics.
    Build: `cargo build -p ncmdump-cli --release` (from `./tools/ncmdump-rs/`)
 2. **sf-cli**: `./bin/sf-cli` → `./target/release/sf-cli` → PATH.
    Build: `cargo build -p sf-cli --release`
-3. **Music DB**: `/mnt/e/static-flow-data/lancedb-music`
+3. **Music DB**: `/mnt/wsl/data4tb/static-flow-data/lancedb-music`
 4. **Netease login**: `ncmdump-cli me`
 5. **Bilibili login**: `ncmdump-cli bili-me` + `ffmpeg -version`
 

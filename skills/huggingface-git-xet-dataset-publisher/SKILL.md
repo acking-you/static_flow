@@ -24,7 +24,7 @@ repository (for example LanceDB data snapshots), including:
 5. Standardize tracking rules across docs and repo config.
 
 ## Required Inputs
-1. `repo_dir`: local dataset repo path (for example `/mnt/e/static-flow-data/lancedb`).
+1. `repo_dir`: local dataset repo path (for example `/mnt/wsl/data4tb/static-flow-data/lancedb`).
 2. `hf_remote`: dataset SSH remote (`git@hf.co:datasets/...`).
 3. `branch`: target branch (default `main`).
 4. File patterns that must be Xet-tracked (default below).

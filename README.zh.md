@@ -32,9 +32,11 @@ static-flow/
 
 本项目将运行时数据放在独立数据集仓库中管理：
 
+- 当前本地数据根目录：`/mnt/wsl/data4tb/static-flow-data`
+
 - HF 数据集仓库：`LB7666/my_lancedb_data`
 - 远端地址：`git@hf.co:datasets/LB7666/my_lancedb_data`
-- 本地数据目录：`/mnt/e/static-flow-data/lancedb`
+- 本地数据目录：`/mnt/wsl/data4tb/static-flow-data/lancedb`
 - 存储格式：LanceDB 表目录（`articles.lance/`、`images.lance/`、`taxonomies.lance/`、`article_views.lance/`）
 
 推荐流程：
@@ -56,7 +58,7 @@ chmod 600 ~/.ssh/known_hosts
 ssh -T git@hf.co
 
 # 2) 将本地数据目录绑定到 HF 数据集远端
-cd /mnt/e/static-flow-data/lancedb
+cd /mnt/wsl/data4tb/static-flow-data/lancedb
 git init -b main
 git remote remove origin 2>/dev/null || true
 git remote add origin git@hf.co:datasets/LB7666/my_lancedb_data
@@ -311,7 +313,7 @@ cd cli
 ## 关键环境变量
 
 后端（由 `scripts/start_backend_selfhosted.sh` 自动设置）：
-- `DB_ROOT`（默认 `/mnt/e/static-flow-data`，自动解析 content/comments/music 三个 DB）
+- `DB_ROOT`（默认 `/mnt/wsl/data4tb/static-flow-data`，自动解析 content/comments/music 三个 DB）
 - `PORT`（默认 `39080`）
 - `HOST`（默认 `127.0.0.1`）
 - `SITE_BASE_URL`（默认 `https://ackingliu.top`，用于 SEO 注入）

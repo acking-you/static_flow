@@ -17,7 +17,7 @@ Binary location: `./bin/sf-cli` (preferred) → `./target/release/sf-cli` → PA
 ## Verification (Post-Write)
 
 ```bash
-sf-cli db --db-path /mnt/e/static-flow-data/lancedb-music \
+sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
   query-rows songs \
   --where "id='<song_id>'" \
   --columns id,title,artist,album,album_id,cover_image,format
@@ -33,7 +33,7 @@ Checklist:
 **Recommended**: use `--cover-url` during ingestion (one-step):
 ```bash
 sf-cli write-music \
-  --db-path /mnt/e/static-flow-data/lancedb-music \
+  --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
   --file /tmp/music/<file>.mp3 \
   --cover-url "https://..." \
   ... # other flags
@@ -41,7 +41,7 @@ sf-cli write-music \
 
 **Fallback** (post-write update, if cover URL was not available at ingest time):
 ```bash
-sf-cli db --db-path /mnt/e/static-flow-data/lancedb-music \
+sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
   update-rows songs \
   --where "id='<song_id>'" \
   --set "cover_image='<cover_url>'"
@@ -65,8 +65,8 @@ Split output at `--- Translation ---` into `.lrc` and `.tlyric.lrc` files.
 `write-music` auto-generates vectors at ingest time. Only run manually for
 songs imported before vector support:
 ```bash
-sf-cli embed-songs --db-path /mnt/e/static-flow-data/lancedb-music
-sf-cli ensure-indexes --db-path /mnt/e/static-flow-data/lancedb
+sf-cli embed-songs --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music
+sf-cli ensure-indexes --db-path /mnt/wsl/data4tb/static-flow-data/lancedb
 ```
 
 ## Error Handling

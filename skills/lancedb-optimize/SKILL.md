@@ -18,7 +18,7 @@ reduce open file descriptors, and improve query performance.
 
 ## Database Roots
 
-All paths are relative to `DB_ROOT` (default: `/mnt/e/static-flow-data`).
+All paths are relative to `DB_ROOT` (default: `/mnt/wsl/data4tb/static-flow-data`).
 
 | DB | Path | Tables |
 |----|------|--------|
@@ -82,7 +82,7 @@ To optimize only specific DBs or tables:
 
 ```bash
 # Single table
-<cli> db --db-path /mnt/e/static-flow-data/lancedb optimize api_behavior_events --all --prune-now
+<cli> db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb optimize api_behavior_events --all --prune-now
 
 # All tables in one DB
 for t in <table_list>; do

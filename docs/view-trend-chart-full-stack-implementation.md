@@ -609,7 +609,7 @@ graph TB
     subgraph "Local Machine"
         PB_LOCAL["pb-mapper 本地<br/>注册 127.0.0.1:3000"]
         AXUM["Axum :3000<br/>HTTP, 绑定 0.0.0.0"]
-        LANCEDB[("LanceDB<br/>/mnt/e/static-flow-data")]
+        LANCEDB[("LanceDB<br/>/mnt/wsl/data4tb/static-flow-data")]
     end
     FE -->|"HTTPS"| CADDY
     CADDY -->|"HTTP"| PB_REMOTE

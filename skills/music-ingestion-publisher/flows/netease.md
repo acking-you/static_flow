@@ -54,7 +54,7 @@ for lyrics and metadata.
 6. **Ingest** (with cover URL from step 5):
    ```bash
    sf-cli write-music \
-     --db-path /mnt/e/static-flow-data/lancedb-music \
+     --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
      --file /tmp/music/<track_id>.mp3 \
      --id "netease-<track_id>" \
      --title "<title>" --artist "<artist>" \

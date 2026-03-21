@@ -700,7 +700,7 @@ sf-cli db --db-path /tmp/test-blob-v2 test-blob-compact --count 5
 # 输出: pass: 5/5, fragments: 5 -> 1
 
 # 真实数据验证：从生产音乐 DB 读取 5 首歌的音频
-sf-cli db --db-path /mnt/e/static-flow-data/lancedb-music verify-audio --limit 5
+sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music verify-audio --limit 5
 # 输出: 5/5 songs verified OK
 ```
 

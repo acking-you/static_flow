@@ -84,7 +84,7 @@ Use this skill when the source page is not a normal Markdown/article import:
 
 ## Default DB
 - Unless the user says otherwise, use:
-  - `/mnt/e/static-flow-data/lancedb`
+  - `/mnt/wsl/data4tb/static-flow-data/lancedb`
 
 ## Naming and Storage Conventions
 - `articles.id`: stable article id, e.g. `bloom-filters`
@@ -120,7 +120,7 @@ Canonical command:
 
 ```bash
 cargo run -q -p sf-cli -- interactive \
-  --db-path /mnt/e/static-flow-data/lancedb \
+  --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   ingest-page \
   --url "<source_url>" \
   --article-id "<article_id>" \
@@ -162,7 +162,7 @@ Canonical command:
 
 ```bash
 cargo run -q -p sf-cli -- interactive \
-  --db-path /mnt/e/static-flow-data/lancedb \
+  --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   add-locale \
   --page-id "ipg-<article_id>" \
   --locale zh \
@@ -194,13 +194,13 @@ Locale QA requirements before `add-locale`:
 DB verification:
 
 ```bash
-cargo run -q -p sf-cli -- db --db-path /mnt/e/static-flow-data/lancedb \
+cargo run -q -p sf-cli -- db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   query-rows articles --where "id = '<article_id>'" --limit 1
 
-cargo run -q -p sf-cli -- db --db-path /mnt/e/static-flow-data/lancedb \
+cargo run -q -p sf-cli -- db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   query-rows interactive_pages --where "id = 'ipg-<article_id>'" --limit 1
 
-cargo run -q -p sf-cli -- db --db-path /mnt/e/static-flow-data/lancedb \
+cargo run -q -p sf-cli -- db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
   query-rows interactive_page_locales --where "page_id = 'ipg-<article_id>'" --limit 10
 ```
 

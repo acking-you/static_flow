@@ -35,7 +35,7 @@ errors. Lyrics are still fetched from Netease via `ncmdump-cli lyric`.
 5. **Ingest** (with cover URL from step 2):
    ```bash
    sf-cli write-music \
-     --db-path /mnt/e/static-flow-data/lancedb-music \
+     --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
      --file /tmp/music/bili-<bvid>.mp3 \
      --id "bilibili-<bvid>" \
      --title "<song_title>" \
@@ -51,7 +51,7 @@ errors. Lyrics are still fetched from Netease via `ncmdump-cli lyric`.
 6. **Verify** (see `common.md`).
    If cover was not available at ingest, update it separately:
    ```bash
-   sf-cli db --db-path /mnt/e/static-flow-data/lancedb-music \
+   sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music \
      update-rows songs \
      --where "id='bilibili-<bvid>'" \
      --set "cover_image='https://i0.hdslb.com/bfs/archive/...'"

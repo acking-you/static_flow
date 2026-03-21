@@ -8,7 +8,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/start_backend_selfhosted.sh
 #   ./scripts/start_backend_selfhosted.sh --daemon
-#   DB_ROOT=/mnt/e/static-flow-data PORT=39080 ./scripts/start_backend_selfhosted.sh
+#   DB_ROOT=/mnt/wsl/data4tb/static-flow-data PORT=39080 ./scripts/start_backend_selfhosted.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -16,7 +16,7 @@ cd "$ROOT_DIR"
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DB_ROOT="${DB_ROOT:-/mnt/e/static-flow-data}"
+DB_ROOT="${DB_ROOT:-/mnt/wsl/data4tb/static-flow-data}"
 DB_PATH="${DB_PATH:-${LANCEDB_URI:-$DB_ROOT/lancedb}}"
 COMMENTS_DB_PATH="${COMMENTS_DB_PATH:-${COMMENTS_LANCEDB_URI:-$DB_ROOT/lancedb-comments}}"
 MUSIC_DB_PATH="${MUSIC_DB_PATH:-${MUSIC_LANCEDB_URI:-$DB_ROOT/lancedb-music}}"
@@ -43,7 +43,7 @@ Options:
   -h, --help       Show this help
 
 Environment variables (all optional):
-  DB_ROOT              Data root (default: /mnt/e/static-flow-data)
+  DB_ROOT              Data root (default: /mnt/wsl/data4tb/static-flow-data)
   DB_PATH              Content DB override
   COMMENTS_DB_PATH     Comments DB override
   MUSIC_DB_PATH        Music DB override

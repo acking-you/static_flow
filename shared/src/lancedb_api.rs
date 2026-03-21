@@ -3980,7 +3980,7 @@ mod tests {
     }
 
     fn make_api_behavior_input(index: usize, occurred_at: i64) -> NewApiBehaviorEventInput {
-        let matching = index % 3 == 0;
+        let matching = index.is_multiple_of(3);
         NewApiBehaviorEventInput {
             event_id: format!("evt-{index:06}"),
             occurred_at,
