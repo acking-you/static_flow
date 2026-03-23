@@ -4,6 +4,7 @@
 > - 内容主表与资源表（`articles` / `images` / `taxonomies`）
 > - backend 运行时与请求表（`article_views` / `api_behavior_events` / `article_requests*`）
 > - 交互镜像表（`interactive_pages` / `interactive_page_locales` / `interactive_assets`）
+> - LLM gateway 表（`llm_gateway_keys` / `llm_gateway_usage_events` / `llm_gateway_runtime_config`）
 > - backend 评论体系表（`comment_tasks` / `comment_published` / `comment_audit_logs`，位于评论专用 DB）
 > - 全量 CRUD（增删改查）命令
 > - 每个字段的语义与来源
@@ -37,7 +38,7 @@ make bin-cli
 - `taxonomies`
 
 说明：
-- `article_views`、`api_behavior_events`、`article_requests*`、`interactive_*` 属于运行时/专项流程表，不依赖 `sf-cli init` 预创建。
+- `article_views`、`api_behavior_events`、`article_requests*`、`interactive_*`、`llm_gateway_*` 属于运行时/专项流程表，不依赖 `sf-cli init` 预创建。
 - 这些表会在对应 backend/worker/interactive 流程首次写入时自动创建。
 
 ### 1.3 一键全量测试（推荐）
@@ -82,6 +83,11 @@ CLI_BIN=./bin/sf-cli WORKDIR=./tmp/cli-e2e ./scripts/test_cli_e2e.sh
 - `interactive_pages`：交互页元数据与入口配置
 - `interactive_page_locales`：交互页多语言版本元数据
 - `interactive_assets`：交互页 HTML/CSS/JS/图片/字体等资源；资源字节采用 blob v2
+
+LLM gateway 库（同一 Content DB，公开接入与额度管理）：
+- `llm_gateway_keys`：公开/私有 API key、状态、额度与累计计费
+- `llm_gateway_usage_events`：按请求落库的使用账本、URL、IP、headers、延迟等诊断字段
+- `llm_gateway_runtime_config`：鉴权缓存 TTL 等运行时配置
 
 评论库（`COMMENTS_LANCEDB_URI`）：
 - `comment_tasks`：评论任务队列（待审核、处理中、失败等状态）

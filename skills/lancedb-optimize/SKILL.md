@@ -22,7 +22,7 @@ All paths are relative to `DB_ROOT` (default: `/mnt/wsl/data4tb/static-flow-data
 
 | DB | Path | Tables |
 |----|------|--------|
-| Content | `$DB_ROOT/lancedb` | `api_behavior_events`, `article_request_ai_run_chunks`, `article_request_ai_runs`, `article_requests`, `article_views`, `articles`, `images`, `interactive_assets`, `interactive_page_locales`, `interactive_pages`, `taxonomies` |
+| Content | `$DB_ROOT/lancedb` | `api_behavior_events`, `article_request_ai_run_chunks`, `article_request_ai_runs`, `article_requests`, `article_views`, `articles`, `images`, `interactive_assets`, `interactive_page_locales`, `interactive_pages`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`, `taxonomies` |
 | Comments | `$DB_ROOT/lancedb-comments` | `comment_ai_run_chunks`, `comment_ai_runs`, `comment_audit_logs`, `comment_published`, `comment_tasks` |
 | Music | `$DB_ROOT/lancedb-music` | `music_comments`, `music_plays`, `music_wish_ai_run_chunks`, `music_wish_ai_runs`, `music_wishes`, `songs` |
 

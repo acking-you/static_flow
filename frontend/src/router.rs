@@ -91,11 +91,32 @@ pub enum Route {
     Search,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/llm-access/help")]
+    LlmAccessGuide,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/llm-access/help")]
+    LlmAccessGuide,
+
+    #[cfg(not(feature = "mock"))]
+    #[at("/llm-access")]
+    LlmAccess,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/llm-access")]
+    LlmAccess,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/admin")]
     Admin,
     #[cfg(feature = "mock")]
     #[at("/static_flow/admin")]
     Admin,
+
+    #[cfg(not(feature = "mock"))]
+    #[at("/admin/llm-gateway")]
+    AdminLlmGateway,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/llm-gateway")]
+    AdminLlmGateway,
 
     #[cfg(not(feature = "mock"))]
     #[at("/admin/comments/runs/:task_id")]
@@ -190,7 +211,10 @@ fn switch(route: Route) -> Html {
             html! { <pages::category_detail::CategoryDetailPage category={category} /> }
         },
         Route::Search => html! { <pages::search::SearchPage /> },
+        Route::LlmAccessGuide => html! { <pages::llm_access_guide::LlmAccessGuidePage /> },
+        Route::LlmAccess => html! { <pages::llm_access::LlmAccessPage /> },
         Route::Admin => html! { <pages::admin::AdminPage /> },
+        Route::AdminLlmGateway => html! { <pages::admin_llm_gateway::AdminLlmGatewayPage /> },
         Route::AdminCommentRuns {
             task_id,
         } => {

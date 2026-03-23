@@ -1,6 +1,6 @@
 # StaticFlow 统一 LanceDB 后台表压缩器：碎片驱动的自动维护
 
-> 3 个数据库、22 张表、6 组 store 扫描器，和一次优雅关闭的踩坑。
+> 3 个数据库、25 张表、7 组 store 扫描器，和一次优雅关闭的踩坑。
 
 ---
 
@@ -10,7 +10,7 @@ StaticFlow 使用 LanceDB 作为唯一存储引擎，数据分布在三个独立
 
 | 数据库 | 路径 | 表数量 |
 |---|---|---|
-| Content DB | `lancedb/` | 11 张（articles, images, taxonomies, article_views, api_behavior_events, article_requests 系列 3 张, interactive 系列 3 张） |
+| Content DB | `lancedb/` | 14 张（articles, images, taxonomies, article_views, api_behavior_events, article_requests 系列 3 张, interactive 系列 3 张, llm_gateway 系列 3 张） |
 | Comments DB | `lancedb-comments/` | 5 张（comment_tasks, comment_published, comment_audit_logs, comment_ai_runs, comment_ai_run_chunks） |
 | Music DB | `lancedb-music/` | 6 张（songs, music_plays, music_comments, music_wishes, music_wish_ai_runs, music_wish_ai_run_chunks） |
 
@@ -18,7 +18,7 @@ LanceDB 的存储模型基于 Lance 格式：每次 append 操作产生一个新
 fragment 是 Lance 文件的最小物理单元，类似于 LSM-Tree 的 SSTable。当 fragment 数量持续
 累积而不做合并时，读取路径需要扫描更多的小文件，查询延迟逐步上升。
 
-旧方案只覆盖了 22 张表中的 **1 张**：`api_behavior_events`。它的 flusher 每 10 次
+旧方案只覆盖了 25 张表中的 **1 张**：`api_behavior_events`。它的 flusher 每 10 次
 batch flush 触发一次 compact：
 
 ```rust
@@ -42,7 +42,7 @@ if flush_count % BEHAVIOR_COMPACT_EVERY_N_FLUSHES == 0 {
 去压缩每一张表——碎片就这样在暗处悄悄生长。
 
 > 💡 **Key Point**: 单表 compact 方案无法扩展。当系统从 1 个 DB 增长到 3 个 DB、
-> 从 5 张表增长到 22 张表时，需要一个统一的、自动的压缩机制。
+> 从 5 张表增长到 25 张表时，需要一个统一的、自动的压缩机制。
 
 ---
 
@@ -71,7 +71,7 @@ if flush_count % BEHAVIOR_COMPACT_EVERY_N_FLUSHES == 0 {
 
 ```mermaid
 graph TD
-    A([🕐 定时唤醒 / 180s]):::trigger --> B[/遍历 6 组 DB × Store/]:::scan
+    A([🕐 定时唤醒 / 180s]):::trigger --> B[/遍历 7 组 DB × Store/]:::scan
     B --> C[[open_table]]:::io
     C -->|失败| D[⚠ warn + 跳过]:::error
     C -->|成功| E[[table.stats]]:::io
@@ -229,19 +229,20 @@ impl XxxStore {
 }
 ```
 
-### 6 个 Store 的表名清单
+### 7 个 Store 的表名清单
 
 | Store | 模块 | DB | 表名常量 | 表 |
 |---|---|---|---|---|
 | `StaticFlowDataStore` | `lancedb_api.rs:230` | Content | `CONTENT_TABLE_NAMES` | articles, images, taxonomies, article_views, api_behavior_events |
 | `ArticleRequestStore` | `article_request_store.rs:111` | Content | `ARTICLE_REQUEST_TABLE_NAMES` | article_requests, article_request_ai_runs, article_request_ai_run_chunks |
 | `InteractiveStore` | `interactive_store.rs:25` | Content | `INTERACTIVE_TABLE_NAMES` | interactive_pages, interactive_page_locales, interactive_assets |
+| `LlmGatewayStore` | `llm_gateway_store/mod.rs` | Content | `LLM_GATEWAY_TABLE_NAMES` | llm_gateway_keys, llm_gateway_usage_events, llm_gateway_runtime_config |
 | `CommentDataStore` | `comments_store.rs:209` | Comments | `COMMENT_TABLE_NAMES` | comment_tasks, comment_published, comment_audit_logs, comment_ai_runs, comment_ai_run_chunks |
 | `MusicDataStore` | `music_store.rs:40` | Music | `MUSIC_TABLE_NAMES` | songs, music_plays, music_comments |
 | `MusicWishStore` | `music_wish_store.rs:109` | Music | `MUSIC_WISH_TABLE_NAMES` | music_wishes, music_wish_ai_runs, music_wish_ai_run_chunks |
 
 注意 Content DB 被 `StaticFlowDataStore` 和 `ArticleRequestStore` 两个 store 扫描，
-再加上 `InteractiveStore` 一起扫描；Music DB 被 `MusicDataStore` 和 `MusicWishStore`
+再加上 `InteractiveStore` 与 `LlmGatewayStore` 一起扫描；Music DB 被 `MusicDataStore` 和 `MusicWishStore`
 两个 store 扫描。这意味着同一个 DB
 的 connection 会被按 store 维度重复打开。
 
@@ -294,7 +295,7 @@ tokio::select! {
 migration（如 `add_columns(NewColumnTransform::AllNulls(...))`），如果压缩器立即启动，
 可能与 migration 产生竞争。60 秒足够所有 migration 完成。
 
-### 6 组 DB 扫描
+### 7 组 DB 扫描
 
 ```rust
 // backend/src/state.rs:417-441
@@ -524,7 +525,7 @@ fn spawn_behavior_event_flusher(
 
 | 维度 | 旧方案 | 新方案 |
 |---|---|---|
-| 覆盖范围 | 1/22 张表 | 22/22 张表 |
+| 覆盖范围 | 1/25 张表 | 25/25 张表 |
 | 触发机制 | 时间驱动（每 N 次 flush） | 碎片驱动（`num_small_fragments >= threshold`） |
 | 配置 | 硬编码 | 环境变量（`TABLE_COMPACT_SCAN_INTERVAL_SECS`, `TABLE_COMPACT_FRAGMENT_THRESHOLD`） |
 | 优雅关闭 | 无 | `watch` channel + `select! { biased; }` |

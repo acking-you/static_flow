@@ -14,6 +14,7 @@ use static_flow_shared::{
     lancedb_api::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
+    llm_gateway_store::{self, LlmGatewayStore, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS},
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
     optimize::{scan_and_compact_tables, CompactConfig},
@@ -25,6 +26,7 @@ use crate::{
     comment_worker::{self, CommentAiWorkerConfig},
     email::EmailNotifier,
     geoip::GeoIpResolver,
+    llm_gateway::LlmGatewayRuntimeState,
     music_wish_worker::{self, MusicWishWorkerConfig},
 };
 
@@ -147,12 +149,27 @@ impl Default for CompactionRuntimeConfig {
     }
 }
 
+/// Runtime knobs for the public LLM gateway and its in-memory auth cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmGatewayRuntimeConfig {
+    pub auth_cache_ttl_seconds: u64,
+}
+
+impl Default for LlmGatewayRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            auth_cache_ttl_seconds: DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdminAccessConfig {
     pub local_only: bool,
     pub token: Option<String>,
 }
 
+/// Stores that participate in the periodic table compaction loop.
 #[derive(Clone)]
 struct TableCompactorStores {
     content_store: Arc<StaticFlowDataStore>,
@@ -161,6 +178,7 @@ struct TableCompactorStores {
     music_wish_store: Arc<MusicWishStore>,
     article_request_store: Arc<ArticleRequestStore>,
     interactive_store: Arc<InteractivePageStore>,
+    llm_gateway_store: Arc<LlmGatewayStore>,
 }
 
 #[derive(Clone)]
@@ -175,6 +193,7 @@ pub struct AppState {
     pub(crate) comment_runtime_config: Arc<RwLock<CommentRuntimeConfig>>,
     pub(crate) api_behavior_runtime_config: Arc<RwLock<ApiBehaviorRuntimeConfig>>,
     pub(crate) compaction_runtime_config: Arc<RwLock<CompactionRuntimeConfig>>,
+    pub(crate) llm_gateway_runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
     pub(crate) comment_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) comment_worker_tx: mpsc::Sender<String>,
     pub(crate) admin_access: AdminAccessConfig,
@@ -189,6 +208,8 @@ pub struct AppState {
     pub(crate) article_request_worker_tx: mpsc::Sender<String>,
     pub(crate) article_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) interactive_store: Arc<InteractivePageStore>,
+    pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
+    pub(crate) llm_gateway: Arc<LlmGatewayRuntimeState>,
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
     pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
     pub(crate) shutdown_tx: watch::Sender<bool>,
@@ -202,12 +223,19 @@ impl AppState {
         music_db_uri: &str,
         index_html_template: String,
     ) -> Result<Self> {
+        tracing::info!(
+            content_db_uri,
+            comments_db_uri,
+            music_db_uri,
+            "initializing application state"
+        );
         let store = Arc::new(StaticFlowDataStore::connect(content_db_uri).await?);
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
         let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
         let music_wish_store = Arc::new(MusicWishStore::connect(music_db_uri).await?);
         let article_request_store = Arc::new(ArticleRequestStore::connect(content_db_uri).await?);
         let interactive_store = Arc::new(InteractivePageStore::connect(content_db_uri).await?);
+        let llm_gateway_store = Arc::new(LlmGatewayStore::connect(content_db_uri).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
         let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
@@ -217,6 +245,25 @@ impl AppState {
             Arc::new(RwLock::new(read_api_behavior_runtime_config_from_env()));
         let compaction_runtime_config =
             Arc::new(RwLock::new(read_compaction_runtime_config_from_env()));
+        let llm_gateway_auth_cache_ttl_seconds = llm_gateway_store
+            .get_runtime_config_or_default()
+            .await?
+            .auth_cache_ttl_seconds;
+        tracing::info!(
+            auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
+            "loaded llm gateway runtime config from storage"
+        );
+        let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
+            auth_cache_ttl_seconds: llm_gateway_auth_cache_ttl_seconds,
+        }));
+        let llm_gateway = Arc::new(LlmGatewayRuntimeState::new(
+            llm_gateway_store.clone(),
+            llm_gateway_runtime_config.clone(),
+        )?);
+        tracing::info!(
+            auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
+            "initialized llm gateway runtime state"
+        );
         let comment_worker_tx = comment_worker::spawn_comment_worker(
             comment_store.clone(),
             CommentAiWorkerConfig::from_env(content_db_uri.to_string()),
@@ -238,10 +285,22 @@ impl AppState {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
         };
+        tracing::info!(
+            admin_local_only = admin_access.local_only,
+            admin_token_configured = admin_access.token.is_some(),
+            "resolved admin access configuration"
+        );
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
+        if let Err(err) = crate::llm_gateway::refresh_public_rate_limit_status(&llm_gateway).await {
+            tracing::warn!("Initial LLM gateway rate-limit refresh failed: {err:#}");
+        }
+        crate::llm_gateway::spawn_public_rate_limit_refresher(
+            llm_gateway.clone(),
+            shutdown_rx.clone(),
+        );
 
         spawn_table_compactor(
             TableCompactorStores {
@@ -251,10 +310,12 @@ impl AppState {
                 music_wish_store: music_wish_store.clone(),
                 article_request_store: article_request_store.clone(),
                 interactive_store: interactive_store.clone(),
+                llm_gateway_store: llm_gateway_store.clone(),
             },
             compaction_runtime_config.clone(),
             shutdown_rx,
         );
+        tracing::info!("application state initialized successfully");
 
         Ok(Self {
             store,
@@ -267,6 +328,7 @@ impl AppState {
             comment_runtime_config,
             api_behavior_runtime_config,
             compaction_runtime_config,
+            llm_gateway_runtime_config,
             comment_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             comment_worker_tx,
             admin_access,
@@ -281,6 +343,8 @@ impl AppState {
             article_request_worker_tx,
             article_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             interactive_store,
+            llm_gateway_store,
+            llm_gateway,
             email_notifier,
             behavior_event_tx,
             shutdown_tx,
@@ -294,6 +358,7 @@ impl AppState {
     }
 }
 
+/// Parse common boolean environment variable spellings with a fallback value.
 fn parse_bool_env(key: &str, default_value: bool) -> bool {
     env::var(key)
         .ok()
@@ -303,6 +368,7 @@ fn parse_bool_env(key: &str, default_value: bool) -> bool {
         .unwrap_or(default_value)
 }
 
+/// Read comment runtime settings from the environment with range validation.
 fn read_comment_runtime_config_from_env() -> CommentRuntimeConfig {
     let submit_rate_limit_seconds = env::var("COMMENT_RATE_LIMIT_SECONDS")
         .ok()
@@ -330,6 +396,7 @@ fn read_comment_runtime_config_from_env() -> CommentRuntimeConfig {
     }
 }
 
+/// Read behavior analytics settings from the environment with range validation.
 fn read_api_behavior_runtime_config_from_env() -> ApiBehaviorRuntimeConfig {
     let retention_days = env::var("API_BEHAVIOR_RETENTION_DAYS")
         .ok()
@@ -357,6 +424,7 @@ fn read_api_behavior_runtime_config_from_env() -> ApiBehaviorRuntimeConfig {
     }
 }
 
+/// Read table compaction settings from the environment with range validation.
 fn read_compaction_runtime_config_from_env() -> CompactionRuntimeConfig {
     let enabled = parse_bool_env("TABLE_COMPACT_ENABLED", DEFAULT_TABLE_COMPACT_ENABLED);
     let scan_interval_seconds = env::var("TABLE_COMPACT_SCAN_INTERVAL_SECS")
@@ -565,6 +633,11 @@ fn spawn_table_compactor(
                     "content",
                     stores.interactive_store.connection(),
                     interactive_store::INTERACTIVE_TABLE_NAMES,
+                ),
+                (
+                    "content",
+                    stores.llm_gateway_store.connection(),
+                    llm_gateway_store::LLM_GATEWAY_TABLE_NAMES,
                 ),
                 (
                     "comments",

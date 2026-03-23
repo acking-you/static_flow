@@ -284,7 +284,10 @@ fn route_path_for(route: &Route) -> String {
             category,
         } => config::route_path(&format!("/categories/{}", urlencoding::encode(category))),
         Route::Search => config::route_path("/search"),
+        Route::LlmAccessGuide => config::route_path("/llm-access/help"),
+        Route::LlmAccess => config::route_path("/llm-access"),
         Route::Admin => config::route_path("/admin"),
+        Route::AdminLlmGateway => config::route_path("/admin/llm-gateway"),
         Route::AdminCommentRuns {
             task_id,
         } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
@@ -492,6 +495,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
             set_hreflang_links(&entries);
         },
         Route::Admin
+        | Route::AdminLlmGateway
         | Route::AdminCommentRuns {
             ..
         }
@@ -547,6 +551,30 @@ pub fn apply_route_seo(route: Option<&Route>) {
                 &canonical_url,
                 "website",
                 "noindex,nofollow",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::LlmAccessGuide => {
+            apply_common_seo(
+                "LLM Access Guide · StaticFlow",
+                "Codex 与养龙虾🦞的三步接入说明页",
+                &canonical_url,
+                "website",
+                "index,follow",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::LlmAccess => {
+            apply_common_seo(
+                "LLM Access · StaticFlow",
+                "查看当前公开可用的免费 API key 与 /v1 接入入口",
+                &canonical_url,
+                "website",
+                "index,follow",
                 "zh-CN",
                 &og_image,
             );

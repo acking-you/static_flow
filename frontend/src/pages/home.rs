@@ -4,7 +4,10 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{icons::IconName, image_with_loading::ImageWithLoading},
+    components::{
+        icons::{Icon, IconName},
+        image_with_loading::ImageWithLoading,
+    },
     i18n::current::{common as common_text, home as t},
     router::Route,
 };
@@ -337,6 +340,36 @@ pub fn home_page() -> Html {
                                     <span class="terminal-content">{ t::INTRO }</span>
                                 </div>
 
+                                <div class="terminal-line" style="margin-top: 1.5rem;">
+                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                    <span class="terminal-content">{ t::CMD_SHOW_LLM_ACCESS }</span>
+                                </div>
+                                <div class={classes!(
+                                    "mt-4",
+                                    "ml-8",
+                                    "max-w-3xl",
+                                    "rounded-[1rem]",
+                                    "border",
+                                    "border-[var(--border)]",
+                                    "bg-[var(--surface)]/85",
+                                    "px-5",
+                                    "py-4",
+                                    "shadow-[var(--shadow-2)]"
+                                )}>
+                                    <p class={classes!("m-0", "text-sm", "leading-7", "text-[var(--muted)]")}>
+                                        { t::LLM_ACCESS_HINT }
+                                    </p>
+                                    <div class={classes!("mt-4", "flex", "flex-wrap", "gap-3")}>
+                                        <Link<Route>
+                                            to={Route::LlmAccess}
+                                            classes={classes!("btn-fluent-primary", "!px-6", "!py-2.5", "!text-sm")}
+                                        >
+                                            <i class="fas fa-key mr-2"></i>
+                                            { t::BTN_LLM_ACCESS }
+                                        </Link<Route>>
+                                    </div>
+                                </div>
+
                                 // Quick navigation buttons styled as terminal commands
                                 <div class="terminal-line" style="margin-top: 1.5rem;">
                                     <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
@@ -475,23 +508,46 @@ pub fn home_page() -> Html {
                                 <div class={classes!(
                                     "mt-4",
                                     "grid",
-                                    "gap-5",
+                                    "gap-4",
                                     "grid-cols-1",
-                                    "md:grid-cols-5",
                                     "w-full"
                                 )}>
-                                    { for stats.into_iter().map(|(_icon, value, label, route)| {
+                                    { for stats.into_iter().map(|(icon, value, label, route)| {
                                         let panel_content = html! {
                                             <div class="system-panel">
-                                                <div class="system-panel-label">{ label.clone() }</div>
-                                                <div class="system-panel-value">
-                                                    if *stats_loaded {
-                                                        { value.clone() }
-                                                    } else {
-                                                        <div class="h-8 w-12 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
-                                                    }
+                                                <div class={classes!("flex", "items-center", "justify-between", "gap-5", "flex-wrap", "sm:flex-nowrap")}>
+                                                    <div class={classes!("flex", "items-center", "gap-4", "min-w-0")}>
+                                                        <div class={classes!(
+                                                            "inline-flex",
+                                                            "h-11",
+                                                            "w-11",
+                                                            "shrink-0",
+                                                            "items-center",
+                                                            "justify-center",
+                                                            "rounded-xl",
+                                                            "border",
+                                                            "border-[var(--border)]",
+                                                            "bg-[var(--surface-alt)]",
+                                                            "text-[var(--primary)]"
+                                                        )}>
+                                                            <Icon name={icon} size={20} />
+                                                        </div>
+                                                        <div class={classes!("min-w-0")}>
+                                                            <div class={classes!("text-[0.72rem]", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ label.clone() }</div>
+                                                            <div class={classes!("mt-1", "text-sm", "text-[var(--muted)]")}>{ "点击查看对应分区与内容集合" }</div>
+                                                        </div>
+                                                    </div>
+                                                    <div class={classes!("text-right", "sm:ml-auto", "min-w-[5.5rem]")}>
+                                                        <div class={classes!("text-[2rem]", "font-bold", "leading-none", "text-[var(--primary)]")}>
+                                                            if *stats_loaded {
+                                                                { value.clone() }
+                                                            } else {
+                                                                <div class="h-8 w-12 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
+                                                            }
+                                                        </div>
+                                                        <div class={classes!("mt-1", "text-sm", "text-[var(--text)]")}>{ t::SYSTEM_UNIT_TOTAL }</div>
+                                                    </div>
                                                 </div>
-                                                <div class="system-panel-unit">{ t::SYSTEM_UNIT_TOTAL }</div>
                                             </div>
                                         };
 

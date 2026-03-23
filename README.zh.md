@@ -30,14 +30,23 @@ static-flow/
 
 `static-flow` 对应网站：<https://acking-you.github.io/>
 
-本项目将运行时数据放在独立数据集仓库中管理：
+本项目将运行时数据放在两个 Hugging Face 数据集仓库和一个本地音乐库中管理：
 
 - 当前本地数据根目录：`/mnt/wsl/data4tb/static-flow-data`
 
-- HF 数据集仓库：`LB7666/my_lancedb_data`
-- 远端地址：`git@hf.co:datasets/LB7666/my_lancedb_data`
-- 本地数据目录：`/mnt/wsl/data4tb/static-flow-data/lancedb`
-- 存储格式：LanceDB 表目录（`articles.lance/`、`images.lance/`、`taxonomies.lance/`、`article_views.lance/`）
+- Content DB（内容主库 + 请求表 + 交互镜像 + LLM gateway）
+  - HF 数据集仓库：`LB7666/my_lancedb_data`
+  - 远端地址：`git@hf.co:datasets/LB7666/my_lancedb_data`
+  - 本地数据目录：`/mnt/wsl/data4tb/static-flow-data/lancedb`
+  - 表：`articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`
+- Comments DB（评论审核与 AI 运行记录）
+  - HF 数据集仓库：`LB7666/static-flow-comments`
+  - 远端地址：`git@hf.co:datasets/LB7666/static-flow-comments`
+  - 本地数据目录：`/mnt/wsl/data4tb/static-flow-data/lancedb-comments`
+  - 表：`comment_tasks`, `comment_published`, `comment_audit_logs`, `comment_ai_runs`, `comment_ai_run_chunks`
+- Music DB（本地优先音乐库）
+  - 本地数据目录：`/mnt/wsl/data4tb/static-flow-data/lancedb-music`
+  - 表：`songs`, `music_plays`, `music_comments`, `music_wishes`, `music_wish_ai_runs`, `music_wish_ai_run_chunks`
 
 推荐流程：
 

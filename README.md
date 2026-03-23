@@ -38,11 +38,11 @@ local-only music DB:
 Canonical local data root:
 - `/mnt/wsl/data4tb/static-flow-data`
 
-- Content DB (content + request + interactive mirror tables)
+- Content DB (content + request + interactive mirror + llm gateway tables)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
   - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
   - Local path: `/mnt/wsl/data4tb/static-flow-data/lancedb`
-  - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`
+  - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`
 - Comments DB (comment moderation + AI run traces)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/static-flow-comments>
   - Remote: `git@hf.co:datasets/LB7666/static-flow-comments`
@@ -171,6 +171,40 @@ Reference configs:
 - Self-hosted Caddy: cloud `/etc/caddy/Caddyfile`
 - GitHub Pages CI: `.github/workflows/deploy.yml`
 - Legacy Nginx configs: `deployment-examples/`
+
+## LLM Gateway / Codex Access
+
+Self-hosted mode also exposes a public read-only LLM access page at `/llm-access`.
+That page publishes:
+
+- an OpenAI-compatible Base URL that already includes `/v1`
+- public API keys that are explicitly marked as externally visible
+- a ready-to-paste Codex provider snippet
+- fallback `auth.json` content and plain chat examples (`curl` / Python SDK)
+
+Key behavior:
+
+- public access is read-only; key creation, quota changes, visibility, and TTL tuning
+  stay under `/admin/llm-gateway`
+- admin paths are blocked at the edge and not forwarded publicly
+- upstream inference currently uses the host machine's `~/.codex/auth.json`
+- Codex `/fast` requests are billed at `2x` billable tokens in StaticFlow quota accounting
+
+Recommended Codex config:
+
+```toml
+model_provider = "staticflow"
+
+[model_providers.staticflow]
+name = "OpenAI"
+base_url = "https://your-host/api/llm-gateway/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+This provider shape keeps Codex on the remote `/responses` and `/responses/compact`
+path while avoiding the initial websocket fallback delay.
 
 ## Quick Start
 
@@ -304,6 +338,7 @@ cd cli
 # - article_views / api_behavior_events: backend runtime analytics
 # - article_requests / article_request_ai_*: article request worker runtime tables
 # - interactive_pages / interactive_page_locales / interactive_assets: standalone interactive mirror pages and localized assets
+# - llm_gateway_keys / llm_gateway_usage_events / llm_gateway_runtime_config: public gateway auth, usage ledger, and runtime cache config
 
 # Backend-like API debug commands
 ../target/release/sf-cli api --db-path ../data/lancedb list-articles --category "Tech"

@@ -5907,3 +5907,226 @@ html {
     height: 2rem;
   }
 }
+
+.llm-access-hero {
+  border-color: rgba(16, 185, 129, 0.15);
+  background: linear-gradient(140deg, rgba(236, 253, 245, 0.98), rgba(239, 246, 255, 0.96));
+  color: #0f172a;
+  box-shadow: 0 30px 90px rgba(16, 185, 129, 0.10);
+}
+
+.llm-access-hero-eyebrow {
+  color: #047857;
+}
+
+.llm-access-hero-title {
+  color: #020617;
+}
+
+.llm-access-hero-body {
+  color: #334155;
+}
+
+.llm-access-hero-secondary-btn {
+  border-color: rgba(15, 23, 42, 0.10) !important;
+  background: rgba(255, 255, 255, 0.68) !important;
+  color: #0f172a !important;
+}
+
+.llm-access-hero-secondary-btn:hover {
+  background: rgba(255, 255, 255, 0.92) !important;
+}
+
+.llm-access-hero-chip-emerald {
+  border-color: rgba(16, 185, 129, 0.18);
+  background: rgba(16, 185, 129, 0.10);
+  color: #047857;
+}
+
+.llm-access-hero-chip-sky {
+  border-color: rgba(14, 165, 233, 0.18);
+  background: rgba(14, 165, 233, 0.10);
+  color: #0369a1;
+}
+
+.llm-access-hero-step {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.llm-access-hero-step--emerald {
+  border-color: rgba(16, 185, 129, 0.16);
+}
+
+.llm-access-hero-step--sky {
+  border-color: rgba(14, 165, 233, 0.16);
+}
+
+.llm-access-hero-step--neutral {
+  border-color: rgba(15, 23, 42, 0.10);
+}
+
+.llm-access-hero-step-title {
+  color: #020617;
+}
+
+.llm-access-hero-step-body {
+  color: #334155;
+}
+
+.llm-access-warning {
+  border-color: rgba(245, 158, 11, 0.20);
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(254, 249, 195, 0.92));
+  color: #0f172a;
+  box-shadow: 0 24px 80px rgba(245, 158, 11, 0.12);
+}
+
+.llm-access-warning-eyebrow,
+.llm-access-warning-card-eyebrow {
+  color: #b45309;
+}
+
+.llm-access-warning-title,
+.llm-access-warning-card-title {
+  color: #020617;
+}
+
+.llm-access-warning-body,
+.llm-access-warning-card-body {
+  color: #334155;
+}
+
+.llm-access-warning-card {
+  border-color: rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.llm-access-warning-link {
+  border-color: rgba(245, 158, 11, 0.24);
+  background: rgba(245, 158, 11, 0.10);
+  color: #92400e;
+}
+
+.llm-access-warning-link:hover {
+  background: rgba(245, 158, 11, 0.16);
+}
+
+[data-theme="dark"] .llm-access-hero,
+[theme="dark"] .llm-access-hero {
+  border-color: color-mix(in srgb, var(--border) 45%, transparent);
+  background: linear-gradient(140deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.95));
+  color: #f8fafc;
+  box-shadow: 0 30px 90px rgba(2, 6, 23, 0.40);
+}
+
+[data-theme="dark"] .llm-access-hero-eyebrow,
+[theme="dark"] .llm-access-hero-eyebrow {
+  color: rgba(110, 231, 183, 0.90);
+}
+
+[data-theme="dark"] .llm-access-hero-title,
+[theme="dark"] .llm-access-hero-title,
+[data-theme="dark"] .llm-access-hero-step-title,
+[theme="dark"] .llm-access-hero-step-title {
+  color: #ffffff;
+}
+
+[data-theme="dark"] .llm-access-hero-body,
+[theme="dark"] .llm-access-hero-body {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .llm-access-hero-secondary-btn,
+[theme="dark"] .llm-access-hero-secondary-btn {
+  border-color: rgba(255, 255, 255, 0.20) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+
+[data-theme="dark"] .llm-access-hero-secondary-btn:hover,
+[theme="dark"] .llm-access-hero-secondary-btn:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
+}
+
+[data-theme="dark"] .llm-access-hero-chip-emerald,
+[theme="dark"] .llm-access-hero-chip-emerald {
+  border-color: rgba(52, 211, 153, 0.18);
+  background: rgba(52, 211, 153, 0.10);
+  color: #d1fae5;
+}
+
+[data-theme="dark"] .llm-access-hero-chip-sky,
+[theme="dark"] .llm-access-hero-chip-sky {
+  border-color: rgba(56, 189, 248, 0.18);
+  background: rgba(56, 189, 248, 0.10);
+  color: #e0f2fe;
+}
+
+[data-theme="dark"] .llm-access-hero-step--emerald,
+[theme="dark"] .llm-access-hero-step--emerald {
+  border-color: rgba(110, 231, 183, 0.20);
+  background: rgba(52, 211, 153, 0.10);
+}
+
+[data-theme="dark"] .llm-access-hero-step--sky,
+[theme="dark"] .llm-access-hero-step--sky {
+  border-color: rgba(125, 211, 252, 0.20);
+  background: rgba(56, 189, 248, 0.10);
+}
+
+[data-theme="dark"] .llm-access-hero-step--neutral,
+[theme="dark"] .llm-access-hero-step--neutral {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .llm-access-hero-step-body,
+[theme="dark"] .llm-access-hero-step-body {
+  color: rgba(248, 250, 252, 0.82);
+}
+
+[data-theme="dark"] .llm-access-warning,
+[theme="dark"] .llm-access-warning {
+  border-color: rgba(251, 191, 36, 0.20);
+  background: linear-gradient(135deg, rgba(69, 26, 3, 0.96), rgba(17, 24, 39, 0.98));
+  color: #fef3c7;
+  box-shadow: 0 30px 90px rgba(120, 53, 15, 0.28);
+}
+
+[data-theme="dark"] .llm-access-warning-eyebrow,
+[theme="dark"] .llm-access-warning-eyebrow,
+[data-theme="dark"] .llm-access-warning-card-eyebrow,
+[theme="dark"] .llm-access-warning-card-eyebrow {
+  color: rgba(252, 211, 77, 0.90);
+}
+
+[data-theme="dark"] .llm-access-warning-title,
+[theme="dark"] .llm-access-warning-title,
+[data-theme="dark"] .llm-access-warning-card-title,
+[theme="dark"] .llm-access-warning-card-title {
+  color: #ffffff;
+}
+
+[data-theme="dark"] .llm-access-warning-body,
+[theme="dark"] .llm-access-warning-body,
+[data-theme="dark"] .llm-access-warning-card-body,
+[theme="dark"] .llm-access-warning-card-body {
+  color: rgba(254, 243, 199, 0.88);
+}
+
+[data-theme="dark"] .llm-access-warning-card,
+[theme="dark"] .llm-access-warning-card {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .llm-access-warning-link,
+[theme="dark"] .llm-access-warning-link {
+  border-color: rgba(252, 211, 77, 0.30);
+  background: rgba(252, 211, 77, 0.12);
+  color: #fef3c7;
+}
+
+[data-theme="dark"] .llm-access-warning-link:hover,
+[theme="dark"] .llm-access-warning-link:hover {
+  background: rgba(252, 211, 77, 0.18);
+}

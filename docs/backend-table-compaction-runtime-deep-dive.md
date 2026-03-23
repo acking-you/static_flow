@@ -60,7 +60,7 @@ StaticFlow 现在把 LanceDB 表压缩分成两条路径：
 flowchart TD
     A["backend 启动"] --> B["等待 60s"]
     B --> C["读取当前 compaction runtime config"]
-    C --> D["顺序扫描 6 组表"]
+    C --> D["顺序扫描 7 组表"]
     D --> E["逐表检查 small fragments"]
     E --> F{"达到阈值"}
     F -->|"否"| G["跳过"]
@@ -169,7 +169,7 @@ compact 成功后会立刻做一次 prune，默认参数是：
 
 ### 4.1 表组划分
 
-后台每轮会顺序扫描 6 组表，调度逻辑在
+后台每轮会顺序扫描 7 组表，调度逻辑在
 [state.rs](/home/ts_user/rust_pro/static_flow/backend/src/state.rs#L558)。
 
 | DB 组 | 表名来源 | 表 |
@@ -177,11 +177,12 @@ compact 成功后会立刻做一次 prune，默认参数是：
 | Content 主内容组 | [lancedb_api.rs](/home/ts_user/rust_pro/static_flow/shared/src/lancedb_api.rs#L239) | `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events` |
 | Content 请求组 | [article_request_store.rs](/home/ts_user/rust_pro/static_flow/shared/src/article_request_store.rs#L111) | `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks` |
 | Content 交互镜像组 | [interactive_store.rs](/home/ts_user/rust_pro/static_flow/shared/src/interactive_store.rs#L25) | `interactive_pages`, `interactive_page_locales`, `interactive_assets` |
+| Content LLM gateway 组 | [llm_gateway_store/mod.rs](/home/ts_user/rust_pro/static_flow/shared/src/llm_gateway_store/mod.rs#L30) | `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config` |
 | Comments 组 | [comments_store.rs](/home/ts_user/rust_pro/static_flow/shared/src/comments_store.rs#L209) | `comment_tasks`, `comment_published`, `comment_audit_logs`, `comment_ai_runs`, `comment_ai_run_chunks` |
 | Music 主表组 | [music_store.rs](/home/ts_user/rust_pro/static_flow/shared/src/music_store.rs#L42) | `songs`, `music_plays`, `music_comments` |
 | Music wish 组 | [music_wish_store.rs](/home/ts_user/rust_pro/static_flow/shared/src/music_wish_store.rs#L109) | `music_wishes`, `music_wish_ai_runs`, `music_wish_ai_run_chunks` |
 
-合起来是 22 张表。
+合起来是 25 张表。
 
 ### 4.2 Content 主内容组的特殊处理
 
@@ -345,13 +346,13 @@ flowchart LR
 ### 7.1 当前方案解决了什么
 
 - 后台 compaction 有统一调度，不再靠人工定期执行
-- 所有 22 张表都纳入自动扫描范围
+- 所有 25 张表都纳入自动扫描范围
 - 热统计表的维护动作和在线流量实现了明确隔离
 - blob v2 表已经纳入正常 compaction，而不是单独跳过
 
 ### 7.2 当前方案刻意没做什么
 
-- 没有把 22 张表都纳入同一套 shared/exclusive 表锁框架
+- 没有把 25 张表都纳入同一套 shared/exclusive 表锁框架
 - 没有把所有在线写入都变成“维护期绝对串行”
 - 没有引入更重的全局调度器或跨 store 统一锁管理器
 
@@ -388,7 +389,7 @@ flowchart LR
 ## 9. 总结
 
 StaticFlow 当前的后台 compaction 机制，核心上是一个**碎片驱动、顺序扫描、失败可降级**
-的维护任务。它已经覆盖全部 22 张表，并且 blob v2 表也进入了正常 compact 路径。
+的维护任务。它已经覆盖全部 25 张表，并且 blob v2 表也进入了正常 compact 路径。
 
 但并发安全不是“一刀切”的：  
 真正做到“在线流量与维护流量显式隔离”的，当前只有 `article_views` 和

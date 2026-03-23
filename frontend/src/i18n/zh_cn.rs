@@ -50,6 +50,7 @@ pub mod header {
     pub const NAV_TAGS: &str = "标签";
     pub const NAV_CATEGORIES: &str = "分类";
     pub const NAV_MUSIC: &str = "音乐";
+    pub const NAV_LLM: &str = "LLM";
     pub const NAV_MAIN_ARIA: &str = "主导航";
     pub const IMAGE_SEARCH_TITLE: &str = "图片搜索";
     pub const IMAGE_LIBRARY_TITLE: &str = "图片库";
@@ -78,10 +79,16 @@ pub mod home {
         "El Psy Kongroo | 世界线收束中... | Rustacean | Database 练习生，痴迷一切底层黑魔法";
 
     pub const CMD_SHOW_README: &str = "cat ./README.md";
-    pub const INTRO: &str = "本地优先的个人内容平台：文章、音乐、视频（规划中）统一托管于 \
-                             LanceDB，支持全文 / 语义 / 混合检索；结合 AI + Skill \
-                             工作流实现内容创作、分类、评论自动回复与许愿点歌等能力，\
-                             一键发布与部署。";
+    pub const INTRO: &str =
+        "本地优先的个人内容平台：文章、音乐、视频（规划中）统一托管于 LanceDB，支持全文 / 语义 / \
+         混合检索；结合 AI + Skill 工作流实现内容创作、分类、评论自动回复与许愿点歌；站长大大的 \
+         GPT Pro 经常用不完，所以也会按余量放出一批免费 Key，给大家接 Codex 和随手养龙虾🦞 (*^▽^*)";
+
+    pub const CMD_SHOW_LLM_ACCESS: &str = "cat ./llm-access.md";
+    pub const LLM_ACCESS_HINT: &str = "站长大大 GPT Pro 经常用不完，所以会按余量放出一批免费的 \
+                                       中转 API key，能白嫖就别浪费啦 (๑•̀ㅂ•́)و✧ 想接 Codex 或随手 \
+                                       养龙虾🦞，点进去复制配置和 key 就能直接开用";
+    pub const BTN_LLM_ACCESS: &str = "进入 LLM Access";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
     pub const BTN_VIEW_ARTICLES: &str = "查看文章";

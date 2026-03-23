@@ -20,6 +20,7 @@ chrono = { workspace = true }
 flate2 = "1.1"
 maxminddb = "0.27"
 async-stream = "0.3"
+eventsource-stream = "0.2"
 futures-util = "0.3"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-native-tls"] }
 url = "2.5"
@@ -29,6 +30,7 @@ better_mimalloc_rs = { workspace = true }
 better_mimalloc_sys = { version = "0.1.1", default-features = false, features = ["extended"] }
 backtrace = "0.3"
 dashmap = "6.1"
+parking_lot = "0.12"
 memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }

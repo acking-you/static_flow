@@ -21,6 +21,9 @@ pub mod article_request_store;
 pub mod interactive_store;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod llm_gateway_store;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod optimize;
 
 #[cfg(not(target_arch = "wasm32"))]

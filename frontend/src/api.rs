@@ -9,8 +9,8 @@ use wasm_bindgen::JsValue;
 #[cfg(feature = "mock")]
 use crate::models;
 
-// API base URL - 编译时从环境变量读取，默认本地开发地址
-// 生产环境通过 workflow 设置 STATICFLOW_API_BASE 环境变量
+// API base URL. Read at compile time from STATICFLOW_API_BASE and fall back
+// to the local development backend when the variable is absent.
 #[cfg(not(feature = "mock"))]
 pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
     Some(url) => url,
@@ -4118,5 +4118,502 @@ pub fn build_admin_article_request_ai_stream_url(request_id: &str) -> String {
             "{base}/admin/article-requests/tasks/{}/ai-output/stream",
             urlencoding::encode(request_id)
         )
+    }
+}
+
+/// Public key metadata exposed on the read-only LLM access page.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayPublicKeyView {
+    pub id: String,
+    pub name: String,
+    pub secret: String,
+    pub quota_billable_limit: u64,
+    pub usage_input_uncached_tokens: u64,
+    pub usage_input_cached_tokens: u64,
+    pub usage_output_tokens: u64,
+    pub remaining_billable: i64,
+    pub last_used_at: Option<i64>,
+}
+
+/// Public payload returned by `/api/llm-gateway/access`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayAccessResponse {
+    pub base_url: String,
+    pub gateway_path: String,
+    pub auth_cache_ttl_seconds: u64,
+    pub keys: Vec<LlmGatewayPublicKeyView>,
+    pub generated_at: i64,
+}
+
+/// One public usage window from the cached Codex limit snapshot.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayRateLimitWindowView {
+    pub used_percent: f64,
+    pub remaining_percent: f64,
+    pub window_duration_mins: Option<i64>,
+    pub resets_at: Option<i64>,
+}
+
+/// Optional credits metadata included in the cached status payload.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayCreditsView {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
+/// One public rate-limit bucket rendered on `/llm-access`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayRateLimitBucketView {
+    pub limit_id: String,
+    pub limit_name: Option<String>,
+    pub display_name: String,
+    pub is_primary: bool,
+    pub plan_type: Option<String>,
+    pub primary: Option<LlmGatewayRateLimitWindowView>,
+    pub secondary: Option<LlmGatewayRateLimitWindowView>,
+    pub credits: Option<LlmGatewayCreditsView>,
+}
+
+/// Cached public rate-limit status for the upstream Codex account.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayRateLimitStatusResponse {
+    pub status: String,
+    pub refresh_interval_seconds: u64,
+    pub last_checked_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub source_url: String,
+    pub error_message: Option<String>,
+    pub buckets: Vec<LlmGatewayRateLimitBucketView>,
+}
+
+/// Admin-only editable representation of a gateway key.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayKeyView {
+    pub id: String,
+    pub name: String,
+    pub secret: String,
+    pub key_hash: String,
+    pub status: String,
+    pub public_visible: bool,
+    pub quota_billable_limit: u64,
+    pub usage_input_uncached_tokens: u64,
+    pub usage_input_cached_tokens: u64,
+    pub usage_output_tokens: u64,
+    pub remaining_billable: i64,
+    pub last_used_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Combined admin payload for the key inventory screen.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayKeysResponse {
+    pub keys: Vec<AdminLlmGatewayKeyView>,
+    pub auth_cache_ttl_seconds: u64,
+    pub generated_at: i64,
+}
+
+/// Rich per-request usage event used by the admin diagnostics view.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayUsageEventView {
+    pub id: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub request_method: String,
+    pub request_url: String,
+    pub latency_ms: i32,
+    pub endpoint: String,
+    pub model: Option<String>,
+    pub status_code: i32,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing: bool,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub request_headers_json: String,
+    pub created_at: i64,
+}
+
+/// Paginated usage-event response from the admin diagnostics endpoint.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayUsageEventsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub events: Vec<AdminLlmGatewayUsageEventView>,
+    pub generated_at: i64,
+}
+
+/// Query options for paginating and filtering LLM gateway usage events.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AdminLlmGatewayUsageEventsQuery {
+    pub key_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// Editable LLM gateway runtime settings exposed to the admin UI.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayRuntimeConfig {
+    pub auth_cache_ttl_seconds: u64,
+}
+
+/// Fetch the read-only public gateway access bundle used by `/llm-access`.
+pub async fn fetch_llm_gateway_access() -> Result<LlmGatewayAccessResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(LlmGatewayAccessResponse {
+            base_url: "http://localhost:3000/api/llm-gateway/v1".to_string(),
+            gateway_path: "/api/llm-gateway/v1".to_string(),
+            auth_cache_ttl_seconds: 60,
+            keys: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/access?_ts={}", API_BASE, Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch the cached public Codex rate-limit snapshot used by `/llm-access`.
+pub async fn fetch_llm_gateway_status() -> Result<LlmGatewayRateLimitStatusResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(LlmGatewayRateLimitStatusResponse {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 60,
+            last_checked_at: Some(0),
+            last_success_at: Some(0),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            buckets: vec![LlmGatewayRateLimitBucketView {
+                limit_id: "codex".to_string(),
+                limit_name: None,
+                display_name: "codex".to_string(),
+                is_primary: true,
+                plan_type: Some("Pro".to_string()),
+                primary: Some(LlmGatewayRateLimitWindowView {
+                    used_percent: 38.0,
+                    remaining_percent: 62.0,
+                    window_duration_mins: Some(300),
+                    resets_at: Some(0),
+                }),
+                secondary: Some(LlmGatewayRateLimitWindowView {
+                    used_percent: 61.0,
+                    remaining_percent: 39.0,
+                    window_duration_mins: Some(10080),
+                    resets_at: Some(0),
+                }),
+                credits: Some(LlmGatewayCreditsView {
+                    has_credits: true,
+                    unlimited: false,
+                    balance: Some("24".to_string()),
+                }),
+            }],
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/status?_ts={}", API_BASE, Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch the current admin runtime configuration for the gateway cache.
+pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(LlmGatewayRuntimeConfig {
+            auth_cache_ttl_seconds: 60,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/config", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Persist a new admin-selected auth cache TTL for gateway key validation.
+pub async fn update_admin_llm_gateway_config(
+    auth_cache_ttl_seconds: u64,
+) -> Result<LlmGatewayRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(LlmGatewayRuntimeConfig {
+            auth_cache_ttl_seconds,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/config", admin_base());
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "auth_cache_ttl_seconds": auth_cache_ttl_seconds }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch the full admin key inventory, including secrets and current counters.
+pub async fn fetch_admin_llm_gateway_keys() -> Result<AdminLlmGatewayKeysResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayKeysResponse {
+            keys: vec![],
+            auth_cache_ttl_seconds: 60,
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/keys", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Create a new gateway key that can later be exposed on the public page.
+pub async fn create_admin_llm_gateway_key(
+    name: &str,
+    quota_billable_limit: u64,
+    public_visible: bool,
+) -> Result<AdminLlmGatewayKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayKeyView {
+            id: "mock".to_string(),
+            name: name.to_string(),
+            secret: "sfk_mock".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            public_visible,
+            quota_billable_limit,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            remaining_billable: quota_billable_limit as i64,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/keys", admin_base());
+        let response = api_post(&url)
+            .json(&serde_json::json!({
+                "name": name,
+                "quota_billable_limit": quota_billable_limit,
+                "public_visible": public_visible
+            }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Patch editable fields on a gateway key from the admin UI.
+pub async fn patch_admin_llm_gateway_key(
+    key_id: &str,
+    name: Option<&str>,
+    status: Option<&str>,
+    public_visible: Option<bool>,
+    quota_billable_limit: Option<u64>,
+) -> Result<AdminLlmGatewayKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (key_id, name, status, public_visible, quota_billable_limit);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/llm-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let mut body = serde_json::Map::new();
+        if let Some(name) = name.map(str::trim).filter(|value| !value.is_empty()) {
+            body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+        }
+        if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+            body.insert("status".to_string(), serde_json::Value::String(status.to_string()));
+        }
+        if let Some(public_visible) = public_visible {
+            body.insert("public_visible".to_string(), serde_json::Value::Bool(public_visible));
+        }
+        if let Some(quota_billable_limit) = quota_billable_limit {
+            body.insert(
+                "quota_billable_limit".to_string(),
+                serde_json::Value::Number(quota_billable_limit.into()),
+            );
+        }
+        let response = api_patch(&url)
+            .json(&serde_json::Value::Object(body))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Delete a gateway key from the admin UI.
+pub async fn delete_admin_llm_gateway_key(key_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = key_id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/llm-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+/// Fetch a paginated slice of admin usage events with an optional key filter.
+pub async fn fetch_admin_llm_gateway_usage_events(
+    query: &AdminLlmGatewayUsageEventsQuery,
+) -> Result<AdminLlmGatewayUsageEventsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayUsageEventsResponse {
+            total: 0,
+            offset: query.offset.unwrap_or(0),
+            limit: query.limit.unwrap_or(50),
+            has_more: false,
+            events: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/llm-gateway/usage", admin_base());
+        let mut params = Vec::new();
+        if let Some(key_id) = query
+            .key_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("key_id={}", urlencoding::encode(key_id)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }

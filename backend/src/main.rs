@@ -4,6 +4,7 @@ mod comment_worker;
 mod email;
 mod geoip;
 mod handlers;
+mod llm_gateway;
 mod memory_profiler;
 mod music_wish_worker;
 mod request_context;

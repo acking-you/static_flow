@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderValue, Method},
     middleware,
     response::{Html, IntoResponse},
-    routing::{get, patch, post},
+    routing::{any, get, patch, post},
     Router,
 };
 use tower_http::{
@@ -11,10 +11,13 @@ use tower_http::{
     services::ServeDir,
 };
 
-use crate::{behavior_analytics, handlers, request_context, seo, state::AppState};
+use crate::{behavior_analytics, handlers, llm_gateway, request_context, seo, state::AppState};
 
+/// Build the full application router, including public APIs, admin APIs, and
+/// SPA fallbacks.
 pub fn create_router(state: AppState) -> Router {
     let behavior_state = state.clone();
+    let llm_gateway_state = state.clone();
     let allow_origin_env = std::env::var("ALLOWED_ORIGINS").ok();
     let allowed_origins = parse_allowed_origins(allow_origin_env.as_deref());
 
@@ -49,11 +52,22 @@ pub fn create_router(state: AppState) -> Router {
         },
     };
 
-    // Define routes
-    // 1) API + admin routes (highest priority)
+    // Keep the LLM gateway proxy behind a dedicated middleware so request
+    // diagnostics can be captured once and reused when usage is persisted.
+    let llm_gateway_router = Router::new()
+        .route("/api/llm-gateway/v1/*path", any(llm_gateway::proxy_gateway_request))
+        .route_layer(middleware::from_fn_with_state(
+            llm_gateway_state,
+            llm_gateway::capture_gateway_event_context_middleware,
+        ));
+
+    // API and admin routes have the highest priority so they cannot be
+    // shadowed by the SPA history fallback below.
     let api_router = Router::new()
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
+        .route("/api/llm-gateway/access", get(llm_gateway::get_public_access))
+        .route("/api/llm-gateway/status", get(llm_gateway::get_public_rate_limit_status))
         .route("/api/articles/:id/raw/:lang", get(handlers::get_article_raw_markdown))
         .route("/interactive-pages/:page_id", get(handlers::get_interactive_page_entry))
         .route(
@@ -114,10 +128,25 @@ pub fn create_router(state: AppState) -> Router {
             "/admin/compaction-config",
             get(handlers::get_compaction_runtime_config).post(handlers::update_compaction_runtime_config),
         )
+        .route(
+            "/admin/llm-gateway/config",
+            get(llm_gateway::get_admin_runtime_config)
+                .post(llm_gateway::update_admin_runtime_config),
+        )
+        .route(
+            "/admin/llm-gateway/keys",
+            get(llm_gateway::list_admin_keys).post(llm_gateway::create_admin_key),
+        )
+        .route(
+            "/admin/llm-gateway/keys/:key_id",
+            patch(llm_gateway::patch_admin_key).delete(llm_gateway::delete_admin_key),
+        )
+        .route("/admin/llm-gateway/usage", get(llm_gateway::list_admin_usage_events))
         .route("/admin/api-behavior/overview", get(handlers::admin_api_behavior_overview))
         .route("/admin/api-behavior/events", get(handlers::admin_list_api_behavior_events))
         .route("/admin/api-behavior/cleanup", post(handlers::admin_cleanup_api_behavior))
         .route("/admin/api-behavior/compact", post(handlers::admin_compact_api_behavior))
+        .merge(llm_gateway_router)
         .route("/admin/geoip/status", get(handlers::get_geoip_status))
         .route(
             "/admin/runtime/memory/overview",

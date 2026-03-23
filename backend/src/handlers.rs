@@ -3330,7 +3330,8 @@ async fn enforce_comment_submit_rate_limit(
     Ok(())
 }
 
-fn ensure_admin_access(
+/// Enforce admin access rules using the configured token and local-only policy.
+pub(crate) fn ensure_admin_access(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {

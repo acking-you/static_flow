@@ -199,6 +199,7 @@ pub fn header() -> Html {
         (t::NAV_TAGS, Route::Tags, "fa-tag"),
         (t::NAV_CATEGORIES, Route::Categories, "fa-folder-open"),
         (t::NAV_MUSIC, Route::MediaAudio, "fa-music"),
+        (t::NAV_LLM, Route::LlmAccess, "fa-key"),
     ];
 
     let mobile_search_input = on_search_input.clone();
