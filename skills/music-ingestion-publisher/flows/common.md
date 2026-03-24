@@ -12,7 +12,10 @@ struct layout, causing `lance-encoding decoder.rs` errors on read.
 
 **ALWAYS** use `sf-cli write-music` for ingestion.
 
-Binary location: `./bin/sf-cli` (preferred) → `./target/release/sf-cli` → PATH.
+Binary location:
+- Worker payloads: use `sf_cli_path` exactly.
+- Manual runs: rebuild `cargo build -p sf-cli --release`, then use `./target/release/sf-cli`.
+- Do not replace that with legacy `./bin/sf-cli` or stale `target/*/sf-cli` snapshots for blob v2 tables.
 
 ## Verification (Post-Write)
 

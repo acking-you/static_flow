@@ -358,6 +358,10 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
     for tag in &tags {
         push_taxonomy_record(&mut taxonomies, "tag", tag, None, now_ms);
     }
+    {
+        let mut seen = std::collections::HashSet::new();
+        taxonomies.retain(|r| seen.insert(r.id.clone()));
+    }
     upsert_taxonomies(&taxonomies_table, &taxonomies).await?;
 
     if let Err(err) = ensure_vector_index(&table, "vector_en").await {

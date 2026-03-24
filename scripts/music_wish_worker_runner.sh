@@ -58,6 +58,11 @@ Notes:
 - Backend judges success by result file content, not stdout.
 - Keep stdout/stderr streaming for execution trace.
 - Do not install/copy/remove skill files at runtime.
+- The payload JSON includes `sf_cli_path`. Use that exact binary for every
+  `sf-cli` command in this run.
+- That path is rebuilt by the backend when the current checkout is newer than
+  the last `sf-cli` build. Do not replace it with `./bin/sf-cli` or any stale
+  snapshot under `target/`.
 - Before starting, read any of these if present in workdir: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md
 EOF
 

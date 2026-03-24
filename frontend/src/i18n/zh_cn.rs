@@ -75,31 +75,28 @@ pub mod home {
     pub const AVATAR_LINK_SR: &str = "前往文章列表";
 
     pub const CMD_SHOW_MOTTO: &str = "echo $MOTTO";
-    pub const MOTTO: &str =
-        "El Psy Kongroo | 世界线收束中... | Rustacean | Database 练习生，痴迷一切底层黑魔法";
+    pub const MOTTO: &str = "El Psy Kongroo | Rustacean | 痴迷底层黑魔法的 Database 练习生";
 
     pub const CMD_SHOW_README: &str = "cat ./README.md";
-    pub const INTRO: &str =
-        "本地优先的个人内容平台：文章、音乐、视频（规划中）统一托管于 LanceDB，支持全文 / 语义 / \
-         混合检索；结合 AI + Skill 工作流实现内容创作、分类、评论自动回复与许愿点歌；站长大大的 \
-         GPT Pro 经常用不完，所以也会按余量放出一批免费 Key，给大家接 Codex 和随手养龙虾🦞 (*^▽^*)";
+    pub const INTRO: &str = "本地优先的全栈 Rust 内容平台 — 文章 · 音乐 · 图片统一托管于 \
+                             LanceDB，支持全文 / 语义 / 混合检索，结合 AI Skill \
+                             工作流驱动内容创作与自动化运维";
 
     pub const CMD_SHOW_LLM_ACCESS: &str = "cat ./llm-access.md";
-    pub const LLM_ACCESS_HINT: &str = "站长大大 GPT Pro 经常用不完，所以会按余量放出一批免费的 \
-                                       中转 API key，能白嫖就别浪费啦 (๑•̀ㅂ•́)و✧ 想接 Codex 或随手 \
-                                       养龙虾🦞，点进去复制配置和 key 就能直接开用";
-    pub const BTN_LLM_ACCESS: &str = "进入 LLM Access";
+    pub const LLM_ACCESS_HINT: &str =
+        "免费中转 API Key 按余量放出，接 Codex 写代码、养龙虾🦞 两不误 (๑•̀ㅂ•́)و✧ 复制配置直接开用~";
+    pub const BTN_LLM_ACCESS: &str = "🦞 获取 Key";
 
     pub const CMD_SHOW_NAVIGATION: &str = "ls -l ./navigation/";
-    pub const BTN_VIEW_ARTICLES: &str = "查看文章";
-    pub const BTN_ARCHIVE: &str = "文章归档";
-    pub const BTN_SEARCH_STATICFLOW: &str = "Search StaticFlow";
+    pub const BTN_VIEW_ARTICLES: &str = "文章";
+    pub const BTN_ARCHIVE: &str = "归档";
+    pub const BTN_SEARCH_STATICFLOW: &str = "搜索";
 
     pub const CMD_SHOW_SOCIAL: &str = "cat ./social_links.json";
     pub const CMD_SHOW_MEDIA_HUB: &str = "ls -l ./media-hub/";
-    pub const BTN_MEDIA_VIDEO: &str = "视频中心";
-    pub const BTN_MEDIA_AUDIO: &str = "音频中心";
-    pub const BTN_MEDIA_IMAGE: &str = "图片库";
+    pub const BTN_MEDIA_VIDEO: &str = "视频";
+    pub const BTN_MEDIA_AUDIO: &str = "音频";
+    pub const BTN_MEDIA_IMAGE: &str = "图片";
     pub const CMD_SHOW_WRAPPED: &str = "./scripts/github-wrapped.sh --list-years";
     pub const CMD_SHOW_STATS: &str = "cat /proc/system/stats";
 

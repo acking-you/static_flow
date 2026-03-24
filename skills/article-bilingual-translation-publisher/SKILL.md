@@ -49,17 +49,18 @@ If only `id` is provided, read source markdown from LanceDB `articles.content`.
 Reuse the same query path as `staticflow-cli-publisher` only when source is not already in context.
 
 1. Resolve CLI binary in this order:
-   - `./bin/sf-cli`
    - `./target/release/sf-cli`
    - `./target/debug/sf-cli`
    - `sf-cli` from `PATH`
-2. Verify CLI availability:
+2. If the checkout is newer than the chosen binary, rebuild before use.
+3. Do not prefer legacy `./bin/sf-cli` snapshots for storage-format-sensitive writes.
+4. Verify CLI availability:
    - `<cli> --help`
-3. Preferred query path (API-style):
+5. Preferred query path (API-style):
    - `<cli> api --db-path <db_path> get-article <article_id>`
-4. Fallback query path (DB-style projection):
+6. Fallback query path (DB-style projection):
    - `<cli> db --db-path <db_path> query-rows articles --where "id='<article_id>'" --columns id,title,date,content,content_en,detailed_summary --limit 1 --format vertical`
-5. Source-of-truth field for translation input:
+7. Source-of-truth field for translation input:
    - `articles.content`
 
 ## Hard Constraints

@@ -9,13 +9,14 @@ Symptom:
 
 Recovery:
 1. Resolve executable in fallback order:
-   - `./bin/sf-cli`
    - `./target/release/sf-cli`
    - `./target/debug/sf-cli`
    - `../target/release/sf-cli`
    - `sf-cli` from `PATH`
 2. If missing, build:
    - `cargo build -p sf-cli --release`
+3. If the checkout is newer than the chosen binary, rebuild before use.
+4. Do not prefer legacy `./bin/sf-cli` snapshots for storage-format-sensitive writes.
 
 ## 2) Wrong subcommand under `db`
 

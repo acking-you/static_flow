@@ -359,12 +359,12 @@ pub fn home_page() -> Html {
                                     <p class={classes!("m-0", "text-sm", "leading-7", "text-[var(--muted)]")}>
                                         { t::LLM_ACCESS_HINT }
                                     </p>
-                                    <div class={classes!("mt-4", "flex", "flex-wrap", "gap-3")}>
+                                    <div class={classes!("mt-3", "flex", "flex-wrap", "gap-2")}>
                                         <Link<Route>
                                             to={Route::LlmAccess}
-                                            classes={classes!("btn-fluent-primary", "!px-6", "!py-2.5", "!text-sm")}
+                                            classes={classes!("btn-terminal", "btn-terminal-accent")}
                                         >
-                                            <i class="fas fa-key mr-2"></i>
+                                            <i class="fas fa-key"></i>
                                             { t::BTN_LLM_ACCESS }
                                         </Link<Route>>
                                     </div>
@@ -378,30 +378,37 @@ pub fn home_page() -> Html {
                                 <div class={classes!(
                                     "flex",
                                     "flex-wrap",
-                                    "gap-3",
+                                    "gap-2",
                                     "mt-4",
                                     "ml-8"
                                 )}>
                                     <Link<Route>
                                         to={Route::LatestArticles}
-                                        classes={classes!("btn-fluent-primary", "!px-6", "!py-2.5", "!text-sm")}
+                                        classes={classes!("btn-terminal", "btn-terminal-primary")}
                                     >
-                                        <i class="fas fa-arrow-right mr-2"></i>
+                                        <i class="fas fa-arrow-right"></i>
                                         { t::BTN_VIEW_ARTICLES }
                                     </Link<Route>>
                                     <Link<Route>
                                         to={Route::Posts}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                        classes={classes!("btn-terminal")}
                                     >
-                                        <i class="fas fa-archive mr-2"></i>
+                                        <i class="fas fa-archive"></i>
                                         { t::BTN_ARCHIVE }
                                     </Link<Route>>
                                     <Link<Route>
-                                        to={Route::Admin}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                        to={Route::MediaAudio}
+                                        classes={classes!("btn-terminal", "btn-terminal-accent")}
                                     >
-                                        <i class="fas fa-sliders mr-2"></i>
-                                        { "Admin Console" }
+                                        <i class="fas fa-headphones"></i>
+                                        { t::BTN_MEDIA_AUDIO }
+                                    </Link<Route>>
+                                    <Link<Route>
+                                        to={Route::Admin}
+                                        classes={classes!("btn-terminal")}
+                                    >
+                                        <i class="fas fa-sliders"></i>
+                                        { "Admin" }
                                     </Link<Route>>
                                     <a
                                         href={staticflow_search_href.clone()}
@@ -411,7 +418,7 @@ pub fn home_page() -> Html {
                                             "no-underline"
                                         )}
                                     >
-                                        <i class="fas fa-search mr-2"></i>
+                                        <i class="fas fa-search"></i>
                                         { t::BTN_SEARCH_STATICFLOW }
                                     </a>
                                 </div>
@@ -421,26 +428,26 @@ pub fn home_page() -> Html {
                                     <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                                     <span class="terminal-content">{ t::CMD_SHOW_MEDIA_HUB }</span>
                                 </div>
-                                <div class={classes!("flex", "flex-wrap", "gap-3", "mt-3", "ml-8")}>
+                                <div class={classes!("flex", "flex-wrap", "gap-2", "mt-3", "ml-8")}>
                                     <Link<Route>
                                         to={Route::MediaVideo}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                        classes={classes!("btn-terminal")}
                                     >
-                                        <i class="fas fa-video mr-2"></i>
+                                        <i class="fas fa-video"></i>
                                         { t::BTN_MEDIA_VIDEO }
                                     </Link<Route>>
                                     <Link<Route>
                                         to={Route::MediaAudio}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                        classes={classes!("btn-terminal")}
                                     >
-                                        <i class="fas fa-headphones mr-2"></i>
+                                        <i class="fas fa-headphones"></i>
                                         { t::BTN_MEDIA_AUDIO }
                                     </Link<Route>>
                                     <Link<Route>
                                         to={Route::MediaImage}
-                                        classes={classes!("btn-fluent-secondary", "!px-6", "!py-2.5", "!text-sm")}
+                                        classes={classes!("btn-terminal")}
                                     >
-                                        <i class="fas fa-image mr-2"></i>
+                                        <i class="fas fa-image"></i>
                                         { t::BTN_MEDIA_IMAGE }
                                     </Link<Route>>
                                 </div>
@@ -508,52 +515,43 @@ pub fn home_page() -> Html {
                                 <div class={classes!(
                                     "mt-4",
                                     "grid",
-                                    "gap-4",
-                                    "grid-cols-1",
+                                    "gap-3",
+                                    "grid-cols-2",
+                                    "sm:grid-cols-3",
+                                    "lg:grid-cols-5",
                                     "w-full"
                                 )}>
                                     { for stats.into_iter().map(|(icon, value, label, route)| {
                                         let panel_content = html! {
-                                            <div class="system-panel">
-                                                <div class={classes!("flex", "items-center", "justify-between", "gap-5", "flex-wrap", "sm:flex-nowrap")}>
-                                                    <div class={classes!("flex", "items-center", "gap-4", "min-w-0")}>
-                                                        <div class={classes!(
-                                                            "inline-flex",
-                                                            "h-11",
-                                                            "w-11",
-                                                            "shrink-0",
-                                                            "items-center",
-                                                            "justify-center",
-                                                            "rounded-xl",
-                                                            "border",
-                                                            "border-[var(--border)]",
-                                                            "bg-[var(--surface-alt)]",
-                                                            "text-[var(--primary)]"
-                                                        )}>
-                                                            <Icon name={icon} size={20} />
-                                                        </div>
-                                                        <div class={classes!("min-w-0")}>
-                                                            <div class={classes!("text-[0.72rem]", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ label.clone() }</div>
-                                                            <div class={classes!("mt-1", "text-sm", "text-[var(--muted)]")}>{ "点击查看对应分区与内容集合" }</div>
-                                                        </div>
-                                                    </div>
-                                                    <div class={classes!("text-right", "sm:ml-auto", "min-w-[5.5rem]")}>
-                                                        <div class={classes!("text-[2rem]", "font-bold", "leading-none", "text-[var(--primary)]")}>
-                                                            if *stats_loaded {
-                                                                { value.clone() }
-                                                            } else {
-                                                                <div class="h-8 w-12 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
-                                                            }
-                                                        </div>
-                                                        <div class={classes!("mt-1", "text-sm", "text-[var(--text)]")}>{ t::SYSTEM_UNIT_TOTAL }</div>
-                                                    </div>
+                                            <div class="system-panel-compact">
+                                                <div class={classes!(
+                                                    "inline-flex",
+                                                    "h-10",
+                                                    "w-10",
+                                                    "items-center",
+                                                    "justify-center",
+                                                    "rounded-lg",
+                                                    "border",
+                                                    "border-[var(--border)]",
+                                                    "bg-[var(--surface-alt)]",
+                                                    "text-[var(--primary)]"
+                                                )}>
+                                                    <Icon name={icon} size={20} />
                                                 </div>
+                                                <div class={classes!("text-[1.75rem]", "font-bold", "leading-none", "text-[var(--primary)]")}>
+                                                    if *stats_loaded {
+                                                        { value.clone() }
+                                                    } else {
+                                                        <div class="h-7 w-10 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
+                                                    }
+                                                </div>
+                                                <div class={classes!("text-[0.72rem]", "uppercase", "tracking-[0.15em]", "text-[var(--muted)]")}>{ label.clone() }</div>
                                             </div>
                                         };
 
                                         if let Some(r) = route {
                                             html! {
-                                                <Link<Route> to={r}>
+                                                <Link<Route> to={r} classes={classes!("no-underline")}>
                                                     { panel_content }
                                                 </Link<Route>>
                                             }

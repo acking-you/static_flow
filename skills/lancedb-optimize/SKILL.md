@@ -28,14 +28,15 @@ All paths are relative to `DB_ROOT` (default: `/mnt/wsl/data4tb/static-flow-data
 
 ## Preconditions
 1. Resolve CLI in this order:
-   - `./bin/sf-cli`
    - `./target/release/sf-cli`
    - `./target/debug/sf-cli`
    - `../target/release/sf-cli`
    - `sf-cli` from `PATH`
 2. Verify CLI works: `<cli> --help`
    - Build if needed: `cargo build -p sf-cli --release`
-3. Verify DB paths exist.
+3. If the checkout is newer than the chosen binary, rebuild before use.
+4. Do not prefer legacy `./bin/sf-cli` snapshots for storage-format-sensitive writes.
+5. Verify DB paths exist.
 
 ## Execution Workflow
 

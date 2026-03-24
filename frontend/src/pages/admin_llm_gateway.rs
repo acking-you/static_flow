@@ -1,3 +1,4 @@
+use gloo_timers::callback::Timeout;
 use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use web_sys::{window, HtmlElement, HtmlInputElement, HtmlSelectElement};
@@ -69,8 +70,9 @@ fn key_status_badge(status: &str) -> Classes {
 
 // Keep copy affordances visually small so dense diagnostics tables stay
 // readable.
-fn copy_icon_button(text: &str) -> Html {
+fn copy_icon_button(text: &str, on_copy: &Callback<(String, String)>) -> Html {
     let value = text.to_string();
+    let on_copy = on_copy.clone();
     html! {
         <button
             type="button"
@@ -91,7 +93,7 @@ fn copy_icon_button(text: &str) -> Html {
             )}
             title="复制"
             aria-label="复制"
-            onclick={Callback::from(move |_| copy_text(&value))}
+            onclick={Callback::from(move |_| on_copy.emit(("".to_string(), value.clone())))}
         >
             <i class={classes!("fas", "fa-copy", "text-xs")} />
         </button>
@@ -111,6 +113,7 @@ struct KeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
     on_changed: Callback<()>,
     on_refresh: Callback<(String, String)>,
+    on_copy: Callback<(String, String)>,
     refreshing: bool,
 }
 
@@ -223,40 +226,23 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
 
     html! {
         <article class={classes!(
-            "rounded-[1.35rem]",
+            "rounded-xl",
             "border",
             "border-[var(--border)]",
             "bg-[var(--surface)]",
-            "p-5",
-            "shadow-[0_18px_42px_rgba(15,23,42,0.10)]"
+            "p-4"
         )}>
-            <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
-                <div>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                <div class={classes!("flex", "items-center", "gap-2")}>
                     <div class={key_status_badge(&key_item.status)}>{ key_item.status.clone() }</div>
-                    <h3 class={classes!("mt-3", "mb-1", "text-xl", "font-bold", "tracking-[-0.03em]")}>{ key_item.name.clone() }</h3>
-                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ format!("创建于 {}", format_ms(key_item.created_at)) }</p>
+                    <h3 class={classes!("m-0", "text-base", "font-bold")}>{ key_item.name.clone() }</h3>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format_ms(key_item.created_at) }</span>
                 </div>
-                <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                <div class={classes!("flex", "gap-2")}>
                     <button
-                        class={classes!(
-                            "inline-flex",
-                            "h-10",
-                            "w-10",
-                            "items-center",
-                            "justify-center",
-                            "rounded-xl",
-                            "border",
-                            "border-[var(--border)]",
-                            "bg-[var(--surface)]",
-                            "text-[var(--muted)]",
-                            "transition-colors",
-                            "hover:text-[var(--primary)]",
-                            "hover:bg-[var(--surface-alt)]",
-                            "disabled:opacity-50",
-                            "disabled:cursor-not-allowed"
-                        )}
-                        title="刷新实时额度"
-                        aria-label="刷新实时额度"
+                        class={classes!("btn-terminal")}
+                        title="刷新额度"
+                        aria-label="刷新额度"
                         onclick={{
                             let on_refresh = props.on_refresh.clone();
                             let key_id = key_item.id.clone();
@@ -266,33 +252,33 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                         disabled={props.refreshing}
                     >
                         <i class={classes!("fas", if props.refreshing { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
-                        <span class={classes!("sr-only")}>{ "刷新实时额度" }</span>
                     </button>
                     <button
-                        class={classes!("btn-fluent-secondary")}
+                        class={classes!("btn-terminal")}
                         onclick={{
+                            let on_copy = props.on_copy.clone();
                             let secret = key_item.secret.clone();
-                            Callback::from(move |_| copy_text(&secret))
+                            Callback::from(move |_| on_copy.emit(("Key".to_string(), secret.clone())))
                         }}
                     >
-                        { "复制 Key" }
+                        { "复制" }
                     </button>
-                    <button class={classes!("btn-fluent-secondary", "text-red-600", "dark:text-red-300")} onclick={on_delete} disabled={*saving}>
+                    <button class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")} onclick={on_delete} disabled={*saving}>
                         { "删除" }
                     </button>
                 </div>
             </div>
 
-            <div class={classes!("mt-4", "rounded-xl", "bg-slate-950", "px-4", "py-3", "text-sm", "text-emerald-200")}>
+            <div class={classes!("mt-3", "rounded-lg", "bg-slate-950", "px-3", "py-2", "text-xs", "text-emerald-200")}>
                 <code class={classes!("break-all")}>{ key_item.secret.clone() }</code>
             </div>
 
-            <div class={classes!("mt-5", "grid", "gap-4", "xl:grid-cols-2")}>
+            <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-2")}>
                 <label class={classes!("text-sm")}>
                     <span class={classes!("text-[var(--muted)]")}>{ "名称" }</span>
                     <input
                         type="text"
-                        class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                         value={(*name).clone()}
                         oninput={{
                             let name = name.clone();
@@ -305,10 +291,10 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     />
                 </label>
                 <label class={classes!("text-sm")}>
-                    <span class={classes!("text-[var(--muted)]")}>{ "主额度上限" }</span>
+                    <span class={classes!("text-[var(--muted)]")}>{ "额度上限" }</span>
                     <input
                         type="number"
-                        class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                         value={(*quota).clone()}
                         oninput={{
                             let quota = quota.clone();
@@ -322,8 +308,8 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 </label>
             </div>
 
-            <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]")}>
-                <label class={classes!("flex", "items-center", "gap-3", "rounded-xl", "border", "border-[var(--border)]", "px-3", "py-3", "text-sm")}>
+            <div class={classes!("mt-3", "flex", "items-center", "gap-3", "flex-wrap")}>
+                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
                     <input
                         type="checkbox"
                         checked={*public_visible}
@@ -336,54 +322,37 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                             })
                         }}
                     />
-                    <span>{ "显示到公共接入页" }</span>
+                    <span>{ "公开" }</span>
                 </label>
-                <label class={classes!("text-sm")}>
-                    <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
-                    <select
-                        key={format!("{}-status-{}", key_item.id, (*status).clone())}
-                        class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
-                        onchange={{
-                            let status = status.clone();
-                            Callback::from(move |event: Event| {
-                                if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                                    status.set(target.value());
-                                }
-                            })
-                        }}
-                    >
-                        <option value="active" selected={*status == "active"}>{ "active" }</option>
-                        <option value="disabled" selected={*status == "disabled"}>{ "disabled" }</option>
-                    </select>
-                </label>
-                <div class={classes!("flex", "items-end")}>
-                    <button class={classes!("btn-fluent-primary", "w-full")} onclick={on_save} disabled={*saving}>
-                        { if *saving { "保存中..." } else { "保存修改" } }
-                    </button>
-                </div>
+                <select
+                    key={format!("{}-status-{}", key_item.id, (*status).clone())}
+                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                    onchange={{
+                        let status = status.clone();
+                        Callback::from(move |event: Event| {
+                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                status.set(target.value());
+                            }
+                        })
+                    }}
+                >
+                    <option value="active" selected={*status == "active"}>{ "active" }</option>
+                    <option value="disabled" selected={*status == "disabled"}>{ "disabled" }</option>
+                </select>
+                <button class={classes!("btn-terminal", "btn-terminal-primary", "ml-auto")} onclick={on_save} disabled={*saving}>
+                    { if *saving { "保存中..." } else { "保存" } }
+                </button>
             </div>
 
-            <div class={classes!("mt-5", "grid", "gap-3", "sm:grid-cols-4")}>
-                <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "剩余" }</div>
-                    <div class={classes!("mt-1", "text-xl", "font-bold")}>{ key_item.remaining_billable }</div>
-                </div>
-                <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "未缓存输入" }</div>
-                    <div class={classes!("mt-1", "text-xl", "font-bold")}>{ key_item.usage_input_uncached_tokens }</div>
-                </div>
-                <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "缓存命中输入" }</div>
-                    <div class={classes!("mt-1", "text-xl", "font-bold")}>{ key_item.usage_input_cached_tokens }</div>
-                </div>
-                <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "输出" }</div>
-                    <div class={classes!("mt-1", "text-xl", "font-bold")}>{ key_item.usage_output_tokens }</div>
-                </div>
+            <div class={classes!("mt-3", "flex", "items-center", "gap-4", "text-xs", "text-[var(--muted)]")}>
+                <span>{ format!("剩余 {}", key_item.remaining_billable) }</span>
+                <span>{ format!("输入 {}", key_item.usage_input_uncached_tokens) }</span>
+                <span>{ format!("缓存 {}", key_item.usage_input_cached_tokens) }</span>
+                <span>{ format!("输出 {}", key_item.usage_output_tokens) }</span>
             </div>
 
             if let Some(feedback) = (*feedback).clone() {
-                <p class={classes!("mt-4", "m-0", "text-sm", "text-[var(--muted)]")}>{ feedback }</p>
+                <p class={classes!("mt-2", "m-0", "text-xs", "text-[var(--muted)]")}>{ feedback }</p>
             }
         </article>
     }
@@ -411,6 +380,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let create_public = use_state(|| true);
     let creating = use_state(|| false);
     let refreshing_key_id = use_state(|| None::<String>);
+    let toast = use_state(|| None::<(String, bool)>);
+    let toast_timeout = use_mut_ref(|| None::<Timeout>);
 
     // Usage events are fetched independently so paging and key filters do not
     // need to re-fetch the rest of the admin page chrome.
@@ -692,93 +663,89 @@ pub fn admin_llm_gateway_page() -> Html {
 
     let usage_total_pages = (*usage_total).max(1).div_ceil(USAGE_PAGE_SIZE);
 
-    let total_remaining: i64 = keys.iter().map(|item| item.remaining_billable).sum();
-    let total_billable_used: u64 = keys
-        .iter()
-        .map(|item| {
-            ((item.quota_billable_limit as i128) - (item.remaining_billable as i128)).max(0) as u64
+    let on_copy = {
+        let toast = toast.clone();
+        let toast_timeout = toast_timeout.clone();
+        Callback::from(move |(label, value): (String, String)| {
+            copy_text(&value);
+            toast.set(Some((format!("已复制{}", label), false)));
+            toast_timeout.borrow_mut().take();
+            let toast = toast.clone();
+            let clear_handle = toast_timeout.clone();
+            let timeout = Timeout::new(1800, move || {
+                toast.set(None);
+                clear_handle.borrow_mut().take();
+            });
+            *toast_timeout.borrow_mut() = Some(timeout);
         })
-        .sum();
+    };
+
+    let total_remaining: i64 = keys.iter().map(|item| item.remaining_billable).sum();
     let public_visible_count = keys.iter().filter(|item| item.public_visible).count();
     let active_key_count = keys.iter().filter(|item| item.status == "active").count();
 
     html! {
         <main class={classes!(
             "min-h-screen",
-            "bg-[linear-gradient(180deg,color-mix(in_srgb,var(--bg)_92%,#0f172a_8%),var(--bg))]",
+            "bg-[var(--bg)]",
             "px-4",
             "py-8",
             "lg:px-6",
             "lg:py-10"
         )}>
-            <div class={classes!("mx-auto", "max-w-[96rem]", "space-y-6")}>
+            <div class={classes!("mx-auto", "max-w-6xl", "space-y-4")}>
                 <section class={classes!(
-                    "rounded-[1.6rem]",
+                    "rounded-xl",
                     "border",
                     "border-[var(--border)]",
                     "bg-[var(--surface)]",
-                    "p-6",
-                    "shadow-[0_28px_72px_rgba(15,23,42,0.12)]"
+                    "p-5"
                 )}>
                     <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
-                        <div class={classes!("max-w-3xl")}>
-                            <p class={classes!("m-0", "text-xs", "font-semibold", "uppercase", "tracking-[0.24em]", "text-sky-600", "dark:text-sky-300")}>
-                                { "Admin Only" }
-                            </p>
-                            <h1 class={classes!("mt-4", "text-4xl", "font-black", "tracking-[-0.04em]")}>
-                                { "LLM Gateway Control Room" }
-                            </h1>
-                            <p class={classes!("mt-4", "m-0", "max-w-2xl", "text-sm", "leading-7", "text-[var(--muted)]")}>
-                                { "这里集中管理面向外部用户暴露的 LLM API key、公开可见性、主额度和鉴权缓存 TTL。公共页始终只读，所有修改都在这里完成。" }
-                            </p>
-                        </div>
+                        <h1 class={classes!("m-0", "text-2xl", "font-bold")}>
+                            { "LLM Gateway Admin" }
+                        </h1>
                         <div class={classes!("flex", "gap-2", "flex-wrap")}>
-                            <Link<Route> to={Route::Admin} classes={classes!("btn-fluent-secondary")}>{ "返回 Admin 首页" }</Link<Route>>
-                            <Link<Route> to={Route::LlmAccess} classes={classes!("btn-fluent-primary")}>{ "查看公共接入页" }</Link<Route>>
+                            <Link<Route> to={Route::Admin} classes={classes!("btn-terminal")}>{ "Admin 首页" }</Link<Route>>
+                            <Link<Route> to={Route::LlmAccess} classes={classes!("btn-terminal", "btn-terminal-primary")}>{ "公共页" }</Link<Route>>
                         </div>
                     </div>
 
                     if let Some(err) = (*load_error).clone() {
-                        <div class={classes!("mt-4", "rounded-xl", "border", "border-red-400/35", "bg-red-500/8", "px-4", "py-3", "text-sm", "text-red-700", "dark:text-red-200")}>
+                        <div class={classes!("mt-4", "rounded-lg", "border", "border-red-400/35", "bg-red-500/8", "px-4", "py-3", "text-sm", "text-red-700", "dark:text-red-200")}>
                             { err }
                         </div>
                     }
 
-                    <div class={classes!("mt-6", "grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-4")}>
-                        <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "可管理 Key" }</div>
-                            <div class={classes!("mt-2", "text-3xl", "font-black", "tracking-[-0.04em]")}>{ keys.len() }</div>
+                    <div class={classes!("mt-4", "grid", "gap-3", "grid-cols-2", "xl:grid-cols-4")}>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key 总数" }</div>
+                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ keys.len() }</div>
                         </div>
-                        <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "公开可见 Key" }</div>
-                            <div class={classes!("mt-2", "text-3xl", "font-black", "tracking-[-0.04em]")}>{ public_visible_count }</div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "公开" }</div>
+                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ public_visible_count }</div>
                         </div>
-                        <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Active Key" }</div>
-                            <div class={classes!("mt-2", "text-3xl", "font-black", "tracking-[-0.04em]")}>{ active_key_count }</div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Active" }</div>
+                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ active_key_count }</div>
                         </div>
-                        <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "总剩余额度" }</div>
-                            <div class={classes!("mt-2", "text-3xl", "font-black", "tracking-[-0.04em]")}>{ total_remaining }</div>
-                            <p class={classes!("m-0", "mt-2", "text-sm", "text-[var(--muted)]")}>{ format!("累计 billable 已用：{}（fast 按 2x 计费）", total_billable_used) }</p>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余额度" }</div>
+                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ total_remaining }</div>
                         </div>
                     </div>
                 </section>
 
-                <section class={classes!("grid", "gap-6", "xl:grid-cols-2")}>
-                    <section class={classes!("rounded-[1.4rem]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                            <div>
-                                <h2 class={classes!("m-0", "text-xl", "font-bold")}>{ "Runtime TTL" }</h2>
-                                <p class={classes!("mt-2", "m-0", "text-sm", "text-[var(--muted)]")}>{ "鉴权成功后会自动续期；默认 60 秒。" }</p>
-                            </div>
-                        </div>
-                        <div class={classes!("mt-4", "grid", "gap-4", "md:grid-cols-[minmax(0,1fr)_auto]")}>
+                <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
+                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Runtime TTL" }</h2>
+                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,1fr)_auto]")}>
                             <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "auth_cache_ttl_seconds" }</span>
                                 <input
                                     type="number"
-                                    class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                                     value={(*ttl_input).clone()}
                                     oninput={{
                                         let ttl_input = ttl_input.clone();
@@ -791,28 +758,27 @@ pub fn admin_llm_gateway_page() -> Html {
                                 />
                             </label>
                             <div class={classes!("flex", "items-end")}>
-                                <button class={classes!("btn-fluent-primary", "w-full", "md:w-auto")} onclick={on_save_ttl} disabled={*saving_ttl}>
-                                    { if *saving_ttl { "保存中..." } else { "保存 TTL" } }
+                                <button class={classes!("btn-terminal", "btn-terminal-primary", "w-full", "md:w-auto")} onclick={on_save_ttl} disabled={*saving_ttl}>
+                                    { if *saving_ttl { "保存中..." } else { "保存" } }
                                 </button>
                             </div>
                         </div>
                         if let Some(cfg) = (*config).clone() {
-                            <p class={classes!("mt-4", "m-0", "text-sm", "text-[var(--muted)]")}>
-                                { format!("当前后端生效 TTL：{} 秒", cfg.auth_cache_ttl_seconds) }
+                            <p class={classes!("mt-3", "m-0", "text-xs", "text-[var(--muted)]")}>
+                                { format!("当前生效：{} 秒", cfg.auth_cache_ttl_seconds) }
                             </p>
                         }
                     </section>
 
-                    <section class={classes!("rounded-[1.4rem]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <h2 class={classes!("m-0", "text-xl", "font-bold")}>{ "Create Key" }</h2>
-                        <p class={classes!("mt-2", "m-0", "text-sm", "text-[var(--muted)]")}>{ "新建一个对外可分发的 API key。" }</p>
-                        <div class={classes!("mt-5", "grid", "gap-4")}>
-                            <div class={classes!("grid", "gap-4", "md:grid-cols-2")}>
+                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Create Key" }</h2>
+                        <div class={classes!("mt-3", "grid", "gap-3")}>
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
                                 <label class={classes!("text-sm")}>
                                     <span class={classes!("text-[var(--muted)]")}>{ "名称" }</span>
                                     <input
                                         type="text"
-                                        class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
+                                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                                         value={(*create_name).clone()}
                                         oninput={{
                                             let create_name = create_name.clone();
@@ -828,7 +794,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                     <span class={classes!("text-[var(--muted)]")}>{ "主额度上限" }</span>
                                     <input
                                         type="number"
-                                        class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
+                                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                                         value={(*create_quota).clone()}
                                         oninput={{
                                             let create_quota = create_quota.clone();
@@ -842,7 +808,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </label>
                             </div>
                             <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                                <label class={classes!("flex", "items-center", "gap-3", "rounded-xl", "border", "border-[var(--border)]", "px-3", "py-3", "text-sm")}>
+                                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
                                     <input
                                         type="checkbox"
                                         checked={*create_public}
@@ -855,23 +821,20 @@ pub fn admin_llm_gateway_page() -> Html {
                                             })
                                         }}
                                     />
-                                    <span>{ "创建后直接展示到公共页" }</span>
+                                    <span>{ "公开" }</span>
                                 </label>
-                                <button class={classes!("btn-fluent-primary")} onclick={on_create} disabled={*creating}>
-                                    { if *creating { "创建中..." } else { "创建新 Key" } }
+                                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_create} disabled={*creating}>
+                                    { if *creating { "创建中..." } else { "创建" } }
                                 </button>
                             </div>
                         </div>
                     </section>
                 </section>
 
-                <section class={classes!("rounded-[1.4rem]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                         <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                            <div>
-                                <h2 class={classes!("m-0", "text-xl", "font-bold")}>{ "Key Inventory" }</h2>
-                                <p class={classes!("mt-2", "m-0", "text-sm", "text-[var(--muted)]")}>{ "修改名称、额度、公开状态与启停开关。" }</p>
-                            </div>
-                            <button class={classes!("btn-fluent-secondary")} onclick={{
+                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Key Inventory" }</h2>
+                            <button class={classes!("btn-terminal")} onclick={{
                                 let reload = reload.clone();
                                 Callback::from(move |_| reload.emit(()))
                             }}>
@@ -890,6 +853,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                         key_item={key_item.clone()}
                                         on_changed={reload.clone()}
                                         on_refresh={on_refresh_key.clone()}
+                                        on_copy={on_copy.clone()}
                                         refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
                                     />
                                 }) }
@@ -897,32 +861,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                 </section>
 
-                <section class={classes!("rounded-[1.4rem]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
-                        <div class={classes!("max-w-3xl")}>
-                            <h2 class={classes!("m-0", "text-xl", "font-bold")}>{ "Usage Event Ledger" }</h2>
-                            <p class={classes!("mt-2", "m-0", "text-sm", "leading-7", "text-[var(--muted)]")}>
-                                { "这里按最新事件倒序展示真实请求，支持按 Key 过滤、分页翻页，并且把 URL、IP 属地和完整 headers 都保留下来，方便直接排查 Codex 接入问题" }
-                            </p>
-                        </div>
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Usage Events" }</h2>
                         <button
-                            class={classes!(
-                                "inline-flex",
-                                "h-10",
-                                "w-10",
-                                "items-center",
-                                "justify-center",
-                                "rounded-xl",
-                                "border",
-                                "border-[var(--border)]",
-                                "bg-[var(--surface)]",
-                                "text-[var(--muted)]",
-                                "transition-colors",
-                                "hover:text-[var(--primary)]",
-                                "hover:bg-[var(--surface-alt)]",
-                                "disabled:opacity-50",
-                                "disabled:cursor-not-allowed"
-                            )}
+                            class={classes!("btn-terminal")}
                             title="刷新事件"
                             aria-label="刷新事件"
                             onclick={{
@@ -935,52 +878,44 @@ pub fn admin_llm_gateway_page() -> Html {
                         </button>
                     </div>
 
-                    <div class={classes!("mt-5", "grid", "gap-4", "xl:grid-cols-[minmax(0,0.95fr)_repeat(2,minmax(0,0.42fr))]")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_auto_auto]", "items-end")}>
                         <label class={classes!("text-sm")}>
                             <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
                             <select
-                                class={classes!("mt-2", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2.5")}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                                 value={(*usage_key_filter).clone()}
                                 onchange={on_usage_key_filter_change}
                             >
-                                <option value="">{ "全部 Key" }</option>
+                                <option value="">{ "全部" }</option>
                                 { for keys.iter().map(|key_item| html! {
-                                    <option value={key_item.id.clone()}>{ format!("{} · {}", key_item.name, key_item.id) }</option>
+                                    <option value={key_item.id.clone()}>{ key_item.name.clone() }</option>
                                 }) }
                             </select>
                         </label>
-                        <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "事件总数" }</div>
-                            <div class={classes!("mt-2", "text-3xl", "font-black", "tracking-[-0.04em]")}>{ *usage_total }</div>
-                        </div>
-                        <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "当前页" }</div>
-                            <div class={classes!("mt-2", "text-3xl", "font-black", "tracking-[-0.04em]")}>{ *usage_page }</div>
-                        </div>
+                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
+                            { format!("{} 条", *usage_total) }
+                        </span>
+                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
+                            { format!("第 {} 页", *usage_page) }
+                        </span>
                     </div>
 
                     if *usage_loading {
-                        <div class={classes!("mt-4", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                        <div class={classes!("mt-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
                             <i class={classes!("fas", "fa-spinner", "animate-spin")} />
-                            <span>{ "正在刷新 usage events" }</span>
+                            <span>{ "加载中" }</span>
                         </div>
                     }
 
-                    <div class={classes!("mt-5", "rounded-[1.2rem]", "border", "border-[var(--border)]", "bg-[color-mix(in_srgb,var(--surface)_84%,var(--surface-alt)_16%)]", "p-3")}>
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "text-xs", "text-[var(--muted)]")}>
-                            <span class={classes!("uppercase", "tracking-[0.18em]", "font-semibold")}>{ "Horizontal Scroll" }</span>
-                            <span>{ "宽表可直接在这里左右拖动查看" }</span>
-                        </div>
+                    <div
+                        ref={usage_scroll_top_ref}
+                        class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-1", "py-1")}
+                        onscroll={on_usage_scroll_top}
+                    >
                         <div
-                            ref={usage_scroll_top_ref}
-                            class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-1", "py-1.5")}
-                            onscroll={on_usage_scroll_top}
-                        >
-                            <div
-                                class={classes!("h-[1px]")}
-                                style={format!("width: {}px;", (*usage_scroll_width).max(1))}
-                            />
-                        </div>
+                            class={classes!("h-[1px]")}
+                            style={format!("width: {}px;", (*usage_scroll_width).max(1))}
+                        />
                     </div>
 
                     <div
@@ -1026,7 +961,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         <div class={classes!("min-w-0", "flex-1")}>
                                                             <div class={classes!("flex", "items-center", "gap-2")}>
                                                                 <span class={classes!("truncate")} title={event.request_url.clone()}>{ event.request_url.clone() }</span>
-                                                                { copy_icon_button(&event.request_url) }
+                                                                { copy_icon_button(&event.request_url, &on_copy) }
                                                             </div>
                                                             <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>
                                                                 { format!("upstream {}", event.endpoint) }
@@ -1051,7 +986,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 <td class={classes!("py-3", "pr-3", "min-w-[14rem]")}>
                                                     <div class={classes!("flex", "items-center", "gap-2")}>
                                                         <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
-                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region)) }
+                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region), &on_copy) }
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[12rem]")}>
@@ -1137,12 +1072,12 @@ pub fn admin_llm_gateway_page() -> Html {
                             "max-w-4xl",
                             "flex-col",
                             "overflow-hidden",
-                            "rounded-[1.5rem]",
+                            "rounded-xl",
                             "border",
                             "border-[var(--border)]",
                             "bg-[var(--surface)]",
-                            "p-6",
-                            "shadow-[0_28px_80px_rgba(15,23,42,0.32)]"
+                            "p-5",
+                            "shadow-[0_16px_48px_rgba(0,0,0,0.2)]"
                         )}
                         onclick={Callback::from(|event: MouseEvent| event.stop_propagation())}
                     >
@@ -1156,16 +1091,17 @@ pub fn admin_llm_gateway_page() -> Html {
                             </div>
                             <div class={classes!("flex", "gap-2")}>
                                 <button
-                                    class={classes!("btn-fluent-secondary")}
+                                    class={classes!("btn-terminal")}
                                     onclick={{
+                                        let on_copy = on_copy.clone();
                                         let headers_json = event.request_headers_json.clone();
-                                        Callback::from(move |_| copy_text(&headers_json))
+                                        Callback::from(move |_| on_copy.emit(("Headers".to_string(), headers_json.clone())))
                                     }}
                                 >
-                                    { "复制 Headers JSON" }
+                                    { "复制 JSON" }
                                 </button>
                                 <button
-                                    class={classes!("btn-fluent-primary")}
+                                    class={classes!("btn-terminal", "btn-terminal-primary")}
                                     onclick={{
                                         let selected_usage_event = selected_usage_event.clone();
                                         Callback::from(move |_| selected_usage_event.set(None))
@@ -1176,33 +1112,33 @@ pub fn admin_llm_gateway_page() -> Html {
                             </div>
                         </div>
 
-                        <div class={classes!("mt-5", "grid", "shrink-0", "gap-4", "lg:grid-cols-3")}>
-                            <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Key ID" }</div>
-                                <div class={classes!("mt-2", "font-mono", "text-xs", "break-all")}>{ event.key_id.clone() }</div>
+                        <div class={classes!("mt-4", "grid", "shrink-0", "gap-3", "lg:grid-cols-4")}>
+                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key ID" }</div>
+                                <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.key_id.clone() }</div>
                             </div>
-                            <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Status / Model" }</div>
-                                <div class={classes!("mt-2", "text-sm")}>{ format!("{} · {}", event.status_code, event.model.clone().unwrap_or_else(|| "-".to_string())) }</div>
+                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Status / Model" }</div>
+                                <div class={classes!("mt-1", "text-sm")}>{ format!("{} · {}", event.status_code, event.model.clone().unwrap_or_else(|| "-".to_string())) }</div>
                             </div>
-                            <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Upstream Route" }</div>
-                                <div class={classes!("mt-2", "font-mono", "text-xs", "break-all")}>{ event.endpoint.clone() }</div>
+                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Route" }</div>
+                                <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.endpoint.clone() }</div>
                             </div>
-                            <div class={classes!("rounded-2xl", "border", "border-[var(--border)]", "px-4", "py-4")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Latency" }</div>
-                                <div class={classes!("mt-2", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
+                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Latency" }</div>
+                                <div class={classes!("mt-1", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
                             </div>
                         </div>
 
-                        <div class={classes!("mt-5", "min-h-0", "flex-1", "overflow-hidden")}>
+                        <div class={classes!("mt-4", "min-h-0", "flex-1", "overflow-hidden")}>
                             <pre class={classes!(
                                 "h-full",
                                 "overflow-x-auto",
                                 "overflow-y-auto",
-                                "rounded-[1.25rem]",
+                                "rounded-lg",
                                 "bg-slate-950",
-                                "p-4",
+                                "p-3",
                                 "text-xs",
                                 "leading-6",
                                 "text-emerald-200",
@@ -1213,6 +1149,22 @@ pub fn admin_llm_gateway_page() -> Html {
                             </pre>
                         </div>
                     </div>
+                </div>
+            }
+
+            if let Some((message, is_error)) = (*toast).clone() {
+                <div class={classes!(
+                    "fixed", "bottom-5", "right-5", "z-[90]",
+                    "rounded-full", "border", "px-4", "py-3",
+                    "text-sm", "font-semibold",
+                    "shadow-[0_8px_24px_rgba(0,0,0,0.15)]",
+                    if is_error {
+                        classes!("border-red-400/35", "bg-red-500/92", "text-white")
+                    } else {
+                        classes!("border-emerald-400/35", "bg-emerald-500/92", "text-white")
+                    }
+                )}>
+                    { message }
                 </div>
             }
         </main>

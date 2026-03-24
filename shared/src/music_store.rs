@@ -2382,7 +2382,7 @@ fn rebuild_rows_to_batch(rows: &[RebuildRow], schema: &Arc<Schema>) -> Result<Re
 mod tests {
     use std::{
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -2595,6 +2595,76 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blob_v2_sidecar_names_follow_mainline_layout_and_audio_reads_back() {
+        let dir = temp_music_db_dir("music-blob-v2-naming");
+        fs::create_dir_all(&dir).expect("create temp db dir");
+        let db_uri = dir.to_string_lossy().to_string();
+
+        let store = MusicDataStore::connect(&db_uri)
+            .await
+            .expect("connect music db");
+        let audio_bytes = 128 * 1024;
+        let record = SongRecord {
+            id: "blob-v2-naming-song".to_string(),
+            title: "Blob V2 Naming".to_string(),
+            artist: "StaticFlow Test".to_string(),
+            album: "Blob V2".to_string(),
+            album_id: None,
+            cover_image: None,
+            duration_ms: 120_000,
+            format: "flac".to_string(),
+            bitrate: 999,
+            lyrics_lrc: None,
+            lyrics_translation: None,
+            audio_data: vec![0x5a; audio_bytes],
+            source: "test".to_string(),
+            source_id: None,
+            tags: "blob-v2,test".to_string(),
+            searchable_text: "Blob V2 Naming".to_string(),
+            vector_en: None,
+            vector_zh: None,
+            created_at: super::now_ms(),
+            updated_at: super::now_ms(),
+        };
+
+        store
+            .upsert_song(&record)
+            .await
+            .expect("insert blob v2 naming test song");
+
+        let blob_names = collect_blob_file_names(&dir.join("songs.lance").join("data"))
+            .expect("collect blob names");
+        assert!(
+            !blob_names.is_empty(),
+            "expected at least one blob sidecar file after inserting large audio payload"
+        );
+        assert!(
+            blob_names
+                .iter()
+                .all(|name| is_mainline_blob_file_name(name)),
+            "expected all blob sidecar files to use mainline binary naming, got {blob_names:?}"
+        );
+        assert!(
+            blob_names
+                .iter()
+                .all(|name| !is_legacy_blob_file_name(name)),
+            "expected no legacy 8-hex blob sidecar names, got {blob_names:?}"
+        );
+
+        let (audio, format) = store
+            .get_song_audio(&record.id)
+            .await
+            .expect("get_song_audio succeeds")
+            .expect("audio exists");
+        assert_eq!(format, "flac");
+        assert_eq!(audio.len(), audio_bytes);
+        assert!(audio.iter().all(|byte| *byte == 0x5a));
+
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     async fn seed_test_songs(
         store: &MusicDataStore,
         count: usize,
@@ -2650,5 +2720,43 @@ mod tests {
             .expect("time")
             .as_nanos();
         base.join(format!("{test_name}-{nanos}"))
+    }
+
+    fn collect_blob_file_names(dir: &Path) -> anyhow::Result<Vec<String>> {
+        let mut names = Vec::new();
+        collect_blob_file_names_recursive(dir, &mut names)?;
+        Ok(names)
+    }
+
+    fn collect_blob_file_names_recursive(dir: &Path, out: &mut Vec<String>) -> anyhow::Result<()> {
+        for entry in fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                collect_blob_file_names_recursive(&path, out)?;
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) == Some("blob") {
+                out.push(
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .expect("blob file name is valid utf-8")
+                        .to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn is_legacy_blob_file_name(name: &str) -> bool {
+        name.len() == 13
+            && name.ends_with(".blob")
+            && name[..8].chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    fn is_mainline_blob_file_name(name: &str) -> bool {
+        name.len() == 37
+            && name.ends_with(".blob")
+            && name[..32].chars().all(|c| matches!(c, '0' | '1'))
     }
 }

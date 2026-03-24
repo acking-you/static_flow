@@ -1,12 +1,12 @@
 use std::{
     env,
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -90,6 +90,7 @@ struct WishWorkerPayload<'a> {
     artist_hint: Option<&'a str>,
     wish_message: &'a str,
     music_db_path: &'a str,
+    sf_cli_path: String,
     skill_path: String,
 }
 
@@ -325,6 +326,12 @@ async fn run_wish_runner(
     wish: &MusicWishRecord,
     run_id: &str,
 ) -> Result<RunnerProcessOutput> {
+    let sf_cli_path = ensure_fresh_sf_cli_binary(&config.workdir).await?;
+    tracing::info!(
+        wish_id = wish.wish_id,
+        sf_cli_path = %sf_cli_path.display(),
+        "resolved fresh sf-cli binary for music wish worker"
+    );
     tokio::fs::create_dir_all(&config.result_dir)
         .await
         .with_context(|| {
@@ -339,6 +346,7 @@ async fn run_wish_runner(
         artist_hint: wish.artist_hint.as_deref(),
         wish_message: &wish.wish_message,
         music_db_path: &config.music_db_path,
+        sf_cli_path: sf_cli_path.display().to_string(),
         skill_path: config.skill_path.display().to_string(),
     };
 
@@ -356,6 +364,7 @@ async fn run_wish_runner(
     command.current_dir(&config.workdir);
     command.env("MUSIC_WISH_SKILL_PATH", &config.skill_path);
     command.env("MUSIC_DB_PATH", &config.music_db_path);
+    command.env("SF_CLI_PATH", &sf_cli_path);
     command.env("MUSIC_WISH_RESULT_DIR", &config.result_dir);
     command.env("MUSIC_WISH_RESULT_PATH", &result_file_path);
     command.stdout(Stdio::piped());
@@ -506,6 +515,150 @@ async fn mark_wish_failed(store: &MusicWishStore, wish_id: &str, message: String
 
 fn parse_bool_env(raw: &str) -> bool {
     matches!(raw.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on")
+}
+
+/// Ensure the worker uses a freshly built `sf-cli` that matches the current
+/// checkout instead of any stale snapshot binary.
+///
+/// The freshness check uses two signals:
+/// 1. whether relevant source paths are dirty compared with git
+/// 2. whether `target/release/sf-cli` is older than the newest relevant git
+///    commit
+///
+/// If either condition is true, we rebuild `sf-cli --release` before use.
+async fn ensure_fresh_sf_cli_binary(workdir: &Path) -> Result<PathBuf> {
+    let binary_path = workdir.join("target/release/sf-cli");
+    let repo_relative_paths =
+        ["cli", "shared", "Cargo.toml", "Cargo.lock", "deps/lance", "deps/lancedb"];
+    let latest_commit_epoch =
+        latest_relevant_git_commit_epoch(workdir, &repo_relative_paths).await?;
+    let dirty = git_has_relevant_changes(workdir, &repo_relative_paths).await?;
+    let build_epoch = binary_build_epoch_seconds(&binary_path)?;
+
+    let needs_rebuild = dirty || build_epoch.is_none_or(|epoch| epoch < latest_commit_epoch);
+    if needs_rebuild {
+        tracing::warn!(
+            dirty,
+            latest_commit_epoch,
+            build_epoch,
+            binary_path = %binary_path.display(),
+            "sf-cli binary is stale relative to current checkout; rebuilding before music wish write"
+        );
+        run_checked_command(
+            workdir,
+            "cargo",
+            &["build", "-p", "sf-cli", "--release"],
+            "rebuild sf-cli for music wish worker",
+        )
+        .await?;
+    } else {
+        tracing::info!(
+            latest_commit_epoch,
+            build_epoch,
+            binary_path = %binary_path.display(),
+            "sf-cli binary is fresh enough for music wish worker"
+        );
+    }
+
+    if !binary_path.is_file() {
+        anyhow::bail!(
+            "sf-cli release binary still missing after freshness check: {}",
+            binary_path.display()
+        );
+    }
+    binary_path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", binary_path.display()))
+}
+
+async fn latest_relevant_git_commit_epoch(workdir: &Path, paths: &[&str]) -> Result<i64> {
+    let args = ["log", "-1", "--format=%ct", "--"]
+        .into_iter()
+        .chain(paths.iter().copied())
+        .collect::<Vec<_>>();
+    let output =
+        run_capture_command(workdir, "git", &args, "read latest relevant git commit").await?;
+    output
+        .trim()
+        .parse::<i64>()
+        .with_context(|| format!("failed to parse git commit timestamp from `{output}`"))
+}
+
+async fn git_has_relevant_changes(workdir: &Path, paths: &[&str]) -> Result<bool> {
+    let args = ["status", "--porcelain", "--"]
+        .into_iter()
+        .chain(paths.iter().copied())
+        .collect::<Vec<_>>();
+    let output =
+        run_capture_command(workdir, "git", &args, "check sf-cli source dirtiness").await?;
+    Ok(!output.trim().is_empty())
+}
+
+fn binary_build_epoch_seconds(path: &Path) -> Result<Option<i64>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let modified = std::fs::metadata(path)
+        .with_context(|| format!("read metadata for {}", path.display()))?
+        .modified()
+        .with_context(|| format!("read mtime for {}", path.display()))?;
+    Ok(Some(system_time_to_epoch_seconds(modified)?))
+}
+
+fn system_time_to_epoch_seconds(value: SystemTime) -> Result<i64> {
+    let duration = value
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is earlier than unix epoch")?;
+    Ok(duration.as_secs() as i64)
+}
+
+async fn run_capture_command(
+    workdir: &Path,
+    program: &str,
+    args: &[&str],
+    purpose: &str,
+) -> Result<String> {
+    let output = tokio::process::Command::new(program)
+        .args(args)
+        .current_dir(workdir)
+        .output()
+        .await
+        .with_context(|| format!("failed to spawn `{program}` while trying to {purpose}"))?;
+    ensure_success_status(program, args, &output.status, &output.stderr, purpose)?;
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("`{program}` stdout was not utf-8 while trying to {purpose}"))
+}
+
+async fn run_checked_command(
+    workdir: &Path,
+    program: &str,
+    args: &[&str],
+    purpose: &str,
+) -> Result<()> {
+    let output = tokio::process::Command::new(program)
+        .args(args)
+        .current_dir(workdir)
+        .output()
+        .await
+        .with_context(|| format!("failed to spawn `{program}` while trying to {purpose}"))?;
+    ensure_success_status(program, args, &output.status, &output.stderr, purpose)
+}
+
+fn ensure_success_status(
+    program: &str,
+    args: &[&str],
+    status: &ExitStatus,
+    stderr: &[u8],
+    purpose: &str,
+) -> Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    anyhow::bail!(
+        "`{program} {}` failed while trying to {purpose}: status={status} stderr={stderr}",
+        args.join(" ")
+    );
 }
 
 async fn send_done_notification(

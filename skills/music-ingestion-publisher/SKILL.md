@@ -37,8 +37,10 @@ still use `ncmdump-cli lyric <netease_track_id>` for lyrics.
 
 1. **ncmdump-cli**: `./tools/ncmdump-rs/target/release/ncmdump-cli` or PATH.
    Build: `cargo build -p ncmdump-cli --release` (from `./tools/ncmdump-rs/`)
-2. **sf-cli**: `./bin/sf-cli` → `./target/release/sf-cli` → PATH.
-   Build: `cargo build -p sf-cli --release`
+2. **sf-cli**:
+   - For worker payloads: use `sf_cli_path` from the payload JSON exactly.
+   - Manual resolution: build `cargo build -p sf-cli --release`, then use `./target/release/sf-cli`
+   - Rebuild whenever the current checkout is newer than the existing binary.
 3. **Music DB**: `/mnt/wsl/data4tb/static-flow-data/lancedb-music`
 4. **Netease login**: `ncmdump-cli me`
 5. **Bilibili login**: `ncmdump-cli bili-me` + `ffmpeg -version`
@@ -78,7 +80,10 @@ dump <files>     Decrypt NCM → MP3/FLAC (-d, -r, -o, -m)
   ingestion. The songs table uses Lance blob v2 encoding for `audio_data`.
   Direct writes (Python lancedb, arrow, manual RecordBatch, etc.) WILL corrupt
   the table and require a full rebuild.
-- **Binary location**: `./bin/sf-cli` (preferred) or `./target/release/sf-cli`.
+- **Binary location**:
+  - Worker runs: payload field `sf_cli_path` is the source of truth.
+  - Manual runs: rebuild `cargo build -p sf-cli --release`, then use `./target/release/sf-cli`
+  - Do not replace that with legacy `./bin/sf-cli` or stale `target/*/sf-cli` snapshots for blob v2 tables.
 - **Cover image is MANDATORY** for online tracks. Must be `https://` URL.
   Use `--cover-url` to set it during ingestion (preferred over post-write update).
 - **Album metadata is MANDATORY** when available (Netease tracks).
