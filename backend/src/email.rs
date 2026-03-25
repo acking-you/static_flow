@@ -9,7 +9,9 @@ use lettre::{
 use pulldown_cmark::{html, Options, Parser};
 use serde::Deserialize;
 use static_flow_shared::{
-    article_request_store::ArticleRequestRecord, music_wish_store::MusicWishRecord,
+    article_request_store::ArticleRequestRecord,
+    llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord},
+    music_wish_store::MusicWishRecord,
 };
 use url::Url;
 
@@ -232,6 +234,62 @@ impl EmailNotifier {
             .await
     }
 
+    pub async fn send_admin_new_llm_token_request_notification(
+        &self,
+        request: &LlmGatewayTokenRequestRecord,
+    ) -> Result<()> {
+        let subject = format!(
+            "[StaticFlow] New LLM Token Wish {} ({})",
+            request.requested_quota_billable_limit, request.request_id
+        );
+        let body_markdown = format!(
+            "## New LLM token wish submitted\n\n- Request ID: `{}`\n- Requester email: {}\n- \
+             Requested tokens: `{}`\n- Status: `{}`\n- Region: {}\n- Client IP: {}\n- Created at \
+             (ms): `{}`\n- Frontend page: {}\n\n### Reason\n\n{}\n",
+            request.request_id,
+            request.requester_email,
+            request.requested_quota_billable_limit,
+            request.status,
+            request.ip_region,
+            request.client_ip,
+            request.created_at,
+            request.frontend_page_url.as_deref().unwrap_or("-"),
+            request.request_reason,
+        );
+        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+            .await
+    }
+
+    pub async fn send_user_llm_token_issued_notification(
+        &self,
+        request: &LlmGatewayTokenRequestRecord,
+        key: &LlmGatewayKeyRecord,
+        gateway_base_url: &str,
+        llm_access_url: Option<&str>,
+    ) -> Result<()> {
+        let subject = "[StaticFlow] 你的 LLM Token 许愿已通过".to_string();
+        let body_markdown = format!(
+            "你好，\n\n你的 LLM Token 许愿已经审核通过，下面是已经为你创建好的访问凭证。\n\n## \
+             申请信息\n- Request ID: `{}`\n- 状态: `{}`\n- 申请额度: `{}`\n- 实际发放 Key ID: \
+             `{}`\n- Key 名称: {}\n\n## 使用信息\n- Base URL: `{}`\n- API Key: `{}`\n\n## \
+             申请缘由\n\n{}\n\n{}\n\n请妥善保管这个 \
+             key；如果后续需要调整额度或重新发放，请直接回复管理员。\n",
+            request.request_id,
+            request.status,
+            request.requested_quota_billable_limit,
+            key.id,
+            key.name,
+            gateway_base_url,
+            key.secret,
+            request.request_reason,
+            llm_access_url
+                .map(|url| format!("## 查看页面\n- LLM Access: [{url}]({url})"))
+                .unwrap_or_default(),
+        );
+        self.send_markdown_email(&request.requester_email, &subject, &body_markdown)
+            .await
+    }
+
     async fn send_markdown_email(
         &self,
         to: &str,
@@ -413,6 +471,30 @@ pub fn build_article_detail_url(frontend_page_url: &str, article_id: &str) -> Re
         format!("/posts/{encoded_id}")
     };
     url.set_path(&target_path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+pub fn build_llm_access_url(frontend_page_url: &str) -> Result<String> {
+    validate_frontend_url(frontend_page_url)?;
+
+    let mut url = Url::parse(frontend_page_url).context("invalid frontend_page_url")?;
+    let path = url.path();
+    let has_static_flow_prefix = path == "/static_flow" || path.starts_with("/static_flow/");
+    let target_path =
+        if has_static_flow_prefix { "/static_flow/llm-access" } else { "/llm-access" };
+    url.set_path(target_path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
+pub fn build_llm_gateway_base_url(frontend_page_url: &str) -> Result<String> {
+    validate_frontend_url(frontend_page_url)?;
+
+    let mut url = Url::parse(frontend_page_url).context("invalid frontend_page_url")?;
+    url.set_path("/api/llm-gateway/v1");
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.into())

@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderValue, Method},
     middleware,
     response::{Html, IntoResponse},
-    routing::{any, get, patch, post},
+    routing::{any, delete, get, patch, post},
     Router,
 };
 use tower_http::{
@@ -68,6 +68,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/articles/:id", get(handlers::get_article))
         .route("/api/llm-gateway/access", get(llm_gateway::get_public_access))
         .route("/api/llm-gateway/status", get(llm_gateway::get_public_rate_limit_status))
+        .route(
+            "/api/llm-gateway/token-requests/submit",
+            post(llm_gateway::submit_public_token_request),
+        )
         .route("/api/articles/:id/raw/:lang", get(handlers::get_article_raw_markdown))
         .route("/interactive-pages/:page_id", get(handlers::get_interactive_page_entry))
         .route(
@@ -142,6 +146,26 @@ pub fn create_router(state: AppState) -> Router {
             patch(llm_gateway::patch_admin_key).delete(llm_gateway::delete_admin_key),
         )
         .route("/admin/llm-gateway/usage", get(llm_gateway::list_admin_usage_events))
+        .route(
+            "/admin/llm-gateway/token-requests",
+            get(llm_gateway::list_admin_token_requests),
+        )
+        .route(
+            "/admin/llm-gateway/token-requests/:request_id/approve-and-issue",
+            post(llm_gateway::approve_and_issue_token_request),
+        )
+        .route(
+            "/admin/llm-gateway/token-requests/:request_id/reject",
+            post(llm_gateway::reject_token_request),
+        )
+        .route(
+            "/admin/llm-gateway/accounts",
+            get(llm_gateway::list_accounts).post(llm_gateway::import_account),
+        )
+        .route(
+            "/admin/llm-gateway/accounts/:name",
+            delete(llm_gateway::remove_account).patch(llm_gateway::patch_account_settings),
+        )
         .route("/admin/api-behavior/overview", get(handlers::admin_api_behavior_overview))
         .route("/admin/api-behavior/events", get(handlers::admin_list_api_behavior_events))
         .route("/admin/api-behavior/cleanup", post(handlers::admin_cleanup_api_behavior))

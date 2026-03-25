@@ -18,7 +18,8 @@ use super::{
         GatewayHandlerResult, GatewayResponseAdapter, OpenAiChatAdaptedRequest,
         PreparedGatewayRequest,
     },
-    FAST_BILLABLE_MULTIPLIER, MAX_GATEWAY_BODY_BYTES, MAX_OPENAI_TOOL_NAME_LEN,
+    FAST_BILLABLE_MULTIPLIER, GPT53_CODEX_MODEL_ID, GPT53_CODEX_SPARK_MODEL_ID,
+    MAX_GATEWAY_BODY_BYTES, MAX_OPENAI_TOOL_NAME_LEN,
 };
 
 /// Normalize an incoming OpenAI-compatible request into the upstream Codex
@@ -130,6 +131,7 @@ pub(crate) async fn prepare_gateway_request(
         method,
         request_body,
         model,
+        client_visible_model: None,
         wants_stream: original_wants_stream,
         force_upstream_stream,
         content_type,
@@ -140,12 +142,158 @@ pub(crate) async fn prepare_gateway_request(
     })
 }
 
+pub(crate) fn apply_gpt53_codex_spark_mapping(
+    prepared: &PreparedGatewayRequest,
+    enabled: bool,
+) -> GatewayHandlerResult<PreparedGatewayRequest> {
+    if !enabled || prepared.model.as_deref() != Some(GPT53_CODEX_MODEL_ID) {
+        return Ok(prepared.clone());
+    }
+
+    let mut value = serde_json::from_slice::<Value>(&prepared.request_body)
+        .map_err(|err| internal_error("Failed to parse mapped llm gateway request body", err))?;
+    let Some(root) = value.as_object_mut() else {
+        return Err(internal_error(
+            "Failed to map llm gateway request model",
+            "request body is not a JSON object",
+        ));
+    };
+    root.insert("model".to_string(), Value::String(GPT53_CODEX_SPARK_MODEL_ID.to_string()));
+    let request_body =
+        Bytes::from(serde_json::to_vec(&value).map_err(|err| {
+            internal_error("Failed to encode mapped llm gateway request body", err)
+        })?);
+
+    let mut mapped = prepared.clone();
+    mapped.request_body = request_body;
+    mapped.model = Some(GPT53_CODEX_SPARK_MODEL_ID.to_string());
+    mapped.client_visible_model = Some(GPT53_CODEX_MODEL_ID.to_string());
+    Ok(mapped)
+}
+
+/// Extract the last text-like message content from the request body.
+///
+/// This intentionally parses request-format structures (`messages` for chat
+/// requests, `input` for responses requests) instead of storing the whole
+/// body. Unsupported shapes return `Ok(None)` so the main request flow is not
+/// blocked; malformed JSON returns `Err(...)` and the caller can record a
+/// failure marker if desired.
+pub(crate) fn extract_last_message_content(body: &Bytes) -> Result<Option<String>, String> {
+    if body.is_empty() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|err| format!("failed to parse request body: {err}"))?;
+    let Some(root) = value.as_object() else {
+        return Err("request body is not a JSON object".to_string());
+    };
+
+    if let Some(messages) = root.get("messages").and_then(Value::as_array) {
+        return Ok(extract_last_message_from_chat_messages(messages));
+    }
+    if let Some(input) = root.get("input") {
+        return Ok(extract_last_text_from_responses_input(input));
+    }
+    Ok(None)
+}
+
 /// Convert request-level service tier hints into a billing multiplier.
 pub(crate) fn resolve_billable_multiplier(json_value: Option<&Value>) -> u64 {
     if request_uses_fast_service_tier(json_value) {
         FAST_BILLABLE_MULTIPLIER
     } else {
         1
+    }
+}
+
+fn extract_last_message_from_chat_messages(messages: &[Value]) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        message
+            .as_object()
+            .and_then(|obj| obj.get("content"))
+            .and_then(extract_last_text_from_generic_content)
+    })
+}
+
+fn extract_last_text_from_responses_input(input: &Value) -> Option<String> {
+    match input {
+        Value::String(text) => normalized_non_empty_text(text),
+        Value::Array(items) => items
+            .iter()
+            .rev()
+            .find_map(extract_last_text_from_responses_item),
+        Value::Object(_) => extract_last_text_from_responses_item(input),
+        _ => None,
+    }
+}
+
+fn extract_last_text_from_responses_item(item: &Value) -> Option<String> {
+    match item {
+        Value::String(text) => normalized_non_empty_text(text),
+        Value::Object(obj) => {
+            let item_type = obj.get("type").and_then(Value::as_str).unwrap_or_default();
+            match item_type {
+                "message" => obj
+                    .get("content")
+                    .and_then(extract_last_text_from_generic_content),
+                "function_call_output" | "custom_tool_call_output" => obj
+                    .get("output")
+                    .and_then(extract_last_text_from_generic_content),
+                "text" | "input_text" | "output_text" => obj
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .and_then(normalized_non_empty_text),
+                _ => obj
+                    .get("content")
+                    .and_then(extract_last_text_from_generic_content)
+                    .or_else(|| {
+                        obj.get("output")
+                            .and_then(extract_last_text_from_generic_content)
+                    })
+                    .or_else(|| {
+                        obj.get("text")
+                            .and_then(Value::as_str)
+                            .and_then(normalized_non_empty_text)
+                    }),
+            }
+        },
+        Value::Array(items) => items
+            .iter()
+            .rev()
+            .find_map(extract_last_text_from_generic_content),
+        _ => None,
+    }
+}
+
+fn extract_last_text_from_generic_content(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => normalized_non_empty_text(text),
+        Value::Array(items) => items
+            .iter()
+            .rev()
+            .find_map(extract_last_text_from_generic_content),
+        Value::Object(map) => map
+            .get("content")
+            .and_then(extract_last_text_from_generic_content)
+            .or_else(|| {
+                map.get("output")
+                    .and_then(extract_last_text_from_generic_content)
+            })
+            .or_else(|| {
+                map.get("text")
+                    .and_then(Value::as_str)
+                    .and_then(normalized_non_empty_text)
+            }),
+        _ => None,
+    }
+}
+
+fn normalized_non_empty_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 

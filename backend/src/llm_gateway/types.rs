@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, time::Instant};
 use axum::{http::Method, response::Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayUsageEventRecord};
+use static_flow_shared::llm_gateway_store::{
+    LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+};
 
 use crate::handlers::ErrorResponse;
 
@@ -54,6 +56,8 @@ pub struct LlmGatewayRateLimitBucketView {
     pub primary: Option<LlmGatewayRateLimitWindowView>,
     pub secondary: Option<LlmGatewayRateLimitWindowView>,
     pub credits: Option<LlmGatewayCreditsView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
 }
 
 /// One usage window within a rate-limit bucket.
@@ -98,6 +102,8 @@ pub struct AdminLlmGatewayKeyView {
     pub last_used_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub route_strategy: Option<String>,
+    pub fixed_account_name: Option<String>,
 }
 
 /// Paginated admin response for settled usage events.
@@ -111,12 +117,72 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub generated_at: i64,
 }
 
+/// Public request body for asking an admin to grant a new token.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubmitLlmGatewayTokenRequest {
+    pub requested_quota_billable_limit: u64,
+    pub request_reason: String,
+    pub requester_email: String,
+    #[serde(default)]
+    pub frontend_page_url: Option<String>,
+}
+
+/// Public acknowledgement returned after a token wish is queued.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitLlmGatewayTokenRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+/// Admin-facing projection of one token wish / issuance task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewayTokenRequestView {
+    pub request_id: String,
+    pub requester_email: String,
+    pub requested_quota_billable_limit: u64,
+    pub request_reason: String,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for token wishes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewayTokenRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminLlmGatewayTokenRequestView>,
+    pub generated_at: i64,
+}
+
+/// Admin query parameters for token-wish filtering and pagination.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AdminLlmGatewayTokenRequestQuery {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
 /// Admin-facing usage event enriched with request diagnostics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminLlmGatewayUsageEventView {
     pub id: String,
     pub key_id: String,
     pub key_name: String,
+    pub account_name: Option<String>,
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
@@ -131,6 +197,7 @@ pub struct AdminLlmGatewayUsageEventView {
     pub client_ip: String,
     pub ip_region: String,
     pub request_headers_json: String,
+    pub last_message_content: Option<String>,
     pub created_at: i64,
 }
 
@@ -162,6 +229,8 @@ pub struct PatchLlmGatewayKeyRequest {
     pub status: Option<String>,
     pub public_visible: Option<bool>,
     pub quota_billable_limit: Option<u64>,
+    pub route_strategy: Option<String>,
+    pub fixed_account_name: Option<String>,
 }
 
 /// Admin query parameters for usage-event filtering and pagination.
@@ -203,6 +272,7 @@ pub(crate) struct PreparedGatewayRequest {
     pub method: Method,
     pub request_body: axum::body::Bytes,
     pub model: Option<String>,
+    pub client_visible_model: Option<String>,
     pub wants_stream: bool,
     pub force_upstream_stream: bool,
     pub content_type: String,
@@ -254,6 +324,50 @@ pub(crate) type GatewayHandlerResult<T> = Result<T, (axum::http::StatusCode, Jso
 pub(crate) type OpenAiChatAdaptedRequest =
     (serde_json::Map<String, Value>, BTreeMap<String, String>);
 
+// === Account pool types ===
+
+/// Admin request body for importing a Codex account into the pool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportAccountRequest {
+    pub name: String,
+    pub tokens: ImportAccountTokens,
+}
+
+/// Token fields needed to import a Codex account.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportAccountTokens {
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+/// Admin-facing summary of one managed Codex account.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSummaryView {
+    pub name: String,
+    pub status: String,
+    pub account_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub primary_remaining_percent: Option<f64>,
+    pub secondary_remaining_percent: Option<f64>,
+    pub map_gpt53_codex_to_spark: bool,
+    pub last_refresh: Option<i64>,
+}
+
+/// Admin response listing all managed Codex accounts.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountListResponse {
+    pub accounts: Vec<AccountSummaryView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchAccountSettingsRequest {
+    pub map_gpt53_codex_to_spark: Option<bool>,
+}
+
 impl From<&LlmGatewayKeyRecord> for LlmGatewayPublicKeyView {
     fn from(value: &LlmGatewayKeyRecord) -> Self {
         Self {
@@ -287,6 +401,8 @@ impl From<&LlmGatewayKeyRecord> for AdminLlmGatewayKeyView {
             last_used_at: value.last_used_at,
             created_at: value.created_at,
             updated_at: value.updated_at,
+            route_strategy: value.route_strategy.clone(),
+            fixed_account_name: value.fixed_account_name.clone(),
         }
     }
 }
@@ -297,6 +413,7 @@ impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventView {
             id: value.id.clone(),
             key_id: value.key_id.clone(),
             key_name: value.key_name.clone(),
+            account_name: value.account_name.clone(),
             request_method: value.request_method.clone(),
             request_url: value.request_url.clone(),
             latency_ms: value.latency_ms,
@@ -311,7 +428,30 @@ impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventView {
             client_ip: value.client_ip.clone(),
             ip_region: value.ip_region.clone(),
             request_headers_json: value.request_headers_json.clone(),
+            last_message_content: value.last_message_content.clone(),
             created_at: value.created_at,
+        }
+    }
+}
+
+impl From<&LlmGatewayTokenRequestRecord> for AdminLlmGatewayTokenRequestView {
+    fn from(value: &LlmGatewayTokenRequestRecord) -> Self {
+        Self {
+            request_id: value.request_id.clone(),
+            requester_email: value.requester_email.clone(),
+            requested_quota_billable_limit: value.requested_quota_billable_limit,
+            request_reason: value.request_reason.clone(),
+            frontend_page_url: value.frontend_page_url.clone(),
+            status: value.status.clone(),
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            admin_note: value.admin_note.clone(),
+            failure_reason: value.failure_reason.clone(),
+            issued_key_id: value.issued_key_id.clone(),
+            issued_key_name: value.issued_key_name.clone(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            processed_at: value.processed_at,
         }
     }
 }

@@ -4173,6 +4173,7 @@ pub struct LlmGatewayRateLimitBucketView {
     pub primary: Option<LlmGatewayRateLimitWindowView>,
     pub secondary: Option<LlmGatewayRateLimitWindowView>,
     pub credits: Option<LlmGatewayCreditsView>,
+    pub account_name: Option<String>,
 }
 
 /// Cached public rate-limit status for the upstream Codex account.
@@ -4204,6 +4205,8 @@ pub struct AdminLlmGatewayKeyView {
     pub last_used_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub route_strategy: Option<String>,
+    pub fixed_account_name: Option<String>,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -4220,6 +4223,7 @@ pub struct AdminLlmGatewayUsageEventView {
     pub id: String,
     pub key_id: String,
     pub key_name: String,
+    pub account_name: Option<String>,
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
@@ -4234,6 +4238,7 @@ pub struct AdminLlmGatewayUsageEventView {
     pub client_ip: String,
     pub ip_region: String,
     pub request_headers_json: String,
+    pub last_message_content: Option<String>,
     pub created_at: i64,
 }
 
@@ -4252,6 +4257,52 @@ pub struct AdminLlmGatewayUsageEventsResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct AdminLlmGatewayUsageEventsQuery {
     pub key_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// Public acknowledgement returned after a token wish is queued.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitLlmGatewayTokenRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+/// Admin-only view of one token wish / issuance task.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayTokenRequestView {
+    pub request_id: String,
+    pub requester_email: String,
+    pub requested_quota_billable_limit: u64,
+    pub request_reason: String,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for token wishes.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayTokenRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminLlmGatewayTokenRequestView>,
+    pub generated_at: i64,
+}
+
+/// Query options for admin token-wish listing.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AdminLlmGatewayTokenRequestsQuery {
+    pub status: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -4329,6 +4380,7 @@ pub async fn fetch_llm_gateway_status() -> Result<LlmGatewayRateLimitStatusRespo
                     unlimited: false,
                     balance: Some("24".to_string()),
                 }),
+                account_name: None,
             }],
         })
     }
@@ -4339,6 +4391,51 @@ pub async fn fetch_llm_gateway_status() -> Result<LlmGatewayRateLimitStatusRespo
         let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Submit a public token wish from `/llm-access`.
+pub async fn submit_llm_gateway_token_request(
+    requested_quota_billable_limit: u64,
+    request_reason: &str,
+    requester_email: &str,
+    frontend_page_url: Option<&str>,
+) -> Result<SubmitLlmGatewayTokenRequestResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ =
+            (requested_quota_billable_limit, request_reason, requester_email, frontend_page_url);
+        Ok(SubmitLlmGatewayTokenRequestResponse {
+            request_id: "mock-llm-wish-1".to_string(),
+            status: "pending".to_string(),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/token-requests/submit", API_BASE);
+        let mut body = serde_json::json!({
+            "requested_quota_billable_limit": requested_quota_billable_limit,
+            "request_reason": request_reason,
+            "requester_email": requester_email,
+        });
+        if let Some(page_url) = frontend_page_url {
+            body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
+        }
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -4440,6 +4537,55 @@ pub async fn fetch_admin_llm_gateway_keys() -> Result<AdminLlmGatewayKeysRespons
     }
 }
 
+/// Fetch admin token wishes for review / issuance.
+pub async fn fetch_admin_llm_gateway_token_requests(
+    query: &AdminLlmGatewayTokenRequestsQuery,
+) -> Result<AdminLlmGatewayTokenRequestsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = query;
+        Ok(AdminLlmGatewayTokenRequestsResponse {
+            total: 0,
+            offset: 0,
+            limit: 20,
+            has_more: false,
+            requests: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/llm-gateway/token-requests", admin_base());
+        let mut params = Vec::new();
+        if let Some(status) = query.status.as_deref() {
+            params.push(format!("status={}", urlencoding::encode(status)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 /// Create a new gateway key that can later be exposed on the public page.
 pub async fn create_admin_llm_gateway_key(
     name: &str,
@@ -4463,6 +4609,8 @@ pub async fn create_admin_llm_gateway_key(
             last_used_at: None,
             created_at: 0,
             updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
         })
     }
 
@@ -4497,10 +4645,20 @@ pub async fn patch_admin_llm_gateway_key(
     status: Option<&str>,
     public_visible: Option<bool>,
     quota_billable_limit: Option<u64>,
+    route_strategy: Option<&str>,
+    fixed_account_name: Option<&str>,
 ) -> Result<AdminLlmGatewayKeyView, String> {
     #[cfg(feature = "mock")]
     {
-        let _ = (key_id, name, status, public_visible, quota_billable_limit);
+        let _ = (
+            key_id,
+            name,
+            status,
+            public_visible,
+            quota_billable_limit,
+            route_strategy,
+            fixed_account_name,
+        );
         Err("mock not supported".to_string())
     }
 
@@ -4524,8 +4682,90 @@ pub async fn patch_admin_llm_gateway_key(
                 serde_json::Value::Number(quota_billable_limit.into()),
             );
         }
+        if let Some(strategy) = route_strategy {
+            body.insert(
+                "route_strategy".to_string(),
+                serde_json::Value::String(strategy.to_string()),
+            );
+        }
+        if let Some(account_name) = fixed_account_name {
+            body.insert(
+                "fixed_account_name".to_string(),
+                serde_json::Value::String(account_name.to_string()),
+            );
+        }
         let response = api_patch(&url)
             .json(&serde_json::Value::Object(body))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Approve a token wish, issue the key, and email it to the requester.
+pub async fn admin_approve_and_issue_llm_gateway_token_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminLlmGatewayTokenRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/token-requests/{}/approve-and-issue",
+            admin_base(),
+            urlencoding::encode(request_id)
+        );
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "admin_note": admin_note }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Reject a token wish from the admin UI.
+pub async fn admin_reject_llm_gateway_token_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminLlmGatewayTokenRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/token-requests/{}/reject",
+            admin_base(),
+            urlencoding::encode(request_id)
+        );
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "admin_note": admin_note }))
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await
@@ -4604,6 +4844,168 @@ pub async fn fetch_admin_llm_gateway_usage_events(
             url.push_str(&params.join("&"));
         }
         let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+// === Account pool management ===
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AccountSummaryView {
+    pub name: String,
+    pub status: String,
+    pub account_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub primary_remaining_percent: Option<f64>,
+    pub secondary_remaining_percent: Option<f64>,
+    pub map_gpt53_codex_to_spark: bool,
+    pub last_refresh: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AccountListResponse {
+    pub accounts: Vec<AccountSummaryView>,
+    pub generated_at: i64,
+}
+
+pub async fn fetch_admin_llm_gateway_accounts() -> Result<AccountListResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AccountListResponse {
+            accounts: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/accounts", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn import_admin_llm_gateway_account(
+    name: &str,
+    id_token: &str,
+    access_token: &str,
+    refresh_token: &str,
+    account_id: Option<&str>,
+) -> Result<AccountSummaryView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AccountSummaryView {
+            name: name.to_string(),
+            status: "active".to_string(),
+            account_id: account_id.map(str::to_string),
+            plan_type: Some("Pro".to_string()),
+            primary_remaining_percent: Some(100.0),
+            secondary_remaining_percent: Some(100.0),
+            map_gpt53_codex_to_spark: false,
+            last_refresh: None,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/accounts", admin_base());
+        let mut payload = serde_json::json!({
+            "name": name,
+            "tokens": {
+                "id_token": id_token,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            }
+        });
+        if let Some(aid) = account_id {
+            payload["tokens"]["account_id"] = serde_json::json!(aid);
+        }
+        let response = api_post(&url)
+            .json(&payload)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_llm_gateway_account(name: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/llm-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn patch_admin_llm_gateway_account(
+    name: &str,
+    map_gpt53_codex_to_spark: bool,
+) -> Result<AccountSummaryView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AccountSummaryView {
+            name: name.to_string(),
+            status: "active".to_string(),
+            account_id: None,
+            plan_type: Some("Pro".to_string()),
+            primary_remaining_percent: Some(100.0),
+            secondary_remaining_percent: Some(100.0),
+            map_gpt53_codex_to_spark,
+            last_refresh: None,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/llm-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let response = api_patch(&url)
+            .json(&serde_json::json!({
+                "map_gpt53_codex_to_spark": map_gpt53_codex_to_spark,
+            }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;

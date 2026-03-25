@@ -9,6 +9,40 @@ use super::{
     types::{ChatStreamMetadata, GatewayResponseAdapter, UsageBreakdown},
 };
 
+fn rewrite_model_alias_in_value(value: &mut Value, from: &str, to: &str) {
+    match value {
+        Value::Object(map) => {
+            if let Some(model) = map.get_mut("model") {
+                if model.as_str() == Some(from) {
+                    *model = Value::String(to.to_string());
+                }
+            }
+            for child in map.values_mut() {
+                rewrite_model_alias_in_value(child, from, to);
+            }
+        },
+        Value::Array(items) => {
+            for item in items {
+                rewrite_model_alias_in_value(item, from, to);
+            }
+        },
+        _ => {},
+    }
+}
+
+fn maybe_apply_model_alias(
+    mut value: Value,
+    model_from: Option<&str>,
+    model_to: Option<&str>,
+) -> Value {
+    if let (Some(from), Some(to)) = (model_from, model_to) {
+        if from != to {
+            rewrite_model_alias_in_value(&mut value, from, to);
+        }
+    }
+    value
+}
+
 /// Flatten text-like content fragments from a responses payload.
 fn map_response_content_text(content: &Value, out: &mut String) {
     match content {
@@ -487,12 +521,15 @@ pub(crate) fn convert_response_event_to_chat_chunk(
     event: &SseEvent,
     tool_name_restore_map: Option<&BTreeMap<String, String>>,
     metadata: &mut ChatStreamMetadata,
+    model_from: Option<&str>,
+    model_to: Option<&str>,
 ) -> Option<Value> {
     let payload = event.data.trim();
     if payload.is_empty() || payload == "[DONE]" {
         return None;
     }
-    let value = serde_json::from_str::<Value>(payload).ok()?;
+    let value =
+        maybe_apply_model_alias(serde_json::from_str::<Value>(payload).ok()?, model_from, model_to);
     observe_chat_stream_metadata(&value, metadata);
     let mut chunk = convert_response_value_to_chat_chunk(&value, tool_name_restore_map)?;
     fill_chat_chunk_defaults(&mut chunk, metadata);
@@ -509,11 +546,24 @@ pub(crate) fn encode_json_sse_chunk(value: &Value) -> Bytes {
 pub(crate) fn convert_json_response_to_chat_completion(
     bytes: &[u8],
     tool_name_restore_map: Option<&BTreeMap<String, String>>,
+    model_from: Option<&str>,
+    model_to: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let value = serde_json::from_slice::<Value>(bytes)
         .map_err(|_| "invalid upstream json payload".to_string())?;
+    let value = maybe_apply_model_alias(value, model_from, model_to);
     serde_json::to_vec(&map_response_to_chat_completion(&value, tool_name_restore_map))
         .map_err(|err| format!("serialize chat.completion json failed: {err}"))
+}
+
+pub(crate) fn rewrite_json_response_model_alias(
+    bytes: &[u8],
+    model_from: Option<&str>,
+    model_to: Option<&str>,
+) -> Option<Vec<u8>> {
+    let value = serde_json::from_slice::<Value>(bytes).ok()?;
+    let value = maybe_apply_model_alias(value, model_from, model_to);
+    serde_json::to_vec(&value).ok()
 }
 
 /// Parse a non-streaming JSON body and extract usage accounting when present.
@@ -629,6 +679,29 @@ pub(crate) fn encode_sse_event(event: &SseEvent) -> Bytes {
     }
     encoded.push('\n');
     Bytes::from(encoded)
+}
+
+pub(crate) fn encode_sse_event_with_model_alias(
+    event: &SseEvent,
+    model_from: Option<&str>,
+    model_to: Option<&str>,
+) -> Bytes {
+    let payload = event.data.trim();
+    if payload.is_empty() || payload == "[DONE]" {
+        return encode_sse_event(event);
+    }
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return encode_sse_event(event);
+    };
+    let value = maybe_apply_model_alias(value, model_from, model_to);
+    let data = serde_json::to_string(&value).unwrap_or_else(|_| event.data.clone());
+    let aliased_event = SseEvent {
+        event: event.event.clone(),
+        data,
+        id: event.id.clone(),
+        retry: event.retry,
+    };
+    encode_sse_event(&aliased_event)
 }
 
 /// Copy selected upstream headers onto the final downstream response.

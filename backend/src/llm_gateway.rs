@@ -11,6 +11,9 @@ mod response;
 mod runtime;
 mod types;
 
+pub(crate) mod accounts;
+pub(crate) mod token_refresh;
+
 use std::{
     env,
     sync::Arc,
@@ -33,35 +36,54 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
     now_ms, LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
-    LLM_GATEWAY_KEY_STATUS_ACTIVE,
+    NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING, LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
 };
 
 pub use self::runtime::LlmGatewayRuntimeState;
+pub(crate) use self::{
+    accounts::{resolve_auths_dir, AccountPool},
+    token_refresh::{build_refresh_client, spawn_account_refresh_task},
+};
 use self::{
     models::respond_local_models,
     request::{
-        ensure_supported_gateway_path, external_origin, extract_presented_key, normalize_name,
-        normalize_status, normalize_upstream_base_url,
-        prepare_gateway_request as normalize_gateway_request,
+        apply_gpt53_codex_spark_mapping, ensure_supported_gateway_path, external_origin,
+        extract_last_message_content, extract_presented_key, normalize_name, normalize_status,
+        normalize_upstream_base_url, prepare_gateway_request as normalize_gateway_request,
     },
     response::{
         adapt_completed_response_json, apply_upstream_response_headers,
         convert_json_response_to_chat_completion, convert_response_event_to_chat_chunk,
-        encode_json_sse_chunk, encode_sse_event, extract_usage_from_bytes, SseUsageCollector,
+        encode_json_sse_chunk, encode_sse_event_with_model_alias, extract_usage_from_bytes,
+        rewrite_json_response_model_alias, SseUsageCollector,
     },
     runtime::{bearer_header, gateway_auth_cache_ttl, CachedKeyLease, CodexAuthSnapshot},
     types::{
-        AdminLlmGatewayKeyView, AdminLlmGatewayKeysResponse, AdminLlmGatewayUsageEventView,
-        AdminLlmGatewayUsageEventsResponse, AdminLlmGatewayUsageQuery, CreateLlmGatewayKeyRequest,
-        GatewayResponseAdapter, LlmGatewayAccessResponse, LlmGatewayCreditsView,
+        AccountListResponse, AccountSummaryView, AdminLlmGatewayKeyView,
+        AdminLlmGatewayKeysResponse, AdminLlmGatewayTokenRequestQuery,
+        AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsResponse,
+        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsResponse,
+        AdminLlmGatewayUsageQuery, CreateLlmGatewayKeyRequest, GatewayResponseAdapter,
+        ImportAccountRequest, LlmGatewayAccessResponse, LlmGatewayCreditsView,
         LlmGatewayEventContext, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
         LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
-        LlmGatewayRuntimeConfigResponse, PatchLlmGatewayKeyRequest, PreparedGatewayRequest,
+        LlmGatewayRuntimeConfigResponse, PatchAccountSettingsRequest, PatchLlmGatewayKeyRequest,
+        PreparedGatewayRequest, SubmitLlmGatewayTokenRequest, SubmitLlmGatewayTokenRequestResponse,
         UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
     },
 };
 use crate::{
-    handlers::{ensure_admin_access, ErrorResponse},
+    email::{
+        build_llm_access_url, build_llm_gateway_base_url, normalize_frontend_page_url_input,
+        normalize_requester_email_input,
+    },
+    handlers::{
+        build_client_fingerprint, build_submit_rate_limit_key, enforce_comment_submit_rate_limit,
+        ensure_admin_access, extract_client_ip, generate_task_id, AdminTaskActionRequest,
+        ErrorResponse,
+    },
     state::{AppState, LlmGatewayRuntimeConfig},
 };
 
@@ -74,9 +96,14 @@ const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
 const MIN_RUNTIME_CACHE_TTL_SECONDS: u64 = 1;
 const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
 const PUBLIC_RATE_LIMIT_REFRESH_SECONDS: u64 = 60;
+const LAST_MESSAGE_CONTENT_EXTRACT_FAILED: &str = "[extract_failed]";
+const MAX_PUBLIC_TOKEN_WISH_REASON_CHARS: usize = 4000;
+const MAX_PUBLIC_TOKEN_WISH_QUOTA: u64 = 100_000_000_000;
+pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
+pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct UsageStatusPayload {
+pub(super) struct UsageStatusPayload {
     #[serde(default)]
     plan_type: Option<String>,
     #[serde(default)]
@@ -261,35 +288,13 @@ pub async fn create_admin_key(
 ) -> Result<Json<AdminLlmGatewayKeyView>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let name = normalize_name(&request.name)?;
-    let secret = generate_secret();
-    let key_hash = sha256_hex(secret.as_bytes());
-    let now = now_ms();
-    let record = LlmGatewayKeyRecord {
-        id: generate_id("llm-key"),
+    let record = create_managed_key_record(
+        &state,
         name,
-        secret,
-        key_hash: key_hash.clone(),
-        status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
-        public_visible: request.public_visible,
-        quota_billable_limit: request.quota_billable_limit,
-        usage_input_uncached_tokens: 0,
-        usage_input_cached_tokens: 0,
-        usage_output_tokens: 0,
-        usage_billable_tokens: 0,
-        last_used_at: None,
-        created_at: now,
-        updated_at: now,
-    };
-    state
-        .llm_gateway_store
-        .upsert_key(&record)
-        .await
-        .map_err(|err| internal_error("Failed to create llm gateway key", err))?;
-    let ttl = current_cache_ttl(&state).await;
-    state
-        .llm_gateway
-        .key_cache
-        .renew(record.clone(), Duration::from_secs(ttl));
+        request.quota_billable_limit,
+        request.public_visible,
+    )
+    .await?;
 
     tracing::info!(
         key_id = %record.id,
@@ -300,6 +305,46 @@ pub async fn create_admin_key(
     );
 
     Ok(Json(AdminLlmGatewayKeyView::from(&record)))
+}
+
+async fn create_managed_key_record(
+    state: &AppState,
+    name: String,
+    quota_billable_limit: u64,
+    public_visible: bool,
+) -> Result<LlmGatewayKeyRecord, (StatusCode, Json<ErrorResponse>)> {
+    let secret = generate_secret();
+    let key_hash = sha256_hex(secret.as_bytes());
+    let now = now_ms();
+    let record = LlmGatewayKeyRecord {
+        id: generate_id("llm-key"),
+        name,
+        secret,
+        key_hash: key_hash.clone(),
+        status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
+        public_visible,
+        quota_billable_limit,
+        usage_input_uncached_tokens: 0,
+        usage_input_cached_tokens: 0,
+        usage_output_tokens: 0,
+        usage_billable_tokens: 0,
+        last_used_at: None,
+        created_at: now,
+        updated_at: now,
+        route_strategy: None,
+        fixed_account_name: None,
+    };
+    state
+        .llm_gateway_store
+        .upsert_key(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create llm gateway key", err))?;
+    let ttl = current_cache_ttl(state).await;
+    state
+        .llm_gateway
+        .key_cache
+        .renew(record.clone(), Duration::from_secs(ttl));
+    Ok(record)
 }
 
 /// Patch one managed key and refresh or invalidate its in-memory cache lease.
@@ -328,6 +373,13 @@ pub async fn patch_admin_key(
     }
     if let Some(limit) = request.quota_billable_limit {
         key.quota_billable_limit = limit;
+    }
+    if let Some(strategy) = request.route_strategy.as_deref() {
+        key.route_strategy = if strategy.is_empty() { None } else { Some(strategy.to_string()) };
+    }
+    if let Some(account_name) = request.fixed_account_name.as_deref() {
+        key.fixed_account_name =
+            if account_name.is_empty() { None } else { Some(account_name.to_string()) };
     }
     key.updated_at = now_ms();
     state
@@ -454,6 +506,317 @@ pub async fn list_admin_usage_events(
     }))
 }
 
+/// Accept a public token wish from `/llm-access`; actual key creation only
+/// happens after an admin approves it.
+pub async fn submit_public_token_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitLlmGatewayTokenRequest>,
+) -> Result<Json<SubmitLlmGatewayTokenRequestResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if request.requested_quota_billable_limit == 0 {
+        return Err(bad_request("requested_quota_billable_limit must be > 0"));
+    }
+    if request.requested_quota_billable_limit > MAX_PUBLIC_TOKEN_WISH_QUOTA {
+        return Err(bad_request("requested_quota_billable_limit is too large"));
+    }
+    let request_reason = request.request_reason.trim();
+    if request_reason.is_empty() {
+        return Err(bad_request("request_reason is required"));
+    }
+    if request_reason.chars().count() > MAX_PUBLIC_TOKEN_WISH_REASON_CHARS {
+        return Err(bad_request("request_reason is too long"));
+    }
+    let requester_email = normalize_requester_email_input(Some(request.requester_email))
+        .map_err(|err| bad_request_with_detail("invalid requester_email", err))?
+        .ok_or_else(|| bad_request("requester_email is required"))?;
+    let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
+        .map_err(|err| bad_request_with_detail("invalid frontend_page_url", err))?;
+
+    let client_ip = extract_client_ip(&headers);
+    let fingerprint = build_client_fingerprint(&headers);
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
+    enforce_comment_submit_rate_limit(
+        state.llm_gateway_token_request_submit_guard.as_ref(),
+        &rate_limit_key,
+        now_ms(),
+        60,
+    )
+    .await?;
+
+    let request_id = generate_task_id("llmwish");
+    let ip_region = state.geoip.resolve_region(&client_ip).await;
+    let record = state
+        .llm_gateway_store
+        .create_token_request(NewLlmGatewayTokenRequestInput {
+            request_id: request_id.clone(),
+            requester_email,
+            requested_quota_billable_limit: request.requested_quota_billable_limit,
+            request_reason: request_reason.to_string(),
+            frontend_page_url,
+            fingerprint,
+            client_ip,
+            ip_region,
+        })
+        .await
+        .map_err(|err| internal_error("Failed to create llm gateway token request", err))?;
+
+    if let Some(notifier) = state.email_notifier.clone() {
+        let record_for_email = record.clone();
+        tokio::spawn(async move {
+            if let Err(err) = notifier
+                .send_admin_new_llm_token_request_notification(&record_for_email)
+                .await
+            {
+                tracing::warn!(
+                    "failed to send admin notification email for llm token request {}: {}",
+                    record_for_email.request_id,
+                    err
+                );
+            }
+        });
+    }
+
+    Ok(Json(SubmitLlmGatewayTokenRequestResponse {
+        request_id,
+        status: LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING.to_string(),
+    }))
+}
+
+/// List token wishes for the admin audit surface.
+pub async fn list_admin_token_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<AdminLlmGatewayTokenRequestQuery>,
+) -> Result<Json<AdminLlmGatewayTokenRequestsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let total = state
+        .llm_gateway_store
+        .count_token_requests(query.status.as_deref())
+        .await
+        .map_err(|err| internal_error("Failed to count llm gateway token requests", err))?;
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminLlmGatewayTokenRequestsResponse {
+            total,
+            offset,
+            limit,
+            has_more: false,
+            requests: vec![],
+            generated_at: now_ms(),
+        }));
+    }
+
+    let requests = state
+        .llm_gateway_store
+        .list_token_requests_page(query.status.as_deref(), limit, offset)
+        .await
+        .map_err(|err| internal_error("Failed to list llm gateway token requests", err))?;
+    let has_more = offset.saturating_add(requests.len()) < total;
+
+    Ok(Json(AdminLlmGatewayTokenRequestsResponse {
+        total,
+        offset,
+        limit,
+        has_more,
+        requests: requests
+            .iter()
+            .map(AdminLlmGatewayTokenRequestView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Approve a token wish, create the key if needed, and email it to the user.
+pub async fn approve_and_issue_token_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<AdminLlmGatewayTokenRequestView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let mut token_request = state
+        .llm_gateway_store
+        .get_token_request(&request_id)
+        .await
+        .map_err(|err| internal_error("Failed to load llm gateway token request", err))?
+        .ok_or_else(|| not_found("LLM gateway token request not found"))?;
+
+    match token_request.status.as_str() {
+        LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED | LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED => {
+            return Err(conflict_error("LLM gateway token request is finalized"));
+        },
+        _ => {},
+    }
+
+    let Some(notifier) = state.email_notifier.clone() else {
+        token_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+        token_request.failure_reason = Some("email notifier is not configured".to_string());
+        token_request.updated_at = now_ms();
+        token_request.processed_at = Some(now_ms());
+        state
+            .llm_gateway_store
+            .upsert_token_request(&token_request)
+            .await
+            .map_err(|err| {
+                internal_error("Failed to persist llm gateway token request failure", err)
+            })?;
+        return Err(internal_error(
+            "Failed to send llm gateway token email",
+            "email notifier is not configured",
+        ));
+    };
+
+    let key = if let Some(existing_key_id) = token_request.issued_key_id.as_deref() {
+        state
+            .llm_gateway_store
+            .get_key_by_id(existing_key_id)
+            .await
+            .map_err(|err| internal_error("Failed to reload issued llm gateway key", err))?
+            .ok_or_else(|| not_found("Previously issued LLM gateway key not found"))?
+    } else {
+        let key_name = normalize_name(&format!("wish-{}", token_request.request_id))?;
+        create_managed_key_record(
+            &state,
+            key_name,
+            token_request.requested_quota_billable_limit,
+            false,
+        )
+        .await?
+    };
+
+    let gateway_base_url = token_request
+        .frontend_page_url
+        .as_deref()
+        .and_then(|url| build_llm_gateway_base_url(url).ok())
+        .or_else(|| {
+            env::var("SITE_BASE_URL")
+                .ok()
+                .map(|base| format!("{}/api/llm-gateway/v1", base.trim_end_matches('/')))
+        })
+        .unwrap_or_else(|| "/api/llm-gateway/v1".to_string());
+    let llm_access_url = token_request
+        .frontend_page_url
+        .as_deref()
+        .and_then(|url| build_llm_access_url(url).ok());
+
+    let now = now_ms();
+    token_request.admin_note = request.admin_note.clone();
+    token_request.failure_reason = None;
+    token_request.issued_key_id = Some(key.id.clone());
+    token_request.issued_key_name = Some(key.name.clone());
+    token_request.updated_at = now;
+    token_request.processed_at = Some(now);
+    let mut issued_request = token_request.clone();
+    issued_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED.to_string();
+    let email_result = notifier
+        .send_user_llm_token_issued_notification(
+            &issued_request,
+            &key,
+            &gateway_base_url,
+            llm_access_url.as_deref(),
+        )
+        .await;
+
+    match email_result {
+        Ok(_) => {
+            token_request = issued_request;
+            state
+                .llm_gateway_store
+                .upsert_token_request(&token_request)
+                .await
+                .map_err(|err| {
+                    internal_error("Failed to finalize llm gateway token request", err)
+                })?;
+            Ok(Json(AdminLlmGatewayTokenRequestView::from(&token_request)))
+        },
+        Err(err) => {
+            token_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+            token_request.failure_reason = Some(err.to_string());
+            state
+                .llm_gateway_store
+                .upsert_token_request(&token_request)
+                .await
+                .map_err(|upsert_err| {
+                    internal_error(
+                        "Failed to persist llm gateway token request failure",
+                        upsert_err,
+                    )
+                })?;
+            Err(internal_error("Failed to send llm gateway token email", err))
+        },
+    }
+}
+
+/// Reject a token wish without creating any key.
+pub async fn reject_token_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<AdminLlmGatewayTokenRequestView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let mut token_request = state
+        .llm_gateway_store
+        .get_token_request(&request_id)
+        .await
+        .map_err(|err| internal_error("Failed to load llm gateway token request", err))?
+        .ok_or_else(|| not_found("LLM gateway token request not found"))?;
+
+    if token_request.status == LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED {
+        return Err(conflict_error("Issued LLM gateway token request cannot be rejected"));
+    }
+    if token_request.status == LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED {
+        return Err(conflict_error("LLM gateway token request is already rejected"));
+    }
+
+    if token_request.status != LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED {
+        if let Some(key_id) = token_request.issued_key_id.as_deref() {
+            if let Some(mut key) = state
+                .llm_gateway_store
+                .get_key_by_id(key_id)
+                .await
+                .map_err(|err| {
+                    internal_error("Failed to load partially issued llm gateway key", err)
+                })?
+            {
+                if key.status == LLM_GATEWAY_KEY_STATUS_ACTIVE {
+                    key.status = LLM_GATEWAY_KEY_STATUS_DISABLED.to_string();
+                    key.updated_at = now_ms();
+                    state
+                        .llm_gateway_store
+                        .upsert_key(&key)
+                        .await
+                        .map_err(|err| {
+                            internal_error(
+                                "Failed to disable partially issued llm gateway key",
+                                err,
+                            )
+                        })?;
+                    state.llm_gateway.key_cache.invalidate(&key.key_hash);
+                }
+            }
+        }
+    }
+
+    let now = now_ms();
+    token_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED.to_string();
+    token_request.admin_note = request.admin_note.clone();
+    token_request.failure_reason = None;
+    token_request.updated_at = now;
+    token_request.processed_at = Some(now);
+    state
+        .llm_gateway_store
+        .upsert_token_request(&token_request)
+        .await
+        .map_err(|err| internal_error("Failed to reject llm gateway token request", err))?;
+
+    Ok(Json(AdminLlmGatewayTokenRequestView::from(&token_request)))
+}
+
 /// Start the background worker that refreshes the public rate-limit cache on a
 /// fixed cadence.
 pub fn spawn_public_rate_limit_refresher(
@@ -485,21 +848,56 @@ pub fn spawn_public_rate_limit_refresher(
 }
 
 /// Refresh the cached Codex account rate-limit snapshot once.
+///
+/// When the account pool has entries the public status is assembled from the
+/// per-account snapshots that the background `token_refresh` task already
+/// maintains — no extra upstream requests are made here.  When the pool is
+/// empty the legacy single-file `CodexAuthSource` path fires one upstream
+/// request as before.
 pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeState>) -> Result<()> {
     let checked_at = now_ms();
     let refresh_interval_seconds = PUBLIC_RATE_LIMIT_REFRESH_SECONDS;
     let source_url = compute_rate_limit_status_url();
 
-    match fetch_rate_limit_status_snapshot(runtime, &source_url).await {
-        Ok(buckets) => {
+    let pool_entries = runtime.account_pool.all_entries().await;
+
+    let result: Result<(Vec<LlmGatewayRateLimitBucketView>, Option<String>)> =
+        if pool_entries.is_empty() {
+            // Legacy single-file path — one upstream request.
+            fetch_rate_limit_status_snapshot(runtime, &source_url)
+                .await
+                .map(|buckets| (buckets, None::<String>))
+        } else {
+            // Multi-account: read the already-cached per-account snapshots kept
+            // fresh by the background refresh task instead of hitting upstream.
+            let summaries = runtime.account_pool.list_summaries().await;
+            let mut all_buckets = Vec::new();
+            for summary in &summaries {
+                if summary.status.as_str() != "active" {
+                    continue;
+                }
+                for mut bucket in summary.rate_limits.buckets.clone() {
+                    bucket.account_name = Some(summary.name.clone());
+                    all_buckets.push(bucket);
+                }
+            }
+            Ok((all_buckets, None))
+        };
+
+    match result {
+        Ok((buckets, partial_error)) => {
             let mut status = runtime.rate_limit_status.write().await;
             *status = LlmGatewayRateLimitStatusResponse {
-                status: "ready".to_string(),
+                status: if partial_error.is_some() {
+                    "degraded".to_string()
+                } else {
+                    "ready".to_string()
+                },
                 refresh_interval_seconds,
                 last_checked_at: Some(checked_at),
                 last_success_at: Some(checked_at),
                 source_url,
-                error_message: None,
+                error_message: partial_error,
                 buckets,
             };
             tracing::info!(
@@ -591,26 +989,38 @@ pub async fn proxy_gateway_request(
         "Validated LLM gateway key and forwarding request"
     );
 
-    let auth_snapshot = state
-        .llm_gateway
-        .auth_source
-        .current()
-        .await
-        .map_err(|err| internal_error("Failed to load llm gateway auth", err))?;
+    let (auth_snapshot, selected_account_name, map_gpt53_codex_to_spark) =
+        resolve_auth_for_key(&state, &key_lease.record).await?;
 
     if request::is_models_path(&gateway_path) {
-        return respond_local_models(&state, &auth_snapshot, &parts.headers, &query).await;
+        return respond_local_models(
+            &state,
+            &auth_snapshot,
+            &parts.headers,
+            &query,
+            map_gpt53_codex_to_spark,
+        )
+        .await;
     }
 
     let prepared =
         normalize_gateway_request(&gateway_path, &query, parts.method, &parts.headers, body)
             .await?;
+    let prepared = apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark)?;
 
     let response = send_upstream_with_retry(&state, &prepared, &parts.headers, &auth_snapshot)
         .await
         .map_err(|err| internal_error("Failed to proxy llm gateway request", err))?;
 
-    forward_upstream_response(state, key_lease, prepared, response, event_context).await
+    forward_upstream_response(
+        state,
+        key_lease,
+        prepared,
+        response,
+        event_context,
+        selected_account_name,
+    )
+    .await
 }
 
 /// Validate the presented key via cache first, then fall back to LanceDB.
@@ -652,6 +1062,58 @@ fn validate_cached_key(key: &LlmGatewayKeyRecord) -> Result<(), (StatusCode, Jso
         return Err(auth_error(StatusCode::TOO_MANY_REQUESTS, "quota_exceeded"));
     }
     Ok(())
+}
+
+/// Select the upstream auth snapshot based on the key's routing strategy.
+///
+/// Routing order:
+/// 1. `fixed` + `fixed_account_name` → use that specific account from the pool.
+/// 2. `auto` (or unset) → pick the active account with the most remaining
+///    quota.
+/// 3. Fallback → if the pool is empty, use the legacy single-file
+///    `CodexAuthSource`.
+async fn resolve_auth_for_key(
+    state: &AppState,
+    key: &LlmGatewayKeyRecord,
+) -> Result<(CodexAuthSnapshot, Option<String>, bool), (StatusCode, Json<ErrorResponse>)> {
+    let pool = &state.llm_gateway.account_pool;
+    let strategy = key.route_strategy.as_deref().unwrap_or("auto");
+
+    match strategy {
+        "fixed" => {
+            let name = key.fixed_account_name.as_deref().unwrap_or("");
+            if name.is_empty() {
+                return Err(bad_request("fixed route_strategy requires fixed_account_name"));
+            }
+            pool.get_account(name)
+                .await
+                .map(|(snapshot, map_gpt53_codex_to_spark)| {
+                    (snapshot, Some(name.to_string()), map_gpt53_codex_to_spark)
+                })
+                .ok_or_else(|| {
+                    auth_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &format!("bound account `{name}` is unavailable"),
+                    )
+                })
+        },
+        _ => {
+            // auto: best available account by remaining quota, or legacy fallback.
+            if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
+                pool.select_best_account().await
+            {
+                return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
+            }
+            // Fallback to single-file CodexAuthSource when pool is empty.
+            state
+                .llm_gateway
+                .auth_source
+                .current()
+                .await
+                .map(|snapshot| (snapshot, None, false))
+                .map_err(|err| internal_error("no accounts available and legacy auth failed", err))
+        },
+    }
 }
 
 /// Read the live auth-cache TTL from the runtime config lock.
@@ -848,6 +1310,7 @@ async fn forward_upstream_response(
     prepared: PreparedGatewayRequest,
     upstream: reqwest::Response,
     event_context: Option<LlmGatewayEventContext>,
+    selected_account_name: Option<String>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     let status = upstream.status();
     let response_adapter = prepared.response_adapter;
@@ -896,6 +1359,7 @@ async fn forward_upstream_response(
                 status.as_u16(),
                 usage,
                 event_context.clone(),
+                selected_account_name.as_deref(),
             )
             .await
             .map_err(|err| internal_error("Failed to persist llm gateway usage", err))?;
@@ -906,6 +1370,30 @@ async fn forward_upstream_response(
                     "response.completed event missing",
                 )
             })?;
+            let response_json = if let (Some(model_from), Some(model_to)) =
+                (prepared.model.as_deref(), prepared.client_visible_model.as_deref())
+            {
+                let aliased = response_json.clone();
+                let aliased_bytes = rewrite_json_response_model_alias(
+                    &serde_json::to_vec(&response_json).unwrap_or_default(),
+                    Some(model_from),
+                    Some(model_to),
+                );
+                aliased_bytes
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .unwrap_or_else(|| {
+                        if model_from != model_to {
+                            tracing::debug!(
+                                model_from,
+                                model_to,
+                                "Failed to alias aggregated llm gateway response model"
+                            );
+                        }
+                        aliased
+                    })
+            } else {
+                response_json
+            };
             let adapted_json = adapt_completed_response_json(
                 &response_json,
                 response_adapter,
@@ -941,13 +1429,19 @@ async fn forward_upstream_response(
                         collector.observe_event(&event);
                         match stream_response_adapter {
                             GatewayResponseAdapter::Responses => {
-                                yield Ok::<Bytes, std::io::Error>(encode_sse_event(&event));
+                                yield Ok::<Bytes, std::io::Error>(encode_sse_event_with_model_alias(
+                                    &event,
+                                    prepared.model.as_deref(),
+                                    prepared.client_visible_model.as_deref(),
+                                ));
                             }
                             GatewayResponseAdapter::ChatCompletions => {
                                 if let Some(chunk) = convert_response_event_to_chat_chunk(
                                     &event,
                                     Some(&prepared.tool_name_restore_map),
                                     &mut chat_metadata,
+                                    prepared.model.as_deref(),
+                                    prepared.client_visible_model.as_deref(),
                                 ) {
                                     yield Ok::<Bytes, std::io::Error>(encode_json_sse_chunk(&chunk));
                                 }
@@ -973,6 +1467,7 @@ async fn forward_upstream_response(
                 status.as_u16(),
                 usage,
                 event_context.clone(),
+                selected_account_name.as_deref(),
             ).await {
                 yield Err(std::io::Error::other(format!(
                     "failed to persist llm gateway usage: {err}"
@@ -1022,20 +1517,32 @@ async fn forward_upstream_response(
         status.as_u16(),
         usage,
         event_context,
+        selected_account_name.as_deref(),
     )
     .await
     .map_err(|err| internal_error("Failed to persist llm gateway usage", err))?;
 
-    let response_bytes = if status.is_success()
-        && response_adapter == GatewayResponseAdapter::ChatCompletions
-    {
-        convert_json_response_to_chat_completion(&body_bytes, Some(&prepared.tool_name_restore_map))
+    let aliased_body_bytes = rewrite_json_response_model_alias(
+        &body_bytes,
+        prepared.model.as_deref(),
+        prepared.client_visible_model.as_deref(),
+    )
+    .unwrap_or_else(|| body_bytes.to_vec());
+
+    let response_bytes =
+        if status.is_success() && response_adapter == GatewayResponseAdapter::ChatCompletions {
+            convert_json_response_to_chat_completion(
+                &body_bytes,
+                Some(&prepared.tool_name_restore_map),
+                prepared.model.as_deref(),
+                prepared.client_visible_model.as_deref(),
+            )
             .map_err(|err| {
                 internal_error("Failed to adapt upstream response to chat.completions", err)
             })?
-    } else {
-        body_bytes.to_vec()
-    };
+        } else {
+            aliased_body_bytes
+        };
 
     let builder = Response::builder()
         .status(status)
@@ -1061,6 +1568,7 @@ async fn persist_gateway_usage(
     status_code: u16,
     usage: UsageBreakdown,
     event_context: Option<LlmGatewayEventContext>,
+    selected_account_name: Option<&str>,
 ) -> Result<()> {
     let _guard = gateway.usage_write_lock.lock().await;
     let current = gateway
@@ -1090,10 +1598,25 @@ async fn persist_gateway_usage(
             "LLM gateway usage payload was missing and fell back to zeroed counters"
         );
     }
+    let last_message_content = match extract_last_message_content(&prepared.request_body) {
+        Ok(content) => content,
+        Err(err) => {
+            tracing::debug!(
+                key_id = %current.id,
+                upstream_path = prepared.upstream_path,
+                "Failed to extract last message content from request body: {err}"
+            );
+            Some(LAST_MESSAGE_CONTENT_EXTRACT_FAILED.to_string())
+        },
+    };
     let event = LlmGatewayUsageEventRecord {
         id: generate_id("llm-usage"),
         key_id: current.id.clone(),
         key_name: current.name.clone(),
+        account_name: selected_account_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         request_method: context.request_method,
         request_url: context.request_url,
         latency_ms,
@@ -1108,6 +1631,7 @@ async fn persist_gateway_usage(
         client_ip: context.client_ip,
         ip_region: context.ip_region,
         request_headers_json: context.request_headers_json,
+        last_message_content,
         created_at: now_ms(),
     };
     let updated = gateway.store.apply_usage_event(&current, &event).await?;
@@ -1116,6 +1640,7 @@ async fn persist_gateway_usage(
         key_id = %updated.id,
         key_name = %updated.name,
         event_id = %event.id,
+        account_name = event.account_name.as_deref().unwrap_or("legacy"),
         request_url = %event.request_url,
         status_code = event.status_code,
         latency_ms = event.latency_ms,
@@ -1205,7 +1730,7 @@ fn status_error_is_unauthorized(err: &anyhow::Error) -> bool {
 }
 
 /// Convert the raw upstream usage payload into display-ready public buckets.
-fn map_rate_limit_status_payload(
+pub(super) fn map_rate_limit_status_payload(
     payload: UsageStatusPayload,
 ) -> Vec<LlmGatewayRateLimitBucketView> {
     let plan_type = payload.plan_type.as_deref().map(normalize_plan_type_label);
@@ -1227,6 +1752,7 @@ fn map_rate_limit_status_payload(
             .and_then(|details| details.secondary_window.as_ref())
             .map(map_rate_limit_window),
         credits: payload.credits.as_ref().map(map_credits_view),
+        account_name: None,
     });
     buckets.extend(
         payload
@@ -1261,6 +1787,7 @@ fn map_rate_limit_status_payload(
                         .and_then(|rate_limit| rate_limit.secondary_window.as_ref())
                         .map(map_rate_limit_window),
                     credits: None,
+                    account_name: None,
                 }
             }),
     );
@@ -1429,6 +1956,17 @@ fn not_found(message: &str) -> (StatusCode, Json<ErrorResponse>) {
     )
 }
 
+/// Build a standardized 409 error payload.
+fn conflict_error(message: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::CONFLICT,
+        Json(ErrorResponse {
+            error: message.to_string(),
+            code: 409,
+        }),
+    )
+}
+
 /// Build a standardized auth-related error payload.
 fn auth_error(status: StatusCode, message: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -1450,4 +1988,186 @@ fn internal_error(message: &str, err: impl std::fmt::Display) -> (StatusCode, Js
             code: 500,
         }),
     )
+}
+
+// === Admin account pool management ===
+
+/// Import a Codex account into the pool after verifying it can reach the
+/// upstream usage endpoint.
+pub async fn import_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ImportAccountRequest>,
+) -> Result<Json<AccountSummaryView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let name = accounts::validate_account_name(&request.name).map_err(|err| bad_request(&err))?;
+    let pool = &state.llm_gateway.account_pool;
+    if pool.exists(&name).await {
+        return Err(bad_request(&format!("account `{name}` already exists")));
+    }
+
+    let access_token = request.tokens.access_token.trim().to_string();
+    let refresh_token = request.tokens.refresh_token.trim().to_string();
+    let id_token = request.tokens.id_token.trim().to_string();
+    let account_id = request
+        .tokens
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+
+    if access_token.is_empty() {
+        return Err(bad_request("access_token is required"));
+    }
+
+    // Validate by fetching usage through the existing proxy.
+    let auth = runtime::CodexAuthSnapshot::from_tokens(access_token.clone(), account_id.clone());
+    let usage = token_refresh::validate_account_usage(&state.llm_gateway.client, &auth)
+        .await
+        .map_err(|err| bad_request(&format!("account verification failed: {err}")))?;
+
+    let account = accounts::CodexAccount {
+        name: name.clone(),
+        access_token,
+        account_id,
+        refresh_token,
+        id_token,
+        map_gpt53_codex_to_spark: false,
+        last_refresh: Some(chrono::Utc::now()),
+        status: accounts::AccountStatus::Active,
+    };
+    pool.insert(account)
+        .await
+        .map_err(|err| internal_error("Failed to persist account", err))?;
+    pool.update_rate_limit(&name, usage.clone()).await;
+
+    tracing::info!(account = name, "Imported Codex account into gateway pool");
+
+    Ok(Json(AccountSummaryView {
+        name,
+        status: "active".to_string(),
+        account_id: request
+            .tokens
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string),
+        plan_type: usage.primary_plan_type(),
+        primary_remaining_percent: usage.primary_remaining_percent(),
+        secondary_remaining_percent: usage.secondary_remaining_percent(),
+        map_gpt53_codex_to_spark: false,
+        last_refresh: Some(now_ms()),
+    }))
+}
+
+/// List all managed Codex accounts in the pool.
+pub async fn list_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AccountListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let summaries = state.llm_gateway.account_pool.list_summaries().await;
+    let accounts = summaries
+        .into_iter()
+        .map(|summary| AccountSummaryView {
+            name: summary.name,
+            status: summary.status.as_str().to_string(),
+            account_id: summary.account_id,
+            plan_type: summary.rate_limits.primary_plan_type(),
+            primary_remaining_percent: summary.rate_limits.primary_remaining_percent(),
+            secondary_remaining_percent: summary.rate_limits.secondary_remaining_percent(),
+            map_gpt53_codex_to_spark: summary.map_gpt53_codex_to_spark,
+            last_refresh: summary
+                .rate_limits
+                .last_checked_at
+                .or(summary.last_refresh_ms),
+        })
+        .collect();
+    Ok(Json(AccountListResponse {
+        accounts,
+        generated_at: now_ms(),
+    }))
+}
+
+pub async fn patch_account_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<PatchAccountSettingsRequest>,
+) -> Result<Json<AccountSummaryView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let name = accounts::validate_account_name(&name).map_err(|err| bad_request(&err))?;
+    let Some(enabled) = request.map_gpt53_codex_to_spark else {
+        return Err(bad_request("map_gpt53_codex_to_spark is required"));
+    };
+
+    let summaries = state.llm_gateway.account_pool.list_summaries().await;
+    let current = summaries
+        .iter()
+        .find(|summary| summary.name == name)
+        .ok_or_else(|| not_found("account not found"))?;
+    if enabled && !current.rate_limits.is_gpt_pro() {
+        return Err(bad_request("Spark mapping is only available for accounts with plan_type=Pro"));
+    }
+
+    let updated = state
+        .llm_gateway
+        .account_pool
+        .set_map_gpt53_codex_to_spark(&name, enabled)
+        .await
+        .map_err(|err| internal_error("Failed to update account settings", err))?;
+    if !updated {
+        return Err(not_found("account not found"));
+    }
+
+    let summary = state
+        .llm_gateway
+        .account_pool
+        .list_summaries()
+        .await
+        .into_iter()
+        .find(|summary| summary.name == name)
+        .ok_or_else(|| not_found("account not found"))?;
+
+    tracing::info!(
+        account = summary.name,
+        map_gpt53_codex_to_spark = summary.map_gpt53_codex_to_spark,
+        "Updated Codex account settings"
+    );
+
+    Ok(Json(AccountSummaryView {
+        name: summary.name,
+        status: summary.status.as_str().to_string(),
+        account_id: summary.account_id,
+        plan_type: summary.rate_limits.primary_plan_type(),
+        primary_remaining_percent: summary.rate_limits.primary_remaining_percent(),
+        secondary_remaining_percent: summary.rate_limits.secondary_remaining_percent(),
+        map_gpt53_codex_to_spark: summary.map_gpt53_codex_to_spark,
+        last_refresh: summary
+            .rate_limits
+            .last_checked_at
+            .or(summary.last_refresh_ms),
+    }))
+}
+
+/// Remove a Codex account from the pool and delete its auth file.
+pub async fn remove_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let removed = state
+        .llm_gateway
+        .account_pool
+        .remove(&name)
+        .await
+        .map_err(|err| internal_error("Failed to remove account", err))?;
+    if !removed {
+        return Err(not_found("account not found"));
+    }
+    tracing::info!(account = name, "Removed Codex account from gateway pool");
+    Ok(Json(json!({ "deleted": true, "name": name })))
 }

@@ -10,7 +10,8 @@ use lancedb::{
 };
 
 use super::types::{
-    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
+    LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
 
 pub fn llm_gateway_keys_schema() -> Arc<Schema> {
@@ -29,6 +30,8 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("last_used_at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("route_strategy", DataType::Utf8, true),
+        Field::new("fixed_account_name", DataType::Utf8, true),
     ]))
 }
 
@@ -37,6 +40,7 @@ pub fn llm_gateway_usage_events_schema() -> Arc<Schema> {
         Field::new("id", DataType::Utf8, false),
         Field::new("key_id", DataType::Utf8, false),
         Field::new("key_name", DataType::Utf8, true),
+        Field::new("account_name", DataType::Utf8, true),
         Field::new("request_method", DataType::Utf8, true),
         Field::new("request_url", DataType::Utf8, true),
         Field::new("latency_ms", DataType::Int32, true),
@@ -51,6 +55,7 @@ pub fn llm_gateway_usage_events_schema() -> Arc<Schema> {
         Field::new("client_ip", DataType::Utf8, true),
         Field::new("ip_region", DataType::Utf8, true),
         Field::new("request_headers_json", DataType::Utf8, true),
+        Field::new("last_message_content", DataType::Utf8, true),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
@@ -60,6 +65,27 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         Field::new("id", DataType::Utf8, false),
         Field::new("auth_cache_ttl_seconds", DataType::UInt64, false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+    ]))
+}
+
+pub fn llm_gateway_token_requests_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("request_id", DataType::Utf8, false),
+        Field::new("requester_email", DataType::Utf8, false),
+        Field::new("requested_quota_billable_limit", DataType::UInt64, false),
+        Field::new("request_reason", DataType::Utf8, false),
+        Field::new("frontend_page_url", DataType::Utf8, true),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("fingerprint", DataType::Utf8, false),
+        Field::new("client_ip", DataType::Utf8, false),
+        Field::new("ip_region", DataType::Utf8, false),
+        Field::new("admin_note", DataType::Utf8, true),
+        Field::new("failure_reason", DataType::Utf8, true),
+        Field::new("issued_key_id", DataType::Utf8, true),
+        Field::new("issued_key_name", DataType::Utf8, true),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("processed_at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
     ]))
 }
 
@@ -91,6 +117,8 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_scalar_index(&table, "key_hash").await?;
     ensure_scalar_index(&table, "status").await?;
     ensure_scalar_index(&table, "public_visible").await?;
+    ensure_nullable_utf8_column(&table, "route_strategy").await?;
+    ensure_nullable_utf8_column(&table, "fixed_account_name").await?;
     Ok(table)
 }
 
@@ -108,6 +136,8 @@ pub async fn ensure_usage_events_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "client_ip").await?;
     ensure_nullable_utf8_column(&table, "ip_region").await?;
     ensure_nullable_utf8_column(&table, "request_headers_json").await?;
+    ensure_nullable_utf8_column(&table, "account_name").await?;
+    ensure_nullable_utf8_column(&table, "last_message_content").await?;
     ensure_scalar_index(&table, "id").await?;
     ensure_scalar_index(&table, "key_id").await?;
     ensure_scalar_index(&table, "created_at").await?;
@@ -122,6 +152,26 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
         ])
         .await?;
     ensure_scalar_index(&table, "id").await?;
+    Ok(table)
+}
+
+pub async fn ensure_token_requests_table(db: &Connection) -> Result<Table> {
+    let table =
+        ensure_table(db, LLM_GATEWAY_TOKEN_REQUESTS_TABLE, llm_gateway_token_requests_schema(), &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ])
+        .await?;
+    ensure_nullable_utf8_column(&table, "frontend_page_url").await?;
+    ensure_nullable_utf8_column(&table, "admin_note").await?;
+    ensure_nullable_utf8_column(&table, "failure_reason").await?;
+    ensure_nullable_utf8_column(&table, "issued_key_id").await?;
+    ensure_nullable_utf8_column(&table, "issued_key_name").await?;
+    ensure_nullable_ts_column(&table, "processed_at").await?;
+    ensure_scalar_index(&table, "request_id").await?;
+    ensure_scalar_index(&table, "requester_email").await?;
+    ensure_scalar_index(&table, "status").await?;
+    ensure_scalar_index(&table, "created_at").await?;
     Ok(table)
 }
 
@@ -210,7 +260,29 @@ async fn ensure_nullable_i32_column(table: &Table, column: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn key_columns() -> [&'static str; 14] {
+/// Adds a nullable timestamp column to an existing table without rewriting old
+/// rows.
+async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
+    let schema = table.schema().await?;
+    if schema.field_with_name(column).is_ok() {
+        return Ok(());
+    }
+    tracing::info!(table = %table.name(), column, "Adding nullable timestamp column to LLM gateway table");
+    table
+        .add_columns(
+            NewColumnTransform::AllNulls(Arc::new(Schema::new(vec![Field::new(
+                column,
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            )]))),
+            None,
+        )
+        .await
+        .with_context(|| format!("failed to add `{column}` to `{}`", table.name()))?;
+    Ok(())
+}
+
+pub fn key_columns() -> [&'static str; 16] {
     [
         "id",
         "name",
@@ -226,14 +298,17 @@ pub fn key_columns() -> [&'static str; 14] {
         "last_used_at",
         "created_at",
         "updated_at",
+        "route_strategy",
+        "fixed_account_name",
     ]
 }
 
-pub fn usage_event_columns() -> [&'static str; 18] {
+pub fn usage_event_columns() -> [&'static str; 20] {
     [
         "id",
         "key_id",
         "key_name",
+        "account_name",
         "request_method",
         "request_url",
         "latency_ms",
@@ -248,7 +323,29 @@ pub fn usage_event_columns() -> [&'static str; 18] {
         "client_ip",
         "ip_region",
         "request_headers_json",
+        "last_message_content",
         "created_at",
+    ]
+}
+
+pub fn token_request_columns() -> [&'static str; 16] {
+    [
+        "request_id",
+        "requester_email",
+        "requested_quota_billable_limit",
+        "request_reason",
+        "frontend_page_url",
+        "status",
+        "fingerprint",
+        "client_ip",
+        "ip_region",
+        "admin_note",
+        "failure_reason",
+        "issued_key_id",
+        "issued_key_name",
+        "created_at",
+        "updated_at",
+        "processed_at",
     ]
 }
 

@@ -21,7 +21,7 @@ use tokio::{
     time::MissedTickBehavior,
 };
 
-use super::types::LlmGatewayRateLimitStatusResponse;
+use super::{accounts::AccountPool, types::LlmGatewayRateLimitStatusResponse};
 use crate::state::LlmGatewayRuntimeConfig;
 
 const CLEANER_TICK_SECONDS: u64 = 1;
@@ -33,6 +33,7 @@ pub struct LlmGatewayRuntimeState {
     pub(crate) store: Arc<LlmGatewayStore>,
     pub(crate) runtime_config: Arc<tokio::sync::RwLock<LlmGatewayRuntimeConfig>>,
     pub(crate) auth_source: Arc<CodexAuthSource>,
+    pub(crate) account_pool: Arc<AccountPool>,
     pub(crate) key_cache: Arc<LlmGatewayKeyCache>,
     pub(crate) rate_limit_status: Arc<tokio::sync::RwLock<LlmGatewayRateLimitStatusResponse>>,
     pub(crate) client: reqwest::Client,
@@ -44,12 +45,14 @@ impl LlmGatewayRuntimeState {
     pub fn new(
         store: Arc<LlmGatewayStore>,
         runtime_config: Arc<tokio::sync::RwLock<LlmGatewayRuntimeConfig>>,
+        account_pool: Arc<AccountPool>,
     ) -> Result<Self> {
         let client = build_llm_gateway_upstream_client()?;
         Ok(Self {
             store,
             runtime_config,
             auth_source: Arc::new(CodexAuthSource::new()),
+            account_pool,
             key_cache: Arc::new(LlmGatewayKeyCache::new()),
             rate_limit_status: Arc::new(tokio::sync::RwLock::new(
                 LlmGatewayRateLimitStatusResponse {
@@ -74,6 +77,17 @@ pub(crate) struct CodexAuthSnapshot {
     pub access_token: String,
     pub account_id: Option<String>,
     modified_at: Option<SystemTime>,
+}
+
+impl CodexAuthSnapshot {
+    /// Build a snapshot without filesystem mtime (used by the account pool).
+    pub(crate) fn from_tokens(access_token: String, account_id: Option<String>) -> Self {
+        Self {
+            access_token,
+            account_id,
+            modified_at: None,
+        }
+    }
 }
 
 /// Minimal shape read from `~/.codex/auth.json`.

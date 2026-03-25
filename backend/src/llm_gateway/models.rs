@@ -12,6 +12,7 @@ use super::{
     runtime::{bearer_header, CodexAuthSnapshot, LlmGatewayRuntimeState},
     types::GatewayModelDescriptor,
     DEFAULT_CODEX_CLI_VERSION, DEFAULT_UPSTREAM_BASE_URL, DEFAULT_WIRE_ORIGINATOR,
+    GPT53_CODEX_MODEL_ID, GPT53_CODEX_SPARK_MODEL_ID,
 };
 use crate::state::AppState;
 
@@ -21,11 +22,13 @@ pub(crate) async fn respond_local_models(
     auth_snapshot: &CodexAuthSnapshot,
     incoming_headers: &HeaderMap,
     query: &str,
+    map_gpt53_codex_to_spark: bool,
 ) -> Result<Response<Body>, (StatusCode, axum::response::Json<crate::handlers::ErrorResponse>)> {
     let (merged, etag) =
         fetch_codex_models(&state.llm_gateway, auth_snapshot, incoming_headers, query)
             .await
             .map_err(|err| internal_error("Failed to fetch llm gateway models", err))?;
+    let merged = apply_model_aliases(merged, map_gpt53_codex_to_spark);
 
     let created = static_flow_shared::llm_gateway_store::now_ms() / 1000;
     let data = merged
@@ -199,6 +202,27 @@ fn parse_gateway_model_descriptors(
         }
     }
     items.into_iter().collect()
+}
+
+fn apply_model_aliases(
+    models: Vec<GatewayModelDescriptor>,
+    map_gpt53_codex_to_spark: bool,
+) -> Vec<GatewayModelDescriptor> {
+    if !map_gpt53_codex_to_spark {
+        return models;
+    }
+
+    models
+        .into_iter()
+        .map(|mut item| {
+            if item.id == GPT53_CODEX_SPARK_MODEL_ID {
+                item.id = GPT53_CODEX_MODEL_ID.to_string();
+            }
+            item
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Ensure model requests carry a Codex client_version query parameter.

@@ -6606,6 +6606,7 @@ dependencies = [
  "async-stream",
  "axum",
  "backtrace",
+ "base64 0.22.1",
  "better_mimalloc_rs",
  "better_mimalloc_sys",
  "chrono",

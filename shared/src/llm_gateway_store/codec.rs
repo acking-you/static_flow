@@ -11,9 +11,13 @@ use arrow_array::{
 
 use super::{
     schema::{
-        llm_gateway_keys_schema, llm_gateway_runtime_config_schema, llm_gateway_usage_events_schema,
+        llm_gateway_keys_schema, llm_gateway_runtime_config_schema,
+        llm_gateway_token_requests_schema, llm_gateway_usage_events_schema,
     },
-    types::{LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord},
+    types::{
+        LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayTokenRequestRecord,
+        LlmGatewayUsageEventRecord,
+    },
 };
 
 pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> {
@@ -32,6 +36,8 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut last_used_at = TimestampMillisecondBuilder::new();
     let mut created_at = TimestampMillisecondBuilder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
+    let mut route_strategy = StringBuilder::new();
+    let mut fixed_account_name = StringBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -48,6 +54,8 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         append_optional_ts(&mut last_used_at, record.last_used_at);
         created_at.append_value(record.created_at);
         updated_at.append_value(record.updated_at);
+        append_optional_str(&mut route_strategy, record.route_strategy.as_deref());
+        append_optional_str(&mut fixed_account_name, record.fixed_account_name.as_deref());
     }
 
     RecordBatch::try_new(schema, vec![
@@ -65,6 +73,8 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(last_used_at.finish()),
         Arc::new(created_at.finish()),
         Arc::new(updated_at.finish()),
+        Arc::new(route_strategy.finish()),
+        Arc::new(fixed_account_name.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
@@ -74,6 +84,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     let mut id = StringBuilder::new();
     let mut key_id = StringBuilder::new();
     let mut key_name = StringBuilder::new();
+    let mut account_name = StringBuilder::new();
     let mut request_method = StringBuilder::new();
     let mut request_url = StringBuilder::new();
     let mut latency_ms = Int32Builder::new();
@@ -88,12 +99,14 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     let mut client_ip = StringBuilder::new();
     let mut ip_region = StringBuilder::new();
     let mut request_headers_json = StringBuilder::new();
+    let mut last_message_content = StringBuilder::new();
     let mut created_at = TimestampMillisecondBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
         key_id.append_value(&record.key_id);
         key_name.append_value(&record.key_name);
+        append_optional_str(&mut account_name, record.account_name.as_deref());
         request_method.append_value(&record.request_method);
         request_url.append_value(&record.request_url);
         latency_ms.append_value(record.latency_ms);
@@ -108,6 +121,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         client_ip.append_value(&record.client_ip);
         ip_region.append_value(&record.ip_region);
         request_headers_json.append_value(&record.request_headers_json);
+        append_optional_str(&mut last_message_content, record.last_message_content.as_deref());
         created_at.append_value(record.created_at);
     }
 
@@ -115,6 +129,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(id.finish()) as ArrayRef,
         Arc::new(key_id.finish()),
         Arc::new(key_name.finish()),
+        Arc::new(account_name.finish()),
         Arc::new(request_method.finish()),
         Arc::new(request_url.finish()),
         Arc::new(latency_ms.finish()),
@@ -129,6 +144,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(client_ip.finish()),
         Arc::new(ip_region.finish()),
         Arc::new(request_headers_json.finish()),
+        Arc::new(last_message_content.finish()),
         Arc::new(created_at.finish()),
     ])
     .context("failed to build llm gateway usage events batch")
@@ -156,6 +172,65 @@ pub fn build_runtime_config_batch(
     .context("failed to build llm gateway runtime config batch")
 }
 
+pub fn build_token_requests_batch(records: &[LlmGatewayTokenRequestRecord]) -> Result<RecordBatch> {
+    let schema = llm_gateway_token_requests_schema();
+    let mut request_id = StringBuilder::new();
+    let mut requester_email = StringBuilder::new();
+    let mut requested_quota_billable_limit = UInt64Builder::new();
+    let mut request_reason = StringBuilder::new();
+    let mut frontend_page_url = StringBuilder::new();
+    let mut status = StringBuilder::new();
+    let mut fingerprint = StringBuilder::new();
+    let mut client_ip = StringBuilder::new();
+    let mut ip_region = StringBuilder::new();
+    let mut admin_note = StringBuilder::new();
+    let mut failure_reason = StringBuilder::new();
+    let mut issued_key_id = StringBuilder::new();
+    let mut issued_key_name = StringBuilder::new();
+    let mut created_at = TimestampMillisecondBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+    let mut processed_at = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        request_id.append_value(&record.request_id);
+        requester_email.append_value(&record.requester_email);
+        requested_quota_billable_limit.append_value(record.requested_quota_billable_limit);
+        request_reason.append_value(&record.request_reason);
+        append_optional_str(&mut frontend_page_url, record.frontend_page_url.as_deref());
+        status.append_value(&record.status);
+        fingerprint.append_value(&record.fingerprint);
+        client_ip.append_value(&record.client_ip);
+        ip_region.append_value(&record.ip_region);
+        append_optional_str(&mut admin_note, record.admin_note.as_deref());
+        append_optional_str(&mut failure_reason, record.failure_reason.as_deref());
+        append_optional_str(&mut issued_key_id, record.issued_key_id.as_deref());
+        append_optional_str(&mut issued_key_name, record.issued_key_name.as_deref());
+        created_at.append_value(record.created_at);
+        updated_at.append_value(record.updated_at);
+        append_optional_ts(&mut processed_at, record.processed_at);
+    }
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(request_id.finish()) as ArrayRef,
+        Arc::new(requester_email.finish()),
+        Arc::new(requested_quota_billable_limit.finish()),
+        Arc::new(request_reason.finish()),
+        Arc::new(frontend_page_url.finish()),
+        Arc::new(status.finish()),
+        Arc::new(fingerprint.finish()),
+        Arc::new(client_ip.finish()),
+        Arc::new(ip_region.finish()),
+        Arc::new(admin_note.finish()),
+        Arc::new(failure_reason.finish()),
+        Arc::new(issued_key_id.finish()),
+        Arc::new(issued_key_name.finish()),
+        Arc::new(created_at.finish()),
+        Arc::new(updated_at.finish()),
+        Arc::new(processed_at.finish()),
+    ])
+    .context("failed to build llm gateway token requests batch")
+}
+
 pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecord>> {
     let mut rows = Vec::with_capacity(total_rows(batches));
     for batch in batches {
@@ -175,6 +250,12 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let last_used_at = optional_ts_col(batch, "last_used_at")?;
         let created_at = required_ts_col(batch, "created_at")?;
         let updated_at = required_ts_col(batch, "updated_at")?;
+        let route_strategy = batch
+            .column_by_name("route_strategy")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let fixed_account_name = batch
+            .column_by_name("fixed_account_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = usage_input_uncached_tokens
@@ -197,6 +278,8 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 last_used_at: value_ts_opt(last_used_at, idx),
                 created_at: created_at.value(idx),
                 updated_at: updated_at.value(idx),
+                route_strategy: route_strategy.and_then(|col| value_string_opt(col, idx)),
+                fixed_account_name: fixed_account_name.and_then(|col| value_string_opt(col, idx)),
             });
         }
     }
@@ -210,6 +293,9 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let key_id = required_str_col(batch, "key_id")?;
         let key_name = batch
             .column_by_name("key_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let account_name = batch
+            .column_by_name("account_name")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let request_method = batch
             .column_by_name("request_method")
@@ -237,6 +323,9 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let request_headers_json = batch
             .column_by_name("request_headers_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let last_message_content = batch
+            .column_by_name("last_message_content")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let created_at = required_ts_col(batch, "created_at")?;
 
         for idx in 0..batch.num_rows() {
@@ -246,6 +335,7 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
                 key_name: key_name
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| key_id.value(idx).to_string()),
+                account_name: account_name.and_then(|column| value_string_opt(column, idx)),
                 request_method: request_method
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| "POST".to_string()),
@@ -272,6 +362,8 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
                 request_headers_json: request_headers_json
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| "{}".to_string()),
+                last_message_content: last_message_content
+                    .and_then(|column| value_string_opt(column, idx)),
                 created_at: created_at.value(idx),
             });
         }
@@ -292,6 +384,63 @@ pub fn batches_to_runtime_config(
                 id: id.value(idx).to_string(),
                 auth_cache_ttl_seconds: auth_cache_ttl_seconds.value(idx),
                 updated_at: updated_at.value(idx),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+pub fn batches_to_token_requests(
+    batches: &[RecordBatch],
+) -> Result<Vec<LlmGatewayTokenRequestRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let request_id = required_str_col(batch, "request_id")?;
+        let requester_email = required_str_col(batch, "requester_email")?;
+        let requested_quota_billable_limit =
+            required_u64_col(batch, "requested_quota_billable_limit")?;
+        let request_reason = required_str_col(batch, "request_reason")?;
+        let frontend_page_url = batch
+            .column_by_name("frontend_page_url")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let status = required_str_col(batch, "status")?;
+        let fingerprint = required_str_col(batch, "fingerprint")?;
+        let client_ip = required_str_col(batch, "client_ip")?;
+        let ip_region = required_str_col(batch, "ip_region")?;
+        let admin_note = batch
+            .column_by_name("admin_note")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let failure_reason = batch
+            .column_by_name("failure_reason")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let issued_key_id = batch
+            .column_by_name("issued_key_id")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let issued_key_name = batch
+            .column_by_name("issued_key_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let created_at = required_ts_col(batch, "created_at")?;
+        let updated_at = required_ts_col(batch, "updated_at")?;
+        let processed_at = optional_ts_col(batch, "processed_at")?;
+
+        for idx in 0..batch.num_rows() {
+            rows.push(LlmGatewayTokenRequestRecord {
+                request_id: request_id.value(idx).to_string(),
+                requester_email: requester_email.value(idx).to_string(),
+                requested_quota_billable_limit: requested_quota_billable_limit.value(idx),
+                request_reason: request_reason.value(idx).to_string(),
+                frontend_page_url: frontend_page_url.and_then(|col| value_string_opt(col, idx)),
+                status: status.value(idx).to_string(),
+                fingerprint: fingerprint.value(idx).to_string(),
+                client_ip: client_ip.value(idx).to_string(),
+                ip_region: ip_region.value(idx).to_string(),
+                admin_note: admin_note.and_then(|col| value_string_opt(col, idx)),
+                failure_reason: failure_reason.and_then(|col| value_string_opt(col, idx)),
+                issued_key_id: issued_key_id.and_then(|col| value_string_opt(col, idx)),
+                issued_key_name: issued_key_name.and_then(|col| value_string_opt(col, idx)),
+                created_at: created_at.value(idx),
+                updated_at: updated_at.value(idx),
+                processed_at: value_ts_opt(processed_at, idx),
             });
         }
     }

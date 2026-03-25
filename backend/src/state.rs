@@ -207,6 +207,7 @@ pub struct AppState {
     pub(crate) article_request_store: Arc<ArticleRequestStore>,
     pub(crate) article_request_worker_tx: mpsc::Sender<String>,
     pub(crate) article_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) llm_gateway_token_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
     pub(crate) interactive_store: Arc<InteractivePageStore>,
     pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
     pub(crate) llm_gateway: Arc<LlmGatewayRuntimeState>,
@@ -256,9 +257,21 @@ impl AppState {
         let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: llm_gateway_auth_cache_ttl_seconds,
         }));
+        let auths_dir = crate::llm_gateway::resolve_auths_dir();
+        let account_pool = Arc::new(crate::llm_gateway::AccountPool::new(auths_dir.clone()));
+        let loaded_accounts = account_pool.load_all().await.unwrap_or_else(|err| {
+            tracing::warn!("failed to load codex accounts from {}: {err:#}", auths_dir.display());
+            0
+        });
+        tracing::info!(
+            auths_dir = %auths_dir.display(),
+            loaded_accounts,
+            "initialized codex account pool"
+        );
         let llm_gateway = Arc::new(LlmGatewayRuntimeState::new(
             llm_gateway_store.clone(),
             llm_gateway_runtime_config.clone(),
+            account_pool.clone(),
         )?);
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
@@ -301,6 +314,17 @@ impl AppState {
             llm_gateway.clone(),
             shutdown_rx.clone(),
         );
+        {
+            let refresh_client = crate::llm_gateway::build_refresh_client().unwrap_or_else(|err| {
+                tracing::warn!("Failed to build refresh client, using gateway client: {err:#}");
+                llm_gateway.client.clone()
+            });
+            crate::llm_gateway::spawn_account_refresh_task(
+                account_pool,
+                refresh_client,
+                shutdown_rx.clone(),
+            );
+        }
 
         spawn_table_compactor(
             TableCompactorStores {
@@ -342,6 +366,7 @@ impl AppState {
             article_request_store,
             article_request_worker_tx,
             article_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
+            llm_gateway_token_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             interactive_store,
             llm_gateway_store,
             llm_gateway,

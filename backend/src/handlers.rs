@@ -3192,7 +3192,7 @@ async fn ensure_article_exists(
     }
 }
 
-fn build_client_fingerprint(headers: &HeaderMap) -> String {
+pub(crate) fn build_client_fingerprint(headers: &HeaderMap) -> String {
     let ip = extract_client_ip(headers);
     let user_agent = headers
         .get(header::USER_AGENT)
@@ -3207,7 +3207,7 @@ fn build_client_fingerprint(headers: &HeaderMap) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn build_submit_rate_limit_key(headers: &HeaderMap, fingerprint: &str) -> String {
+pub(crate) fn build_submit_rate_limit_key(headers: &HeaderMap, fingerprint: &str) -> String {
     let ip = extract_client_ip(headers);
     if ip == "unknown" {
         format!("fp:{fingerprint}")
@@ -3216,7 +3216,7 @@ fn build_submit_rate_limit_key(headers: &HeaderMap, fingerprint: &str) -> String
     }
 }
 
-fn extract_client_ip(headers: &HeaderMap) -> String {
+pub(crate) fn extract_client_ip(headers: &HeaderMap) -> String {
     // Prefer proxy chain source headers, then vendor/common real-ip headers.
     parse_first_ip_from_header(headers.get("x-forwarded-for"))
         .or_else(|| parse_first_ip_from_header(headers.get("x-real-ip")))
@@ -3305,7 +3305,7 @@ fn parse_raw_markdown_lang(raw: &str) -> Option<&'static str> {
     }
 }
 
-async fn enforce_comment_submit_rate_limit(
+pub(crate) async fn enforce_comment_submit_rate_limit(
     guard: &tokio::sync::RwLock<HashMap<String, i64>>,
     rate_limit_key: &str,
     now_ms: i64,
@@ -3645,7 +3645,7 @@ fn normalize_song_id_vec_list(raw: Option<Vec<String>>, max: usize) -> Vec<Strin
         .collect()
 }
 
-fn generate_task_id(prefix: &str) -> String {
+pub(crate) fn generate_task_id(prefix: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)

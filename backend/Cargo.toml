@@ -34,3 +34,4 @@ parking_lot = "0.12"
 memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
+base64 = "0.22.1"

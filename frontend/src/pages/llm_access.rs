@@ -1,13 +1,14 @@
 use gloo_timers::callback::{Interval, Timeout};
 use wasm_bindgen::prelude::*;
-use web_sys::Element;
+use web_sys::{Element, HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        fetch_llm_gateway_access, fetch_llm_gateway_status, LlmGatewayAccessResponse,
-        LlmGatewayPublicKeyView, LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
+        fetch_llm_gateway_access, fetch_llm_gateway_status, submit_llm_gateway_token_request,
+        LlmGatewayAccessResponse, LlmGatewayPublicKeyView, LlmGatewayRateLimitStatusResponse,
+        LlmGatewayRateLimitWindowView,
     },
     pages::llm_access_shared::{
         format_ms, format_percent, format_reset_hint, format_window_label, pretty_limit_name,
@@ -196,6 +197,12 @@ pub fn llm_access_page() -> Html {
     let refreshing_key = use_state(|| None::<String>);
     let refreshing_status = use_state(|| false);
     let status_section_ref = use_node_ref();
+    let wish_section_ref = use_node_ref();
+    let wish_quota = use_state(String::new);
+    let wish_reason = use_state(String::new);
+    let wish_email = use_state(String::new);
+    let wish_submitting = use_state(|| false);
+    let wish_feedback = use_state(|| None::<(String, bool)>);
 
     {
         let access = access.clone();
@@ -349,6 +356,71 @@ pub fn llm_access_page() -> Html {
         })
     };
 
+    let on_scroll_to_wish = {
+        let wish_section_ref = wish_section_ref.clone();
+        Callback::from(move |_| {
+            if let Some(section) = wish_section_ref.cast::<Element>() {
+                section.scroll_into_view();
+            }
+        })
+    };
+
+    let on_submit_token_wish = {
+        let wish_quota = wish_quota.clone();
+        let wish_reason = wish_reason.clone();
+        let wish_email = wish_email.clone();
+        let wish_submitting = wish_submitting.clone();
+        let wish_feedback = wish_feedback.clone();
+        Callback::from(move |event: SubmitEvent| {
+            event.prevent_default();
+            let quota_raw = (*wish_quota).trim().to_string();
+            let reason = (*wish_reason).trim().to_string();
+            let email = (*wish_email).trim().to_string();
+            let Ok(quota) = quota_raw.parse::<u64>() else {
+                wish_feedback.set(Some(("所需 token 量必须是正整数".to_string(), true)));
+                return;
+            };
+            if quota == 0 || reason.is_empty() || email.is_empty() {
+                wish_feedback.set(Some(("token 量、缘由和邮箱都必须填写".to_string(), true)));
+                return;
+            }
+
+            let frontend_page_url =
+                web_sys::window().and_then(|window| window.location().href().ok());
+            let wish_quota = wish_quota.clone();
+            let wish_reason = wish_reason.clone();
+            let wish_email = wish_email.clone();
+            let wish_submitting = wish_submitting.clone();
+            let wish_feedback = wish_feedback.clone();
+            wish_submitting.set(true);
+            wish_feedback.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match submit_llm_gateway_token_request(
+                    quota,
+                    &reason,
+                    &email,
+                    frontend_page_url.as_deref(),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        wish_quota.set(String::new());
+                        wish_reason.set(String::new());
+                        wish_email.set(String::new());
+                        wish_feedback.set(Some((
+                            "许愿已提交，审核通过后才会创建 token 并发送到你的邮箱。".to_string(),
+                            false,
+                        )));
+                    },
+                    Err(err) => {
+                        wish_feedback.set(Some((err, true)));
+                    },
+                }
+                wish_submitting.set(false);
+            });
+        })
+    };
+
     // PLACEHOLDER_CONTENT_RENDER
 
     let content = if *loading {
@@ -377,18 +449,33 @@ pub fn llm_access_page() -> Html {
             let effective_status_error = (*status_error)
                 .clone()
                 .or_else(|| status.error_message.clone());
-            let primary_bucket = status
-                .buckets
-                .iter()
-                .find(|b| b.is_primary)
-                .cloned()
-                .or_else(|| status.buckets.first().cloned());
-            let additional_buckets: Vec<_> = status
-                .buckets
-                .iter()
-                .filter(|b| !b.is_primary)
-                .cloned()
-                .collect();
+
+            // Group buckets by account_name. Buckets without account_name go
+            // into a single "legacy" group so the rendering stays backward
+            // compatible with the pre-multi-account era.
+            let mut account_groups: Vec<(
+                Option<String>,
+                Vec<crate::api::LlmGatewayRateLimitBucketView>,
+            )> = Vec::new();
+            {
+                let mut seen_order: Vec<Option<String>> = Vec::new();
+                let mut map: std::collections::HashMap<
+                    Option<String>,
+                    Vec<crate::api::LlmGatewayRateLimitBucketView>,
+                > = std::collections::HashMap::new();
+                for bucket in status.buckets.iter() {
+                    let key = bucket.account_name.clone();
+                    if !map.contains_key(&key) {
+                        seen_order.push(key.clone());
+                    }
+                    map.entry(key).or_default().push(bucket.clone());
+                }
+                for key in seen_order {
+                    if let Some(buckets) = map.remove(&key) {
+                        account_groups.push((key, buckets));
+                    }
+                }
+            }
 
             html! {
                 <section
@@ -434,78 +521,109 @@ pub fn llm_access_page() -> Html {
 
                     // PLACEHOLDER_STATUS_BODY
 
-                    // Primary bucket windows
-                    if let Some(primary_bucket) = primary_bucket.clone() {
-                        <div class={classes!("mt-4")}>
-                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                                <span class={classes!("text-sm", "font-bold", "text-[var(--text)]")}>
-                                    { pretty_limit_name(&primary_bucket.display_name) }
-                                </span>
-                                <div class={classes!("flex", "items-center", "gap-3")}>
-                                    if let Some(credits) = primary_bucket.credits.clone() {
-                                        <span class={classes!("text-xs", "font-semibold", "text-[var(--muted)]")}>
-                                            { if !credits.has_credits { "Credits: N/A" } else if credits.unlimited { "Credits: ∞" } else { "Credits: ✓" } }
+                    // Render buckets grouped by account
+                    { for account_groups.iter().map(|(account_name, group_buckets)| {
+                        let primary_bucket = group_buckets
+                            .iter()
+                            .find(|b| b.is_primary)
+                            .cloned()
+                            .or_else(|| group_buckets.first().cloned());
+                        let additional_buckets: Vec<_> = group_buckets
+                            .iter()
+                            .filter(|b| !b.is_primary)
+                            .cloned()
+                            .collect();
+                        let group_label = account_name
+                            .as_deref()
+                            .unwrap_or("default");
+                        let show_account_header = account_groups.len() > 1 || account_name.is_some();
+                        html! {
+                            <div class={classes!("mt-4")}>
+                                if show_account_header {
+                                    <div class={classes!("flex", "items-center", "gap-2", "mb-2")}>
+                                        <span class={classes!(
+                                            "inline-flex", "items-center",
+                                            "rounded-full", "border", "border-[var(--border)]",
+                                            "bg-[var(--surface-alt)]", "px-3", "py-1",
+                                            "text-xs", "font-bold", "uppercase", "tracking-wider",
+                                            "text-[var(--primary)]"
+                                        )}>
+                                            { group_label }
                                         </span>
-                                    }
-                                    if let Some(ref plan) = primary_bucket.plan_type {
-                                        <span class={classes!("text-xs", "font-semibold", "text-[var(--muted)]")}>
-                                            { plan.clone() }
-                                        </span>
-                                    }
-                                </div>
-                            </div>
-                            <div class={classes!("mt-3", "grid", "gap-3", "sm:grid-cols-2")}>
-                                if let Some(primary_window) = primary_bucket.primary.clone() {
-                                    <RateLimitWindowPanel
-                                        label={"5h 窗口"}
-                                        accent_class={classes!("bg-[linear-gradient(90deg,#0f766e,#14b8a6)]")}
-                                        window={primary_window}
-                                    />
+                                    </div>
                                 }
-                                if let Some(secondary_window) = primary_bucket.secondary.clone() {
-                                    <RateLimitWindowPanel
-                                        label={"Weekly 窗口"}
-                                        accent_class={classes!("bg-[linear-gradient(90deg,#2563eb,#7c3aed)]")}
-                                        window={secondary_window}
-                                    />
-                                }
-                            </div>
-                        </div>
-                    }
-
-                    // Additional buckets
-                    if !additional_buckets.is_empty() {
-                        <div class={classes!("mt-4")}>
-                            <h3 class={classes!("m-0", "text-sm", "font-bold", "text-[var(--text)]")}>
-                                { format!("其他 Buckets ({})", additional_buckets.len()) }
-                            </h3>
-                            <div class={classes!("mt-3", "space-y-2")}>
-                                { for additional_buckets.iter().map(|bucket| {
-                                    let bp = bucket.primary.clone();
-                                    let bs = bucket.secondary.clone();
-                                    html! {
-                                        <div class={classes!("flex", "items-center", "justify-between", "gap-4", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3", "flex-wrap")}>
-                                            <span class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>
-                                                { pretty_limit_name(&bucket.display_name) }
+                                if let Some(primary_bucket) = primary_bucket.clone() {
+                                    <div>
+                                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                            <span class={classes!("text-sm", "font-bold", "text-[var(--text)]")}>
+                                                { pretty_limit_name(&primary_bucket.display_name) }
                                             </span>
-                                            <div class={classes!("flex", "items-center", "gap-4", "text-sm")}>
-                                                if let Some(p) = bp {
-                                                    <span class={classes!("font-bold", "text-[var(--text)]")}>
-                                                        { format!("5h {}", format_percent(p.remaining_percent)) }
+                                            <div class={classes!("flex", "items-center", "gap-3")}>
+                                                if let Some(credits) = primary_bucket.credits.clone() {
+                                                    <span class={classes!("text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                                        { if !credits.has_credits { "Credits: N/A" } else if credits.unlimited { "Credits: ∞" } else { "Credits: ✓" } }
                                                     </span>
                                                 }
-                                                if let Some(s) = bs {
-                                                    <span class={classes!("font-bold", "text-[var(--text)]")}>
-                                                        { format!("wk {}", format_percent(s.remaining_percent)) }
+                                                if let Some(ref plan) = primary_bucket.plan_type {
+                                                    <span class={classes!("text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                                        { plan.clone() }
                                                     </span>
                                                 }
                                             </div>
                                         </div>
-                                    }
-                                }) }
+                                        <div class={classes!("mt-3", "grid", "gap-3", "sm:grid-cols-2")}>
+                                            if let Some(primary_window) = primary_bucket.primary.clone() {
+                                                <RateLimitWindowPanel
+                                                    label={"5h 窗口"}
+                                                    accent_class={classes!("bg-[linear-gradient(90deg,#0f766e,#14b8a6)]")}
+                                                    window={primary_window}
+                                                />
+                                            }
+                                            if let Some(secondary_window) = primary_bucket.secondary.clone() {
+                                                <RateLimitWindowPanel
+                                                    label={"Weekly 窗口"}
+                                                    accent_class={classes!("bg-[linear-gradient(90deg,#2563eb,#7c3aed)]")}
+                                                    window={secondary_window}
+                                                />
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                if !additional_buckets.is_empty() {
+                                    <div class={classes!("mt-3")}>
+                                        <h3 class={classes!("m-0", "text-sm", "font-bold", "text-[var(--text)]")}>
+                                            { format!("其他 Buckets ({})", additional_buckets.len()) }
+                                        </h3>
+                                        <div class={classes!("mt-3", "space-y-2")}>
+                                            { for additional_buckets.iter().map(|bucket| {
+                                                let bp = bucket.primary.clone();
+                                                let bs = bucket.secondary.clone();
+                                                html! {
+                                                    <div class={classes!("flex", "items-center", "justify-between", "gap-4", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3", "flex-wrap")}>
+                                                        <span class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>
+                                                            { pretty_limit_name(&bucket.display_name) }
+                                                        </span>
+                                                        <div class={classes!("flex", "items-center", "gap-4", "text-sm")}>
+                                                            if let Some(p) = bp {
+                                                                <span class={classes!("font-bold", "text-[var(--text)]")}>
+                                                                    { format!("5h {}", format_percent(p.remaining_percent)) }
+                                                                </span>
+                                                            }
+                                                            if let Some(s) = bs {
+                                                                <span class={classes!("font-bold", "text-[var(--text)]")}>
+                                                                    { format!("wk {}", format_percent(s.remaining_percent)) }
+                                                                </span>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                }
+                                            }) }
+                                        </div>
+                                    </div>
+                                }
                             </div>
-                        </div>
-                    }
+                        }
+                    }) }
 
                     // Snapshot meta (compact)
                     <div class={classes!("mt-4", "flex", "items-center", "gap-4", "text-xs", "text-[var(--muted)]", "flex-wrap")}>
@@ -630,6 +748,115 @@ pub fn llm_access_page() -> Html {
                 <section class={classes!("mt-6")}>
                     { status_view }
                 </section>
+
+                // Token wish section
+                <section
+                    ref={wish_section_ref.clone()}
+                    class={classes!("mt-6", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}
+                >
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "text-lg", "font-bold", "text-[var(--text)]")}>
+                                { "许愿 Token" }
+                            </h2>
+                            <p class={classes!("mt-2", "m-0", "text-sm", "leading-6", "text-[var(--muted)]")}>
+                                { "如果当前公开 key 不够用，可以在这里提交额度申请。只有 admin 审核通过后，系统才会创建新 token，并把它发到你填写的邮箱。" }
+                            </p>
+                        </div>
+                        <div class={classes!("rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                            { "邮箱必填" }
+                        </div>
+                    </div>
+
+                    <form class={classes!("mt-5", "grid", "gap-4")} onsubmit={on_submit_token_wish}>
+                        <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "所需 token 量" }</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    placeholder="例如 500000"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]")}
+                                    value={(*wish_quota).clone()}
+                                    oninput={{
+                                        let wish_quota = wish_quota.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                wish_quota.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                    required=true
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "邮箱" }</span>
+                                <input
+                                    type="email"
+                                    placeholder="you@example.com"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]")}
+                                    value={(*wish_email).clone()}
+                                    oninput={{
+                                        let wish_email = wish_email.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                wish_email.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                    required=true
+                                />
+                            </label>
+                        </div>
+
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "缘由" }</span>
+                            <textarea
+                                rows="4"
+                                placeholder="说清楚你准备用这些 token 做什么、为什么需要这个量。"
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]", "resize-y")}
+                                value={(*wish_reason).clone()}
+                                oninput={{
+                                    let wish_reason = wish_reason.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                                            wish_reason.set(target.value());
+                                        }
+                                    })
+                                }}
+                                required=true
+                            />
+                        </label>
+
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <p class={classes!("m-0", "text-xs", "leading-6", "text-[var(--muted)]")}>
+                                { "提交后不会立刻发 token。管理员会先在后台审核，审核通过时才会创建 key 并发送邮件。" }
+                            </p>
+                            <button
+                                type="submit"
+                                class={classes!("btn-terminal", "btn-terminal-primary")}
+                                disabled={*wish_submitting}
+                            >
+                                <i class={classes!("fas", if *wish_submitting { "fa-spinner animate-spin" } else { "fa-paper-plane" })}></i>
+                                { if *wish_submitting { "提交中..." } else { "提交许愿" } }
+                            </button>
+                        </div>
+
+                        if let Some((message, is_error)) = (*wish_feedback).clone() {
+                            <div class={classes!(
+                                "rounded-lg", "border", "px-4", "py-3", "text-sm",
+                                if is_error {
+                                    classes!("border-red-400/35", "bg-red-500/8", "text-red-700", "dark:text-red-200")
+                                } else {
+                                    classes!("border-emerald-400/35", "bg-emerald-500/8", "text-emerald-700", "dark:text-emerald-200")
+                                }
+                            )}>
+                                { message }
+                            </div>
+                        }
+                    </form>
+                </section>
             </>
         }
     } else {
@@ -641,6 +868,20 @@ pub fn llm_access_page() -> Html {
             <div class={classes!("relative", "mx-auto", "max-w-5xl", "px-4", "pb-16", "pt-8", "lg:px-6")}>
                 { content }
             </div>
+
+            <button
+                type="button"
+                class={classes!(
+                    "fixed", "bottom-24", "left-5", "z-[85]",
+                    "btn-terminal",
+                    "!rounded-full", "!px-4", "!py-2.5",
+                    "shadow-[0_8px_24px_rgba(0,0,0,0.15)]"
+                )}
+                onclick={on_scroll_to_wish}
+            >
+                <i class="fas fa-envelope-open-text"></i>
+                { "许愿 Token" }
+            </button>
 
             <button
                 type="button"
