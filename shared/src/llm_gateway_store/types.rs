@@ -5,12 +5,15 @@ pub const LLM_GATEWAY_KEYS_TABLE: &str = "llm_gateway_keys";
 pub const LLM_GATEWAY_USAGE_EVENTS_TABLE: &str = "llm_gateway_usage_events";
 pub const LLM_GATEWAY_RUNTIME_CONFIG_TABLE: &str = "llm_gateway_runtime_config";
 pub const LLM_GATEWAY_TOKEN_REQUESTS_TABLE: &str = "llm_gateway_token_requests";
+pub const LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE: &str =
+    "llm_gateway_account_contribution_requests";
 
 pub const LLM_GATEWAY_TABLE_NAMES: &[&str] = &[
     LLM_GATEWAY_KEYS_TABLE,
     LLM_GATEWAY_USAGE_EVENTS_TABLE,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
+    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
 ];
 
 pub const LLM_GATEWAY_KEY_STATUS_ACTIVE: &str = "active";
@@ -104,6 +107,49 @@ pub struct LlmGatewayTokenRequestRecord {
     pub ip_region: String,
     pub admin_note: Option<String>,
     pub failure_reason: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewLlmGatewayAccountContributionRequestInput {
+    pub request_id: String,
+    pub account_name: String,
+    pub account_id: Option<String>,
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub fingerprint: String,
+    pub client_ip: String,
+    pub ip_region: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LlmGatewayAccountContributionRequestRecord {
+    pub request_id: String,
+    pub account_name: String,
+    pub account_id: Option<String>,
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub fingerprint: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub imported_account_name: Option<String>,
     pub issued_key_id: Option<String>,
     pub issued_key_name: Option<String>,
     pub created_at: i64,

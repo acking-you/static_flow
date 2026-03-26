@@ -9,14 +9,19 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        admin_approve_and_issue_llm_gateway_token_request, admin_reject_llm_gateway_token_request,
-        create_admin_llm_gateway_key, delete_admin_llm_gateway_account,
-        delete_admin_llm_gateway_key, fetch_admin_llm_gateway_accounts,
+        admin_approve_and_issue_llm_gateway_account_contribution_request,
+        admin_approve_and_issue_llm_gateway_token_request,
+        admin_reject_llm_gateway_account_contribution_request,
+        admin_reject_llm_gateway_token_request, create_admin_llm_gateway_key,
+        delete_admin_llm_gateway_account, delete_admin_llm_gateway_key,
+        fetch_admin_llm_gateway_account_contribution_requests, fetch_admin_llm_gateway_accounts,
         fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_keys,
         fetch_admin_llm_gateway_token_requests, fetch_admin_llm_gateway_usage_events,
         import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
         patch_admin_llm_gateway_key, update_admin_llm_gateway_config, AccountSummaryView,
-        AdminLlmGatewayKeyView, AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
+        AdminLlmGatewayAccountContributionRequestView,
+        AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
+        AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery, LlmGatewayRuntimeConfig,
     },
     components::pagination::Pagination,
@@ -25,6 +30,7 @@ use crate::{
 
 const USAGE_PAGE_SIZE: usize = 20;
 const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
+const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
@@ -126,6 +132,22 @@ fn copy_icon_button(text: &str, on_copy: &Callback<(String, String)>) -> Html {
         >
             <i class={classes!("fas", "fa-copy", "text-xs")} />
         </button>
+    }
+}
+
+fn copyable_token_preview(label: &str, value: &str, on_copy: &Callback<(String, String)>) -> Html {
+    html! {
+        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
+                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>
+                    { label }
+                </div>
+                { copy_icon_button(value, on_copy) }
+            </div>
+            <code class={classes!("mt-2", "block", "break-all", "text-xs", "text-[var(--text)]")}>
+                { preview_text(value, 96) }
+            </code>
+        </div>
     }
 }
 
@@ -475,6 +497,13 @@ pub fn admin_llm_gateway_page() -> Html {
     let token_request_loading = use_state(|| false);
     let token_request_status_filter = use_state(String::new);
     let token_request_action_inflight = use_state(HashSet::<String>::new);
+    let account_contribution_requests =
+        use_state(Vec::<AdminLlmGatewayAccountContributionRequestView>::new);
+    let account_contribution_request_total = use_state(|| 0_usize);
+    let account_contribution_request_page = use_state(|| 1_usize);
+    let account_contribution_request_loading = use_state(|| false);
+    let account_contribution_request_status_filter = use_state(String::new);
+    let account_contribution_request_action_inflight = use_state(HashSet::<String>::new);
     let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventView>);
     let usage_scroll_top_ref = use_node_ref();
     let usage_scroll_bottom_ref = use_node_ref();
@@ -576,6 +605,48 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
+    let reload_account_contribution_requests = {
+        let account_contribution_requests = account_contribution_requests.clone();
+        let account_contribution_request_total = account_contribution_request_total.clone();
+        let account_contribution_request_page = account_contribution_request_page.clone();
+        let account_contribution_request_loading = account_contribution_request_loading.clone();
+        let account_contribution_request_status_filter =
+            account_contribution_request_status_filter.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |(requested_page, override_status): (Option<usize>, Option<String>)| {
+            let account_contribution_requests = account_contribution_requests.clone();
+            let account_contribution_request_total = account_contribution_request_total.clone();
+            let account_contribution_request_page = account_contribution_request_page.clone();
+            let account_contribution_request_loading = account_contribution_request_loading.clone();
+            let account_contribution_request_status_filter =
+                account_contribution_request_status_filter.clone();
+            let load_error = load_error.clone();
+            let page = requested_page
+                .unwrap_or(*account_contribution_request_page)
+                .max(1);
+            let selected_status = override_status
+                .unwrap_or_else(|| (*account_contribution_request_status_filter).clone());
+            account_contribution_request_loading.set(true);
+            wasm_bindgen_futures::spawn_local(async move {
+                let query = AdminLlmGatewayAccountContributionRequestsQuery {
+                    status: (!selected_status.is_empty()).then_some(selected_status),
+                    limit: Some(ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE),
+                    offset: Some((page - 1) * ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE),
+                };
+                match fetch_admin_llm_gateway_account_contribution_requests(&query).await {
+                    Ok(resp) => {
+                        account_contribution_request_total.set(resp.total);
+                        account_contribution_requests.set(resp.requests);
+                        account_contribution_request_page.set(page);
+                        load_error.set(None);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                account_contribution_request_loading.set(false);
+            });
+        })
+    };
+
     // This reload keeps the inventory, runtime config, and the current usage
     // page in sync after any admin write operation.
     let reload = {
@@ -658,9 +729,11 @@ pub fn admin_llm_gateway_page() -> Html {
     {
         let reload = reload.clone();
         let reload_token_requests = reload_token_requests.clone();
+        let reload_account_contribution_requests = reload_account_contribution_requests.clone();
         use_effect_with((), move |_| {
             reload.emit(());
             reload_token_requests.emit((Some(1), Some(String::new())));
+            reload_account_contribution_requests.emit((Some(1), Some(String::new())));
             || ()
         });
     }
@@ -834,6 +907,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let token_request_total_pages = (*token_request_total)
         .max(1)
         .div_ceil(TOKEN_REQUEST_PAGE_SIZE);
+    let account_contribution_request_total_pages = (*account_contribution_request_total)
+        .max(1)
+        .div_ceil(ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE);
 
     let on_token_request_status_filter_change = {
         let token_request_status_filter = token_request_status_filter.clone();
@@ -933,6 +1009,119 @@ pub fn admin_llm_gateway_page() -> Html {
                 let mut inflight = (*token_request_action_inflight).clone();
                 inflight.remove(&request_id);
                 token_request_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_account_contribution_status_filter_change = {
+        let account_contribution_request_status_filter =
+            account_contribution_request_status_filter.clone();
+        let account_contribution_request_page = account_contribution_request_page.clone();
+        let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                let status = target.value();
+                account_contribution_request_status_filter.set(status.clone());
+                account_contribution_request_page.set(1);
+                reload_account_contribution_requests.emit((Some(1), Some(status)));
+            }
+        })
+    };
+
+    let on_account_contribution_page_change = {
+        let account_contribution_request_page = account_contribution_request_page.clone();
+        let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+        Callback::from(move |page: usize| {
+            account_contribution_request_page.set(page);
+            reload_account_contribution_requests.emit((Some(page), None));
+        })
+    };
+
+    let on_approve_account_contribution_request = {
+        let account_contribution_request_action_inflight =
+            account_contribution_request_action_inflight.clone();
+        let account_contribution_requests = account_contribution_requests.clone();
+        let reload = reload.clone();
+        let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |request_id: String| {
+            let account_contribution_request_action_inflight =
+                account_contribution_request_action_inflight.clone();
+            let account_contribution_requests = account_contribution_requests.clone();
+            let reload = reload.clone();
+            let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut inflight = (*account_contribution_request_action_inflight).clone();
+                inflight.insert(request_id.clone());
+                account_contribution_request_action_inflight.set(inflight);
+
+                match admin_approve_and_issue_llm_gateway_account_contribution_request(
+                    &request_id,
+                    None,
+                )
+                .await
+                {
+                    Ok(updated) => {
+                        let mut list = (*account_contribution_requests).clone();
+                        if let Some(item) = list
+                            .iter_mut()
+                            .find(|item| item.request_id == updated.request_id)
+                        {
+                            *item = updated;
+                        }
+                        account_contribution_requests.set(list);
+                        load_error.set(None);
+                        reload.emit(());
+                        reload_account_contribution_requests.emit((None, None));
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+
+                let mut inflight = (*account_contribution_request_action_inflight).clone();
+                inflight.remove(&request_id);
+                account_contribution_request_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_reject_account_contribution_request = {
+        let account_contribution_request_action_inflight =
+            account_contribution_request_action_inflight.clone();
+        let account_contribution_requests = account_contribution_requests.clone();
+        let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |request_id: String| {
+            let account_contribution_request_action_inflight =
+                account_contribution_request_action_inflight.clone();
+            let account_contribution_requests = account_contribution_requests.clone();
+            let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut inflight = (*account_contribution_request_action_inflight).clone();
+                inflight.insert(request_id.clone());
+                account_contribution_request_action_inflight.set(inflight);
+
+                match admin_reject_llm_gateway_account_contribution_request(&request_id, None).await
+                {
+                    Ok(updated) => {
+                        let mut list = (*account_contribution_requests).clone();
+                        if let Some(item) = list
+                            .iter_mut()
+                            .find(|item| item.request_id == updated.request_id)
+                        {
+                            *item = updated;
+                        }
+                        account_contribution_requests.set(list);
+                        load_error.set(None);
+                        reload_account_contribution_requests.emit((None, None));
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+
+                let mut inflight = (*account_contribution_request_action_inflight).clone();
+                inflight.remove(&request_id);
+                account_contribution_request_action_inflight.set(inflight);
             });
         })
     };
@@ -1395,6 +1584,179 @@ pub fn admin_llm_gateway_page() -> Html {
                             }) }
                         </div>
                     }
+                </section>
+
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Account Contributions" }</h2>
+                            <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
+                                { "公开页提交的 Codex 账号贡献申请会先进入这里；只有审核通过后，系统才会导入账号并发放绑定该账号路由的 token。" }
+                            </p>
+                        </div>
+                        <button
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+                                Callback::from(move |_| reload_account_contribution_requests.emit((None, None)))
+                            }}
+                            disabled={*account_contribution_request_loading}
+                        >
+                            <i class={classes!("fas", if *account_contribution_request_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                        </button>
+                    </div>
+
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,16rem)_auto]")}>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
+                            <select
+                                key={format!("account-contribution-filter-{}", (*account_contribution_request_status_filter).clone())}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                onchange={on_account_contribution_status_filter_change}
+                            >
+                                <option value="" selected={(*account_contribution_request_status_filter).is_empty()}>{ "全部" }</option>
+                                <option value="pending" selected={*account_contribution_request_status_filter == "pending"}>{ "pending" }</option>
+                                <option value="failed" selected={*account_contribution_request_status_filter == "failed"}>{ "failed" }</option>
+                                <option value="issued" selected={*account_contribution_request_status_filter == "issued"}>{ "issued" }</option>
+                                <option value="rejected" selected={*account_contribution_request_status_filter == "rejected"}>{ "rejected" }</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    if account_contribution_requests.is_empty() && !*account_contribution_request_loading {
+                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                            { "当前筛选下还没有账号贡献申请。" }
+                        </div>
+                    } else {
+                        <div class={classes!("mt-4", "space-y-3")}>
+                            { for account_contribution_requests.iter().map(|item| {
+                                let request_id = item.request_id.clone();
+                                let approve_request_id = item.request_id.clone();
+                                let reject_request_id = item.request_id.clone();
+                                let approve_cb = on_approve_account_contribution_request.clone();
+                                let reject_cb = on_reject_account_contribution_request.clone();
+                                let on_copy = on_copy.clone();
+                                let action_busy =
+                                    account_contribution_request_action_inflight.contains(&request_id);
+                                let status_class = match item.status.as_str() {
+                                    "pending" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
+                                    "failed" => classes!("bg-red-500/10", "text-red-700", "dark:text-red-200", "border-red-500/20"),
+                                    "issued" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
+                                    "rejected" => classes!("bg-slate-500/10", "text-slate-700", "dark:text-slate-200", "border-slate-500/20"),
+                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
+                                };
+                                html! {
+                                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                                        <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                                            <div class={classes!("min-w-0", "space-y-1")}>
+                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class.clone())}>
+                                                        { item.status.clone() }
+                                                    </span>
+                                                    <span class={classes!("font-semibold")}>{ item.account_name.clone() }</span>
+                                                    <span class={classes!("text-xs", "text-[var(--muted)]")}>{ item.requester_email.clone() }</span>
+                                                    <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ item.request_id.clone() }</span>
+                                                </div>
+                                                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                    { format!("{} / {} · created {}", item.client_ip, item.ip_region, format_ms(item.created_at)) }
+                                                </div>
+                                            </div>
+                                            <div class={classes!("text-right", "space-y-1")}>
+                                                if let Some(github_id) = item.github_id.clone() {
+                                                    <div class={classes!("text-sm", "font-semibold")}>{ format!("@{}", github_id) }</div>
+                                                }
+                                                if let Some(account_id) = item.account_id.clone() {
+                                                    <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ account_id }</div>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]")}>
+                                            <div>
+                                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "留言" }</div>
+                                                <div class={classes!("mt-2", "whitespace-pre-wrap", "break-words", "text-sm", "leading-6", "text-[var(--text)]")}>
+                                                    { item.contributor_message.clone() }
+                                                </div>
+                                            </div>
+                                            <div class={classes!("space-y-2", "text-sm")}>
+                                                if let Some(frontend_page_url) = item.frontend_page_url.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "页面" }</div>
+                                                        <div class={classes!("mt-1", "break-all", "text-[var(--text)]")}>{ frontend_page_url }</div>
+                                                    </div>
+                                                }
+                                                if let Some(imported_account_name) = item.imported_account_name.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "已导入账号" }</div>
+                                                        <div class={classes!("mt-1", "text-[var(--text)]")}>{ imported_account_name }</div>
+                                                    </div>
+                                                }
+                                                if let Some(issued_key_name) = item.issued_key_name.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "已发放 Key" }</div>
+                                                        <div class={classes!("mt-1", "text-[var(--text)]")}>
+                                                            { format!("{} ({})", issued_key_name, item.issued_key_id.clone().unwrap_or_default()) }
+                                                        </div>
+                                                    </div>
+                                                }
+                                                if let Some(admin_note) = item.admin_note.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Admin Note" }</div>
+                                                        <div class={classes!("mt-1", "whitespace-pre-wrap", "break-words", "text-[var(--text)]")}>{ admin_note }</div>
+                                                    </div>
+                                                }
+                                                if let Some(failure_reason) = item.failure_reason.clone() {
+                                                    <div class={classes!("rounded-lg", "border", "border-red-400/25", "bg-red-500/8", "px-3", "py-2", "text-red-700", "dark:text-red-200")}>
+                                                        { failure_reason }
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-3")}>
+                                            { copyable_token_preview("access_token", &item.access_token, &on_copy) }
+                                            { copyable_token_preview("id_token", &item.id_token, &on_copy) }
+                                            { copyable_token_preview("refresh_token", &item.refresh_token, &on_copy) }
+                                        </div>
+
+                                        <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                            <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                { item.processed_at.map(format_ms).map(|value| format!("processed {}", value)).unwrap_or_else(|| "尚未处理".to_string()) }
+                                            </div>
+                                            <div class={classes!("flex", "items-center", "gap-2")}>
+                                                if item.status == "pending" || item.status == "failed" {
+                                                    <button
+                                                        class={classes!("btn-terminal", "btn-terminal-primary")}
+                                                        onclick={Callback::from(move |_| approve_cb.emit(approve_request_id.clone()))}
+                                                        disabled={action_busy}
+                                                    >
+                                                        { if action_busy { "处理中..." } else { "批准并导入" } }
+                                                    </button>
+                                                }
+                                                if item.status == "pending" || item.status == "failed" {
+                                                    <button
+                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                        onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
+                                                        disabled={action_busy}
+                                                    >
+                                                        { "拒绝" }
+                                                    </button>
+                                                }
+                                            </div>
+                                        </div>
+                                    </article>
+                                }
+                            }) }
+                        </div>
+                    }
+
+                    <div class={classes!("mt-5")}>
+                        <Pagination
+                            current_page={*account_contribution_request_page}
+                            total_pages={account_contribution_request_total_pages}
+                            on_page_change={on_account_contribution_page_change}
+                        />
+                    </div>
                 </section>
 
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>

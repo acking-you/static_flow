@@ -1,16 +1,24 @@
-use std::{env, path::PathBuf, str::FromStr};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::{Context, Result};
 use lettre::{
-    message::{header::ContentType, Mailbox, MultiPart, SinglePart},
+    message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart},
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
-use pulldown_cmark::{html, Options, Parser};
+use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 use serde::Deserialize;
 use static_flow_shared::{
     article_request_store::ArticleRequestRecord,
-    llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord},
+    llm_gateway_store::{
+        LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+        LlmGatewayTokenRequestRecord,
+    },
     music_wish_store::MusicWishRecord,
 };
 use url::Url;
@@ -51,6 +59,20 @@ pub struct EmailNotifier {
     from_mailbox: Mailbox,
     admin_recipient: String,
     mailer: AsyncSmtpTransport<Tokio1Executor>,
+}
+
+#[derive(Debug)]
+struct InlineEmailAsset {
+    content_id: String,
+    filename: String,
+    bytes: Vec<u8>,
+    content_type: ContentType,
+}
+
+#[derive(Debug)]
+struct RenderedMarkdownEmail {
+    html_fragment: String,
+    inline_assets: Vec<InlineEmailAsset>,
 }
 
 impl EmailNotifier {
@@ -260,6 +282,35 @@ impl EmailNotifier {
             .await
     }
 
+    pub async fn send_admin_new_llm_account_contribution_request_notification(
+        &self,
+        request: &LlmGatewayAccountContributionRequestRecord,
+    ) -> Result<()> {
+        let subject = format!(
+            "[StaticFlow] New Codex Account Contribution {} ({})",
+            request.account_name, request.request_id
+        );
+        let body_markdown = format!(
+            "## New Codex account contribution submitted\n\n- Request ID: `{}`\n- Account name: \
+             `{}`\n- Account ID: {}\n- Requester email: {}\n- GitHub ID: {}\n- Status: `{}`\n- \
+             Region: {}\n- Client IP: {}\n- Created at (ms): `{}`\n- Frontend page: {}\n\n### \
+             Message\n\n{}\n",
+            request.request_id,
+            request.account_name,
+            request.account_id.as_deref().unwrap_or("-"),
+            request.requester_email,
+            request.github_id.as_deref().unwrap_or("-"),
+            request.status,
+            request.ip_region,
+            request.client_ip,
+            request.created_at,
+            request.frontend_page_url.as_deref().unwrap_or("-"),
+            request.contributor_message,
+        );
+        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+            .await
+    }
+
     pub async fn send_user_llm_token_issued_notification(
         &self,
         request: &LlmGatewayTokenRequestRecord,
@@ -290,32 +341,103 @@ impl EmailNotifier {
             .await
     }
 
+    pub async fn send_user_llm_account_contribution_issued_notification(
+        &self,
+        request: &LlmGatewayAccountContributionRequestRecord,
+        key: &LlmGatewayKeyRecord,
+        gateway_base_url: &str,
+        llm_access_url: Option<&str>,
+    ) -> Result<()> {
+        let subject = "[StaticFlow] 你的 Codex 账号贡献已审核通过".to_string();
+        let account_name = request
+            .imported_account_name
+            .as_deref()
+            .unwrap_or(request.account_name.as_str());
+        let body_markdown = format!(
+            "你好，\n\n感谢你贡献 Codex \
+             账号给站点共享池。你的申请已经审核通过，\
+             系统已经导入账号并为你创建了一把绑定到该账号路由的新 token。\n\n## 贡献信息\n- \
+             Request ID: `{}`\n- 状态: `{}`\n- 贡献账号: `{}`\n- Account ID: {}\n- GitHub ID: \
+             {}\n- 发放 Key ID: `{}`\n- Key 名称: {}\n\n## 使用信息\n- Base URL: `{}`\n- API Key: \
+             `{}`\n- 路由策略: `fixed`\n- 绑定账号: `{}`\n\n## \
+             你的留言\n\n{}\n\n{}\n\n再次感谢你的贡献。以后如果这个账号需要下线、改名或重新发放 \
+             key，请直接联系管理员。\n",
+            request.request_id,
+            request.status,
+            account_name,
+            request.account_id.as_deref().unwrap_or("-"),
+            request.github_id.as_deref().unwrap_or("-"),
+            key.id,
+            key.name,
+            gateway_base_url,
+            key.secret,
+            account_name,
+            request.contributor_message,
+            llm_access_url
+                .map(|url| format!("## 查看页面\n- LLM Access: [{url}]({url})"))
+                .unwrap_or_default(),
+        );
+        self.send_markdown_email(&request.requester_email, &subject, &body_markdown)
+            .await
+    }
+
     async fn send_markdown_email(
         &self,
         to: &str,
         subject: &str,
         markdown_body: &str,
     ) -> Result<()> {
+        self.send_markdown_email_with_options(to, subject, markdown_body, None, None)
+            .await
+    }
+
+    async fn send_markdown_email_with_options(
+        &self,
+        to: &str,
+        subject: &str,
+        markdown_body: &str,
+        asset_base_dir: Option<&Path>,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
         let to_mailbox =
             Mailbox::from_str(to).with_context(|| format!("invalid recipient: {to}"))?;
-        let html_body = build_html_email_document(subject, markdown_body);
-        let email = Message::builder()
+        let rendered = render_markdown_email(markdown_body, asset_base_dir)?;
+        let html_body = build_html_email_document(subject, &rendered.html_fragment);
+        let plain_part = SinglePart::builder()
+            .header(ContentType::TEXT_PLAIN)
+            .body(markdown_body.to_string());
+        let html_part = SinglePart::builder()
+            .header(ContentType::TEXT_HTML)
+            .body(html_body);
+        let multipart = if rendered.inline_assets.is_empty() {
+            MultiPart::alternative()
+                .singlepart(plain_part)
+                .singlepart(html_part)
+        } else {
+            let related = rendered.inline_assets.into_iter().fold(
+                MultiPart::related().singlepart(html_part),
+                |multipart, asset| {
+                    multipart.singlepart(
+                        Attachment::new_inline_with_name(asset.content_id, asset.filename)
+                            .body(asset.bytes, asset.content_type),
+                    )
+                },
+            );
+            MultiPart::alternative()
+                .singlepart(plain_part)
+                .multipart(related)
+        };
+        let mut builder = Message::builder()
             .from(self.from_mailbox.clone())
             .to(to_mailbox)
-            .subject(subject)
-            .multipart(
-                MultiPart::alternative()
-                    .singlepart(
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_PLAIN)
-                            .body(markdown_body.to_string()),
-                    )
-                    .singlepart(
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_HTML)
-                            .body(html_body),
-                    ),
-            )
+            .subject(subject);
+        if let Some(reply_to) = reply_to {
+            let reply_to_mailbox = Mailbox::from_str(reply_to)
+                .with_context(|| format!("invalid reply-to recipient: {reply_to}"))?;
+            builder = builder.reply_to(reply_to_mailbox);
+        }
+        let email = builder
+            .multipart(multipart)
             .context("failed to build email message")?;
         self.mailer
             .send(email)
@@ -325,21 +447,71 @@ impl EmailNotifier {
     }
 }
 
-fn render_markdown_to_html_fragment(markdown: &str) -> String {
+fn render_markdown_email(
+    markdown: &str,
+    asset_base_dir: Option<&Path>,
+) -> Result<RenderedMarkdownEmail> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_GFM);
-    let parser = Parser::new_ext(markdown, options);
+    let mut inline_assets = Vec::new();
+    let mut inline_asset_ids = HashMap::<PathBuf, String>::new();
+    let mut render_error = None::<anyhow::Error>;
+    let parser = Parser::new_ext(markdown, options).map(|event| match event {
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => {
+            if render_error.is_some() {
+                return Event::Start(Tag::Image {
+                    link_type,
+                    dest_url,
+                    title,
+                    id,
+                });
+            }
+            let mut resolved_dest_url = dest_url;
+            if let Some(base_dir) = asset_base_dir {
+                match maybe_register_inline_asset(
+                    base_dir,
+                    resolved_dest_url.as_ref(),
+                    &mut inline_assets,
+                    &mut inline_asset_ids,
+                ) {
+                    Ok(Some(content_id)) => {
+                        resolved_dest_url =
+                            CowStr::Boxed(format!("cid:{content_id}").into_boxed_str());
+                    },
+                    Ok(None) => {},
+                    Err(err) => render_error = Some(err),
+                }
+            }
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url: resolved_dest_url,
+                title,
+                id,
+            })
+        },
+        other => other,
+    });
     let mut output = String::new();
     html::push_html(&mut output, parser);
-    output
+    if let Some(err) = render_error {
+        return Err(err);
+    }
+    Ok(RenderedMarkdownEmail {
+        html_fragment: output,
+        inline_assets,
+    })
 }
 
-fn build_html_email_document(subject: &str, markdown_body: &str) -> String {
+fn build_html_email_document(subject: &str, content_html: &str) -> String {
     let escaped_subject = escape_html(subject);
-    let content_html = render_markdown_to_html_fragment(markdown_body);
     format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -398,6 +570,77 @@ fn build_html_email_document(subject: &str, markdown_body: &str) -> String {
 </html>"#,
         escaped_subject, escaped_subject, content_html
     )
+}
+
+fn maybe_register_inline_asset(
+    base_dir: &Path,
+    dest_url: &str,
+    inline_assets: &mut Vec<InlineEmailAsset>,
+    inline_asset_ids: &mut HashMap<PathBuf, String>,
+) -> Result<Option<String>> {
+    if !should_inline_local_image_reference(dest_url) {
+        return Ok(None);
+    }
+    let clean_ref = dest_url.split(['#', '?']).next().unwrap_or(dest_url).trim();
+    if clean_ref.is_empty() {
+        return Ok(None);
+    }
+    let candidate = Path::new(clean_ref);
+    let resolved_path =
+        if candidate.is_absolute() { candidate.to_path_buf() } else { base_dir.join(candidate) };
+    let canonical_path = resolved_path.canonicalize().with_context(|| {
+        format!("failed to resolve local email image asset {}", resolved_path.display())
+    })?;
+    if let Some(existing_content_id) = inline_asset_ids.get(&canonical_path) {
+        return Ok(Some(existing_content_id.clone()));
+    }
+
+    let bytes = std::fs::read(&canonical_path).with_context(|| {
+        format!("failed to read local email image {}", canonical_path.display())
+    })?;
+    let filename = canonical_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .with_context(|| format!("invalid local email image path {}", canonical_path.display()))?;
+    let content_type = detect_inline_asset_content_type(&canonical_path)?;
+    let content_id = format!("sf-inline-{}", inline_assets.len() + 1);
+    inline_assets.push(InlineEmailAsset {
+        content_id: content_id.clone(),
+        filename,
+        bytes,
+        content_type,
+    });
+    inline_asset_ids.insert(canonical_path, content_id.clone());
+    Ok(Some(content_id))
+}
+
+fn should_inline_local_image_reference(dest_url: &str) -> bool {
+    let trimmed = dest_url.trim();
+    !(trimmed.is_empty()
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("cid:")
+        || trimmed.starts_with("data:")
+        || trimmed.starts_with("mailto:")
+        || trimmed.starts_with('#'))
+}
+
+fn detect_inline_asset_content_type(path: &Path) -> Result<ContentType> {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        anyhow::bail!("local email image {} has no file extension", path.display());
+    };
+    let mime = match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => {
+            anyhow::bail!("local email image {} has unsupported extension .{}", path.display(), ext)
+        },
+    };
+    ContentType::parse(mime).context("failed to parse inline asset content type")
 }
 
 fn escape_html(raw: &str) -> String {
@@ -576,9 +819,11 @@ fn validate_frontend_url(raw: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
         build_html_email_document, build_music_player_url, normalize_frontend_page_url_input,
-        normalize_requester_email_input, render_markdown_to_html_fragment,
+        normalize_requester_email_input, render_markdown_email,
     };
 
     #[test]
@@ -620,15 +865,39 @@ mod tests {
     fn render_markdown_to_html_keeps_links_and_images() {
         let markdown =
             "查看 [文档](https://example.com/docs)\n\n![cover](https://example.com/cover.png)";
-        let html = render_markdown_to_html_fragment(markdown);
-        assert!(html.contains("href=\"https://example.com/docs\""));
-        assert!(html.contains("src=\"https://example.com/cover.png\""));
+        let rendered = render_markdown_email(markdown, None).expect("should render markdown");
+        assert!(rendered
+            .html_fragment
+            .contains("href=\"https://example.com/docs\""));
+        assert!(rendered
+            .html_fragment
+            .contains("src=\"https://example.com/cover.png\""));
+        assert!(rendered.inline_assets.is_empty());
+    }
+
+    #[test]
+    fn render_markdown_email_inlines_local_images() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("static-flow-email-test-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).expect("should create temp dir");
+        let image_path = temp_dir.join("qr.png");
+        fs::write(&image_path, b"fake-png-bytes").expect("should write fake image");
+
+        let rendered = render_markdown_email("![qr](qr.png)", Some(&temp_dir))
+            .expect("should inline local image");
+        assert!(rendered.html_fragment.contains("src=\"cid:sf-inline-1\""));
+        assert_eq!(rendered.inline_assets.len(), 1);
+        assert_eq!(rendered.inline_assets[0].filename, "qr.png");
+
+        fs::remove_file(&image_path).expect("should remove fake image");
+        fs::remove_dir_all(&temp_dir).expect("should remove temp dir");
     }
 
     #[test]
     fn build_html_email_document_wraps_rendered_markdown() {
-        let html =
-            build_html_email_document("测试主题", "[播放链接](https://example.com/media/audio/1)");
+        let rendered = render_markdown_email("[播放链接](https://example.com/media/audio/1)", None)
+            .expect("should render markdown");
+        let html = build_html_email_document("测试主题", &rendered.html_fragment);
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("class=\"sf-content\""));
         assert!(html.contains("href=\"https://example.com/media/audio/1\""));

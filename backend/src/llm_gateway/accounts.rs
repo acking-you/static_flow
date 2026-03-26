@@ -9,6 +9,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
@@ -156,6 +157,7 @@ pub(crate) struct AccountSummarySnapshot {
 pub(crate) struct AccountPool {
     accounts: RwLock<HashMap<String, Arc<RwLock<CodexAccount>>>>,
     rate_limits: RwLock<HashMap<String, AccountRateLimitSnapshot>>,
+    auth_file_mtimes: RwLock<HashMap<String, Option<SystemTime>>>,
     auths_dir: PathBuf,
 }
 
@@ -164,6 +166,7 @@ impl AccountPool {
         Self {
             accounts: RwLock::new(HashMap::new()),
             rate_limits: RwLock::new(HashMap::new()),
+            auth_file_mtimes: RwLock::new(HashMap::new()),
             auths_dir,
         }
     }
@@ -200,7 +203,11 @@ impl AccountPool {
                 Ok(mut account) => {
                     account.name = name.clone();
                     let entry = Arc::new(RwLock::new(account));
-                    self.accounts.write().await.insert(name, entry);
+                    self.accounts.write().await.insert(name.clone(), entry);
+                    self.auth_file_mtimes
+                        .write()
+                        .await
+                        .insert(name.clone(), auth_file_modified_at(&path).await);
                     loaded += 1;
                 },
                 Err(err) => {
@@ -246,6 +253,11 @@ impl AccountPool {
             .write()
             .await
             .insert("default".to_string(), entry);
+        let persisted_path = auth_file_path(&self.auths_dir, "default");
+        self.auth_file_mtimes
+            .write()
+            .await
+            .insert("default".to_string(), auth_file_modified_at(&persisted_path).await);
         tracing::info!(
             codex_path = %codex_path.display(),
             "Seeded account pool with default account from codex auth.json"
@@ -262,8 +274,13 @@ impl AccountPool {
     pub async fn insert(&self, account: CodexAccount) -> Result<()> {
         let name = account.name.clone();
         persist_account_to_file(&self.auths_dir, &account).await?;
+        let modified_at = auth_file_modified_at(&auth_file_path(&self.auths_dir, &name)).await;
         let entry = Arc::new(RwLock::new(account));
-        self.accounts.write().await.insert(name, entry);
+        self.accounts.write().await.insert(name.clone(), entry);
+        self.auth_file_mtimes
+            .write()
+            .await
+            .insert(name, modified_at);
         Ok(())
     }
 
@@ -271,6 +288,7 @@ impl AccountPool {
     pub async fn remove(&self, name: &str) -> Result<bool> {
         let existed = self.accounts.write().await.remove(name).is_some();
         self.rate_limits.write().await.remove(name);
+        self.auth_file_mtimes.write().await.remove(name);
         let path = self.auths_dir.join(format!("{name}.json"));
         if path.is_file() {
             tokio::fs::remove_file(&path)
@@ -392,7 +410,42 @@ impl AccountPool {
             .get(name)
             .with_context(|| format!("account `{name}` not found in pool"))?;
         let account = entry.read().await;
-        persist_account_to_file(&self.auths_dir, &account).await
+        persist_account_to_file(&self.auths_dir, &account).await?;
+        drop(account);
+        self.auth_file_mtimes.write().await.insert(
+            name.to_string(),
+            auth_file_modified_at(&auth_file_path(&self.auths_dir, name)).await,
+        );
+        Ok(())
+    }
+
+    /// Reload one account from disk when its auth file mtime changed.
+    pub async fn sync_account_from_disk_if_changed(
+        &self,
+        name: &str,
+        entry: &Arc<RwLock<CodexAccount>>,
+    ) -> Result<bool> {
+        let path = auth_file_path(&self.auths_dir, name);
+        let modified_at = auth_file_modified_at(&path).await;
+        let cached_modified_at = self
+            .auth_file_mtimes
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .flatten();
+        if modified_matches(cached_modified_at, modified_at) {
+            return Ok(false);
+        }
+
+        let mut account = load_account_from_file(&path).await?;
+        account.name = name.to_string();
+        *entry.write().await = account;
+        self.auth_file_mtimes
+            .write()
+            .await
+            .insert(name.to_string(), modified_at);
+        Ok(true)
     }
 
     /// Return whether the pool has any accounts.
@@ -500,6 +553,22 @@ async fn persist_account_settings_to_file(auths_dir: &Path, account: &CodexAccou
         .await
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn auth_file_path(auths_dir: &Path, name: &str) -> PathBuf {
+    auths_dir.join(format!("{name}.json"))
+}
+
+async fn auth_file_modified_at(path: &Path) -> Option<SystemTime> {
+    tokio::fs::metadata(path).await.ok()?.modified().ok()
+}
+
+fn modified_matches(left: Option<SystemTime>, right: Option<SystemTime>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn settings_path_for_auth_file(auth_path: &Path) -> PathBuf {

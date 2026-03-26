@@ -36,7 +36,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
     now_ms, LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
-    NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewayTokenRequestInput,
+    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING, LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
 };
@@ -61,7 +62,9 @@ use self::{
     },
     runtime::{bearer_header, gateway_auth_cache_ttl, CachedKeyLease, CodexAuthSnapshot},
     types::{
-        AccountListResponse, AccountSummaryView, AdminLlmGatewayKeyView,
+        AccountListResponse, AccountSummaryView, AdminLlmGatewayAccountContributionRequestQuery,
+        AdminLlmGatewayAccountContributionRequestView,
+        AdminLlmGatewayAccountContributionRequestsResponse, AdminLlmGatewayKeyView,
         AdminLlmGatewayKeysResponse, AdminLlmGatewayTokenRequestQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsResponse,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsResponse,
@@ -70,8 +73,10 @@ use self::{
         LlmGatewayEventContext, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
         LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
         LlmGatewayRuntimeConfigResponse, PatchAccountSettingsRequest, PatchLlmGatewayKeyRequest,
-        PreparedGatewayRequest, SubmitLlmGatewayTokenRequest, SubmitLlmGatewayTokenRequestResponse,
-        UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
+        PreparedGatewayRequest, PublicLlmGatewayAccountContributionView,
+        PublicLlmGatewayAccountContributionsResponse, SubmitLlmGatewayAccountContributionRequest,
+        SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewayTokenRequest,
+        SubmitLlmGatewayTokenRequestResponse, UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
     },
 };
 use crate::{
@@ -99,6 +104,9 @@ const PUBLIC_RATE_LIMIT_REFRESH_SECONDS: u64 = 60;
 const LAST_MESSAGE_CONTENT_EXTRACT_FAILED: &str = "[extract_failed]";
 const MAX_PUBLIC_TOKEN_WISH_REASON_CHARS: usize = 4000;
 const MAX_PUBLIC_TOKEN_WISH_QUOTA: u64 = 100_000_000_000;
+const MAX_PUBLIC_ACCOUNT_CONTRIBUTION_MESSAGE_CHARS: usize = 4000;
+const MAX_PUBLIC_ACCOUNT_CONTRIBUTION_GITHUB_ID_CHARS: usize = 39;
+const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
 pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
 pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
@@ -293,6 +301,8 @@ pub async fn create_admin_key(
         name,
         request.quota_billable_limit,
         request.public_visible,
+        None,
+        None,
     )
     .await?;
 
@@ -312,6 +322,8 @@ async fn create_managed_key_record(
     name: String,
     quota_billable_limit: u64,
     public_visible: bool,
+    route_strategy: Option<String>,
+    fixed_account_name: Option<String>,
 ) -> Result<LlmGatewayKeyRecord, (StatusCode, Json<ErrorResponse>)> {
     let secret = generate_secret();
     let key_hash = sha256_hex(secret.as_bytes());
@@ -331,8 +343,8 @@ async fn create_managed_key_record(
         last_used_at: None,
         created_at: now,
         updated_at: now,
-        route_strategy: None,
-        fixed_account_name: None,
+        route_strategy,
+        fixed_account_name,
     };
     state
         .llm_gateway_store
@@ -582,6 +594,145 @@ pub async fn submit_public_token_request(
     }))
 }
 
+fn normalize_optional_github_id_input(value: Option<String>) -> Result<Option<String>> {
+    let Some(trimmed) = value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if trimmed.chars().count() > MAX_PUBLIC_ACCOUNT_CONTRIBUTION_GITHUB_ID_CHARS {
+        anyhow::bail!("github_id is too long");
+    }
+    if trimmed.starts_with('-') || trimmed.ends_with('-') {
+        anyhow::bail!("github_id cannot start or end with `-`");
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        anyhow::bail!("github_id may contain only ASCII letters, digits, or `-`");
+    }
+
+    Ok(Some(trimmed))
+}
+
+/// Accept a public Codex account contribution request from `/llm-access`.
+pub async fn submit_public_account_contribution_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitLlmGatewayAccountContributionRequest>,
+) -> Result<
+    Json<SubmitLlmGatewayAccountContributionRequestResponse>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    let account_name =
+        accounts::validate_account_name(&request.account_name).map_err(|err| bad_request(&err))?;
+    let account_id = request
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let id_token = request.id_token.trim().to_string();
+    let access_token = request.access_token.trim().to_string();
+    let refresh_token = request.refresh_token.trim().to_string();
+    if id_token.is_empty() || access_token.is_empty() || refresh_token.is_empty() {
+        return Err(bad_request("id_token, access_token, and refresh_token are required"));
+    }
+    let requester_email = normalize_requester_email_input(Some(request.requester_email))
+        .map_err(|err| bad_request_with_detail("invalid requester_email", err))?
+        .ok_or_else(|| bad_request("requester_email is required"))?;
+    let contributor_message = request.contributor_message.trim();
+    if contributor_message.is_empty() {
+        return Err(bad_request("contributor_message is required"));
+    }
+    if contributor_message.chars().count() > MAX_PUBLIC_ACCOUNT_CONTRIBUTION_MESSAGE_CHARS {
+        return Err(bad_request("contributor_message is too long"));
+    }
+    let github_id = normalize_optional_github_id_input(request.github_id)
+        .map_err(|err| bad_request_with_detail("invalid github_id", err))?;
+    let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
+        .map_err(|err| bad_request_with_detail("invalid frontend_page_url", err))?;
+
+    let client_ip = extract_client_ip(&headers);
+    let fingerprint = build_client_fingerprint(&headers);
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
+    enforce_comment_submit_rate_limit(
+        state.llm_gateway_token_request_submit_guard.as_ref(),
+        &rate_limit_key,
+        now_ms(),
+        60,
+    )
+    .await?;
+
+    let request_id = generate_task_id("llmacct");
+    let ip_region = state.geoip.resolve_region(&client_ip).await;
+    let record = state
+        .llm_gateway_store
+        .create_account_contribution_request(NewLlmGatewayAccountContributionRequestInput {
+            request_id: request_id.clone(),
+            account_name,
+            account_id,
+            id_token,
+            access_token,
+            refresh_token,
+            requester_email,
+            contributor_message: contributor_message.to_string(),
+            github_id,
+            frontend_page_url,
+            fingerprint,
+            client_ip,
+            ip_region,
+        })
+        .await
+        .map_err(|err| {
+            internal_error("Failed to create llm gateway account contribution request", err)
+        })?;
+
+    if let Some(notifier) = state.email_notifier.clone() {
+        let record_for_email = record.clone();
+        tokio::spawn(async move {
+            if let Err(err) = notifier
+                .send_admin_new_llm_account_contribution_request_notification(&record_for_email)
+                .await
+            {
+                tracing::warn!(
+                    "failed to send admin notification email for llm account contribution {}: {}",
+                    record_for_email.request_id,
+                    err
+                );
+            }
+        });
+    }
+
+    Ok(Json(SubmitLlmGatewayAccountContributionRequestResponse {
+        request_id,
+        status: LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING.to_string(),
+    }))
+}
+
+/// List approved account contributions for the public thank-you wall.
+pub async fn list_public_account_contributions(
+    State(state): State<AppState>,
+) -> Result<Json<PublicLlmGatewayAccountContributionsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let contributions = state
+        .llm_gateway_store
+        .list_public_account_contributions(MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS)
+        .await
+        .map_err(|err| {
+            internal_error("Failed to list llm gateway public account contributions", err)
+        })?;
+    Ok(Json(PublicLlmGatewayAccountContributionsResponse {
+        contributions: contributions
+            .iter()
+            .map(PublicLlmGatewayAccountContributionView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
 /// List token wishes for the admin audit surface.
 pub async fn list_admin_token_requests(
     State(state): State<AppState>,
@@ -683,6 +834,8 @@ pub async fn approve_and_issue_token_request(
             key_name,
             token_request.requested_quota_billable_limit,
             false,
+            None,
+            None,
         )
         .await?
     };
@@ -815,6 +968,366 @@ pub async fn reject_token_request(
         .map_err(|err| internal_error("Failed to reject llm gateway token request", err))?;
 
     Ok(Json(AdminLlmGatewayTokenRequestView::from(&token_request)))
+}
+
+/// List Codex account contribution requests for admin review.
+pub async fn list_admin_account_contribution_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<
+        AdminLlmGatewayAccountContributionRequestQuery,
+    >,
+) -> Result<
+    Json<AdminLlmGatewayAccountContributionRequestsResponse>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    ensure_admin_access(&state, &headers)?;
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let total = state
+        .llm_gateway_store
+        .count_account_contribution_requests(query.status.as_deref())
+        .await
+        .map_err(|err| {
+            internal_error("Failed to count llm gateway account contribution requests", err)
+        })?;
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminLlmGatewayAccountContributionRequestsResponse {
+            total,
+            offset,
+            limit,
+            has_more: false,
+            requests: vec![],
+            generated_at: now_ms(),
+        }));
+    }
+
+    let requests = state
+        .llm_gateway_store
+        .list_account_contribution_requests_page(query.status.as_deref(), limit, offset)
+        .await
+        .map_err(|err| {
+            internal_error("Failed to list llm gateway account contribution requests", err)
+        })?;
+    let has_more = offset.saturating_add(requests.len()) < total;
+
+    Ok(Json(AdminLlmGatewayAccountContributionRequestsResponse {
+        total,
+        offset,
+        limit,
+        has_more,
+        requests: requests
+            .iter()
+            .map(AdminLlmGatewayAccountContributionRequestView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Approve an account contribution, import the account, issue a bound key,
+/// and email the contributor.
+pub async fn approve_and_issue_account_contribution_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<AdminLlmGatewayAccountContributionRequestView>, (StatusCode, Json<ErrorResponse>)>
+{
+    ensure_admin_access(&state, &headers)?;
+
+    let mut contribution_request = state
+        .llm_gateway_store
+        .get_account_contribution_request(&request_id)
+        .await
+        .map_err(|err| {
+            internal_error("Failed to load llm gateway account contribution request", err)
+        })?
+        .ok_or_else(|| not_found("LLM gateway account contribution request not found"))?;
+
+    match contribution_request.status.as_str() {
+        LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED | LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED => {
+            return Err(conflict_error("LLM gateway account contribution request is finalized"));
+        },
+        _ => {},
+    }
+
+    let Some(notifier) = state.email_notifier.clone() else {
+        contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+        contribution_request.failure_reason = Some("email notifier is not configured".to_string());
+        contribution_request.updated_at = now_ms();
+        contribution_request.processed_at = Some(now_ms());
+        state
+            .llm_gateway_store
+            .upsert_account_contribution_request(&contribution_request)
+            .await
+            .map_err(|err| {
+                internal_error(
+                    "Failed to persist llm gateway account contribution request failure",
+                    err,
+                )
+            })?;
+        return Err(internal_error(
+            "Failed to send llm gateway contribution email",
+            "email notifier is not configured",
+        ));
+    };
+
+    let auth = runtime::CodexAuthSnapshot::from_tokens(
+        contribution_request.access_token.clone(),
+        contribution_request.account_id.clone(),
+    );
+    let usage = match token_refresh::validate_account_usage(&state.llm_gateway.client, &auth).await
+    {
+        Ok(usage) => usage,
+        Err(err) => {
+            contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+            contribution_request.failure_reason = Some(err.to_string());
+            contribution_request.updated_at = now_ms();
+            contribution_request.processed_at = Some(now_ms());
+            state
+                .llm_gateway_store
+                .upsert_account_contribution_request(&contribution_request)
+                .await
+                .map_err(|upsert_err| {
+                    internal_error(
+                        "Failed to persist llm gateway account contribution request failure",
+                        upsert_err,
+                    )
+                })?;
+            return Err(bad_request(&format!("account verification failed: {err}")));
+        },
+    };
+
+    let imported_account_name = contribution_request
+        .imported_account_name
+        .clone()
+        .unwrap_or_else(|| contribution_request.account_name.clone());
+    let pool = &state.llm_gateway.account_pool;
+    if contribution_request.imported_account_name.is_none()
+        && pool.exists(&imported_account_name).await
+    {
+        contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+        contribution_request.failure_reason =
+            Some(format!("account `{imported_account_name}` already exists"));
+        contribution_request.updated_at = now_ms();
+        contribution_request.processed_at = Some(now_ms());
+        state
+            .llm_gateway_store
+            .upsert_account_contribution_request(&contribution_request)
+            .await
+            .map_err(|err| {
+                internal_error(
+                    "Failed to persist llm gateway account contribution request failure",
+                    err,
+                )
+            })?;
+        return Err(conflict_error("LLM gateway account already exists"));
+    }
+
+    if !pool.exists(&imported_account_name).await {
+        let account = accounts::CodexAccount {
+            name: imported_account_name.clone(),
+            access_token: contribution_request.access_token.clone(),
+            account_id: contribution_request.account_id.clone(),
+            refresh_token: contribution_request.refresh_token.clone(),
+            id_token: contribution_request.id_token.clone(),
+            map_gpt53_codex_to_spark: false,
+            last_refresh: Some(chrono::Utc::now()),
+            status: accounts::AccountStatus::Active,
+        };
+        pool.insert(account)
+            .await
+            .map_err(|err| internal_error("Failed to persist contributed account", err))?;
+    }
+    pool.update_rate_limit(&imported_account_name, usage.clone())
+        .await;
+    contribution_request.imported_account_name = Some(imported_account_name.clone());
+
+    let key = if let Some(existing_key_id) = contribution_request.issued_key_id.as_deref() {
+        match state
+            .llm_gateway_store
+            .get_key_by_id(existing_key_id)
+            .await
+            .map_err(|err| {
+                internal_error("Failed to reload issued llm gateway contribution key", err)
+            })? {
+            Some(existing) => existing,
+            None => {
+                let key_name =
+                    normalize_name(&format!("contrib-{}", contribution_request.request_id))?;
+                create_managed_key_record(
+                    &state,
+                    key_name,
+                    100_000_000_000,
+                    false,
+                    Some("fixed".to_string()),
+                    Some(imported_account_name.clone()),
+                )
+                .await?
+            },
+        }
+    } else {
+        let key_name = normalize_name(&format!("contrib-{}", contribution_request.request_id))?;
+        create_managed_key_record(
+            &state,
+            key_name,
+            100_000_000_000,
+            false,
+            Some("fixed".to_string()),
+            Some(imported_account_name.clone()),
+        )
+        .await?
+    };
+
+    let gateway_base_url = contribution_request
+        .frontend_page_url
+        .as_deref()
+        .and_then(|url| build_llm_gateway_base_url(url).ok())
+        .or_else(|| {
+            env::var("SITE_BASE_URL")
+                .ok()
+                .map(|base| format!("{}/api/llm-gateway/v1", base.trim_end_matches('/')))
+        })
+        .unwrap_or_else(|| "/api/llm-gateway/v1".to_string());
+    let llm_access_url = contribution_request
+        .frontend_page_url
+        .as_deref()
+        .and_then(|url| build_llm_access_url(url).ok());
+
+    let now = now_ms();
+    contribution_request.admin_note = request.admin_note.clone();
+    contribution_request.failure_reason = None;
+    contribution_request.issued_key_id = Some(key.id.clone());
+    contribution_request.issued_key_name = Some(key.name.clone());
+    contribution_request.updated_at = now;
+    contribution_request.processed_at = Some(now);
+    let mut issued_request = contribution_request.clone();
+    issued_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED.to_string();
+
+    let email_result = notifier
+        .send_user_llm_account_contribution_issued_notification(
+            &issued_request,
+            &key,
+            &gateway_base_url,
+            llm_access_url.as_deref(),
+        )
+        .await;
+
+    match email_result {
+        Ok(_) => {
+            contribution_request = issued_request;
+            state
+                .llm_gateway_store
+                .upsert_account_contribution_request(&contribution_request)
+                .await
+                .map_err(|err| {
+                    internal_error(
+                        "Failed to finalize llm gateway account contribution request",
+                        err,
+                    )
+                })?;
+            Ok(Json(AdminLlmGatewayAccountContributionRequestView::from(&contribution_request)))
+        },
+        Err(err) => {
+            contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+            contribution_request.failure_reason = Some(err.to_string());
+            state
+                .llm_gateway_store
+                .upsert_account_contribution_request(&contribution_request)
+                .await
+                .map_err(|upsert_err| {
+                    internal_error(
+                        "Failed to persist llm gateway account contribution request failure",
+                        upsert_err,
+                    )
+                })?;
+            Err(internal_error("Failed to send llm gateway contribution email", err))
+        },
+    }
+}
+
+/// Reject an account contribution request and clean up any partial account/key.
+pub async fn reject_account_contribution_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<AdminLlmGatewayAccountContributionRequestView>, (StatusCode, Json<ErrorResponse>)>
+{
+    ensure_admin_access(&state, &headers)?;
+
+    let mut contribution_request = state
+        .llm_gateway_store
+        .get_account_contribution_request(&request_id)
+        .await
+        .map_err(|err| {
+            internal_error("Failed to load llm gateway account contribution request", err)
+        })?
+        .ok_or_else(|| not_found("LLM gateway account contribution request not found"))?;
+
+    if contribution_request.status == LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED {
+        return Err(conflict_error(
+            "Issued LLM gateway account contribution request cannot be rejected",
+        ));
+    }
+    if contribution_request.status == LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED {
+        return Err(conflict_error("LLM gateway account contribution request is already rejected"));
+    }
+
+    if let Some(key_id) = contribution_request.issued_key_id.as_deref() {
+        if let Some(mut key) = state
+            .llm_gateway_store
+            .get_key_by_id(key_id)
+            .await
+            .map_err(|err| {
+                internal_error("Failed to load partially issued llm gateway contribution key", err)
+            })?
+        {
+            if key.status == LLM_GATEWAY_KEY_STATUS_ACTIVE {
+                key.status = LLM_GATEWAY_KEY_STATUS_DISABLED.to_string();
+                key.updated_at = now_ms();
+                state
+                    .llm_gateway_store
+                    .upsert_key(&key)
+                    .await
+                    .map_err(|err| {
+                        internal_error(
+                            "Failed to disable partially issued llm gateway contribution key",
+                            err,
+                        )
+                    })?;
+                state.llm_gateway.key_cache.invalidate(&key.key_hash);
+            }
+        }
+    }
+
+    if let Some(account_name) = contribution_request.imported_account_name.as_deref() {
+        state
+            .llm_gateway
+            .account_pool
+            .remove(account_name)
+            .await
+            .map_err(|err| {
+                internal_error("Failed to remove partially imported contributed account", err)
+            })?;
+    }
+
+    let now = now_ms();
+    contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED.to_string();
+    contribution_request.admin_note = request.admin_note.clone();
+    contribution_request.failure_reason = None;
+    contribution_request.updated_at = now;
+    contribution_request.processed_at = Some(now);
+    state
+        .llm_gateway_store
+        .upsert_account_contribution_request(&contribution_request)
+        .await
+        .map_err(|err| {
+            internal_error("Failed to reject llm gateway account contribution request", err)
+        })?;
+
+    Ok(Json(AdminLlmGatewayAccountContributionRequestView::from(&contribution_request)))
 }
 
 /// Start the background worker that refreshes the public rate-limit cache on a

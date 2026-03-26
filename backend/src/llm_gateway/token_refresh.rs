@@ -57,6 +57,22 @@ async fn refresh_all_accounts(pool: &AccountPool, client: &reqwest::Client) -> R
     let now = Utc::now().timestamp();
 
     for (name, entry) in &entries {
+        match pool.sync_account_from_disk_if_changed(name, entry).await {
+            Ok(true) => {
+                tracing::info!(
+                    account = name,
+                    "Reloaded auth file changes into in-memory account snapshot"
+                );
+            },
+            Ok(false) => {},
+            Err(err) => {
+                tracing::warn!(
+                    account = name,
+                    "Failed to sync account from auth file, keeping in-memory state: {err:#}"
+                );
+            },
+        }
+
         let needs_refresh = {
             let account = entry.read().await;
             if account.status != AccountStatus::Active {

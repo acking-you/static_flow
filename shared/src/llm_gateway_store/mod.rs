@@ -12,10 +12,11 @@ use lancedb::{
 };
 
 pub use self::types::{
-    now_ms, LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayTokenRequestRecord,
-    LlmGatewayUsageEventRecord, NewLlmGatewayTokenRequestInput,
-    DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, LLM_GATEWAY_KEYS_TABLE,
-    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    now_ms, LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+    LlmGatewayRuntimeConfigRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewayTokenRequestInput,
+    DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_TABLE_NAMES, LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING, LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
@@ -23,11 +24,13 @@ pub use self::types::{
 };
 use self::{
     codec::{
-        batches_to_keys, batches_to_runtime_config, batches_to_token_requests,
-        batches_to_usage_events, build_keys_batch, build_runtime_config_batch,
+        batches_to_account_contribution_requests, batches_to_keys, batches_to_runtime_config,
+        batches_to_token_requests, batches_to_usage_events,
+        build_account_contribution_requests_batch, build_keys_batch, build_runtime_config_batch,
         build_token_requests_batch, build_usage_events_batch,
     },
     schema::{
+        account_contribution_request_columns, ensure_account_contribution_requests_table,
         ensure_keys_table, ensure_runtime_config_table, ensure_token_requests_table,
         ensure_usage_events_table, escape_literal, key_columns, token_request_columns,
         usage_event_columns,
@@ -53,6 +56,7 @@ impl LlmGatewayStore {
         store.usage_events_table().await?;
         store.runtime_config_table().await?;
         store.token_requests_table().await?;
+        store.account_contribution_requests_table().await?;
         store.ensure_default_runtime_config().await?;
         tracing::info!("LLM gateway store ready");
         Ok(store)
@@ -76,6 +80,10 @@ impl LlmGatewayStore {
 
     async fn token_requests_table(&self) -> Result<Table> {
         ensure_token_requests_table(&self.db).await
+    }
+
+    async fn account_contribution_requests_table(&self) -> Result<Table> {
+        ensure_account_contribution_requests_table(&self.db).await
     }
 
     async fn ensure_default_runtime_config(&self) -> Result<()> {
@@ -412,5 +420,145 @@ impl LlmGatewayStore {
         let batches = query.execute().await?;
         let batch_list = batches.try_collect::<Vec<_>>().await?;
         batches_to_token_requests(&batch_list)
+    }
+
+    pub async fn upsert_account_contribution_request(
+        &self,
+        record: &LlmGatewayAccountContributionRequestRecord,
+    ) -> Result<()> {
+        let table = self.account_contribution_requests_table().await?;
+        let batch = build_account_contribution_requests_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        let mut merge = table.merge_insert(&["request_id"]);
+        merge.when_matched_update_all(None);
+        merge.when_not_matched_insert_all();
+        merge
+            .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .await
+            .context("failed to upsert llm gateway account contribution request")?;
+        Ok(())
+    }
+
+    pub async fn create_account_contribution_request(
+        &self,
+        input: NewLlmGatewayAccountContributionRequestInput,
+    ) -> Result<LlmGatewayAccountContributionRequestRecord> {
+        let now = now_ms();
+        let record = LlmGatewayAccountContributionRequestRecord {
+            request_id: input.request_id,
+            account_name: input.account_name,
+            account_id: input.account_id,
+            id_token: input.id_token,
+            access_token: input.access_token,
+            refresh_token: input.refresh_token,
+            requester_email: input.requester_email,
+            contributor_message: input.contributor_message,
+            github_id: input.github_id,
+            frontend_page_url: input.frontend_page_url,
+            status: LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING.to_string(),
+            fingerprint: input.fingerprint,
+            client_ip: input.client_ip,
+            ip_region: input.ip_region,
+            admin_note: None,
+            failure_reason: None,
+            imported_account_name: None,
+            issued_key_id: None,
+            issued_key_name: None,
+            created_at: now,
+            updated_at: now,
+            processed_at: None,
+        };
+        self.upsert_account_contribution_request(&record).await?;
+        Ok(record)
+    }
+
+    pub async fn get_account_contribution_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<LlmGatewayAccountContributionRequestRecord>> {
+        let table = self.account_contribution_requests_table().await?;
+        let escaped = escape_literal(request_id);
+        let batches = table
+            .query()
+            .only_if(format!("request_id = '{escaped}'"))
+            .limit(1)
+            .select(Select::columns(&account_contribution_request_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_account_contribution_requests(&batch_list).map(|mut rows| rows.pop())
+    }
+
+    pub async fn count_account_contribution_requests(&self, status: Option<&str>) -> Result<usize> {
+        let table = self.account_contribution_requests_table().await?;
+        let filter = status
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("status = '{}'", escape_literal(value)));
+        let total = table
+            .count_rows(filter)
+            .await
+            .context("failed to count llm gateway account contribution requests")?;
+        Ok(total as usize)
+    }
+
+    pub async fn list_account_contribution_requests_page(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LlmGatewayAccountContributionRequestRecord>> {
+        let total = self.count_account_contribution_requests(status).await?;
+        if total == 0 || offset >= total {
+            return Ok(vec![]);
+        }
+        let fetch_count = (total - offset).min(limit.max(1));
+        let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
+        let mut rows = self
+            .query_account_contribution_requests(status, fetch_count, reverse_offset)
+            .await?;
+        rows.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        Ok(rows)
+    }
+
+    pub async fn query_account_contribution_requests(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LlmGatewayAccountContributionRequestRecord>> {
+        let table = self.account_contribution_requests_table().await?;
+        let mut query = table
+            .query()
+            .select(Select::columns(&account_contribution_request_columns()))
+            .offset(offset)
+            .limit(limit.max(1));
+        if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+            query = query.only_if(format!("status = '{}'", escape_literal(status)));
+        }
+        let batches = query.execute().await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_account_contribution_requests(&batch_list)
+    }
+
+    pub async fn list_public_account_contributions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<LlmGatewayAccountContributionRequestRecord>> {
+        let mut rows = self
+            .list_account_contribution_requests_page(
+                Some(LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED),
+                limit.max(1),
+                0,
+            )
+            .await?;
+        rows.sort_by(|left, right| {
+            right
+                .processed_at
+                .unwrap_or(right.created_at)
+                .cmp(&left.processed_at.unwrap_or(left.created_at))
+        });
+        Ok(rows)
     }
 }

@@ -4268,6 +4268,44 @@ pub struct SubmitLlmGatewayTokenRequestResponse {
     pub status: String,
 }
 
+/// Public acknowledgement returned after an account contribution is queued.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitLlmGatewayAccountContributionRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+/// Public thank-you card item for approved account contributions.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PublicLlmGatewayAccountContributionView {
+    pub request_id: String,
+    pub account_name: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub processed_at: Option<i64>,
+}
+
+/// Public response for approved account contribution cards.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PublicLlmGatewayAccountContributionsResponse {
+    pub contributions: Vec<PublicLlmGatewayAccountContributionView>,
+    pub generated_at: i64,
+}
+
+/// Public form payload for contributing a Codex account.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitLlmGatewayAccountContributionInput {
+    pub account_name: String,
+    pub account_id: Option<String>,
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+}
+
 /// Admin-only view of one token wish / issuance task.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AdminLlmGatewayTokenRequestView {
@@ -4297,6 +4335,51 @@ pub struct AdminLlmGatewayTokenRequestsResponse {
     pub has_more: bool,
     pub requests: Vec<AdminLlmGatewayTokenRequestView>,
     pub generated_at: i64,
+}
+
+/// Admin-only view of one Codex account contribution request.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayAccountContributionRequestView {
+    pub request_id: String,
+    pub account_name: String,
+    pub account_id: Option<String>,
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub imported_account_name: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for account contribution requests.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewayAccountContributionRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminLlmGatewayAccountContributionRequestView>,
+    pub generated_at: i64,
+}
+
+/// Query options for admin account contribution request listing.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AdminLlmGatewayAccountContributionRequestsQuery {
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 /// Query options for admin token-wish listing.
@@ -4450,6 +4533,96 @@ pub async fn submit_llm_gateway_token_request(
     }
 }
 
+/// Submit a public Codex account contribution request from `/llm-access`.
+pub async fn submit_llm_gateway_account_contribution_request(
+    input: &SubmitLlmGatewayAccountContributionInput,
+) -> Result<SubmitLlmGatewayAccountContributionRequestResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Ok(SubmitLlmGatewayAccountContributionRequestResponse {
+            request_id: "mock-llm-account-contribution-1".to_string(),
+            status: "pending".to_string(),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/account-contribution-requests/submit", API_BASE);
+        let mut body = serde_json::json!({
+            "account_name": input.account_name,
+            "id_token": input.id_token,
+            "access_token": input.access_token,
+            "refresh_token": input.refresh_token,
+            "requester_email": input.requester_email,
+            "contributor_message": input.contributor_message,
+        });
+        if let Some(account_id) = input
+            .account_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["account_id"] = serde_json::Value::String(account_id.trim().to_string());
+        }
+        if let Some(github_id) = input
+            .github_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["github_id"] = serde_json::Value::String(github_id.trim().to_string());
+        }
+        if let Some(page_url) = input.frontend_page_url.as_deref() {
+            body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
+        }
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch approved public account contributions for the thank-you wall.
+pub async fn fetch_llm_gateway_account_contributions(
+) -> Result<PublicLlmGatewayAccountContributionsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(PublicLlmGatewayAccountContributionsResponse {
+            contributions: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/llm-gateway/account-contributions?_ts={}", API_BASE, Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 /// Fetch the current admin runtime configuration for the gateway cache.
 pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig, String> {
     #[cfg(feature = "mock")]
@@ -4557,6 +4730,55 @@ pub async fn fetch_admin_llm_gateway_token_requests(
     #[cfg(not(feature = "mock"))]
     {
         let mut url = format!("{}/admin/llm-gateway/token-requests", admin_base());
+        let mut params = Vec::new();
+        if let Some(status) = query.status.as_deref() {
+            params.push(format!("status={}", urlencoding::encode(status)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch admin account contribution requests for review / issuance.
+pub async fn fetch_admin_llm_gateway_account_contribution_requests(
+    query: &AdminLlmGatewayAccountContributionRequestsQuery,
+) -> Result<AdminLlmGatewayAccountContributionRequestsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = query;
+        Ok(AdminLlmGatewayAccountContributionRequestsResponse {
+            total: 0,
+            offset: 0,
+            limit: 20,
+            has_more: false,
+            requests: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/llm-gateway/account-contribution-requests", admin_base());
         let mut params = Vec::new();
         if let Some(status) = query.status.as_deref() {
             params.push(format!("status={}", urlencoding::encode(status)));
@@ -4761,6 +4983,77 @@ pub async fn admin_reject_llm_gateway_token_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/token-requests/{}/reject",
+            admin_base(),
+            urlencoding::encode(request_id)
+        );
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "admin_note": admin_note }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Approve an account contribution, import the account, issue a bound key,
+/// and email it to the contributor.
+pub async fn admin_approve_and_issue_llm_gateway_account_contribution_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminLlmGatewayAccountContributionRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/account-contribution-requests/{}/approve-and-issue",
+            admin_base(),
+            urlencoding::encode(request_id)
+        );
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "admin_note": admin_note }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Reject an account contribution request from the admin UI.
+pub async fn admin_reject_llm_gateway_account_contribution_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminLlmGatewayAccountContributionRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/account-contribution-requests/{}/reject",
             admin_base(),
             urlencoding::encode(request_id)
         );

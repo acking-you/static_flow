@@ -4,7 +4,8 @@ use axum::{http::Method, response::Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use static_flow_shared::llm_gateway_store::{
-    LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord,
+    LlmGatewayUsageEventRecord,
 };
 
 use crate::handlers::ErrorResponse;
@@ -134,6 +135,47 @@ pub struct SubmitLlmGatewayTokenRequestResponse {
     pub status: String,
 }
 
+/// Public request body for contributing a Codex account into the shared pool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubmitLlmGatewayAccountContributionRequest {
+    pub account_name: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    #[serde(default)]
+    pub github_id: Option<String>,
+    #[serde(default)]
+    pub frontend_page_url: Option<String>,
+}
+
+/// Public acknowledgement returned after an account contribution is queued.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitLlmGatewayAccountContributionRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+/// Public thank-you card payload rendered at the bottom of `/llm-access`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicLlmGatewayAccountContributionView {
+    pub request_id: String,
+    pub account_name: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub processed_at: Option<i64>,
+}
+
+/// Public response containing already-approved account contributions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicLlmGatewayAccountContributionsResponse {
+    pub contributions: Vec<PublicLlmGatewayAccountContributionView>,
+    pub generated_at: i64,
+}
+
 /// Admin-facing projection of one token wish / issuance task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminLlmGatewayTokenRequestView {
@@ -163,6 +205,54 @@ pub struct AdminLlmGatewayTokenRequestsResponse {
     pub has_more: bool,
     pub requests: Vec<AdminLlmGatewayTokenRequestView>,
     pub generated_at: i64,
+}
+
+/// Admin-facing projection of one account contribution request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewayAccountContributionRequestView {
+    pub request_id: String,
+    pub account_name: String,
+    pub account_id: Option<String>,
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub imported_account_name: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for account contribution requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewayAccountContributionRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminLlmGatewayAccountContributionRequestView>,
+    pub generated_at: i64,
+}
+
+/// Admin query parameters for account contribution request pagination.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AdminLlmGatewayAccountContributionRequestQuery {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 /// Admin query parameters for token-wish filtering and pagination.
@@ -451,6 +541,51 @@ impl From<&LlmGatewayTokenRequestRecord> for AdminLlmGatewayTokenRequestView {
             issued_key_name: value.issued_key_name.clone(),
             created_at: value.created_at,
             updated_at: value.updated_at,
+            processed_at: value.processed_at,
+        }
+    }
+}
+
+impl From<&LlmGatewayAccountContributionRequestRecord>
+    for AdminLlmGatewayAccountContributionRequestView
+{
+    fn from(value: &LlmGatewayAccountContributionRequestRecord) -> Self {
+        Self {
+            request_id: value.request_id.clone(),
+            account_name: value.account_name.clone(),
+            account_id: value.account_id.clone(),
+            id_token: value.id_token.clone(),
+            access_token: value.access_token.clone(),
+            refresh_token: value.refresh_token.clone(),
+            requester_email: value.requester_email.clone(),
+            contributor_message: value.contributor_message.clone(),
+            github_id: value.github_id.clone(),
+            frontend_page_url: value.frontend_page_url.clone(),
+            status: value.status.clone(),
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            admin_note: value.admin_note.clone(),
+            failure_reason: value.failure_reason.clone(),
+            imported_account_name: value.imported_account_name.clone(),
+            issued_key_id: value.issued_key_id.clone(),
+            issued_key_name: value.issued_key_name.clone(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            processed_at: value.processed_at,
+        }
+    }
+}
+
+impl From<&LlmGatewayAccountContributionRequestRecord> for PublicLlmGatewayAccountContributionView {
+    fn from(value: &LlmGatewayAccountContributionRequestRecord) -> Self {
+        Self {
+            request_id: value.request_id.clone(),
+            account_name: value
+                .imported_account_name
+                .clone()
+                .unwrap_or_else(|| value.account_name.clone()),
+            contributor_message: value.contributor_message.clone(),
+            github_id: value.github_id.clone(),
             processed_at: value.processed_at,
         }
     }

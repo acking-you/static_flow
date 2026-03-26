@@ -69,8 +69,16 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/llm-gateway/access", get(llm_gateway::get_public_access))
         .route("/api/llm-gateway/status", get(llm_gateway::get_public_rate_limit_status))
         .route(
+            "/api/llm-gateway/account-contributions",
+            get(llm_gateway::list_public_account_contributions),
+        )
+        .route(
             "/api/llm-gateway/token-requests/submit",
             post(llm_gateway::submit_public_token_request),
+        )
+        .route(
+            "/api/llm-gateway/account-contribution-requests/submit",
+            post(llm_gateway::submit_public_account_contribution_request),
         )
         .route("/api/articles/:id/raw/:lang", get(handlers::get_article_raw_markdown))
         .route("/interactive-pages/:page_id", get(handlers::get_interactive_page_entry))
@@ -157,6 +165,18 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/llm-gateway/token-requests/:request_id/reject",
             post(llm_gateway::reject_token_request),
+        )
+        .route(
+            "/admin/llm-gateway/account-contribution-requests",
+            get(llm_gateway::list_admin_account_contribution_requests),
+        )
+        .route(
+            "/admin/llm-gateway/account-contribution-requests/:request_id/approve-and-issue",
+            post(llm_gateway::approve_and_issue_account_contribution_request),
+        )
+        .route(
+            "/admin/llm-gateway/account-contribution-requests/:request_id/reject",
+            post(llm_gateway::reject_account_contribution_request),
         )
         .route(
             "/admin/llm-gateway/accounts",

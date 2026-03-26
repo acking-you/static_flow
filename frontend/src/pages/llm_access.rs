@@ -1,4 +1,5 @@
 use gloo_timers::callback::{Interval, Timeout};
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
@@ -6,9 +7,11 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        fetch_llm_gateway_access, fetch_llm_gateway_status, submit_llm_gateway_token_request,
-        LlmGatewayAccessResponse, LlmGatewayPublicKeyView, LlmGatewayRateLimitStatusResponse,
-        LlmGatewayRateLimitWindowView,
+        fetch_llm_gateway_access, fetch_llm_gateway_account_contributions,
+        fetch_llm_gateway_status, submit_llm_gateway_account_contribution_request,
+        submit_llm_gateway_token_request, LlmGatewayAccessResponse, LlmGatewayPublicKeyView,
+        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
+        PublicLlmGatewayAccountContributionView, SubmitLlmGatewayAccountContributionInput,
     },
     pages::llm_access_shared::{
         format_ms, format_percent, format_reset_hint, format_window_label, pretty_limit_name,
@@ -26,6 +29,83 @@ export function copy_text(text) {
 "#)]
 extern "C" {
     fn copy_text(text: &str);
+}
+
+fn github_avatar_url(github_id: &str) -> String {
+    format!("https://github.com/{}.png?size=96", github_id.trim())
+}
+
+fn github_profile_url(github_id: &str) -> String {
+    format!("https://github.com/{}", github_id.trim())
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ImportedCodexAuthTokens {
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ImportedCodexAuthFile {
+    #[serde(default)]
+    tokens: Option<ImportedCodexAuthTokens>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
+struct ParsedImportedAuthJson {
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+    account_id: Option<String>,
+}
+
+fn parse_imported_auth_json(raw: &str) -> Result<ParsedImportedAuthJson, String> {
+    let parsed: ImportedCodexAuthFile =
+        serde_json::from_str(raw).map_err(|_| "auth.json 不是合法 JSON".to_string())?;
+    let tokens = parsed.tokens.unwrap_or_default();
+    let id_token = tokens
+        .id_token
+        .or(parsed.id_token)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "auth.json 缺少 id_token".to_string())?;
+    let access_token = tokens
+        .access_token
+        .or(parsed.access_token)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "auth.json 缺少 access_token".to_string())?;
+    let refresh_token = tokens
+        .refresh_token
+        .or(parsed.refresh_token)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "auth.json 缺少 refresh_token".to_string())?;
+    let account_id = tokens
+        .account_id
+        .or(parsed.account_id)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    Ok(ParsedImportedAuthJson {
+        id_token,
+        access_token,
+        refresh_token,
+        account_id,
+    })
 }
 
 #[derive(Properties, PartialEq)]
@@ -198,11 +278,26 @@ pub fn llm_access_page() -> Html {
     let refreshing_status = use_state(|| false);
     let status_section_ref = use_node_ref();
     let wish_section_ref = use_node_ref();
+    let contribution_section_ref = use_node_ref();
     let wish_quota = use_state(String::new);
     let wish_reason = use_state(String::new);
     let wish_email = use_state(String::new);
     let wish_submitting = use_state(|| false);
     let wish_feedback = use_state(|| None::<(String, bool)>);
+    let contributions = use_state(Vec::<PublicLlmGatewayAccountContributionView>::new);
+    let contribution_error = use_state(|| None::<String>);
+    let contribution_account_name = use_state(String::new);
+    let contribution_raw_auth_json = use_state(String::new);
+    let contribution_raw_auth_feedback = use_state(|| None::<(String, bool)>);
+    let contribution_account_id = use_state(String::new);
+    let contribution_id_token = use_state(String::new);
+    let contribution_access_token = use_state(String::new);
+    let contribution_refresh_token = use_state(String::new);
+    let contribution_email = use_state(String::new);
+    let contribution_message = use_state(String::new);
+    let contribution_github_id = use_state(String::new);
+    let contribution_submitting = use_state(|| false);
+    let contribution_feedback = use_state(|| None::<(String, bool)>);
 
     {
         let access = access.clone();
@@ -243,6 +338,26 @@ pub fn llm_access_page() -> Html {
                     },
                 }
                 status_loading.set(false);
+            });
+            || ()
+        });
+    }
+
+    {
+        let contributions = contributions.clone();
+        let contribution_error = contribution_error.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_llm_gateway_account_contributions().await {
+                    Ok(data) => {
+                        contributions.set(data.contributions);
+                        contribution_error.set(None);
+                    },
+                    Err(err) => {
+                        contributions.set(vec![]);
+                        contribution_error.set(Some(err));
+                    },
+                }
             });
             || ()
         });
@@ -365,6 +480,15 @@ pub fn llm_access_page() -> Html {
         })
     };
 
+    let on_scroll_to_contribution = {
+        let contribution_section_ref = contribution_section_ref.clone();
+        Callback::from(move |_| {
+            if let Some(section) = contribution_section_ref.cast::<Element>() {
+                section.scroll_into_view();
+            }
+        })
+    };
+
     let on_submit_token_wish = {
         let wish_quota = wish_quota.clone();
         let wish_reason = wish_reason.clone();
@@ -417,6 +541,96 @@ pub fn llm_access_page() -> Html {
                     },
                 }
                 wish_submitting.set(false);
+            });
+        })
+    };
+
+    let on_submit_account_contribution = {
+        let contribution_account_name = contribution_account_name.clone();
+        let contribution_raw_auth_json = contribution_raw_auth_json.clone();
+        let contribution_raw_auth_feedback = contribution_raw_auth_feedback.clone();
+        let contribution_account_id = contribution_account_id.clone();
+        let contribution_id_token = contribution_id_token.clone();
+        let contribution_access_token = contribution_access_token.clone();
+        let contribution_refresh_token = contribution_refresh_token.clone();
+        let contribution_email = contribution_email.clone();
+        let contribution_message = contribution_message.clone();
+        let contribution_github_id = contribution_github_id.clone();
+        let contribution_submitting = contribution_submitting.clone();
+        let contribution_feedback = contribution_feedback.clone();
+        Callback::from(move |event: SubmitEvent| {
+            event.prevent_default();
+            let account_name = (*contribution_account_name).trim().to_string();
+            let account_id = (*contribution_account_id).trim().to_string();
+            let id_token = (*contribution_id_token).trim().to_string();
+            let access_token = (*contribution_access_token).trim().to_string();
+            let refresh_token = (*contribution_refresh_token).trim().to_string();
+            let email = (*contribution_email).trim().to_string();
+            let message = (*contribution_message).trim().to_string();
+            let github_id = (*contribution_github_id).trim().to_string();
+            if account_name.is_empty()
+                || id_token.is_empty()
+                || access_token.is_empty()
+                || refresh_token.is_empty()
+                || email.is_empty()
+                || message.is_empty()
+            {
+                contribution_feedback
+                    .set(Some(("账号名、三段 token、邮箱和留言都必须填写".to_string(), true)));
+                return;
+            }
+
+            let frontend_page_url =
+                web_sys::window().and_then(|window| window.location().href().ok());
+            let contribution_account_name = contribution_account_name.clone();
+            let contribution_raw_auth_json = contribution_raw_auth_json.clone();
+            let contribution_raw_auth_feedback = contribution_raw_auth_feedback.clone();
+            let contribution_account_id = contribution_account_id.clone();
+            let contribution_id_token = contribution_id_token.clone();
+            let contribution_access_token = contribution_access_token.clone();
+            let contribution_refresh_token = contribution_refresh_token.clone();
+            let contribution_email = contribution_email.clone();
+            let contribution_message = contribution_message.clone();
+            let contribution_github_id = contribution_github_id.clone();
+            let contribution_submitting = contribution_submitting.clone();
+            let contribution_feedback = contribution_feedback.clone();
+            contribution_submitting.set(true);
+            contribution_feedback.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                let input = SubmitLlmGatewayAccountContributionInput {
+                    account_name: account_name.clone(),
+                    account_id: (!account_id.is_empty()).then_some(account_id.clone()),
+                    id_token: id_token.clone(),
+                    access_token: access_token.clone(),
+                    refresh_token: refresh_token.clone(),
+                    requester_email: email.clone(),
+                    contributor_message: message.clone(),
+                    github_id: (!github_id.is_empty()).then_some(github_id.clone()),
+                    frontend_page_url: frontend_page_url.clone(),
+                };
+                match submit_llm_gateway_account_contribution_request(&input).await {
+                    Ok(_) => {
+                        contribution_account_name.set(String::new());
+                        contribution_raw_auth_json.set(String::new());
+                        contribution_raw_auth_feedback.set(None);
+                        contribution_account_id.set(String::new());
+                        contribution_id_token.set(String::new());
+                        contribution_access_token.set(String::new());
+                        contribution_refresh_token.set(String::new());
+                        contribution_email.set(String::new());
+                        contribution_message.set(String::new());
+                        contribution_github_id.set(String::new());
+                        contribution_feedback.set(Some((
+                            "账号贡献申请已提交。只有 admin \
+                             审核通过后，系统才会把账号导入池里并把绑定该账号的 token \
+                             发到你的邮箱。"
+                                .to_string(),
+                            false,
+                        )));
+                    },
+                    Err(err) => contribution_feedback.set(Some((err, true))),
+                }
+                contribution_submitting.set(false);
             });
         })
     };
@@ -857,6 +1071,368 @@ pub fn llm_access_page() -> Html {
                         }
                     </form>
                 </section>
+
+                <section
+                    ref={contribution_section_ref.clone()}
+                    class={classes!("mt-6", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}
+                >
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
+                        <div class={classes!("max-w-3xl")}>
+                            <h2 class={classes!("m-0", "text-lg", "font-bold", "text-[var(--text)]")}>
+                                { "贡献 Codex 账号" }
+                            </h2>
+                            <p class={classes!("mt-2", "m-0", "text-sm", "leading-6", "text-[var(--muted)]")}>
+                                { "如果你愿意把自己的 Codex / GPT 账号贡献到站点账号池里，其他用户就能直接通过本站使用，不必自己长期挂代理。提交后 admin 会先审核；只有审核通过后，系统才会导入账号、创建一把绑定这个账号路由的 token，并把 token 发到你填写的邮箱。" }
+                            </p>
+                        </div>
+                        <div class={classes!("rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                            { "邮箱和留言必填" }
+                        </div>
+                    </div>
+
+                    <form class={classes!("mt-5", "grid", "gap-4")} onsubmit={on_submit_account_contribution}>
+                        <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "账号名" }</span>
+                                <input
+                                    type="text"
+                                    placeholder="例如 my-pro-account"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]")}
+                                    value={(*contribution_account_name).clone()}
+                                    oninput={{
+                                        let contribution_account_name = contribution_account_name.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                contribution_account_name.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                    required=true
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "邮箱" }</span>
+                                <input
+                                    type="email"
+                                    placeholder="you@example.com"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]")}
+                                    value={(*contribution_email).clone()}
+                                    oninput={{
+                                        let contribution_email = contribution_email.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                contribution_email.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                    required=true
+                                />
+                            </label>
+                        </div>
+
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "原始 auth.json（可选）" }</span>
+                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                    { "支持直接粘贴 ~/.codex/auth.json，解析成功后会自动回填下面的 token 和 account_id。" }
+                                </span>
+                            </div>
+                            <textarea
+                                rows="6"
+                                placeholder="{\"tokens\":{\"access_token\":\"...\",\"refresh_token\":\"...\",\"id_token\":\"...\",\"account_id\":\"...\"}}"
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-xs", "text-[var(--text)]", "resize-y")}
+                                value={(*contribution_raw_auth_json).clone()}
+                                oninput={{
+                                    let contribution_raw_auth_json = contribution_raw_auth_json.clone();
+                                    let contribution_raw_auth_feedback = contribution_raw_auth_feedback.clone();
+                                    let contribution_account_id = contribution_account_id.clone();
+                                    let contribution_id_token = contribution_id_token.clone();
+                                    let contribution_access_token = contribution_access_token.clone();
+                                    let contribution_refresh_token = contribution_refresh_token.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                                            let raw = target.value();
+                                            let trimmed = raw.trim().to_string();
+                                            contribution_raw_auth_json.set(raw);
+                                            if trimmed.is_empty() {
+                                                contribution_raw_auth_feedback.set(None);
+                                                return;
+                                            }
+                                            match parse_imported_auth_json(&trimmed) {
+                                                Ok(parsed) => {
+                                                    contribution_account_id.set(parsed.account_id.unwrap_or_default());
+                                                    contribution_id_token.set(parsed.id_token);
+                                                    contribution_access_token.set(parsed.access_token);
+                                                    contribution_refresh_token.set(parsed.refresh_token);
+                                                    contribution_raw_auth_feedback.set(Some((
+                                                        "已从 auth.json 自动回填 token 和 account_id，请继续填写账号名、邮箱和留言。".to_string(),
+                                                        false,
+                                                    )));
+                                                },
+                                                Err(err) => {
+                                                    if trimmed.ends_with('}') || trimmed.contains('\n') {
+                                                        contribution_raw_auth_feedback.set(Some((err, true)));
+                                                    } else {
+                                                        contribution_raw_auth_feedback.set(None);
+                                                    }
+                                                },
+                                            }
+                                        }
+                                    })
+                                }}
+                            />
+                            if let Some((message, is_error)) = (*contribution_raw_auth_feedback).clone() {
+                                <div class={classes!(
+                                    "mt-2",
+                                    "rounded-lg",
+                                    "border",
+                                    "px-3",
+                                    "py-2",
+                                    "text-xs",
+                                    if is_error {
+                                        "border-red-400/35 bg-red-500/8 text-red-700 dark:text-red-200"
+                                    } else {
+                                        "border-emerald-400/35 bg-emerald-500/8 text-emerald-700 dark:text-emerald-200"
+                                    }
+                                )}>
+                                    { message }
+                                </div>
+                            }
+                        </label>
+
+                        <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "GitHub ID（可选）" }</span>
+                                <input
+                                    type="text"
+                                    placeholder="ackingliu"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]")}
+                                    value={(*contribution_github_id).clone()}
+                                    oninput={{
+                                        let contribution_github_id = contribution_github_id.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                contribution_github_id.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "account_id（可选）" }</span>
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]")}
+                                    value={(*contribution_account_id).clone()}
+                                    oninput={{
+                                        let contribution_account_id = contribution_account_id.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                contribution_account_id.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                        </div>
+
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "access_token" }</span>
+                            <textarea
+                                rows="2"
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-xs", "text-[var(--text)]", "resize-y")}
+                                value={(*contribution_access_token).clone()}
+                                oninput={{
+                                    let contribution_access_token = contribution_access_token.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                                            contribution_access_token.set(target.value());
+                                        }
+                                    })
+                                }}
+                                required=true
+                            />
+                        </label>
+
+                        <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "id_token" }</span>
+                                <textarea
+                                    rows="2"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-xs", "text-[var(--text)]", "resize-y")}
+                                    value={(*contribution_id_token).clone()}
+                                    oninput={{
+                                        let contribution_id_token = contribution_id_token.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                                                contribution_id_token.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                    required=true
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "refresh_token" }</span>
+                                <textarea
+                                    rows="2"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-xs", "text-[var(--text)]", "resize-y")}
+                                    value={(*contribution_refresh_token).clone()}
+                                    oninput={{
+                                        let contribution_refresh_token = contribution_refresh_token.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                                                contribution_refresh_token.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                    required=true
+                                />
+                            </label>
+                        </div>
+
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "留言" }</span>
+                            <textarea
+                                rows="4"
+                                placeholder="介绍一下你为什么愿意贡献这个账号，或者给站点留一句话。"
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-[var(--text)]", "resize-y")}
+                                value={(*contribution_message).clone()}
+                                oninput={{
+                                    let contribution_message = contribution_message.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        if let Some(target) = event.target_dyn_into::<HtmlTextAreaElement>() {
+                                            contribution_message.set(target.value());
+                                        }
+                                    })
+                                }}
+                                required=true
+                            />
+                        </label>
+
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <p class={classes!("m-0", "text-xs", "leading-6", "text-[var(--muted)]")}>
+                                { "审核通过后，系统会把你的账号导入 Codex 账号池，并单独给你发一把绑定到该账号的 token。页面下方的感谢卡片只会公开显示你的留言、贡献账号名和 GitHub ID，不会公开邮箱或 token。" }
+                            </p>
+                            <button
+                                type="submit"
+                                class={classes!("btn-terminal", "btn-terminal-primary")}
+                                disabled={*contribution_submitting}
+                            >
+                                <i class={classes!("fas", if *contribution_submitting { "fa-spinner animate-spin" } else { "fa-heart-circle-plus" })}></i>
+                                { if *contribution_submitting { "提交中..." } else { "提交账号贡献" } }
+                            </button>
+                        </div>
+
+                        if let Some((message, is_error)) = (*contribution_feedback).clone() {
+                            <div class={classes!(
+                                "rounded-lg", "border", "px-4", "py-3", "text-sm",
+                                if is_error {
+                                    classes!("border-red-400/35", "bg-red-500/8", "text-red-700", "dark:text-red-200")
+                                } else {
+                                    classes!("border-emerald-400/35", "bg-emerald-500/8", "text-emerald-700", "dark:text-emerald-200")
+                                }
+                            )}>
+                                { message }
+                            </div>
+                        }
+                    </form>
+
+                    <div class={classes!("mt-8", "border-t", "border-[var(--border)]", "pt-5")}>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <div>
+                                <h3 class={classes!("m-0", "text-base", "font-bold", "text-[var(--text)]")}>
+                                    { "贡献感谢墙" }
+                                </h3>
+                                <p class={classes!("mt-1", "m-0", "text-sm", "text-[var(--muted)]")}>
+                                    { "只有审核通过并完成发放的贡献才会出现在这里。" }
+                                </p>
+                            </div>
+                        </div>
+
+                        if let Some(err) = (*contribution_error).clone() {
+                            <div class={classes!("mt-4", "rounded-lg", "border", "border-red-400/35", "bg-red-500/8", "px-4", "py-3", "text-sm", "text-red-700", "dark:text-red-200")}>
+                                { err }
+                            </div>
+                        } else if contributions.is_empty() {
+                            <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-5", "py-10", "text-center", "text-[var(--muted)]")}>
+                                { "还没有公开展示的账号贡献，欢迎成为第一位。" }
+                            </div>
+                        } else {
+                            <div class={classes!("mt-4", "grid", "gap-4", "lg:grid-cols-2")}>
+                                { for contributions.iter().map(|item| {
+                                    let github_id = item.github_id.clone();
+                                    let avatar_url = github_id
+                                        .as_deref()
+                                        .map(github_avatar_url)
+                                        .unwrap_or_default();
+                                    let github_profile_url = github_id
+                                        .as_deref()
+                                        .map(github_profile_url)
+                                        .unwrap_or_default();
+                                    html! {
+                                        <article class={classes!(
+                                            "rounded-xl",
+                                            "border",
+                                            "border-[var(--border)]",
+                                            "bg-[var(--surface)]",
+                                            "p-4",
+                                            "shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
+                                        )}>
+                                            <div class={classes!("flex", "items-start", "gap-3")}>
+                                                if let Some(github_id) = github_id.clone() {
+                                                    <a
+                                                        href={github_profile_url.clone()}
+                                                        target="_blank"
+                                                        rel="noreferrer noopener"
+                                                        class={classes!("shrink-0")}
+                                                        aria-label={format!("Open {} GitHub profile", github_id)}
+                                                    >
+                                                        <img
+                                                            src={avatar_url}
+                                                            alt={format!("{github_id} avatar")}
+                                                            class={classes!("h-12", "w-12", "rounded-full", "border", "border-[var(--border)]", "object-cover", "transition-opacity", "hover:opacity-85")}
+                                                            loading="lazy"
+                                                        />
+                                                    </a>
+                                                } else {
+                                                    <div class={classes!("flex", "h-12", "w-12", "shrink-0", "items-center", "justify-center", "rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "text-[var(--muted)]")}>
+                                                        <i class={classes!("fas", "fa-user-astronaut")} />
+                                                    </div>
+                                                }
+                                                <div class={classes!("min-w-0", "flex-1")}>
+                                                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                        <span class={classes!("rounded-full", "bg-sky-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
+                                                            { item.account_name.clone() }
+                                                        </span>
+                                                        if let Some(github_id) = item.github_id.clone() {
+                                                            <a
+                                                                href={github_profile_url.clone()}
+                                                                target="_blank"
+                                                                rel="noreferrer noopener"
+                                                                class={classes!("text-sm", "font-semibold", "text-[var(--text)]", "underline-offset-4", "transition-colors", "hover:text-sky-700", "hover:underline", "dark:hover:text-sky-200")}
+                                                            >
+                                                                { format!("@{}", github_id) }
+                                                            </a>
+                                                        }
+                                                        if let Some(processed_at) = item.processed_at {
+                                                            <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                                { format_ms(processed_at) }
+                                                            </span>
+                                                        }
+                                                    </div>
+                                                    <p class={classes!("mt-3", "m-0", "whitespace-pre-wrap", "break-words", "text-sm", "leading-6", "text-[var(--text)]")}>
+                                                        { item.contributor_message.clone() }
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </article>
+                                    }
+                                }) }
+                            </div>
+                        }
+                    </div>
+                </section>
             </>
         }
     } else {
@@ -868,6 +1444,20 @@ pub fn llm_access_page() -> Html {
             <div class={classes!("relative", "mx-auto", "max-w-5xl", "px-4", "pb-16", "pt-8", "lg:px-6")}>
                 { content }
             </div>
+
+            <button
+                type="button"
+                class={classes!(
+                    "fixed", "bottom-40", "left-5", "z-[85]",
+                    "btn-terminal",
+                    "!rounded-full", "!px-4", "!py-2.5",
+                    "shadow-[0_8px_24px_rgba(0,0,0,0.15)]"
+                )}
+                onclick={on_scroll_to_contribution}
+            >
+                <i class="fas fa-user-plus"></i>
+                { "贡献账号" }
+            </button>
 
             <button
                 type="button"
