@@ -13,27 +13,31 @@ use lancedb::{
 
 pub use self::types::{
     now_ms, LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-    LlmGatewayRuntimeConfigRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewayTokenRequestInput,
+    LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
+    LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
+    NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
     DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
     LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_TABLE_NAMES, LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
-    LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED,
-    LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING, LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
-    LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
+    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
+    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED, LLM_GATEWAY_TABLE_NAMES,
+    LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED, LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
 use self::{
     codec::{
         batches_to_account_contribution_requests, batches_to_keys, batches_to_runtime_config,
-        batches_to_token_requests, batches_to_usage_events,
+        batches_to_sponsor_requests, batches_to_token_requests, batches_to_usage_events,
         build_account_contribution_requests_batch, build_keys_batch, build_runtime_config_batch,
-        build_token_requests_batch, build_usage_events_batch,
+        build_sponsor_requests_batch, build_token_requests_batch, build_usage_events_batch,
     },
     schema::{
         account_contribution_request_columns, ensure_account_contribution_requests_table,
-        ensure_keys_table, ensure_runtime_config_table, ensure_token_requests_table,
-        ensure_usage_events_table, escape_literal, key_columns, token_request_columns,
-        usage_event_columns,
+        ensure_keys_table, ensure_runtime_config_table, ensure_sponsor_requests_table,
+        ensure_token_requests_table, ensure_usage_events_table, escape_literal, key_columns,
+        sponsor_request_columns, token_request_columns, usage_event_columns,
     },
 };
 
@@ -57,6 +61,7 @@ impl LlmGatewayStore {
         store.runtime_config_table().await?;
         store.token_requests_table().await?;
         store.account_contribution_requests_table().await?;
+        store.sponsor_requests_table().await?;
         store.ensure_default_runtime_config().await?;
         tracing::info!("LLM gateway store ready");
         Ok(store)
@@ -84,6 +89,10 @@ impl LlmGatewayStore {
 
     async fn account_contribution_requests_table(&self) -> Result<Table> {
         ensure_account_contribution_requests_table(&self.db).await
+    }
+
+    async fn sponsor_requests_table(&self) -> Result<Table> {
+        ensure_sponsor_requests_table(&self.db).await
     }
 
     async fn ensure_default_runtime_config(&self) -> Result<()> {
@@ -549,6 +558,152 @@ impl LlmGatewayStore {
         let mut rows = self
             .list_account_contribution_requests_page(
                 Some(LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED),
+                limit.max(1),
+                0,
+            )
+            .await?;
+        rows.sort_by(|left, right| {
+            right
+                .processed_at
+                .unwrap_or(right.created_at)
+                .cmp(&left.processed_at.unwrap_or(left.created_at))
+        });
+        Ok(rows)
+    }
+
+    pub async fn upsert_sponsor_request(
+        &self,
+        record: &LlmGatewaySponsorRequestRecord,
+    ) -> Result<()> {
+        let table = self.sponsor_requests_table().await?;
+        let batch = build_sponsor_requests_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        let mut merge = table.merge_insert(&["request_id"]);
+        merge.when_matched_update_all(None);
+        merge.when_not_matched_insert_all();
+        merge
+            .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .await
+            .context("failed to upsert llm gateway sponsor request")?;
+        Ok(())
+    }
+
+    pub async fn create_sponsor_request(
+        &self,
+        input: NewLlmGatewaySponsorRequestInput,
+    ) -> Result<LlmGatewaySponsorRequestRecord> {
+        let now = now_ms();
+        let record = LlmGatewaySponsorRequestRecord {
+            request_id: input.request_id,
+            requester_email: input.requester_email,
+            sponsor_message: input.sponsor_message,
+            display_name: input.display_name,
+            github_id: input.github_id,
+            frontend_page_url: input.frontend_page_url,
+            status: LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED.to_string(),
+            fingerprint: input.fingerprint,
+            client_ip: input.client_ip,
+            ip_region: input.ip_region,
+            admin_note: None,
+            failure_reason: None,
+            payment_email_sent_at: None,
+            created_at: now,
+            updated_at: now,
+            processed_at: None,
+        };
+        self.upsert_sponsor_request(&record).await?;
+        Ok(record)
+    }
+
+    pub async fn get_sponsor_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<LlmGatewaySponsorRequestRecord>> {
+        let table = self.sponsor_requests_table().await?;
+        let escaped = escape_literal(request_id);
+        let batches = table
+            .query()
+            .only_if(format!("request_id = '{escaped}'"))
+            .limit(1)
+            .select(Select::columns(&sponsor_request_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_sponsor_requests(&batch_list).map(|mut rows| rows.pop())
+    }
+
+    pub async fn delete_sponsor_request(&self, request_id: &str) -> Result<()> {
+        let table = self.sponsor_requests_table().await?;
+        let escaped = escape_literal(request_id);
+        table
+            .delete(&format!("request_id = '{escaped}'"))
+            .await
+            .with_context(|| {
+                format!("failed to delete llm gateway sponsor request `{request_id}`")
+            })?;
+        Ok(())
+    }
+
+    pub async fn count_sponsor_requests(&self, status: Option<&str>) -> Result<usize> {
+        let table = self.sponsor_requests_table().await?;
+        let filter = status
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("status = '{}'", escape_literal(value)));
+        let total = table
+            .count_rows(filter)
+            .await
+            .context("failed to count llm gateway sponsor requests")?;
+        Ok(total as usize)
+    }
+
+    pub async fn list_sponsor_requests_page(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LlmGatewaySponsorRequestRecord>> {
+        let total = self.count_sponsor_requests(status).await?;
+        if total == 0 || offset >= total {
+            return Ok(vec![]);
+        }
+        let fetch_count = (total - offset).min(limit.max(1));
+        let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
+        let mut rows = self
+            .query_sponsor_requests(status, fetch_count, reverse_offset)
+            .await?;
+        rows.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        Ok(rows)
+    }
+
+    pub async fn query_sponsor_requests(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LlmGatewaySponsorRequestRecord>> {
+        let table = self.sponsor_requests_table().await?;
+        let mut query = table
+            .query()
+            .select(Select::columns(&sponsor_request_columns()))
+            .offset(offset)
+            .limit(limit.max(1));
+        if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+            query = query.only_if(format!("status = '{}'", escape_literal(status)));
+        }
+        let batches = query.execute().await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_sponsor_requests(&batch_list)
+    }
+
+    pub async fn list_public_sponsors(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<LlmGatewaySponsorRequestRecord>> {
+        let mut rows = self
+            .list_sponsor_requests_page(
+                Some(LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED),
                 limit.max(1),
                 0,
             )

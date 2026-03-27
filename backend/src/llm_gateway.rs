@@ -9,6 +9,7 @@ mod models;
 mod request;
 mod response;
 mod runtime;
+mod support;
 mod types;
 
 pub(crate) mod accounts;
@@ -36,15 +37,18 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
     now_ms, LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
-    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewayTokenRequestInput,
-    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED,
-    LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING, LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
+    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
+    NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
 };
 
 pub use self::runtime::LlmGatewayRuntimeState;
 pub(crate) use self::{
     accounts::{resolve_auths_dir, AccountPool},
+    support::{load_support_asset, load_support_config, render_payment_email_markdown},
     token_refresh::{build_refresh_client, spawn_account_refresh_task},
 };
 use self::{
@@ -65,17 +69,21 @@ use self::{
         AccountListResponse, AccountSummaryView, AdminLlmGatewayAccountContributionRequestQuery,
         AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsResponse, AdminLlmGatewayKeyView,
-        AdminLlmGatewayKeysResponse, AdminLlmGatewayTokenRequestQuery,
-        AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsResponse,
-        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsResponse,
-        AdminLlmGatewayUsageQuery, CreateLlmGatewayKeyRequest, GatewayResponseAdapter,
-        ImportAccountRequest, LlmGatewayAccessResponse, LlmGatewayCreditsView,
-        LlmGatewayEventContext, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
-        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
-        LlmGatewayRuntimeConfigResponse, PatchAccountSettingsRequest, PatchLlmGatewayKeyRequest,
+        AdminLlmGatewayKeysResponse, AdminLlmGatewaySponsorRequestQuery,
+        AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsResponse,
+        AdminLlmGatewayTokenRequestQuery, AdminLlmGatewayTokenRequestView,
+        AdminLlmGatewayTokenRequestsResponse, AdminLlmGatewayUsageEventView,
+        AdminLlmGatewayUsageEventsResponse, AdminLlmGatewayUsageQuery, CreateLlmGatewayKeyRequest,
+        GatewayResponseAdapter, ImportAccountRequest, LlmGatewayAccessResponse,
+        LlmGatewayCreditsView, LlmGatewayEventContext, LlmGatewayPublicKeyView,
+        LlmGatewayRateLimitBucketView, LlmGatewayRateLimitStatusResponse,
+        LlmGatewayRateLimitWindowView, LlmGatewayRuntimeConfigResponse,
+        LlmGatewaySupportConfigView, PatchAccountSettingsRequest, PatchLlmGatewayKeyRequest,
         PreparedGatewayRequest, PublicLlmGatewayAccountContributionView,
-        PublicLlmGatewayAccountContributionsResponse, SubmitLlmGatewayAccountContributionRequest,
-        SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewayTokenRequest,
+        PublicLlmGatewayAccountContributionsResponse, PublicLlmGatewaySponsorView,
+        PublicLlmGatewaySponsorsResponse, SubmitLlmGatewayAccountContributionRequest,
+        SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewaySponsorRequest,
+        SubmitLlmGatewaySponsorRequestResponse, SubmitLlmGatewayTokenRequest,
         SubmitLlmGatewayTokenRequestResponse, UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
     },
 };
@@ -107,6 +115,9 @@ const MAX_PUBLIC_TOKEN_WISH_QUOTA: u64 = 100_000_000_000;
 const MAX_PUBLIC_ACCOUNT_CONTRIBUTION_MESSAGE_CHARS: usize = 4000;
 const MAX_PUBLIC_ACCOUNT_CONTRIBUTION_GITHUB_ID_CHARS: usize = 39;
 const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
+const MAX_PUBLIC_SPONSOR_MESSAGE_CHARS: usize = 4000;
+const MAX_PUBLIC_SPONSOR_DISPLAY_NAME_CHARS: usize = 80;
+const MAX_PUBLIC_SPONSORS: usize = 36;
 pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
 pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
@@ -618,6 +629,21 @@ fn normalize_optional_github_id_input(value: Option<String>) -> Result<Option<St
     Ok(Some(trimmed))
 }
 
+fn normalize_optional_display_name_input(value: Option<String>) -> Result<Option<String>> {
+    let Some(trimmed) = value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if trimmed.chars().count() > MAX_PUBLIC_SPONSOR_DISPLAY_NAME_CHARS {
+        anyhow::bail!("display_name is too long");
+    }
+
+    Ok(Some(trimmed))
+}
+
 /// Accept a public Codex account contribution request from `/llm-access`.
 pub async fn submit_public_account_contribution_request(
     State(state): State<AppState>,
@@ -731,6 +757,273 @@ pub async fn list_public_account_contributions(
             .collect(),
         generated_at: now_ms(),
     }))
+}
+
+/// Return public sponsor/community configuration for `/llm-access`.
+pub async fn get_public_support_config(
+    State(_state): State<AppState>,
+) -> Result<Json<LlmGatewaySupportConfigView>, (StatusCode, Json<ErrorResponse>)> {
+    let config = load_support_config()
+        .map_err(|err| internal_error("Failed to load llm access support config", err))?;
+    Ok(Json(LlmGatewaySupportConfigView {
+        sponsor_title: config.sponsor_title.clone(),
+        sponsor_intro: config.sponsor_intro.clone(),
+        group_name: config.group_name.clone(),
+        qq_group_number: config.qq_group_number.clone(),
+        group_invite_text: config.group_invite_text.clone(),
+        alipay_qr_url: format!("/api/llm-gateway/support-assets/{}", support::ALIPAY_QR_FILE),
+        wechat_qr_url: format!("/api/llm-gateway/support-assets/{}", support::WECHAT_QR_FILE),
+        qq_group_qr_url: config
+            .has_group_qr()
+            .then(|| format!("/api/llm-gateway/support-assets/{}", support::QQ_GROUP_QR_FILE)),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Serve public support assets such as QR code images.
+pub async fn get_public_support_asset(
+    axum::extract::Path(file_name): axum::extract::Path<String>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let config = load_support_config()
+        .map_err(|err| internal_error("Failed to load llm access support config", err))?;
+    let asset = load_support_asset(&config, &file_name)
+        .map_err(|err| not_found(&format!("support asset not found: {err}")))?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, asset.content_type)
+        .body(Body::from(asset.bytes))
+        .map_err(|err| internal_error("Failed to build llm support asset response", err))
+}
+
+/// Accept a public sponsor request from `/llm-access`, then try to send the
+/// payment instructions email immediately.
+pub async fn submit_public_sponsor_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitLlmGatewaySponsorRequest>,
+) -> Result<Json<SubmitLlmGatewaySponsorRequestResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let requester_email = normalize_requester_email_input(Some(request.requester_email))
+        .map_err(|err| bad_request_with_detail("invalid requester_email", err))?
+        .ok_or_else(|| bad_request("requester_email is required"))?;
+    let sponsor_message = request.sponsor_message.trim();
+    if sponsor_message.is_empty() {
+        return Err(bad_request("sponsor_message is required"));
+    }
+    if sponsor_message.chars().count() > MAX_PUBLIC_SPONSOR_MESSAGE_CHARS {
+        return Err(bad_request("sponsor_message is too long"));
+    }
+    let display_name = normalize_optional_display_name_input(request.display_name)
+        .map_err(|err| bad_request_with_detail("invalid display_name", err))?;
+    let github_id = normalize_optional_github_id_input(request.github_id)
+        .map_err(|err| bad_request_with_detail("invalid github_id", err))?;
+    let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
+        .map_err(|err| bad_request_with_detail("invalid frontend_page_url", err))?;
+
+    let client_ip = extract_client_ip(&headers);
+    let fingerprint = build_client_fingerprint(&headers);
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
+    enforce_comment_submit_rate_limit(
+        state.llm_gateway_token_request_submit_guard.as_ref(),
+        &rate_limit_key,
+        now_ms(),
+        60,
+    )
+    .await?;
+
+    let request_id = generate_task_id("llmsponsor");
+    let ip_region = state.geoip.resolve_region(&client_ip).await;
+    let mut record = state
+        .llm_gateway_store
+        .create_sponsor_request(NewLlmGatewaySponsorRequestInput {
+            request_id: request_id.clone(),
+            requester_email,
+            sponsor_message: sponsor_message.to_string(),
+            display_name,
+            github_id,
+            frontend_page_url,
+            fingerprint,
+            client_ip,
+            ip_region,
+        })
+        .await
+        .map_err(|err| internal_error("Failed to create llm gateway sponsor request", err))?;
+
+    let mut payment_email_sent = false;
+    if let Some(notifier) = state.email_notifier.clone() {
+        match load_support_config().and_then(|config| {
+            let markdown = render_payment_email_markdown(&config)?;
+            Ok((config, markdown))
+        }) {
+            Ok((config, markdown)) => {
+                match notifier
+                    .send_llm_sponsor_payment_instructions(
+                        &record.requester_email,
+                        &config.payment_email_subject,
+                        &markdown,
+                        &config.base_dir,
+                        config.reply_to_email.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        payment_email_sent = true;
+                        record.status =
+                            LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT.to_string();
+                        record.failure_reason = None;
+                        record.payment_email_sent_at = Some(now_ms());
+                        record.updated_at = now_ms();
+                    },
+                    Err(err) => {
+                        record.failure_reason = Some(err.to_string());
+                        record.updated_at = now_ms();
+                    },
+                }
+            },
+            Err(err) => {
+                record.failure_reason = Some(err.to_string());
+                record.updated_at = now_ms();
+            },
+        }
+    } else {
+        record.failure_reason = Some("email notifier is not configured".to_string());
+        record.updated_at = now_ms();
+    }
+    state
+        .llm_gateway_store
+        .upsert_sponsor_request(&record)
+        .await
+        .map_err(|err| internal_error("Failed to persist llm gateway sponsor request", err))?;
+
+    Ok(Json(SubmitLlmGatewaySponsorRequestResponse {
+        request_id,
+        status: record.status.clone(),
+        payment_email_sent,
+    }))
+}
+
+/// List approved sponsors for the public thank-you wall.
+pub async fn list_public_sponsors(
+    State(state): State<AppState>,
+) -> Result<Json<PublicLlmGatewaySponsorsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let sponsors = state
+        .llm_gateway_store
+        .list_public_sponsors(MAX_PUBLIC_SPONSORS)
+        .await
+        .map_err(|err| internal_error("Failed to list llm gateway public sponsors", err))?;
+    Ok(Json(PublicLlmGatewaySponsorsResponse {
+        sponsors: sponsors
+            .iter()
+            .map(PublicLlmGatewaySponsorView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// List sponsor requests for the admin audit surface.
+pub async fn list_admin_sponsor_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<AdminLlmGatewaySponsorRequestQuery>,
+) -> Result<Json<AdminLlmGatewaySponsorRequestsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let total = state
+        .llm_gateway_store
+        .count_sponsor_requests(query.status.as_deref())
+        .await
+        .map_err(|err| internal_error("Failed to count llm gateway sponsor requests", err))?;
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminLlmGatewaySponsorRequestsResponse {
+            total,
+            offset,
+            limit,
+            has_more: false,
+            requests: vec![],
+            generated_at: now_ms(),
+        }));
+    }
+
+    let requests = state
+        .llm_gateway_store
+        .list_sponsor_requests_page(query.status.as_deref(), limit, offset)
+        .await
+        .map_err(|err| internal_error("Failed to list llm gateway sponsor requests", err))?;
+    let has_more = offset.saturating_add(requests.len()) < total;
+
+    Ok(Json(AdminLlmGatewaySponsorRequestsResponse {
+        total,
+        offset,
+        limit,
+        has_more,
+        requests: requests
+            .iter()
+            .map(AdminLlmGatewaySponsorRequestView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Mark a sponsor request as manually confirmed so it appears on the public
+/// sponsor wall.
+pub async fn approve_sponsor_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> Result<Json<AdminLlmGatewaySponsorRequestView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let mut sponsor_request = state
+        .llm_gateway_store
+        .get_sponsor_request(&request_id)
+        .await
+        .map_err(|err| internal_error("Failed to load llm gateway sponsor request", err))?
+        .ok_or_else(|| not_found("LLM gateway sponsor request not found"))?;
+
+    if sponsor_request.status == LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED {
+        return Err(conflict_error("LLM gateway sponsor request is already approved"));
+    }
+
+    let now = now_ms();
+    sponsor_request.status = LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED.to_string();
+    sponsor_request.admin_note = request.admin_note.clone();
+    sponsor_request.failure_reason = None;
+    sponsor_request.updated_at = now;
+    sponsor_request.processed_at = Some(now);
+    state
+        .llm_gateway_store
+        .upsert_sponsor_request(&sponsor_request)
+        .await
+        .map_err(|err| internal_error("Failed to approve llm gateway sponsor request", err))?;
+
+    Ok(Json(AdminLlmGatewaySponsorRequestView::from(&sponsor_request)))
+}
+
+/// Delete one sponsor request from admin review/history.
+pub async fn delete_sponsor_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+
+    let existing = state
+        .llm_gateway_store
+        .get_sponsor_request(&request_id)
+        .await
+        .map_err(|err| internal_error("Failed to load llm gateway sponsor request", err))?;
+    if existing.is_none() {
+        return Err(not_found("LLM gateway sponsor request not found"));
+    }
+
+    state
+        .llm_gateway_store
+        .delete_sponsor_request(&request_id)
+        .await
+        .map_err(|err| internal_error("Failed to delete llm gateway sponsor request", err))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// List token wishes for the admin audit surface.

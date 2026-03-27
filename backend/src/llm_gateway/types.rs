@@ -4,8 +4,8 @@ use axum::{http::Method, response::Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use static_flow_shared::llm_gateway_store::{
-    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord,
-    LlmGatewayUsageEventRecord,
+    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
 };
 
 use crate::handlers::ErrorResponse;
@@ -17,6 +17,20 @@ pub struct LlmGatewayAccessResponse {
     pub gateway_path: String,
     pub auth_cache_ttl_seconds: u64,
     pub keys: Vec<LlmGatewayPublicKeyView>,
+    pub generated_at: i64,
+}
+
+/// Public support/community configuration rendered on `/llm-access`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmGatewaySupportConfigView {
+    pub sponsor_title: String,
+    pub sponsor_intro: String,
+    pub group_name: String,
+    pub qq_group_number: String,
+    pub group_invite_text: String,
+    pub alipay_qr_url: String,
+    pub wechat_qr_url: String,
+    pub qq_group_qr_url: Option<String>,
     pub generated_at: i64,
 }
 
@@ -176,6 +190,45 @@ pub struct PublicLlmGatewayAccountContributionsResponse {
     pub generated_at: i64,
 }
 
+/// Public sponsor submission payload from `/llm-access`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitLlmGatewaySponsorRequest {
+    pub requester_email: String,
+    pub sponsor_message: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub github_id: Option<String>,
+    #[serde(default)]
+    pub frontend_page_url: Option<String>,
+}
+
+/// Public acknowledgement returned after a sponsor request is queued.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitLlmGatewaySponsorRequestResponse {
+    pub request_id: String,
+    pub status: String,
+    pub payment_email_sent: bool,
+}
+
+/// Public sponsor thank-you card payload rendered at the bottom of
+/// `/llm-access`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicLlmGatewaySponsorView {
+    pub request_id: String,
+    pub display_name: Option<String>,
+    pub sponsor_message: String,
+    pub github_id: Option<String>,
+    pub processed_at: Option<i64>,
+}
+
+/// Public response containing already-approved sponsors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicLlmGatewaySponsorsResponse {
+    pub sponsors: Vec<PublicLlmGatewaySponsorView>,
+    pub generated_at: i64,
+}
+
 /// Admin-facing projection of one token wish / issuance task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminLlmGatewayTokenRequestView {
@@ -247,6 +300,48 @@ pub struct AdminLlmGatewayAccountContributionRequestsResponse {
 /// Admin query parameters for account contribution request pagination.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AdminLlmGatewayAccountContributionRequestQuery {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+/// Admin-facing projection of one sponsor request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewaySponsorRequestView {
+    pub request_id: String,
+    pub requester_email: String,
+    pub sponsor_message: String,
+    pub display_name: Option<String>,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub payment_email_sent_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for sponsor requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewaySponsorRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminLlmGatewaySponsorRequestView>,
+    pub generated_at: i64,
+}
+
+/// Admin query parameters for sponsor request pagination.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AdminLlmGatewaySponsorRequestQuery {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -585,6 +680,40 @@ impl From<&LlmGatewayAccountContributionRequestRecord> for PublicLlmGatewayAccou
                 .clone()
                 .unwrap_or_else(|| value.account_name.clone()),
             contributor_message: value.contributor_message.clone(),
+            github_id: value.github_id.clone(),
+            processed_at: value.processed_at,
+        }
+    }
+}
+
+impl From<&LlmGatewaySponsorRequestRecord> for AdminLlmGatewaySponsorRequestView {
+    fn from(value: &LlmGatewaySponsorRequestRecord) -> Self {
+        Self {
+            request_id: value.request_id.clone(),
+            requester_email: value.requester_email.clone(),
+            sponsor_message: value.sponsor_message.clone(),
+            display_name: value.display_name.clone(),
+            github_id: value.github_id.clone(),
+            frontend_page_url: value.frontend_page_url.clone(),
+            status: value.status.clone(),
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            admin_note: value.admin_note.clone(),
+            failure_reason: value.failure_reason.clone(),
+            payment_email_sent_at: value.payment_email_sent_at,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            processed_at: value.processed_at,
+        }
+    }
+}
+
+impl From<&LlmGatewaySponsorRequestRecord> for PublicLlmGatewaySponsorView {
+    fn from(value: &LlmGatewaySponsorRequestRecord) -> Self {
+        Self {
+            request_id: value.request_id.clone(),
+            display_name: value.display_name.clone(),
+            sponsor_message: value.sponsor_message.clone(),
             github_id: value.github_id.clone(),
             processed_at: value.processed_at,
         }

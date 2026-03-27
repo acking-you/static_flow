@@ -11,8 +11,8 @@ use lancedb::{
 
 use super::types::{
     LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_KEYS_TABLE,
-    LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
-    LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
+    LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
 
 pub fn llm_gateway_keys_schema() -> Arc<Schema> {
@@ -111,6 +111,27 @@ pub fn llm_gateway_account_contribution_requests_schema() -> Arc<Schema> {
         Field::new("imported_account_name", DataType::Utf8, true),
         Field::new("issued_key_id", DataType::Utf8, true),
         Field::new("issued_key_name", DataType::Utf8, true),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("processed_at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+    ]))
+}
+
+pub fn llm_gateway_sponsor_requests_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("request_id", DataType::Utf8, false),
+        Field::new("requester_email", DataType::Utf8, false),
+        Field::new("sponsor_message", DataType::Utf8, false),
+        Field::new("display_name", DataType::Utf8, true),
+        Field::new("github_id", DataType::Utf8, true),
+        Field::new("frontend_page_url", DataType::Utf8, true),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("fingerprint", DataType::Utf8, false),
+        Field::new("client_ip", DataType::Utf8, false),
+        Field::new("ip_region", DataType::Utf8, false),
+        Field::new("admin_note", DataType::Utf8, true),
+        Field::new("failure_reason", DataType::Utf8, true),
+        Field::new("payment_email_sent_at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("processed_at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
@@ -225,6 +246,31 @@ pub async fn ensure_account_contribution_requests_table(db: &Connection) -> Resu
     ensure_nullable_ts_column(&table, "processed_at").await?;
     ensure_scalar_index(&table, "request_id").await?;
     ensure_scalar_index(&table, "account_name").await?;
+    ensure_scalar_index(&table, "requester_email").await?;
+    ensure_scalar_index(&table, "status").await?;
+    ensure_scalar_index(&table, "created_at").await?;
+    Ok(table)
+}
+
+pub async fn ensure_sponsor_requests_table(db: &Connection) -> Result<Table> {
+    let table = ensure_table(
+        db,
+        LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
+        llm_gateway_sponsor_requests_schema(),
+        &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ],
+    )
+    .await?;
+    ensure_nullable_utf8_column(&table, "display_name").await?;
+    ensure_nullable_utf8_column(&table, "github_id").await?;
+    ensure_nullable_utf8_column(&table, "frontend_page_url").await?;
+    ensure_nullable_utf8_column(&table, "admin_note").await?;
+    ensure_nullable_utf8_column(&table, "failure_reason").await?;
+    ensure_nullable_ts_column(&table, "payment_email_sent_at").await?;
+    ensure_nullable_ts_column(&table, "processed_at").await?;
+    ensure_scalar_index(&table, "request_id").await?;
     ensure_scalar_index(&table, "requester_email").await?;
     ensure_scalar_index(&table, "status").await?;
     ensure_scalar_index(&table, "created_at").await?;
@@ -426,6 +472,27 @@ pub fn account_contribution_request_columns() -> [&'static str; 22] {
         "imported_account_name",
         "issued_key_id",
         "issued_key_name",
+        "created_at",
+        "updated_at",
+        "processed_at",
+    ]
+}
+
+pub fn sponsor_request_columns() -> [&'static str; 16] {
+    [
+        "request_id",
+        "requester_email",
+        "sponsor_message",
+        "display_name",
+        "github_id",
+        "frontend_page_url",
+        "status",
+        "fingerprint",
+        "client_ip",
+        "ip_region",
+        "admin_note",
+        "failure_reason",
+        "payment_email_sent_at",
         "created_at",
         "updated_at",
         "processed_at",

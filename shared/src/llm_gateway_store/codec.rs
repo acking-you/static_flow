@@ -12,12 +12,13 @@ use arrow_array::{
 use super::{
     schema::{
         llm_gateway_account_contribution_requests_schema, llm_gateway_keys_schema,
-        llm_gateway_runtime_config_schema, llm_gateway_token_requests_schema,
-        llm_gateway_usage_events_schema,
+        llm_gateway_runtime_config_schema, llm_gateway_sponsor_requests_schema,
+        llm_gateway_token_requests_schema, llm_gateway_usage_events_schema,
     },
     types::{
         LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-        LlmGatewayRuntimeConfigRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
+        LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
     },
 };
 
@@ -311,6 +312,67 @@ pub fn build_account_contribution_requests_batch(
     .context("failed to build llm gateway account contribution requests batch")
 }
 
+pub fn build_sponsor_requests_batch(
+    records: &[LlmGatewaySponsorRequestRecord],
+) -> Result<RecordBatch> {
+    let schema = llm_gateway_sponsor_requests_schema();
+    let mut request_id = StringBuilder::new();
+    let mut requester_email = StringBuilder::new();
+    let mut sponsor_message = StringBuilder::new();
+    let mut display_name = StringBuilder::new();
+    let mut github_id = StringBuilder::new();
+    let mut frontend_page_url = StringBuilder::new();
+    let mut status = StringBuilder::new();
+    let mut fingerprint = StringBuilder::new();
+    let mut client_ip = StringBuilder::new();
+    let mut ip_region = StringBuilder::new();
+    let mut admin_note = StringBuilder::new();
+    let mut failure_reason = StringBuilder::new();
+    let mut payment_email_sent_at = TimestampMillisecondBuilder::new();
+    let mut created_at = TimestampMillisecondBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+    let mut processed_at = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        request_id.append_value(&record.request_id);
+        requester_email.append_value(&record.requester_email);
+        sponsor_message.append_value(&record.sponsor_message);
+        append_optional_str(&mut display_name, record.display_name.as_deref());
+        append_optional_str(&mut github_id, record.github_id.as_deref());
+        append_optional_str(&mut frontend_page_url, record.frontend_page_url.as_deref());
+        status.append_value(&record.status);
+        fingerprint.append_value(&record.fingerprint);
+        client_ip.append_value(&record.client_ip);
+        ip_region.append_value(&record.ip_region);
+        append_optional_str(&mut admin_note, record.admin_note.as_deref());
+        append_optional_str(&mut failure_reason, record.failure_reason.as_deref());
+        append_optional_ts(&mut payment_email_sent_at, record.payment_email_sent_at);
+        created_at.append_value(record.created_at);
+        updated_at.append_value(record.updated_at);
+        append_optional_ts(&mut processed_at, record.processed_at);
+    }
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(request_id.finish()) as ArrayRef,
+        Arc::new(requester_email.finish()),
+        Arc::new(sponsor_message.finish()),
+        Arc::new(display_name.finish()),
+        Arc::new(github_id.finish()),
+        Arc::new(frontend_page_url.finish()),
+        Arc::new(status.finish()),
+        Arc::new(fingerprint.finish()),
+        Arc::new(client_ip.finish()),
+        Arc::new(ip_region.finish()),
+        Arc::new(admin_note.finish()),
+        Arc::new(failure_reason.finish()),
+        Arc::new(payment_email_sent_at.finish()),
+        Arc::new(created_at.finish()),
+        Arc::new(updated_at.finish()),
+        Arc::new(processed_at.finish()),
+    ])
+    .context("failed to build llm gateway sponsor requests batch")
+}
+
 pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecord>> {
     let mut rows = Vec::with_capacity(total_rows(batches));
     for batch in batches {
@@ -593,6 +655,62 @@ pub fn batches_to_account_contribution_requests(
                     .and_then(|col| value_string_opt(col, idx)),
                 issued_key_id: issued_key_id.and_then(|col| value_string_opt(col, idx)),
                 issued_key_name: issued_key_name.and_then(|col| value_string_opt(col, idx)),
+                created_at: created_at.value(idx),
+                updated_at: updated_at.value(idx),
+                processed_at: value_ts_opt(processed_at, idx),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+pub fn batches_to_sponsor_requests(
+    batches: &[RecordBatch],
+) -> Result<Vec<LlmGatewaySponsorRequestRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let request_id = required_str_col(batch, "request_id")?;
+        let requester_email = required_str_col(batch, "requester_email")?;
+        let sponsor_message = required_str_col(batch, "sponsor_message")?;
+        let display_name = batch
+            .column_by_name("display_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let github_id = batch
+            .column_by_name("github_id")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let frontend_page_url = batch
+            .column_by_name("frontend_page_url")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let status = required_str_col(batch, "status")?;
+        let fingerprint = required_str_col(batch, "fingerprint")?;
+        let client_ip = required_str_col(batch, "client_ip")?;
+        let ip_region = required_str_col(batch, "ip_region")?;
+        let admin_note = batch
+            .column_by_name("admin_note")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let failure_reason = batch
+            .column_by_name("failure_reason")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let payment_email_sent_at = optional_ts_col(batch, "payment_email_sent_at")?;
+        let created_at = required_ts_col(batch, "created_at")?;
+        let updated_at = required_ts_col(batch, "updated_at")?;
+        let processed_at = optional_ts_col(batch, "processed_at")?;
+
+        for idx in 0..batch.num_rows() {
+            rows.push(LlmGatewaySponsorRequestRecord {
+                request_id: request_id.value(idx).to_string(),
+                requester_email: requester_email.value(idx).to_string(),
+                sponsor_message: sponsor_message.value(idx).to_string(),
+                display_name: display_name.and_then(|col| value_string_opt(col, idx)),
+                github_id: github_id.and_then(|col| value_string_opt(col, idx)),
+                frontend_page_url: frontend_page_url.and_then(|col| value_string_opt(col, idx)),
+                status: status.value(idx).to_string(),
+                fingerprint: fingerprint.value(idx).to_string(),
+                client_ip: client_ip.value(idx).to_string(),
+                ip_region: ip_region.value(idx).to_string(),
+                admin_note: admin_note.and_then(|col| value_string_opt(col, idx)),
+                failure_reason: failure_reason.and_then(|col| value_string_opt(col, idx)),
+                payment_email_sent_at: value_ts_opt(payment_email_sent_at, idx),
                 created_at: created_at.value(idx),
                 updated_at: updated_at.value(idx),
                 processed_at: value_ts_opt(processed_at, idx),

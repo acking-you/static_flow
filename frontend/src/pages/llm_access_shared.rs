@@ -76,7 +76,17 @@ pub fn format_reset_hint(ts_secs: Option<i64>) -> String {
 }
 
 pub fn pretty_limit_name(raw: &str) -> String {
-    raw.replace(['_', '-'], " ")
+    let cleaned = raw.replace(['_', '-'], " ");
+    let trimmed = if cleaned.len() >= 5 && cleaned[..5].eq_ignore_ascii_case("codex") {
+        cleaned[5..].trim_start()
+    } else {
+        cleaned.as_str()
+    };
+    if trimmed.is_empty() {
+        cleaned
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub fn resolved_base_url(access: &LlmGatewayAccessResponse) -> String {

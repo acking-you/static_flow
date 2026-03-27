@@ -7,6 +7,7 @@ pub const LLM_GATEWAY_RUNTIME_CONFIG_TABLE: &str = "llm_gateway_runtime_config";
 pub const LLM_GATEWAY_TOKEN_REQUESTS_TABLE: &str = "llm_gateway_token_requests";
 pub const LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE: &str =
     "llm_gateway_account_contribution_requests";
+pub const LLM_GATEWAY_SPONSOR_REQUESTS_TABLE: &str = "llm_gateway_sponsor_requests";
 
 pub const LLM_GATEWAY_TABLE_NAMES: &[&str] = &[
     LLM_GATEWAY_KEYS_TABLE,
@@ -14,6 +15,7 @@ pub const LLM_GATEWAY_TABLE_NAMES: &[&str] = &[
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
     LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+    LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
 ];
 
 pub const LLM_GATEWAY_KEY_STATUS_ACTIVE: &str = "active";
@@ -23,6 +25,9 @@ pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
 pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED: &str = "issued";
 pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED: &str = "rejected";
 pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED: &str = "failed";
+pub const LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED: &str = "submitted";
+pub const LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT: &str = "payment_email_sent";
+pub const LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED: &str = "approved";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LlmGatewayKeyRecord {
@@ -152,6 +157,39 @@ pub struct LlmGatewayAccountContributionRequestRecord {
     pub imported_account_name: Option<String>,
     pub issued_key_id: Option<String>,
     pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewLlmGatewaySponsorRequestInput {
+    pub request_id: String,
+    pub requester_email: String,
+    pub sponsor_message: String,
+    pub display_name: Option<String>,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub fingerprint: String,
+    pub client_ip: String,
+    pub ip_region: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LlmGatewaySponsorRequestRecord {
+    pub request_id: String,
+    pub requester_email: String,
+    pub sponsor_message: String,
+    pub display_name: Option<String>,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub fingerprint: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub payment_email_sent_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
     pub processed_at: Option<i64>,

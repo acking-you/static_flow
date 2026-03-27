@@ -4292,6 +4292,20 @@ pub struct PublicLlmGatewayAccountContributionsResponse {
     pub generated_at: i64,
 }
 
+/// Public support/community config rendered on `/llm-access`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewaySupportConfigView {
+    pub sponsor_title: String,
+    pub sponsor_intro: String,
+    pub group_name: String,
+    pub qq_group_number: String,
+    pub group_invite_text: String,
+    pub alipay_qr_url: String,
+    pub wechat_qr_url: String,
+    pub qq_group_qr_url: Option<String>,
+    pub generated_at: i64,
+}
+
 /// Public form payload for contributing a Codex account.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SubmitLlmGatewayAccountContributionInput {
@@ -4304,6 +4318,41 @@ pub struct SubmitLlmGatewayAccountContributionInput {
     pub contributor_message: String,
     pub github_id: Option<String>,
     pub frontend_page_url: Option<String>,
+}
+
+/// Public form payload for requesting to become a sponsor.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitLlmGatewaySponsorInput {
+    pub requester_email: String,
+    pub sponsor_message: String,
+    pub display_name: Option<String>,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+}
+
+/// Public acknowledgement returned after a sponsor request is queued.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitLlmGatewaySponsorRequestResponse {
+    pub request_id: String,
+    pub status: String,
+    pub payment_email_sent: bool,
+}
+
+/// Public thank-you card item for approved sponsors.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PublicLlmGatewaySponsorView {
+    pub request_id: String,
+    pub display_name: Option<String>,
+    pub sponsor_message: String,
+    pub github_id: Option<String>,
+    pub processed_at: Option<i64>,
+}
+
+/// Public response for approved sponsor cards.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PublicLlmGatewaySponsorsResponse {
+    pub sponsors: Vec<PublicLlmGatewaySponsorView>,
+    pub generated_at: i64,
 }
 
 /// Admin-only view of one token wish / issuance task.
@@ -4377,6 +4426,45 @@ pub struct AdminLlmGatewayAccountContributionRequestsResponse {
 /// Query options for admin account contribution request listing.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct AdminLlmGatewayAccountContributionRequestsQuery {
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// Admin-only view of one sponsor request.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewaySponsorRequestView {
+    pub request_id: String,
+    pub requester_email: String,
+    pub sponsor_message: String,
+    pub display_name: Option<String>,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub payment_email_sent_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for sponsor requests.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminLlmGatewaySponsorRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminLlmGatewaySponsorRequestView>,
+    pub generated_at: i64,
+}
+
+/// Query options for admin sponsor request listing.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AdminLlmGatewaySponsorRequestsQuery {
     pub status: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -4623,6 +4711,128 @@ pub async fn fetch_llm_gateway_account_contributions(
     }
 }
 
+/// Fetch public sponsor/community configuration for `/llm-access`.
+pub async fn fetch_llm_gateway_support_config() -> Result<LlmGatewaySupportConfigView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(LlmGatewaySupportConfigView {
+            sponsor_title: "请作者喝杯咖啡".to_string(),
+            sponsor_intro: "填写邮箱后，系统会把赞助说明和收款码发给你。".to_string(),
+            group_name: "美区词元魔盗团".to_string(),
+            qq_group_number: "1092356490".to_string(),
+            group_invite_text: "遇到 token、贡献或使用问题都可以进群交流。".to_string(),
+            alipay_qr_url: "/api/llm-gateway/support-assets/alipay_qr.png".to_string(),
+            wechat_qr_url: "/api/llm-gateway/support-assets/wechat_qr.png".to_string(),
+            qq_group_qr_url: Some("/api/llm-gateway/support-assets/qq_group_qr.png".to_string()),
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/support-config?_ts={}", API_BASE, Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Submit a public sponsor request from `/llm-access`.
+pub async fn submit_llm_gateway_sponsor_request(
+    input: &SubmitLlmGatewaySponsorInput,
+) -> Result<SubmitLlmGatewaySponsorRequestResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Ok(SubmitLlmGatewaySponsorRequestResponse {
+            request_id: "mock-llm-sponsor-1".to_string(),
+            status: "payment_email_sent".to_string(),
+            payment_email_sent: true,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/sponsor-requests/submit", API_BASE);
+        let mut body = serde_json::json!({
+            "requester_email": input.requester_email,
+            "sponsor_message": input.sponsor_message,
+        });
+        if let Some(display_name) = input
+            .display_name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["display_name"] = serde_json::Value::String(display_name.trim().to_string());
+        }
+        if let Some(github_id) = input
+            .github_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["github_id"] = serde_json::Value::String(github_id.trim().to_string());
+        }
+        if let Some(page_url) = input.frontend_page_url.as_deref() {
+            body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
+        }
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch approved public sponsors for the thank-you wall.
+pub async fn fetch_llm_gateway_sponsors() -> Result<PublicLlmGatewaySponsorsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(PublicLlmGatewaySponsorsResponse {
+            sponsors: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/sponsors?_ts={}", API_BASE, Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 /// Fetch the current admin runtime configuration for the gateway cache.
 pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig, String> {
     #[cfg(feature = "mock")]
@@ -4779,6 +4989,55 @@ pub async fn fetch_admin_llm_gateway_account_contribution_requests(
     #[cfg(not(feature = "mock"))]
     {
         let mut url = format!("{}/admin/llm-gateway/account-contribution-requests", admin_base());
+        let mut params = Vec::new();
+        if let Some(status) = query.status.as_deref() {
+            params.push(format!("status={}", urlencoding::encode(status)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch admin sponsor requests for manual review.
+pub async fn fetch_admin_llm_gateway_sponsor_requests(
+    query: &AdminLlmGatewaySponsorRequestsQuery,
+) -> Result<AdminLlmGatewaySponsorRequestsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = query;
+        Ok(AdminLlmGatewaySponsorRequestsResponse {
+            total: 0,
+            offset: 0,
+            limit: 20,
+            has_more: false,
+            requests: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/llm-gateway/sponsor-requests", admin_base());
         let mut params = Vec::new();
         if let Some(status) = query.status.as_deref() {
             params.push(format!("status={}", urlencoding::encode(status)));
@@ -5071,6 +5330,68 @@ pub async fn admin_reject_llm_gateway_account_contribution_request(
             .json()
             .await
             .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Mark a sponsor request as manually confirmed from the admin UI.
+pub async fn admin_approve_llm_gateway_sponsor_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminLlmGatewaySponsorRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/sponsor-requests/{}/approve",
+            admin_base(),
+            urlencoding::encode(request_id)
+        );
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "admin_note": admin_note }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Delete one sponsor request from the admin UI.
+pub async fn delete_admin_llm_gateway_sponsor_request(request_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request_id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/sponsor-requests/{}",
+            admin_base(),
+            urlencoding::encode(request_id)
+        );
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
     }
 }
 

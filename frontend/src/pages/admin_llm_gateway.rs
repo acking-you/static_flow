@@ -11,16 +11,20 @@ use crate::{
     api::{
         admin_approve_and_issue_llm_gateway_account_contribution_request,
         admin_approve_and_issue_llm_gateway_token_request,
+        admin_approve_llm_gateway_sponsor_request,
         admin_reject_llm_gateway_account_contribution_request,
         admin_reject_llm_gateway_token_request, create_admin_llm_gateway_key,
         delete_admin_llm_gateway_account, delete_admin_llm_gateway_key,
+        delete_admin_llm_gateway_sponsor_request,
         fetch_admin_llm_gateway_account_contribution_requests, fetch_admin_llm_gateway_accounts,
         fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_keys,
-        fetch_admin_llm_gateway_token_requests, fetch_admin_llm_gateway_usage_events,
-        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
-        patch_admin_llm_gateway_key, update_admin_llm_gateway_config, AccountSummaryView,
+        fetch_admin_llm_gateway_sponsor_requests, fetch_admin_llm_gateway_token_requests,
+        fetch_admin_llm_gateway_usage_events, import_admin_llm_gateway_account,
+        patch_admin_llm_gateway_account, patch_admin_llm_gateway_key,
+        update_admin_llm_gateway_config, AccountSummaryView,
         AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
+        AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery, LlmGatewayRuntimeConfig,
     },
@@ -31,6 +35,7 @@ use crate::{
 const USAGE_PAGE_SIZE: usize = 20;
 const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
 const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
+const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
 
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
@@ -504,6 +509,12 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_contribution_request_loading = use_state(|| false);
     let account_contribution_request_status_filter = use_state(String::new);
     let account_contribution_request_action_inflight = use_state(HashSet::<String>::new);
+    let sponsor_requests = use_state(Vec::<AdminLlmGatewaySponsorRequestView>::new);
+    let sponsor_request_total = use_state(|| 0_usize);
+    let sponsor_request_page = use_state(|| 1_usize);
+    let sponsor_request_loading = use_state(|| false);
+    let sponsor_request_status_filter = use_state(String::new);
+    let sponsor_request_action_inflight = use_state(HashSet::<String>::new);
     let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventView>);
     let usage_scroll_top_ref = use_node_ref();
     let usage_scroll_bottom_ref = use_node_ref();
@@ -647,6 +658,44 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
+    let reload_sponsor_requests = {
+        let sponsor_requests = sponsor_requests.clone();
+        let sponsor_request_total = sponsor_request_total.clone();
+        let sponsor_request_page = sponsor_request_page.clone();
+        let sponsor_request_loading = sponsor_request_loading.clone();
+        let sponsor_request_status_filter = sponsor_request_status_filter.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |(requested_page, override_status): (Option<usize>, Option<String>)| {
+            let sponsor_requests = sponsor_requests.clone();
+            let sponsor_request_total = sponsor_request_total.clone();
+            let sponsor_request_page = sponsor_request_page.clone();
+            let sponsor_request_loading = sponsor_request_loading.clone();
+            let sponsor_request_status_filter = sponsor_request_status_filter.clone();
+            let load_error = load_error.clone();
+            let page = requested_page.unwrap_or(*sponsor_request_page).max(1);
+            let selected_status =
+                override_status.unwrap_or_else(|| (*sponsor_request_status_filter).clone());
+            sponsor_request_loading.set(true);
+            wasm_bindgen_futures::spawn_local(async move {
+                let query = AdminLlmGatewaySponsorRequestsQuery {
+                    status: (!selected_status.is_empty()).then_some(selected_status),
+                    limit: Some(SPONSOR_REQUEST_PAGE_SIZE),
+                    offset: Some((page - 1) * SPONSOR_REQUEST_PAGE_SIZE),
+                };
+                match fetch_admin_llm_gateway_sponsor_requests(&query).await {
+                    Ok(resp) => {
+                        sponsor_request_total.set(resp.total);
+                        sponsor_requests.set(resp.requests);
+                        sponsor_request_page.set(page);
+                        load_error.set(None);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                sponsor_request_loading.set(false);
+            });
+        })
+    };
+
     // This reload keeps the inventory, runtime config, and the current usage
     // page in sync after any admin write operation.
     let reload = {
@@ -730,10 +779,12 @@ pub fn admin_llm_gateway_page() -> Html {
         let reload = reload.clone();
         let reload_token_requests = reload_token_requests.clone();
         let reload_account_contribution_requests = reload_account_contribution_requests.clone();
+        let reload_sponsor_requests = reload_sponsor_requests.clone();
         use_effect_with((), move |_| {
             reload.emit(());
             reload_token_requests.emit((Some(1), Some(String::new())));
             reload_account_contribution_requests.emit((Some(1), Some(String::new())));
+            reload_sponsor_requests.emit((Some(1), Some(String::new())));
             || ()
         });
     }
@@ -910,6 +961,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_contribution_request_total_pages = (*account_contribution_request_total)
         .max(1)
         .div_ceil(ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE);
+    let sponsor_request_total_pages = (*sponsor_request_total)
+        .max(1)
+        .div_ceil(SPONSOR_REQUEST_PAGE_SIZE);
 
     let on_token_request_status_filter_change = {
         let token_request_status_filter = token_request_status_filter.clone();
@@ -1122,6 +1176,117 @@ pub fn admin_llm_gateway_page() -> Html {
                 let mut inflight = (*account_contribution_request_action_inflight).clone();
                 inflight.remove(&request_id);
                 account_contribution_request_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_sponsor_request_status_filter_change = {
+        let sponsor_request_status_filter = sponsor_request_status_filter.clone();
+        let sponsor_request_page = sponsor_request_page.clone();
+        let reload_sponsor_requests = reload_sponsor_requests.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                let status = target.value();
+                sponsor_request_status_filter.set(status.clone());
+                sponsor_request_page.set(1);
+                reload_sponsor_requests.emit((Some(1), Some(status)));
+            }
+        })
+    };
+
+    let on_sponsor_request_page_change = {
+        let sponsor_request_page = sponsor_request_page.clone();
+        let reload_sponsor_requests = reload_sponsor_requests.clone();
+        Callback::from(move |page: usize| {
+            sponsor_request_page.set(page);
+            reload_sponsor_requests.emit((Some(page), None));
+        })
+    };
+
+    let on_approve_sponsor_request = {
+        let sponsor_request_action_inflight = sponsor_request_action_inflight.clone();
+        let sponsor_requests = sponsor_requests.clone();
+        let reload_sponsor_requests = reload_sponsor_requests.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |request_id: String| {
+            let sponsor_request_action_inflight = sponsor_request_action_inflight.clone();
+            let sponsor_requests = sponsor_requests.clone();
+            let reload_sponsor_requests = reload_sponsor_requests.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut inflight = (*sponsor_request_action_inflight).clone();
+                inflight.insert(request_id.clone());
+                sponsor_request_action_inflight.set(inflight);
+
+                match admin_approve_llm_gateway_sponsor_request(&request_id, None).await {
+                    Ok(updated) => {
+                        let mut list = (*sponsor_requests).clone();
+                        if let Some(item) = list
+                            .iter_mut()
+                            .find(|item| item.request_id == updated.request_id)
+                        {
+                            *item = updated;
+                        }
+                        sponsor_requests.set(list);
+                        load_error.set(None);
+                        reload_sponsor_requests.emit((None, None));
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+
+                let mut inflight = (*sponsor_request_action_inflight).clone();
+                inflight.remove(&request_id);
+                sponsor_request_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_delete_sponsor_request = {
+        let sponsor_request_action_inflight = sponsor_request_action_inflight.clone();
+        let sponsor_requests = sponsor_requests.clone();
+        let sponsor_request_total = sponsor_request_total.clone();
+        let reload_sponsor_requests = reload_sponsor_requests.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |request_id: String| {
+            let Some(browser) = window() else {
+                return;
+            };
+            if !browser
+                .confirm_with_message("确认删除这条 Sponsor 请求？")
+                .ok()
+                .unwrap_or(false)
+            {
+                return;
+            }
+
+            let sponsor_request_action_inflight = sponsor_request_action_inflight.clone();
+            let sponsor_requests = sponsor_requests.clone();
+            let sponsor_request_total = sponsor_request_total.clone();
+            let reload_sponsor_requests = reload_sponsor_requests.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut inflight = (*sponsor_request_action_inflight).clone();
+                inflight.insert(request_id.clone());
+                sponsor_request_action_inflight.set(inflight);
+
+                match delete_admin_llm_gateway_sponsor_request(&request_id).await {
+                    Ok(_) => {
+                        let filtered = (*sponsor_requests)
+                            .iter()
+                            .filter(|item| item.request_id != request_id)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        sponsor_requests.set(filtered);
+                        sponsor_request_total.set((*sponsor_request_total).saturating_sub(1));
+                        load_error.set(None);
+                        reload_sponsor_requests.emit((None, None));
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+
+                let mut inflight = (*sponsor_request_action_inflight).clone();
+                inflight.remove(&request_id);
+                sponsor_request_action_inflight.set(inflight);
             });
         })
     };
@@ -1755,6 +1920,158 @@ pub fn admin_llm_gateway_page() -> Html {
                             current_page={*account_contribution_request_page}
                             total_pages={account_contribution_request_total_pages}
                             on_page_change={on_account_contribution_page_change}
+                        />
+                    </div>
+                </section>
+
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Sponsors" }</h2>
+                            <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
+                                { "这批请求是“先填邮箱，再发付款说明邮件”的人工确认流。你确认对方已经按邮件说明完成赞助后，再在这里标记通过。" }
+                            </p>
+                        </div>
+                        <button
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let reload_sponsor_requests = reload_sponsor_requests.clone();
+                                Callback::from(move |_| reload_sponsor_requests.emit((None, None)))
+                            }}
+                            disabled={*sponsor_request_loading}
+                        >
+                            <i class={classes!("fas", if *sponsor_request_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                        </button>
+                    </div>
+
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,16rem)_auto]")}>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
+                            <select
+                                key={format!("sponsor-filter-{}", (*sponsor_request_status_filter).clone())}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                onchange={on_sponsor_request_status_filter_change}
+                            >
+                                <option value="" selected={(*sponsor_request_status_filter).is_empty()}>{ "全部" }</option>
+                                <option value="submitted" selected={*sponsor_request_status_filter == "submitted"}>{ "submitted" }</option>
+                                <option value="payment_email_sent" selected={*sponsor_request_status_filter == "payment_email_sent"}>{ "payment_email_sent" }</option>
+                                <option value="approved" selected={*sponsor_request_status_filter == "approved"}>{ "approved" }</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    if sponsor_requests.is_empty() && !*sponsor_request_loading {
+                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                            { "当前筛选下还没有 Sponsor 请求。" }
+                        </div>
+                    } else {
+                        <div class={classes!("mt-4", "space-y-3")}>
+                            { for sponsor_requests.iter().map(|item| {
+                                let request_id = item.request_id.clone();
+                                let approve_request_id = item.request_id.clone();
+                                let delete_request_id = item.request_id.clone();
+                                let approve_cb = on_approve_sponsor_request.clone();
+                                let delete_cb = on_delete_sponsor_request.clone();
+                                let action_busy = sponsor_request_action_inflight.contains(&request_id);
+                                let status_class = match item.status.as_str() {
+                                    "submitted" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
+                                    "payment_email_sent" => classes!("bg-sky-500/10", "text-sky-700", "dark:text-sky-200", "border-sky-500/20"),
+                                    "approved" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
+                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
+                                };
+                                html! {
+                                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                                        <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                                            <div class={classes!("min-w-0", "space-y-1")}>
+                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class.clone())}>
+                                                        { item.status.clone() }
+                                                    </span>
+                                                    <span class={classes!("font-semibold")}>{ item.requester_email.clone() }</span>
+                                                    <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ item.request_id.clone() }</span>
+                                                </div>
+                                                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                    { format!("{} / {} · created {}", item.client_ip, item.ip_region, format_ms(item.created_at)) }
+                                                </div>
+                                            </div>
+                                            <div class={classes!("text-right", "space-y-1")}>
+                                                if let Some(display_name) = item.display_name.clone() {
+                                                    <div class={classes!("text-sm", "font-semibold")}>{ display_name }</div>
+                                                }
+                                                if let Some(github_id) = item.github_id.clone() {
+                                                    <div class={classes!("text-xs", "font-semibold", "text-[var(--muted)]")}>{ format!("@{}", github_id) }</div>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]")}>
+                                            <div>
+                                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "留言" }</div>
+                                                <div class={classes!("mt-2", "whitespace-pre-wrap", "break-words", "text-sm", "leading-6", "text-[var(--text)]")}>
+                                                    { item.sponsor_message.clone() }
+                                                </div>
+                                            </div>
+                                            <div class={classes!("space-y-2", "text-sm")}>
+                                                if let Some(frontend_page_url) = item.frontend_page_url.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "页面" }</div>
+                                                        <div class={classes!("mt-1", "break-all", "text-[var(--text)]")}>{ frontend_page_url }</div>
+                                                    </div>
+                                                }
+                                                if let Some(payment_email_sent_at) = item.payment_email_sent_at {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "付款说明邮件" }</div>
+                                                        <div class={classes!("mt-1", "text-[var(--text)]")}>{ format_ms(payment_email_sent_at) }</div>
+                                                    </div>
+                                                }
+                                                if let Some(admin_note) = item.admin_note.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Admin Note" }</div>
+                                                        <div class={classes!("mt-1", "whitespace-pre-wrap", "break-words", "text-[var(--text)]")}>{ admin_note }</div>
+                                                    </div>
+                                                }
+                                                if let Some(failure_reason) = item.failure_reason.clone() {
+                                                    <div class={classes!("rounded-lg", "border", "border-red-400/25", "bg-red-500/8", "px-3", "py-2", "text-red-700", "dark:text-red-200")}>
+                                                        { failure_reason }
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                            <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                { item.processed_at.map(format_ms).map(|value| format!("processed {}", value)).unwrap_or_else(|| "尚未确认".to_string()) }
+                                            </div>
+                                            <div class={classes!("flex", "items-center", "gap-2")}>
+                                                if item.status != "approved" {
+                                                    <button
+                                                        class={classes!("btn-terminal", "btn-terminal-primary")}
+                                                        onclick={Callback::from(move |_| approve_cb.emit(approve_request_id.clone()))}
+                                                        disabled={action_busy}
+                                                    >
+                                                        { if action_busy { "处理中..." } else { "标记已确认" } }
+                                                    </button>
+                                                }
+                                                <button
+                                                    class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                    onclick={Callback::from(move |_| delete_cb.emit(delete_request_id.clone()))}
+                                                    disabled={action_busy}
+                                                >
+                                                    { "删除" }
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </article>
+                                }
+                            }) }
+                        </div>
+                    }
+
+                    <div class={classes!("mt-5")}>
+                        <Pagination
+                            current_page={*sponsor_request_page}
+                            total_pages={sponsor_request_total_pages}
+                            on_page_change={on_sponsor_request_page_change}
                         />
                     </div>
                 </section>

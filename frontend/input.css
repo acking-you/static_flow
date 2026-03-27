@@ -6045,3 +6045,76 @@ html {
   background: rgba(var(--surface-rgb), 0.5);
   border-left-color: #fbbf24;
 }
+
+/* LLM access modal enter animation */
+.llm-modal-enter {
+  animation: llm-modal-in 0.2s cubic-bezier(0.11, 0.9, 0.2, 1) both;
+}
+
+@keyframes llm-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* LLM access form input focus ring */
+.llm-access-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.12);
+}
+
+/* Thank-you wall cards */
+.llm-wall-card {
+  animation: llm-wall-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes llm-wall-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.llm-wall-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(var(--primary-rgb), 0.3) 20%,
+    rgba(var(--primary-rgb), 0.6) 50%,
+    rgba(var(--primary-rgb), 0.3) 80%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.llm-wall-card:hover::before {
+  opacity: 1;
+}
+
+.llm-wall-card-sponsor::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(245, 158, 11, 0.3) 20%,
+    rgba(245, 158, 11, 0.6) 50%,
+    rgba(245, 158, 11, 0.3) 80%,
+    transparent 100%
+  );
+}

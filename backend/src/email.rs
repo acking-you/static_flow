@@ -381,6 +381,24 @@ impl EmailNotifier {
             .await
     }
 
+    pub async fn send_llm_sponsor_payment_instructions(
+        &self,
+        requester_email: &str,
+        subject: &str,
+        markdown_body: &str,
+        asset_base_dir: &Path,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
+        self.send_markdown_email_with_options(
+            requester_email,
+            subject,
+            markdown_body,
+            Some(asset_base_dir),
+            reply_to,
+        )
+        .await
+    }
+
     async fn send_markdown_email(
         &self,
         to: &str,
