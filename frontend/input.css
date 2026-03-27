@@ -6118,3 +6118,25 @@ html {
     transparent 100%
   );
 }
+
+/* QQ group name gradient text with shimmer */
+.llm-group-name {
+  background: linear-gradient(
+    90deg,
+    var(--primary) 0%,
+    #06b6d4 25%,
+    #8b5cf6 50%,
+    #06b6d4 75%,
+    var(--primary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: llm-group-shimmer 4s ease-in-out infinite;
+}
+
+@keyframes llm-group-shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}

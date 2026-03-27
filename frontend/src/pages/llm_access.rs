@@ -1,7 +1,7 @@
 use gloo_timers::callback::{Interval, Timeout};
 use serde::Deserialize;
 use wasm_bindgen::{prelude::*, JsCast};
-use web_sys::{Element, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent};
+use web_sys::{HtmlInputElement, HtmlTextAreaElement, KeyboardEvent};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -17,8 +17,9 @@ use crate::{
         SubmitLlmGatewaySponsorInput, API_BASE,
     },
     pages::llm_access_shared::{
-        format_ms, format_percent, format_reset_hint, format_window_label, pretty_limit_name,
-        resolved_base_url, usage_ratio, REMOTE_COMPACT_ARTICLE_ID,
+        format_ms, format_number_i64, format_number_u64, format_percent, format_reset_hint,
+        format_window_label, pretty_limit_name, resolved_base_url, usage_ratio,
+        REMOTE_COMPACT_ARTICLE_ID,
     },
     router::Route,
 };
@@ -246,13 +247,13 @@ fn public_key_card(props: &PublicKeyCardProps) -> Html {
                 <div>
                     <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余" }</div>
                     <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", "text-[var(--text)]")}>
-                        { key_item.remaining_billable }
+                        { format_number_i64(key_item.remaining_billable) }
                     </div>
                 </div>
                 <div>
                     <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "总额度" }</div>
                     <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", "text-[var(--text)]")}>
-                        { key_item.quota_billable_limit }
+                        { format_number_u64(key_item.quota_billable_limit) }
                     </div>
                 </div>
             </div>
@@ -268,9 +269,9 @@ fn public_key_card(props: &PublicKeyCardProps) -> Html {
                     />
                 </div>
                 <div class={classes!("mt-2", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                    <span>{ format!("in {}", key_item.usage_input_uncached_tokens) }</span>
-                    <span>{ format!("cache {}", key_item.usage_input_cached_tokens) }</span>
-                    <span>{ format!("out {}", key_item.usage_output_tokens) }</span>
+                    <span>{ format!("in {}", format_number_u64(key_item.usage_input_uncached_tokens)) }</span>
+                    <span>{ format!("cache {}", format_number_u64(key_item.usage_input_cached_tokens)) }</span>
+                    <span>{ format!("out {}", format_number_u64(key_item.usage_output_tokens)) }</span>
                     if let Some(ts) = key_item.last_used_at {
                         <span class={classes!("ml-auto")}>{ format_ms(ts) }</span>
                     }
@@ -298,6 +299,7 @@ pub fn llm_access_page() -> Html {
     let refreshing_status = use_state(|| false);
     let active_modal = use_state(|| ActiveModal::None);
     let qr_zoomed = use_state(|| false);
+    let status_expanded = use_state(|| false);
     let status_section_ref = use_node_ref();
     // Token wish form
     let wish_quota = use_state(String::new);
@@ -572,15 +574,6 @@ pub fn llm_access_page() -> Html {
             });
         })
     };
-
-    let on_scroll_to_status = {
-        let status_section_ref = status_section_ref.clone();
-        Callback::from(move |_| {
-            if let Some(section) = status_section_ref.cast::<Element>() {
-                section.scroll_into_view();
-            }
-        })
-    };
     // PLACEHOLDER_FORM_CALLBACKS
 
     let on_submit_token_wish = {
@@ -825,7 +818,6 @@ pub fn llm_access_page() -> Html {
             .as_ref()
             .and_then(|c| c.qq_group_qr_url.as_deref())
             .map(resolve_support_asset_url);
-        let support_available = support_config_value.is_some();
 
         // --- Status view ---
         let status_view = if *status_loading {
@@ -866,8 +858,15 @@ pub fn llm_access_page() -> Html {
                     ref={status_section_ref.clone()}
                     class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}
                 >
-                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div
+                        class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap", "cursor-pointer")}
+                        onclick={{
+                            let status_expanded = status_expanded.clone();
+                            Callback::from(move |_: MouseEvent| status_expanded.set(!*status_expanded))
+                        }}
+                    >
                         <div class={classes!("flex", "items-center", "gap-3")}>
+                            <i class={classes!("fas", if *status_expanded { "fa-chevron-down" } else { "fa-chevron-right" }, "text-xs", "text-[var(--muted)]")}></i>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>
                                 { "限额状态" }
                             </h2>
@@ -895,13 +894,17 @@ pub fn llm_access_page() -> Html {
                         <button
                             type="button"
                             class={classes!("btn-terminal")}
-                            onclick={on_refresh_status.clone()}
+                            onclick={{
+                                let on_refresh_status = on_refresh_status.clone();
+                                Callback::from(move |e: MouseEvent| { e.stop_propagation(); on_refresh_status.emit(()); })
+                            }}
                             disabled={*refreshing_status}
                         >
                             <i class={classes!("fas", if *refreshing_status { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
                         </button>
                     </div>
 
+                    if *status_expanded {
                     // Account groups
                     { for account_groups.iter().enumerate().map(|(group_idx, (account_name, group_buckets))| {
                         let primary_bucket = group_buckets.iter().find(|b| b.is_primary).cloned()
@@ -994,6 +997,7 @@ pub fn llm_access_page() -> Html {
                     if let Some(error_message) = effective_status_error {
                         <div class={classes!("mt-3", "llm-access-notice")}>{ error_message }</div>
                     }
+                    } // end status_expanded
                 </section>
             }
         } else if let Some(err) = (*status_error).clone() {
@@ -1083,13 +1087,8 @@ pub fn llm_access_page() -> Html {
                             }
                         </section>
 
-                        // Status section
-                        <section class={classes!("mt-6")}>
-                            { status_view }
-                        </section>
-
-                        // --- Action bar: compact row of buttons to open modals ---
-                        <section class={classes!("mt-6", "flex", "items-center", "gap-3", "flex-wrap")}>
+                        // Action buttons
+                        <section class={classes!("mt-6", "flex", "items-center", "gap-2", "flex-wrap")}>
                             <button
                                 type="button"
                                 class={classes!("btn-terminal")}
@@ -1119,11 +1118,15 @@ pub fn llm_access_page() -> Html {
                                     let active_modal = active_modal.clone();
                                     Callback::from(move |_| active_modal.set(ActiveModal::Sponsor))
                                 }}
-                                disabled={!support_available}
                             >
                                 <i class="fas fa-mug-hot"></i>
-                                { "请喝咖啡" }
+                                { "赞助站点" }
                             </button>
+                        </section>
+
+                        // Status section
+                        <section class={classes!("mt-6")}>
+                            { status_view }
                         </section>
 
                         // --- QQ group card ---
@@ -1154,7 +1157,7 @@ pub fn llm_access_page() -> Html {
                                     }
                                     <div class={classes!("min-w-0", "flex-1")}>
                                         <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>
+                                            <h2 class={classes!("m-0", "font-mono", "text-lg", "font-bold", "llm-group-name")}>
                                                 { group_name.clone() }
                                             </h2>
                                             <span class={classes!("font-mono", "text-[11px]", "text-[var(--muted)]")}>
@@ -1580,14 +1583,17 @@ pub fn llm_access_page() -> Html {
                             onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}
                         >
                             <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
-                                <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "请喝咖啡" }</h2>
+                                <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "请站长喝杯咖啡" }</h2>
                                 <button type="button" class={classes!("btn-terminal")}
                                     onclick={{ let m = active_modal.clone(); Callback::from(move |_| m.set(ActiveModal::None)) }}>
                                     <i class="fas fa-xmark"></i>
                                 </button>
                             </div>
-                            <p class={classes!("mt-2", "m-0", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                                { "填写邮箱后会收到付款说明，付款后回复邮件即可。" }
+                            <p class={classes!("mt-2", "m-0", "text-sm", "leading-relaxed", "text-[var(--muted)]")}>
+                                { "这是一个公益站点，服务器和带宽都需要持续投入。一杯咖啡的支持就能帮站长分担运维成本，让大家继续免费用下去。" }
+                            </p>
+                            <p class={classes!("mt-2", "m-0", "font-mono", "text-[11px]", "text-[var(--muted)]", "opacity-60")}>
+                                { "填写邮箱 → 收到付款说明 → 付款后回复邮件 → 上墙" }
                             </p>
                             <form class={classes!("mt-4", "grid", "gap-3")} onsubmit={on_submit_sponsor}>
                                 <div class={classes!("grid", "gap-3", "sm:grid-cols-2")}>
@@ -1633,28 +1639,10 @@ pub fn llm_access_page() -> Html {
                     </div>
                 }
 
-                // Floating status button
-                <button
-                    type="button"
-                    class={classes!(
-                        "fixed", "bottom-6", "right-5", "z-[85]",
-                        "btn-terminal", "btn-terminal-primary",
-                        "!rounded-full", "!px-4", "!py-2.5",
-                        "shadow-[0_8px_24px_rgba(0,0,0,0.15)]",
-                    )}
-                    onclick={on_scroll_to_status}
-                >
-                    <span class={classes!("relative", "flex", "h-2", "w-2")}>
-                        <span class={classes!("absolute", "inline-flex", "h-full", "w-full", "animate-ping", "rounded-full", "bg-white/60")}></span>
-                        <span class={classes!("relative", "inline-flex", "h-2", "w-2", "rounded-full", "bg-white")}></span>
-                    </span>
-                    { "限额" }
-                </button>
-
                 // Toast
                 if let Some((message, is_error)) = (*toast).clone() {
                     <div class={classes!(
-                        "fixed", "bottom-5", "right-20", "z-[90]",
+                        "fixed", "bottom-5", "right-5", "z-[90]",
                         "rounded-full", "border", "px-4", "py-2.5",
                         "font-mono", "text-sm", "font-semibold",
                         "shadow-[0_8px_24px_rgba(0,0,0,0.15)]",

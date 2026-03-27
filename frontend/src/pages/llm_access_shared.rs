@@ -89,6 +89,27 @@ pub fn pretty_limit_name(raw: &str) -> String {
     }
 }
 
+/// Format a number with comma separators: 1234567 → "1,234,567"
+pub fn format_number_u64(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
+pub fn format_number_i64(n: i64) -> String {
+    if n < 0 {
+        format!("-{}", format_number_u64(n.unsigned_abs()))
+    } else {
+        format_number_u64(n as u64)
+    }
+}
+
 pub fn resolved_base_url(access: &LlmGatewayAccessResponse) -> String {
     if access.base_url.starts_with("http://") || access.base_url.starts_with("https://") {
         return access.base_url.clone();

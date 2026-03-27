@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use gloo_timers::callback::Timeout;
 use js_sys::Date;
 use wasm_bindgen::prelude::*;
-use web_sys::{window, HtmlElement, HtmlInputElement, HtmlSelectElement};
+use web_sys::{window, Element, HtmlElement, HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -30,6 +30,7 @@ use crate::{
         PatchAdminLlmGatewayKeyRequest,
     },
     components::pagination::Pagination,
+    pages::llm_access_shared::{format_number_i64, format_number_u64},
     router::Route,
 };
 
@@ -547,10 +548,10 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             </div>
 
             <div class={classes!("mt-3", "flex", "items-center", "gap-4", "text-xs", "text-[var(--muted)]")}>
-                <span>{ format!("剩余 {}", key_item.remaining_billable) }</span>
-                <span>{ format!("输入 {}", key_item.usage_input_uncached_tokens) }</span>
-                <span>{ format!("缓存 {}", key_item.usage_input_cached_tokens) }</span>
-                <span>{ format!("输出 {}", key_item.usage_output_tokens) }</span>
+                <span>{ format!("剩余 {}", format_number_i64(key_item.remaining_billable)) }</span>
+                <span>{ format!("输入 {}", format_number_u64(key_item.usage_input_uncached_tokens)) }</span>
+                <span>{ format!("缓存 {}", format_number_u64(key_item.usage_input_cached_tokens)) }</span>
+                <span>{ format!("输出 {}", format_number_u64(key_item.usage_output_tokens)) }</span>
             </div>
 
             if let Some(feedback) = (*feedback).clone() {
@@ -611,6 +612,14 @@ pub fn admin_llm_gateway_page() -> Html {
     let import_account_id = use_state(String::new);
     let importing = use_state(|| false);
     let account_action_inflight = use_state(HashSet::<String>::new);
+    let show_import_form = use_state(|| false);
+    // Section navigation refs
+    let keys_section_ref = use_node_ref();
+    let accounts_section_ref = use_node_ref();
+    let usage_section_ref = use_node_ref();
+    let wishes_section_ref = use_node_ref();
+    let contributions_section_ref = use_node_ref();
+    let sponsors_section_ref = use_node_ref();
 
     // Usage events are fetched independently so paging and key filters do not
     // need to re-fetch the rest of the admin page chrome.
@@ -1475,6 +1484,15 @@ pub fn admin_llm_gateway_page() -> Html {
         let reload = reload.clone();
         let load_error = load_error.clone();
         Callback::from(move |name: String| {
+            let confirmed = window()
+                .and_then(|w| {
+                    w.confirm_with_message(&format!("确认删除账号 {} ？", name))
+                        .ok()
+                })
+                .unwrap_or(false);
+            if !confirmed {
+                return;
+            }
             let reload = reload.clone();
             let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -1489,6 +1507,32 @@ pub fn admin_llm_gateway_page() -> Html {
     let total_remaining: i64 = keys.iter().map(|item| item.remaining_billable).sum();
     let public_visible_count = keys.iter().filter(|item| item.public_visible).count();
     let active_key_count = keys.iter().filter(|item| item.status == "active").count();
+    let total_quota: u64 = keys.iter().map(|k| k.quota_billable_limit).sum();
+    let total_used: u64 = keys
+        .iter()
+        .map(|k| {
+            k.usage_input_uncached_tokens + k.usage_input_cached_tokens + k.usage_output_tokens
+        })
+        .sum();
+    let usage_percent = if total_quota > 0 {
+        (total_used as f64 / total_quota as f64 * 100.0).round() as u64
+    } else {
+        0
+    };
+    let pending_token_requests = token_requests
+        .iter()
+        .filter(|r| r.status == "pending")
+        .count();
+    let pending_contribution_requests = account_contribution_requests
+        .iter()
+        .filter(|r| r.status == "pending")
+        .count();
+    let pending_sponsor_requests = sponsor_requests
+        .iter()
+        .filter(|r| r.status == "submitted" || r.status == "payment_email_sent")
+        .count();
+    let total_pending =
+        pending_token_requests + pending_contribution_requests + pending_sponsor_requests;
 
     html! {
         <main class={classes!(
@@ -1508,7 +1552,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     "p-5"
                 )}>
                     <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
-                        <h1 class={classes!("m-0", "text-2xl", "font-bold")}>
+                        <h1 class={classes!("m-0", "font-mono", "text-xl", "font-bold")}>
                             { "LLM Gateway Admin" }
                         </h1>
                         <div class={classes!("flex", "gap-2", "flex-wrap")}>
@@ -1525,27 +1569,67 @@ pub fn admin_llm_gateway_page() -> Html {
 
                     <div class={classes!("mt-4", "grid", "gap-3", "grid-cols-2", "xl:grid-cols-4")}>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key 总数" }</div>
-                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ keys.len() }</div>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key 总数" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ keys.len() }</div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "公开" }</div>
-                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ public_visible_count }</div>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "公开 / Active" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format!("{} / {}", public_visible_count, active_key_count) }</div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Active" }</div>
-                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ active_key_count }</div>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余额度" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format_number_i64(total_remaining) }</div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余额度" }</div>
-                            <div class={classes!("mt-1", "text-2xl", "font-black")}>{ total_remaining }</div>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "总额度" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format_number_u64(total_quota) }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "已用量" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format_number_u64(total_used) }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "使用率" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format!("{}%", usage_percent) }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "待审核" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", if total_pending > 0 { "text-amber-600" } else { "" })}>{ total_pending }</div>
                         </div>
                     </div>
                 </section>
 
+                // Quick navigation bar
+                <section class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                    <button type="button" class={classes!("btn-terminal")}
+                        onclick={{ let r = keys_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
+                        <i class="fas fa-key"></i>{ " Keys" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")}
+                        onclick={{ let r = accounts_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
+                        <i class="fas fa-users"></i>{ " Accounts" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")}
+                        onclick={{ let r = usage_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
+                        <i class="fas fa-chart-bar"></i>{ " Usage" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")}
+                        onclick={{ let r = wishes_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
+                        <i class="fas fa-wand-magic-sparkles"></i>{ " Wishes" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")}
+                        onclick={{ let r = contributions_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
+                        <i class="fas fa-user-plus"></i>{ " Contributions" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")}
+                        onclick={{ let r = sponsors_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
+                        <i class="fas fa-mug-hot"></i>{ " Sponsors" }
+                    </button>
+                </section>
+
                 <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
                     <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Runtime TTL" }</h2>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Runtime TTL" }</h2>
                         <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,1fr)_auto]")}>
                             <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "auth_cache_ttl_seconds" }</span>
@@ -1577,7 +1661,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     </section>
 
                     <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Create Key" }</h2>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Create Key" }</h2>
                         <div class={classes!("mt-3", "grid", "gap-3")}>
                             <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
                                 <label class={classes!("text-sm")}>
@@ -1637,13 +1721,60 @@ pub fn admin_llm_gateway_page() -> Html {
                     </section>
                 </section>
 
+                <section ref={keys_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Key Inventory" }</h2>
+                            <button class={classes!("btn-terminal")} onclick={{
+                                let reload = reload.clone();
+                                Callback::from(move |_| reload.emit(()))
+                            }}>
+                                { if *loading { "刷新中..." } else { "刷新" } }
+                            </button>
+                        </div>
+                        <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
+                            if keys.is_empty() && !*loading {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                                    { "当前还没有可管理的 key。" }
+                                </div>
+                            } else {
+                                { for keys.iter().map(|key_item| html! {
+                                    <KeyEditorCard
+                                        key={key_item.id.clone()}
+                                        key_item={key_item.clone()}
+                                        on_changed={reload.clone()}
+                                        on_refresh={on_refresh_key.clone()}
+                                        on_copy={on_copy.clone()}
+                                        refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
+                                        accounts={(*accounts).clone()}
+                                    />
+                                }) }
+                            }
+                        </div>
+                </section>
+
                 // === Codex Accounts ===
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Codex Accounts" }</h2>
+                <section ref={accounts_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Codex Accounts" }</h2>
                     <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
-                        { format!("已导入 {} 个账号，文件存储在 ~/.static-flow/auths/", accounts.len()) }
+                        { format!("已导入 {} 个账号", accounts.len()) }
                     </p>
 
+                    // Import form toggle
+                    <div class={classes!("mt-3")}>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let show_import_form = show_import_form.clone();
+                                Callback::from(move |_| show_import_form.set(!*show_import_form))
+                            }}
+                        >
+                            <i class={classes!("fas", if *show_import_form { "fa-chevron-up" } else { "fa-plus" })}></i>
+                            { if *show_import_form { "收起导入表单" } else { "导入账号" } }
+                        </button>
+                    </div>
+
+                    if *show_import_form {
                     // Import form
                     <div class={classes!("mt-3", "grid", "gap-3")}>
                         <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
@@ -1737,6 +1868,7 @@ pub fn admin_llm_gateway_page() -> Html {
                             </button>
                         </div>
                     </div>
+                    } // end show_import_form
 
                     // Account list
                     if !accounts.is_empty() {
@@ -1824,10 +1956,391 @@ pub fn admin_llm_gateway_page() -> Html {
                     }
                 </section>
 
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section ref={usage_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Usage Events" }</h2>
+                        <button
+                            class={classes!("btn-terminal")}
+                            title="刷新事件"
+                            aria-label="刷新事件"
+                            onclick={{
+                                let reload_usage = reload_usage.clone();
+                                Callback::from(move |_| reload_usage.emit((None, None)))
+                            }}
+                            disabled={*usage_loading}
+                        >
+                            <i class={classes!("fas", if *usage_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                        </button>
+                    </div>
+
+                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_auto_auto]", "items-end")}>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
+                            <select
+                                key={format!("usage-filter-{}", (*usage_key_filter).clone())}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                onchange={on_usage_key_filter_change}
+                            >
+                                <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部" }</option>
+                                { for keys.iter().map(|key_item| html! {
+                                    <option
+                                        value={key_item.id.clone()}
+                                        selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
+                                    >
+                                        { key_item.name.clone() }
+                                    </option>
+                                }) }
+                            </select>
+                        </label>
+                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
+                            { format!("{} 条", *usage_total) }
+                        </span>
+                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
+                            { format!("第 {} 页", *usage_page) }
+                        </span>
+                    </div>
+
+                    if *usage_loading {
+                        <div class={classes!("mt-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                            <i class={classes!("fas", "fa-spinner", "animate-spin")} />
+                            <span>{ "加载中" }</span>
+                        </div>
+                    }
+
+                    <div
+                        ref={usage_scroll_top_ref}
+                        class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-1", "py-1")}
+                        onscroll={on_usage_scroll_top}
+                    >
+                        <div
+                            class={classes!("h-[1px]")}
+                            style={format!("width: {}px;", (*usage_scroll_width).max(1))}
+                        />
+                    </div>
+
+                    <div
+                        ref={usage_scroll_bottom_ref}
+                        class={classes!("mt-4", "overflow-x-auto")}
+                        onscroll={on_usage_scroll_bottom}
+                    >
+                        <table class={classes!("w-full", "text-sm")}>
+                            <thead>
+                                <tr class={classes!("text-left", "text-[var(--muted)]")}>
+                                    <th class={classes!("py-2", "pr-3")}>{ "时间" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Key" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "号池" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "URL / Route" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Model" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Status" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Latency" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "IP / 属地" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Tokens" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "最后一条内容" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Headers" }</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                if usage_events.is_empty() && !*loading && !*usage_loading {
+                                    <tr class={classes!("border-t", "border-[var(--border)]")}>
+                                        <td colspan="11" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
+                                    </tr>
+                                } else {
+                                    { for usage_events.iter().map(|event| {
+                                        let event_for_detail_modal = event.clone();
+                                        let event_for_message_modal = event.clone();
+                                        let header_preview = pretty_headers_json(&event.request_headers_json);
+                                        let account_label = event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string());
+                                        let last_message_full = event.last_message_content.clone().unwrap_or_else(|| "-".to_string());
+                                        let last_message_preview = preview_text(&last_message_full, 120);
+                                        html! {
+                                            <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
+                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]")}>
+                                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</div>
+                                                    <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>{ event.key_id.clone() }</div>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-emerald-700", "dark:text-emerald-200")}>
+                                                        { account_label }
+                                                    </span>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[22rem]")}>
+                                                    <div class={classes!("flex", "items-start", "gap-2")}>
+                                                        <span class={classes!("inline-flex", "rounded-full", "border", "border-sky-500/20", "bg-sky-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-sky-700", "dark:text-sky-200")}>
+                                                            { event.request_method.clone() }
+                                                        </span>
+                                                        <div class={classes!("min-w-0", "flex-1")}>
+                                                            <div class={classes!("flex", "items-center", "gap-2")}>
+                                                                <span class={classes!("truncate")} title={event.request_url.clone()}>{ event.request_url.clone() }</span>
+                                                                { copy_icon_button(&event.request_url, &on_copy) }
+                                                            </div>
+                                                            <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>
+                                                                { format!("upstream {}", event.endpoint) }
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[11rem]")}>
+                                                    <div>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</div>
+                                                    if event.usage_missing {
+                                                        <div class={classes!("mt-2", "inline-flex", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
+                                                            { "usage missing" }
+                                                        </div>
+                                                    }
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ event.status_code }</td>
+                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-violet-500/20", "bg-violet-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-violet-700", "dark:text-violet-200")}>
+                                                        { format_latency_ms(event.latency_ms) }
+                                                    </span>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[14rem]")}>
+                                                    <div class={classes!("flex", "items-center", "gap-2")}>
+                                                        <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
+                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region), &on_copy) }
+                                                    </div>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[12rem]")}>
+                                                    <div class={classes!("grid", "gap-1", "text-xs", "text-[var(--muted)]")}>
+                                                        <span>{ format!("Uncached {}", format_number_u64(event.input_uncached_tokens)) }</span>
+                                                        <span>{ format!("Cached {}", format_number_u64(event.input_cached_tokens)) }</span>
+                                                        <span>{ format!("Out {}", format_number_u64(event.output_tokens)) }</span>
+                                                        <span class={classes!("font-semibold", "text-[var(--text)]")}>{ format!("Billable {}", format_number_u64(event.billable_tokens)) }</span>
+                                                    </div>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
+                                                    <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title={last_message_full.clone()}>
+                                                        { last_message_preview }
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        class={classes!(
+                                                            "mt-2",
+                                                            "inline-flex",
+                                                            "items-center",
+                                                            "gap-2",
+                                                            "rounded-lg",
+                                                            "border",
+                                                            "border-[var(--border)]",
+                                                            "bg-[var(--surface)]",
+                                                            "px-2.5",
+                                                            "py-1.5",
+                                                            "text-[11px]",
+                                                            "font-semibold",
+                                                            "text-[var(--muted)]",
+                                                            "transition-colors",
+                                                            "hover:text-[var(--primary)]",
+                                                            "hover:bg-[var(--surface-alt)]"
+                                                        )}
+                                                        title="查看最后一条内容全文"
+                                                        aria-label="查看最后一条内容全文"
+                                                        onclick={{
+                                                            let selected_usage_event = selected_usage_event.clone();
+                                                            Callback::from(move |_| selected_usage_event.set(Some(event_for_message_modal.clone())))
+                                                        }}
+                                                    >
+                                                        <i class={classes!("fas", "fa-expand")} />
+                                                        <span>{ "查看全文" }</span>
+                                                    </button>
+                                                </td>
+                                                <td class={classes!("py-3", "pr-3")}>
+                                                    <button
+                                                        type="button"
+                                                        class={classes!(
+                                                            "inline-flex",
+                                                            "h-9",
+                                                            "w-9",
+                                                            "items-center",
+                                                            "justify-center",
+                                                            "rounded-xl",
+                                                            "border",
+                                                            "border-[var(--border)]",
+                                                            "bg-[var(--surface)]",
+                                                            "text-[var(--muted)]",
+                                                            "transition-colors",
+                                                            "hover:text-[var(--primary)]",
+                                                            "hover:bg-[var(--surface-alt)]"
+                                                        )}
+                                                        title="查看请求详情"
+                                                        aria-label="查看请求详情"
+                                                        onclick={{
+                                                            let selected_usage_event = selected_usage_event.clone();
+                                                            Callback::from(move |_| selected_usage_event.set(Some(event_for_detail_modal.clone())))
+                                                        }}
+                                                    >
+                                                        <i class={classes!("fas", "fa-bars-staggered")}></i>
+                                                    </button>
+                                                    <div class={classes!("mt-2", "max-w-[12rem]", "truncate", "font-mono", "text-[11px]", "text-[var(--muted)]")} title={header_preview.clone()}>
+                                                        { header_preview }
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    }) }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class={classes!("mt-5")}>
+                        <Pagination current_page={*usage_page} total_pages={usage_total_pages} on_page_change={on_usage_page_change} />
+                    </div>
+                </section>
+
+                <section ref={wishes_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
-                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Account Contributions" }</h2>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Token Wishes" }</h2>
+                            <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
+                                { "只有在这里审核通过后，系统才会真正创建 key 并通过邮件发给申请人。" }
+                            </p>
+                        </div>
+                        <button
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let reload_token_requests = reload_token_requests.clone();
+                                Callback::from(move |_| reload_token_requests.emit((None, None)))
+                            }}
+                            disabled={*token_request_loading}
+                        >
+                            <i class={classes!("fas", if *token_request_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                        </button>
+                    </div>
+
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,16rem)_auto]")}>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
+                            <select
+                                key={format!("token-request-filter-{}", (*token_request_status_filter).clone())}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                onchange={on_token_request_status_filter_change}
+                            >
+                                <option value="" selected={(*token_request_status_filter).is_empty()}>{ "全部" }</option>
+                                <option value="pending" selected={*token_request_status_filter == "pending"}>{ "pending" }</option>
+                                <option value="failed" selected={*token_request_status_filter == "failed"}>{ "failed" }</option>
+                                <option value="issued" selected={*token_request_status_filter == "issued"}>{ "issued" }</option>
+                                <option value="rejected" selected={*token_request_status_filter == "rejected"}>{ "rejected" }</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    if token_requests.is_empty() && !*token_request_loading {
+                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                            { "当前筛选下还没有 token 许愿。" }
+                        </div>
+                    } else {
+                        <div class={classes!("mt-4", "space-y-3")}>
+                            { for token_requests.iter().map(|item| {
+                                let request_id = item.request_id.clone();
+                                let approve_request_id = item.request_id.clone();
+                                let reject_request_id = item.request_id.clone();
+                                let approve_cb = on_approve_token_request.clone();
+                                let reject_cb = on_reject_token_request.clone();
+                                let action_busy = token_request_action_inflight.contains(&request_id);
+                                let status_class = match item.status.as_str() {
+                                    "pending" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
+                                    "failed" => classes!("bg-red-500/10", "text-red-700", "dark:text-red-200", "border-red-500/20"),
+                                    "issued" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
+                                    "rejected" => classes!("bg-slate-500/10", "text-slate-700", "dark:text-slate-200", "border-slate-500/20"),
+                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
+                                };
+                                html! {
+                                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                                        <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                                            <div class={classes!("min-w-0", "space-y-1")}>
+                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class)}>
+                                                        { item.status.clone() }
+                                                    </span>
+                                                    <span class={classes!("font-semibold")}>{ item.requester_email.clone() }</span>
+                                                    <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ item.request_id.clone() }</span>
+                                                </div>
+                                                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                    { format!("{} / {} · created {}", item.client_ip, item.ip_region, format_ms(item.created_at)) }
+                                                </div>
+                                            </div>
+                                            <div class={classes!("text-right")}>
+                                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "申请 token" }</div>
+                                                <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format_number_u64(item.requested_quota_billable_limit) }</div>
+                                            </div>
+                                        </div>
+
+                                        <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]")}>
+                                            <div>
+                                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "缘由" }</div>
+                                                <div class={classes!("mt-2", "whitespace-pre-wrap", "break-words", "text-sm", "leading-6", "text-[var(--text)]")}>
+                                                    { item.request_reason.clone() }
+                                                </div>
+                                            </div>
+                                            <div class={classes!("space-y-2", "text-sm")}>
+                                                if let Some(frontend_page_url) = item.frontend_page_url.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "页面" }</div>
+                                                        <div class={classes!("mt-1", "break-all", "text-[var(--text)]")}>{ frontend_page_url }</div>
+                                                    </div>
+                                                }
+                                                if let Some(issued_key_name) = item.issued_key_name.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "已发放 Key" }</div>
+                                                        <div class={classes!("mt-1", "text-[var(--text)]")}>
+                                                            { format!("{} ({})", issued_key_name, item.issued_key_id.clone().unwrap_or_default()) }
+                                                        </div>
+                                                    </div>
+                                                }
+                                                if let Some(admin_note) = item.admin_note.clone() {
+                                                    <div>
+                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Admin Note" }</div>
+                                                        <div class={classes!("mt-1", "whitespace-pre-wrap", "break-words", "text-[var(--text)]")}>{ admin_note }</div>
+                                                    </div>
+                                                }
+                                                if let Some(failure_reason) = item.failure_reason.clone() {
+                                                    <div class={classes!("rounded-lg", "border", "border-red-400/25", "bg-red-500/8", "px-3", "py-2", "text-red-700", "dark:text-red-200")}>
+                                                        { failure_reason }
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                            <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                { item.processed_at.map(format_ms).map(|value| format!("processed {}", value)).unwrap_or_else(|| "尚未处理".to_string()) }
+                                            </div>
+                                            <div class={classes!("flex", "items-center", "gap-2")}>
+                                                if item.status == "pending" || item.status == "failed" {
+                                                    <button
+                                                        class={classes!("btn-terminal", "btn-terminal-primary")}
+                                                        onclick={Callback::from(move |_| approve_cb.emit(approve_request_id.clone()))}
+                                                        disabled={action_busy}
+                                                    >
+                                                        { if action_busy { "处理中..." } else { "批准并发放" } }
+                                                    </button>
+                                                }
+                                                if item.status == "pending" || item.status == "failed" {
+                                                    <button
+                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                        onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
+                                                        disabled={action_busy}
+                                                    >
+                                                        { "拒绝" }
+                                                    </button>
+                                                }
+                                            </div>
+                                        </div>
+                                    </article>
+                                }
+                            }) }
+                        </div>
+                    }
+
+                    <div class={classes!("mt-5")}>
+                        <Pagination current_page={*token_request_page} total_pages={token_request_total_pages} on_page_change={on_token_request_page_change} />
+                    </div>
+                </section>
+
+                <section ref={contributions_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Account Contributions" }</h2>
                             <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
                                 { "公开页提交的 Codex 账号贡献申请会先进入这里；只有审核通过后，系统才会导入账号并发放绑定该账号路由的 token。" }
                             </p>
@@ -1997,10 +2510,10 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
                 </section>
 
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section ref={sponsors_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
-                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Sponsors" }</h2>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Sponsors" }</h2>
                             <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
                                 { "这批请求是“先填邮箱，再发付款说明邮件”的人工确认流。你确认对方已经按邮件说明完成赞助后，再在这里标记通过。" }
                             </p>
@@ -2149,417 +2662,6 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
                 </section>
 
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Key Inventory" }</h2>
-                            <button class={classes!("btn-terminal")} onclick={{
-                                let reload = reload.clone();
-                                Callback::from(move |_| reload.emit(()))
-                            }}>
-                                { if *loading { "刷新中..." } else { "刷新" } }
-                            </button>
-                        </div>
-                        <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
-                            if keys.is_empty() && !*loading {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                                    { "当前还没有可管理的 key。" }
-                                </div>
-                            } else {
-                                { for keys.iter().map(|key_item| html! {
-                                    <KeyEditorCard
-                                        key={key_item.id.clone()}
-                                        key_item={key_item.clone()}
-                                        on_changed={reload.clone()}
-                                        on_refresh={on_refresh_key.clone()}
-                                        on_copy={on_copy.clone()}
-                                        refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
-                                        accounts={(*accounts).clone()}
-                                    />
-                                }) }
-                            }
-                        </div>
-                </section>
-
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <div>
-                            <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Token Wishes" }</h2>
-                            <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
-                                { "只有在这里审核通过后，系统才会真正创建 key 并通过邮件发给申请人。" }
-                            </p>
-                        </div>
-                        <button
-                            class={classes!("btn-terminal")}
-                            onclick={{
-                                let reload_token_requests = reload_token_requests.clone();
-                                Callback::from(move |_| reload_token_requests.emit((None, None)))
-                            }}
-                            disabled={*token_request_loading}
-                        >
-                            <i class={classes!("fas", if *token_request_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
-                        </button>
-                    </div>
-
-                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,16rem)_auto]")}>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
-                            <select
-                                key={format!("token-request-filter-{}", (*token_request_status_filter).clone())}
-                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                onchange={on_token_request_status_filter_change}
-                            >
-                                <option value="" selected={(*token_request_status_filter).is_empty()}>{ "全部" }</option>
-                                <option value="pending" selected={*token_request_status_filter == "pending"}>{ "pending" }</option>
-                                <option value="failed" selected={*token_request_status_filter == "failed"}>{ "failed" }</option>
-                                <option value="issued" selected={*token_request_status_filter == "issued"}>{ "issued" }</option>
-                                <option value="rejected" selected={*token_request_status_filter == "rejected"}>{ "rejected" }</option>
-                            </select>
-                        </label>
-                    </div>
-
-                    if token_requests.is_empty() && !*token_request_loading {
-                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                            { "当前筛选下还没有 token 许愿。" }
-                        </div>
-                    } else {
-                        <div class={classes!("mt-4", "space-y-3")}>
-                            { for token_requests.iter().map(|item| {
-                                let request_id = item.request_id.clone();
-                                let approve_request_id = item.request_id.clone();
-                                let reject_request_id = item.request_id.clone();
-                                let approve_cb = on_approve_token_request.clone();
-                                let reject_cb = on_reject_token_request.clone();
-                                let action_busy = token_request_action_inflight.contains(&request_id);
-                                let status_class = match item.status.as_str() {
-                                    "pending" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
-                                    "failed" => classes!("bg-red-500/10", "text-red-700", "dark:text-red-200", "border-red-500/20"),
-                                    "issued" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
-                                    "rejected" => classes!("bg-slate-500/10", "text-slate-700", "dark:text-slate-200", "border-slate-500/20"),
-                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
-                                };
-                                html! {
-                                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
-                                        <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
-                                            <div class={classes!("min-w-0", "space-y-1")}>
-                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class)}>
-                                                        { item.status.clone() }
-                                                    </span>
-                                                    <span class={classes!("font-semibold")}>{ item.requester_email.clone() }</span>
-                                                    <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ item.request_id.clone() }</span>
-                                                </div>
-                                                <div class={classes!("text-xs", "text-[var(--muted)]")}>
-                                                    { format!("{} / {} · created {}", item.client_ip, item.ip_region, format_ms(item.created_at)) }
-                                                </div>
-                                            </div>
-                                            <div class={classes!("text-right")}>
-                                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "申请 token" }</div>
-                                                <div class={classes!("mt-1", "text-2xl", "font-black")}>{ item.requested_quota_billable_limit }</div>
-                                            </div>
-                                        </div>
-
-                                        <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]")}>
-                                            <div>
-                                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "缘由" }</div>
-                                                <div class={classes!("mt-2", "whitespace-pre-wrap", "break-words", "text-sm", "leading-6", "text-[var(--text)]")}>
-                                                    { item.request_reason.clone() }
-                                                </div>
-                                            </div>
-                                            <div class={classes!("space-y-2", "text-sm")}>
-                                                if let Some(frontend_page_url) = item.frontend_page_url.clone() {
-                                                    <div>
-                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "页面" }</div>
-                                                        <div class={classes!("mt-1", "break-all", "text-[var(--text)]")}>{ frontend_page_url }</div>
-                                                    </div>
-                                                }
-                                                if let Some(issued_key_name) = item.issued_key_name.clone() {
-                                                    <div>
-                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "已发放 Key" }</div>
-                                                        <div class={classes!("mt-1", "text-[var(--text)]")}>
-                                                            { format!("{} ({})", issued_key_name, item.issued_key_id.clone().unwrap_or_default()) }
-                                                        </div>
-                                                    </div>
-                                                }
-                                                if let Some(admin_note) = item.admin_note.clone() {
-                                                    <div>
-                                                        <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Admin Note" }</div>
-                                                        <div class={classes!("mt-1", "whitespace-pre-wrap", "break-words", "text-[var(--text)]")}>{ admin_note }</div>
-                                                    </div>
-                                                }
-                                                if let Some(failure_reason) = item.failure_reason.clone() {
-                                                    <div class={classes!("rounded-lg", "border", "border-red-400/25", "bg-red-500/8", "px-3", "py-2", "text-red-700", "dark:text-red-200")}>
-                                                        { failure_reason }
-                                                    </div>
-                                                }
-                                            </div>
-                                        </div>
-
-                                        <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                                            <div class={classes!("text-xs", "text-[var(--muted)]")}>
-                                                { item.processed_at.map(format_ms).map(|value| format!("processed {}", value)).unwrap_or_else(|| "尚未处理".to_string()) }
-                                            </div>
-                                            <div class={classes!("flex", "items-center", "gap-2")}>
-                                                if item.status == "pending" || item.status == "failed" {
-                                                    <button
-                                                        class={classes!("btn-terminal", "btn-terminal-primary")}
-                                                        onclick={Callback::from(move |_| approve_cb.emit(approve_request_id.clone()))}
-                                                        disabled={action_busy}
-                                                    >
-                                                        { if action_busy { "处理中..." } else { "批准并发放" } }
-                                                    </button>
-                                                }
-                                                if item.status == "pending" || item.status == "failed" {
-                                                    <button
-                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
-                                                        onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
-                                                        disabled={action_busy}
-                                                    >
-                                                        { "拒绝" }
-                                                    </button>
-                                                }
-                                            </div>
-                                        </div>
-                                    </article>
-                                }
-                            }) }
-                        </div>
-                    }
-
-                    <div class={classes!("mt-5")}>
-                        <Pagination current_page={*token_request_page} total_pages={token_request_total_pages} on_page_change={on_token_request_page_change} />
-                    </div>
-                </section>
-
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <h2 class={classes!("m-0", "text-lg", "font-bold")}>{ "Usage Events" }</h2>
-                        <button
-                            class={classes!("btn-terminal")}
-                            title="刷新事件"
-                            aria-label="刷新事件"
-                            onclick={{
-                                let reload_usage = reload_usage.clone();
-                                Callback::from(move |_| reload_usage.emit((None, None)))
-                            }}
-                            disabled={*usage_loading}
-                        >
-                            <i class={classes!("fas", if *usage_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
-                        </button>
-                    </div>
-
-                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_auto_auto]", "items-end")}>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
-                            <select
-                                key={format!("usage-filter-{}", (*usage_key_filter).clone())}
-                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                onchange={on_usage_key_filter_change}
-                            >
-                                <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部" }</option>
-                                { for keys.iter().map(|key_item| html! {
-                                    <option
-                                        value={key_item.id.clone()}
-                                        selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
-                                    >
-                                        { key_item.name.clone() }
-                                    </option>
-                                }) }
-                            </select>
-                        </label>
-                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            { format!("{} 条", *usage_total) }
-                        </span>
-                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            { format!("第 {} 页", *usage_page) }
-                        </span>
-                    </div>
-
-                    if *usage_loading {
-                        <div class={classes!("mt-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
-                            <i class={classes!("fas", "fa-spinner", "animate-spin")} />
-                            <span>{ "加载中" }</span>
-                        </div>
-                    }
-
-                    <div
-                        ref={usage_scroll_top_ref}
-                        class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-1", "py-1")}
-                        onscroll={on_usage_scroll_top}
-                    >
-                        <div
-                            class={classes!("h-[1px]")}
-                            style={format!("width: {}px;", (*usage_scroll_width).max(1))}
-                        />
-                    </div>
-
-                    <div
-                        ref={usage_scroll_bottom_ref}
-                        class={classes!("mt-4", "overflow-x-auto")}
-                        onscroll={on_usage_scroll_bottom}
-                    >
-                        <table class={classes!("w-full", "text-sm")}>
-                            <thead>
-                                <tr class={classes!("text-left", "text-[var(--muted)]")}>
-                                    <th class={classes!("py-2", "pr-3")}>{ "时间" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Key" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "号池" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "URL / Route" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Model" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Status" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Latency" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "IP / 属地" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Tokens" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "最后一条内容" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Headers" }</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                if usage_events.is_empty() && !*loading && !*usage_loading {
-                                    <tr class={classes!("border-t", "border-[var(--border)]")}>
-                                        <td colspan="11" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
-                                    </tr>
-                                } else {
-                                    { for usage_events.iter().map(|event| {
-                                        let event_for_detail_modal = event.clone();
-                                        let event_for_message_modal = event.clone();
-                                        let header_preview = pretty_headers_json(&event.request_headers_json);
-                                        let account_label = event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string());
-                                        let last_message_full = event.last_message_content.clone().unwrap_or_else(|| "-".to_string());
-                                        let last_message_preview = preview_text(&last_message_full, 120);
-                                        html! {
-                                            <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]")}>
-                                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</div>
-                                                    <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>{ event.key_id.clone() }</div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-emerald-700", "dark:text-emerald-200")}>
-                                                        { account_label }
-                                                    </span>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[22rem]")}>
-                                                    <div class={classes!("flex", "items-start", "gap-2")}>
-                                                        <span class={classes!("inline-flex", "rounded-full", "border", "border-sky-500/20", "bg-sky-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-sky-700", "dark:text-sky-200")}>
-                                                            { event.request_method.clone() }
-                                                        </span>
-                                                        <div class={classes!("min-w-0", "flex-1")}>
-                                                            <div class={classes!("flex", "items-center", "gap-2")}>
-                                                                <span class={classes!("truncate")} title={event.request_url.clone()}>{ event.request_url.clone() }</span>
-                                                                { copy_icon_button(&event.request_url, &on_copy) }
-                                                            </div>
-                                                            <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                                                                { format!("upstream {}", event.endpoint) }
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[11rem]")}>
-                                                    <div>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</div>
-                                                    if event.usage_missing {
-                                                        <div class={classes!("mt-2", "inline-flex", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
-                                                            { "usage missing" }
-                                                        </div>
-                                                    }
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ event.status_code }</td>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-violet-500/20", "bg-violet-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-violet-700", "dark:text-violet-200")}>
-                                                        { format_latency_ms(event.latency_ms) }
-                                                    </span>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[14rem]")}>
-                                                    <div class={classes!("flex", "items-center", "gap-2")}>
-                                                        <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
-                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region), &on_copy) }
-                                                    </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[12rem]")}>
-                                                    <div class={classes!("grid", "gap-1", "text-xs", "text-[var(--muted)]")}>
-                                                        <span>{ format!("Uncached {}", event.input_uncached_tokens) }</span>
-                                                        <span>{ format!("Cached {}", event.input_cached_tokens) }</span>
-                                                        <span>{ format!("Out {}", event.output_tokens) }</span>
-                                                        <span class={classes!("font-semibold", "text-[var(--text)]")}>{ format!("Billable {}", event.billable_tokens) }</span>
-                                                    </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
-                                                    <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title={last_message_full.clone()}>
-                                                        { last_message_preview }
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        class={classes!(
-                                                            "mt-2",
-                                                            "inline-flex",
-                                                            "items-center",
-                                                            "gap-2",
-                                                            "rounded-lg",
-                                                            "border",
-                                                            "border-[var(--border)]",
-                                                            "bg-[var(--surface)]",
-                                                            "px-2.5",
-                                                            "py-1.5",
-                                                            "text-[11px]",
-                                                            "font-semibold",
-                                                            "text-[var(--muted)]",
-                                                            "transition-colors",
-                                                            "hover:text-[var(--primary)]",
-                                                            "hover:bg-[var(--surface-alt)]"
-                                                        )}
-                                                        title="查看最后一条内容全文"
-                                                        aria-label="查看最后一条内容全文"
-                                                        onclick={{
-                                                            let selected_usage_event = selected_usage_event.clone();
-                                                            Callback::from(move |_| selected_usage_event.set(Some(event_for_message_modal.clone())))
-                                                        }}
-                                                    >
-                                                        <i class={classes!("fas", "fa-expand")} />
-                                                        <span>{ "查看全文" }</span>
-                                                    </button>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3")}>
-                                                    <button
-                                                        type="button"
-                                                        class={classes!(
-                                                            "inline-flex",
-                                                            "h-9",
-                                                            "w-9",
-                                                            "items-center",
-                                                            "justify-center",
-                                                            "rounded-xl",
-                                                            "border",
-                                                            "border-[var(--border)]",
-                                                            "bg-[var(--surface)]",
-                                                            "text-[var(--muted)]",
-                                                            "transition-colors",
-                                                            "hover:text-[var(--primary)]",
-                                                            "hover:bg-[var(--surface-alt)]"
-                                                        )}
-                                                        title="查看请求详情"
-                                                        aria-label="查看请求详情"
-                                                        onclick={{
-                                                            let selected_usage_event = selected_usage_event.clone();
-                                                            Callback::from(move |_| selected_usage_event.set(Some(event_for_detail_modal.clone())))
-                                                        }}
-                                                    >
-                                                        <i class={classes!("fas", "fa-bars-staggered")}></i>
-                                                    </button>
-                                                    <div class={classes!("mt-2", "max-w-[12rem]", "truncate", "font-mono", "text-[11px]", "text-[var(--muted)]")} title={header_preview.clone()}>
-                                                        { header_preview }
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        }
-                                    }) }
-                                }
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div class={classes!("mt-5")}>
-                        <Pagination current_page={*usage_page} total_pages={usage_total_pages} on_page_change={on_usage_page_change} />
-                    </div>
-                </section>
             </div>
 
             if let Some(event) = (*selected_usage_event).clone() {
