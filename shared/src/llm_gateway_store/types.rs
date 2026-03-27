@@ -47,6 +47,7 @@ pub struct LlmGatewayKeyRecord {
     pub updated_at: i64,
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
+    pub auto_account_names: Option<Vec<String>>,
 }
 
 impl LlmGatewayKeyRecord {

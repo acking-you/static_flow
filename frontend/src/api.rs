@@ -4207,6 +4207,7 @@ pub struct AdminLlmGatewayKeyView {
     pub updated_at: i64,
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
+    pub auto_account_names: Option<Vec<String>>,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -5092,6 +5093,7 @@ pub async fn create_admin_llm_gateway_key(
             updated_at: 0,
             route_strategy: None,
             fixed_account_name: None,
+            auto_account_names: None,
         })
     }
 
@@ -5120,25 +5122,32 @@ pub async fn create_admin_llm_gateway_key(
 }
 
 /// Patch editable fields on a gateway key from the admin UI.
+#[derive(Clone, Debug, Default)]
+pub struct PatchAdminLlmGatewayKeyRequest<'a> {
+    pub name: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub public_visible: Option<bool>,
+    pub quota_billable_limit: Option<u64>,
+    pub route_strategy: Option<&'a str>,
+    pub fixed_account_name: Option<&'a str>,
+    pub auto_account_names: Option<&'a [String]>,
+}
+
 pub async fn patch_admin_llm_gateway_key(
     key_id: &str,
-    name: Option<&str>,
-    status: Option<&str>,
-    public_visible: Option<bool>,
-    quota_billable_limit: Option<u64>,
-    route_strategy: Option<&str>,
-    fixed_account_name: Option<&str>,
+    request: PatchAdminLlmGatewayKeyRequest<'_>,
 ) -> Result<AdminLlmGatewayKeyView, String> {
     #[cfg(feature = "mock")]
     {
         let _ = (
             key_id,
-            name,
-            status,
-            public_visible,
-            quota_billable_limit,
-            route_strategy,
-            fixed_account_name,
+            request.name,
+            request.status,
+            request.public_visible,
+            request.quota_billable_limit,
+            request.route_strategy,
+            request.fixed_account_name,
+            request.auto_account_names,
         );
         Err("mock not supported".to_string())
     }
@@ -5148,31 +5157,50 @@ pub async fn patch_admin_llm_gateway_key(
         let url =
             format!("{}/admin/llm-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
         let mut body = serde_json::Map::new();
-        if let Some(name) = name.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(name) = request
+            .name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
         }
-        if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(status) = request
+            .status
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             body.insert("status".to_string(), serde_json::Value::String(status.to_string()));
         }
-        if let Some(public_visible) = public_visible {
+        if let Some(public_visible) = request.public_visible {
             body.insert("public_visible".to_string(), serde_json::Value::Bool(public_visible));
         }
-        if let Some(quota_billable_limit) = quota_billable_limit {
+        if let Some(quota_billable_limit) = request.quota_billable_limit {
             body.insert(
                 "quota_billable_limit".to_string(),
                 serde_json::Value::Number(quota_billable_limit.into()),
             );
         }
-        if let Some(strategy) = route_strategy {
+        if let Some(strategy) = request.route_strategy {
             body.insert(
                 "route_strategy".to_string(),
                 serde_json::Value::String(strategy.to_string()),
             );
         }
-        if let Some(account_name) = fixed_account_name {
+        if let Some(account_name) = request.fixed_account_name {
             body.insert(
                 "fixed_account_name".to_string(),
                 serde_json::Value::String(account_name.to_string()),
+            );
+        }
+        if let Some(account_names) = request.auto_account_names {
+            body.insert(
+                "auto_account_names".to_string(),
+                serde_json::Value::Array(
+                    account_names
+                        .iter()
+                        .map(|value| serde_json::Value::String(value.clone()))
+                        .collect(),
+                ),
             );
         }
         let response = api_patch(&url)

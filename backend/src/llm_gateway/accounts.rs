@@ -5,7 +5,7 @@
 //! keeps an in-memory snapshot that the gateway proxy consults for routing.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     path::{Path, PathBuf},
     sync::Arc,
@@ -325,13 +325,22 @@ impl AccountPool {
         out
     }
 
-    /// Select the best active account by remaining primary quota.
-    pub async fn select_best_account(&self) -> Option<(String, CodexAuthSnapshot, bool)> {
+    /// Select the best active account by remaining primary quota, optionally
+    /// restricted to a configured subset.
+    pub async fn select_best_account(
+        &self,
+        allowed_names: Option<&HashSet<String>>,
+    ) -> Option<(String, CodexAuthSnapshot, bool)> {
         let accounts = self.accounts.read().await;
         let rate_limits = self.rate_limits.read().await;
 
         let mut best: Option<(f64, String, CodexAuthSnapshot, bool)> = None;
         for (name, entry) in accounts.iter() {
+            if let Some(allowed_names) = allowed_names {
+                if !allowed_names.contains(name) {
+                    continue;
+                }
+            }
             let account = entry.read().await;
             if account.status != AccountStatus::Active {
                 continue;

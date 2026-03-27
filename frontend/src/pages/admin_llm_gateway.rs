@@ -27,6 +27,7 @@ use crate::{
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery, LlmGatewayRuntimeConfig,
+        PatchAdminLlmGatewayKeyRequest,
     },
     components::pagination::Pagination,
     router::Route,
@@ -171,7 +172,7 @@ struct KeyEditorCardProps {
     on_refresh: Callback<(String, String)>,
     on_copy: Callback<(String, String)>,
     refreshing: bool,
-    account_names: Vec<String>,
+    accounts: Vec<AccountSummaryView>,
 }
 
 #[function_component(KeyEditorCard)]
@@ -188,6 +189,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             .unwrap_or_else(|| "auto".to_string())
     });
     let fixed_account_name = use_state(|| key_item.fixed_account_name.clone().unwrap_or_default());
+    let auto_account_names = use_state(|| key_item.auto_account_names.clone().unwrap_or_default());
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
@@ -200,6 +202,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let status = status.clone();
         let route_strategy = route_strategy.clone();
         let fixed_account_name = fixed_account_name.clone();
+        let auto_account_names = auto_account_names.clone();
         use_effect_with(props.key_item.clone(), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
@@ -212,6 +215,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     .unwrap_or_else(|| "auto".to_string()),
             );
             fixed_account_name.set(key_item.fixed_account_name.clone().unwrap_or_default());
+            auto_account_names.set(key_item.auto_account_names.clone().unwrap_or_default());
             || ()
         });
     }
@@ -224,6 +228,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let status = status.clone();
         let route_strategy = route_strategy.clone();
         let fixed_account_name = fixed_account_name.clone();
+        let auto_account_names = auto_account_names.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_changed = props.on_changed.clone();
@@ -235,6 +240,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             let status_value = (*status).clone();
             let route_strategy_value = (*route_strategy).clone();
             let fixed_account_name_value = (*fixed_account_name).clone();
+            let auto_account_names_value = (*auto_account_names).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_changed = on_changed.clone();
@@ -247,15 +253,15 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     return;
                 };
                 saving.set(true);
-                match patch_admin_llm_gateway_key(
-                    &key_id,
-                    Some(&name_value),
-                    Some(&status_value),
-                    Some(public_visible_value),
-                    Some(quota_value),
-                    Some(&route_strategy_value),
-                    Some(&fixed_account_name_value),
-                )
+                match patch_admin_llm_gateway_key(&key_id, PatchAdminLlmGatewayKeyRequest {
+                    name: Some(&name_value),
+                    status: Some(&status_value),
+                    public_visible: Some(public_visible_value),
+                    quota_billable_limit: Some(quota_value),
+                    route_strategy: Some(&route_strategy_value),
+                    fixed_account_name: Some(&fixed_account_name_value),
+                    auto_account_names: Some(auto_account_names_value.as_slice()),
+                })
                 .await
                 {
                     Ok(_) => {
@@ -266,6 +272,20 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 }
                 saving.set(false);
             });
+        })
+    };
+
+    let toggle_auto_account_name = {
+        let auto_account_names = auto_account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*auto_account_names).clone();
+            if let Some(idx) = names.iter().position(|name| name == &account_name) {
+                names.remove(idx);
+            } else {
+                names.push(account_name);
+                names.sort();
+            }
+            auto_account_names.set(names);
         })
     };
 
@@ -458,17 +478,70 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                             }}
                         >
                             <option value="" selected={(*fixed_account_name).is_empty()}>{ "-- 选择 --" }</option>
-                            { for props.account_names.iter().map(|acc_name| html! {
-                                <option value={acc_name.clone()} selected={*fixed_account_name == *acc_name}>{ acc_name.clone() }</option>
+                            { for props.accounts.iter().map(|account| html! {
+                                <option value={account.name.clone()} selected={*fixed_account_name == account.name}>{ account.name.clone() }</option>
                             }) }
                         </select>
                     </label>
+                } else {
+                    <div class={classes!("w-full", "space-y-2")}>
+                        <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "自动候选账号" }</div>
+                        if props.accounts.is_empty() {
+                            <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-sm", "text-[var(--muted)]")}>
+                                { "当前没有可供绑定的账号。" }
+                            </div>
+                        } else {
+                            <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                { for props.accounts.iter().map(|account| {
+                                    let account_name = account.name.clone();
+                                    let checked = auto_account_names.iter().any(|name| name == &account.name);
+                                    let toggle_auto_account_name = toggle_auto_account_name.clone();
+                                    html! {
+                                        <label class={classes!(
+                                            "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                            if checked {
+                                                "border-sky-500/30 bg-sky-500/8"
+                                            } else {
+                                                "border-[var(--border)] bg-[var(--surface-alt)]"
+                                            }
+                                        )}>
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onchange={Callback::from(move |_| toggle_auto_account_name.emit(account_name.clone()))}
+                                            />
+                                            <div class={classes!("min-w-0", "flex-1")}>
+                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                    <span class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</span>
+                                                    <span class={key_status_badge(&account.status)}>{ account.status.clone() }</span>
+                                                    if let Some(plan_type) = account.plan_type.clone() {
+                                                        <span class={classes!("rounded-full", "bg-sky-500/12", "px-2", "py-0.5", "text-[11px]", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
+                                                            { plan_type }
+                                                        </span>
+                                                    }
+                                                </div>
+                                                <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                    { format!(
+                                                        "5h {} / wk {}",
+                                                        account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
+                                                        account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
+                                                    ) }
+                                                </div>
+                                            </div>
+                                        </label>
+                                    }
+                                }) }
+                            </div>
+                        }
+                    </div>
                 }
                 <span class={classes!("text-xs", "text-[var(--muted)]")}>
                     { if *route_strategy == "fixed" {
                         format!("绑定: {}", if (*fixed_account_name).is_empty() { "未选择" } else { &*fixed_account_name })
+                    } else if auto_account_names.is_empty() {
+                        "全账号池自动择优；如果某个账号不可用，会继续尝试其他账号。".to_string()
                     } else {
-                        "自动选择剩余额度最多的账号".to_string()
+                        format!("仅在这些账号中优先自动择优: {}；如果子集耗尽，会回退到全局 auto。", auto_account_names.join(", "))
                     }}
                 </span>
             </div>
@@ -2100,7 +2173,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                         on_refresh={on_refresh_key.clone()}
                                         on_copy={on_copy.clone()}
                                         refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
-                                        account_names={accounts.iter().map(|a| a.name.clone()).collect::<Vec<_>>()}
+                                        accounts={(*accounts).clone()}
                                     />
                                 }) }
                             }

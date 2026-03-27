@@ -119,6 +119,7 @@ pub struct AdminLlmGatewayKeyView {
     pub updated_at: i64,
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
+    pub auto_account_names: Option<Vec<String>>,
 }
 
 /// Paginated admin response for settled usage events.
@@ -416,6 +417,7 @@ pub struct PatchLlmGatewayKeyRequest {
     pub quota_billable_limit: Option<u64>,
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
+    pub auto_account_names: Option<Vec<String>>,
 }
 
 /// Admin query parameters for usage-event filtering and pagination.
@@ -588,6 +590,7 @@ impl From<&LlmGatewayKeyRecord> for AdminLlmGatewayKeyView {
             updated_at: value.updated_at,
             route_strategy: value.route_strategy.clone(),
             fixed_account_name: value.fixed_account_name.clone(),
+            auto_account_names: value.auto_account_names.clone(),
         }
     }
 }

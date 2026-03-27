@@ -33,6 +33,7 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
         Field::new("route_strategy", DataType::Utf8, true),
         Field::new("fixed_account_name", DataType::Utf8, true),
+        Field::new("auto_account_names_json", DataType::Utf8, true),
     ]))
 }
 
@@ -168,6 +169,7 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_scalar_index(&table, "public_visible").await?;
     ensure_nullable_utf8_column(&table, "route_strategy").await?;
     ensure_nullable_utf8_column(&table, "fixed_account_name").await?;
+    ensure_nullable_utf8_column(&table, "auto_account_names_json").await?;
     Ok(table)
 }
 
@@ -384,7 +386,7 @@ async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn key_columns() -> [&'static str; 16] {
+pub fn key_columns() -> [&'static str; 17] {
     [
         "id",
         "name",
@@ -402,6 +404,7 @@ pub fn key_columns() -> [&'static str; 16] {
         "updated_at",
         "route_strategy",
         "fixed_account_name",
+        "auto_account_names_json",
     ]
 }
 

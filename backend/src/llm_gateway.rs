@@ -16,6 +16,7 @@ pub(crate) mod accounts;
 pub(crate) mod token_refresh;
 
 use std::{
+    collections::HashSet,
     env,
     sync::Arc,
     time::{Duration, Instant},
@@ -314,6 +315,7 @@ pub async fn create_admin_key(
         request.public_visible,
         None,
         None,
+        None,
     )
     .await?;
 
@@ -335,6 +337,7 @@ async fn create_managed_key_record(
     public_visible: bool,
     route_strategy: Option<String>,
     fixed_account_name: Option<String>,
+    auto_account_names: Option<Vec<String>>,
 ) -> Result<LlmGatewayKeyRecord, (StatusCode, Json<ErrorResponse>)> {
     let secret = generate_secret();
     let key_hash = sha256_hex(secret.as_bytes());
@@ -356,6 +359,7 @@ async fn create_managed_key_record(
         updated_at: now,
         route_strategy,
         fixed_account_name,
+        auto_account_names,
     };
     state
         .llm_gateway_store
@@ -398,11 +402,36 @@ pub async fn patch_admin_key(
         key.quota_billable_limit = limit;
     }
     if let Some(strategy) = request.route_strategy.as_deref() {
-        key.route_strategy = if strategy.is_empty() { None } else { Some(strategy.to_string()) };
+        key.route_strategy = normalize_route_strategy_input(Some(strategy))
+            .map_err(|err| bad_request_with_detail("invalid route_strategy", err))?;
     }
     if let Some(account_name) = request.fixed_account_name.as_deref() {
-        key.fixed_account_name =
-            if account_name.is_empty() { None } else { Some(account_name.to_string()) };
+        key.fixed_account_name = normalize_optional_account_name_input(Some(account_name))
+            .map_err(|err| bad_request_with_detail("invalid fixed_account_name", err))?;
+    }
+    if let Some(account_names) = request.auto_account_names {
+        key.auto_account_names = normalize_auto_account_names_input(Some(account_names))
+            .map_err(|err| bad_request_with_detail("invalid auto_account_names", err))?;
+    }
+
+    match key.route_strategy.as_deref().unwrap_or("auto") {
+        "fixed" => {
+            let fixed_account_name = key
+                .fixed_account_name
+                .clone()
+                .ok_or_else(|| bad_request("fixed route_strategy requires fixed_account_name"))?;
+            validate_account_names_exist(&state.llm_gateway.account_pool, &[fixed_account_name])
+                .await?;
+            key.auto_account_names = None;
+        },
+        "auto" => {
+            key.fixed_account_name = None;
+            if let Some(ref auto_account_names) = key.auto_account_names {
+                validate_account_names_exist(&state.llm_gateway.account_pool, auto_account_names)
+                    .await?;
+            }
+        },
+        _ => return Err(bad_request("route_strategy must be `auto` or `fixed`")),
     }
     key.updated_at = now_ms();
     state
@@ -642,6 +671,59 @@ fn normalize_optional_display_name_input(value: Option<String>) -> Result<Option
     }
 
     Ok(Some(trimmed))
+}
+
+fn normalize_route_strategy_input(value: Option<&str>) -> Result<Option<String>> {
+    let Some(trimmed) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    match trimmed {
+        "auto" | "fixed" => Ok(Some(trimmed.to_string())),
+        _ => anyhow::bail!("route_strategy must be `auto` or `fixed`"),
+    }
+}
+
+fn normalize_optional_account_name_input(value: Option<&str>) -> Result<Option<String>> {
+    let Some(trimmed) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    accounts::validate_account_name(trimmed)
+        .map(Some)
+        .map_err(anyhow::Error::msg)
+}
+
+fn normalize_auto_account_names_input(value: Option<Vec<String>>) -> Result<Option<Vec<String>>> {
+    let Some(values) = value else {
+        return Ok(None);
+    };
+
+    let mut names = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| accounts::validate_account_name(&value).map_err(anyhow::Error::msg))
+        .collect::<Result<Vec<_>>>()?;
+    names.sort();
+    names.dedup();
+
+    if names.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(names))
+}
+
+async fn validate_account_names_exist(
+    pool: &AccountPool,
+    names: &[String],
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    for name in names {
+        if !pool.exists(name).await {
+            return Err(bad_request(&format!("unknown account `{name}`")));
+        }
+    }
+    Ok(())
 }
 
 /// Accept a public Codex account contribution request from `/llm-access`.
@@ -1129,6 +1211,7 @@ pub async fn approve_and_issue_token_request(
             false,
             None,
             None,
+            None,
         )
         .await?
     };
@@ -1456,6 +1539,7 @@ pub async fn approve_and_issue_account_contribution_request(
                     false,
                     Some("fixed".to_string()),
                     Some(imported_account_name.clone()),
+                    None,
                 )
                 .await?
             },
@@ -1469,6 +1553,7 @@ pub async fn approve_and_issue_account_contribution_request(
             false,
             Some("fixed".to_string()),
             Some(imported_account_name.clone()),
+            None,
         )
         .await?
     };
@@ -1874,9 +1959,11 @@ fn validate_cached_key(key: &LlmGatewayKeyRecord) -> Result<(), (StatusCode, Jso
 ///
 /// Routing order:
 /// 1. `fixed` + `fixed_account_name` → use that specific account from the pool.
-/// 2. `auto` (or unset) → pick the active account with the most remaining
-///    quota.
-/// 3. Fallback → if the pool is empty, use the legacy single-file
+/// 2. `auto` + `auto_account_names` → pick the best active account only from
+///    that subset.
+/// 3. `auto` (or subset exhausted) → pick the best active account from the full
+///    pool.
+/// 4. Fallback → if the pool is empty, use the legacy single-file
 ///    `CodexAuthSource`.
 async fn resolve_auth_for_key(
     state: &AppState,
@@ -1903,14 +1990,30 @@ async fn resolve_auth_for_key(
                     )
                 })
         },
-        _ => {
-            // auto: best available account by remaining quota, or legacy fallback.
+        "auto" => {
+            let auto_account_filter = key.auto_account_names.as_ref().and_then(|names| {
+                (!names.is_empty()).then(|| names.iter().cloned().collect::<HashSet<_>>())
+            });
+
+            if let Some(filter) = auto_account_filter.as_ref() {
+                if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
+                    pool.select_best_account(Some(filter)).await
+                {
+                    return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
+                }
+                tracing::warn!(
+                    key_id = %key.id,
+                    key_name = %key.name,
+                    auto_account_names = ?key.auto_account_names,
+                    "configured auto account subset had no usable accounts; falling back to global auto"
+                );
+            }
+
             if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
-                pool.select_best_account().await
+                pool.select_best_account(None).await
             {
                 return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
             }
-            // Fallback to single-file CodexAuthSource when pool is empty.
             state
                 .llm_gateway
                 .auth_source
@@ -1919,6 +2022,7 @@ async fn resolve_auth_for_key(
                 .map(|snapshot| (snapshot, None, false))
                 .map_err(|err| internal_error("no accounts available and legacy auth failed", err))
         },
+        _ => Err(bad_request("route_strategy must be `auto` or `fixed`")),
     }
 }
 

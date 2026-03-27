@@ -40,6 +40,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut updated_at = TimestampMillisecondBuilder::new();
     let mut route_strategy = StringBuilder::new();
     let mut fixed_account_name = StringBuilder::new();
+    let mut auto_account_names_json = StringBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -58,6 +59,10 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         updated_at.append_value(record.updated_at);
         append_optional_str(&mut route_strategy, record.route_strategy.as_deref());
         append_optional_str(&mut fixed_account_name, record.fixed_account_name.as_deref());
+        append_optional_str(
+            &mut auto_account_names_json,
+            serialize_string_vec_json(record.auto_account_names.as_deref())?.as_deref(),
+        );
     }
 
     RecordBatch::try_new(schema, vec![
@@ -77,6 +82,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(updated_at.finish()),
         Arc::new(route_strategy.finish()),
         Arc::new(fixed_account_name.finish()),
+        Arc::new(auto_account_names_json.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
@@ -398,6 +404,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let fixed_account_name = batch
             .column_by_name("fixed_account_name")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let auto_account_names_json = batch
+            .column_by_name("auto_account_names_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = usage_input_uncached_tokens
@@ -422,10 +431,33 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 updated_at: updated_at.value(idx),
                 route_strategy: route_strategy.and_then(|col| value_string_opt(col, idx)),
                 fixed_account_name: fixed_account_name.and_then(|col| value_string_opt(col, idx)),
+                auto_account_names: parse_string_vec_json_opt(
+                    auto_account_names_json
+                        .and_then(|col| value_string_opt(col, idx))
+                        .as_deref(),
+                )?,
             });
         }
     }
     Ok(rows)
+}
+
+fn serialize_string_vec_json(value: Option<&[String]>) -> Result<Option<String>> {
+    match value {
+        Some(items) if !items.is_empty() => serde_json::to_string(items)
+            .map(Some)
+            .context("failed to serialize llm gateway auto account names"),
+        _ => Ok(None),
+    }
+}
+
+fn parse_string_vec_json_opt(value: Option<&str>) -> Result<Option<Vec<String>>> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => serde_json::from_str::<Vec<String>>(raw)
+            .map(Some)
+            .with_context(|| format!("failed to parse llm gateway auto account names JSON: {raw}")),
+        None => Ok(None),
+    }
 }
 
 pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayUsageEventRecord>> {
