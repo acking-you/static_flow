@@ -15,7 +15,7 @@ mod wire;
 
 pub mod anthropic;
 
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use axum::{
     extract::{Path, Query, State},
@@ -62,7 +62,9 @@ const MAX_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 60_000;
 /// the proxy pipeline until the usage event is persisted.
 #[derive(Clone)]
 pub struct KiroEventContext {
-    /// Kiro account name resolved from the token manager (if available).
+    /// Kiro account name that handled the upstream request. Starts as `None`
+    /// at authentication time and is filled in by the provider after account
+    /// selection completes.
     pub account_name: Option<String>,
     /// HTTP method of the proxied request (typically `"POST"`).
     pub request_method: String,
@@ -134,7 +136,8 @@ impl AppKiroStateExt for AppState {
             .await
             .map_err(|err| internal_error("Failed to load Kiro API key", err))?
             .ok_or_else(|| unauthorized("Invalid API key"))?;
-        validate_key(&key)?;
+        let effective_key = self.llm_gateway.overlay_key_usage(&key).await;
+        validate_key(&effective_key)?;
         let request_url = external_origin(headers)
             .map(|origin| format!("{origin}/api/kiro-gateway"))
             .unwrap_or_else(|| "/api/kiro-gateway".to_string());
@@ -152,9 +155,8 @@ impl AppKiroStateExt for AppState {
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|_| "[]".to_string());
-        let account_name = self.kiro_gateway.token_manager.current_account_name().await;
-        Ok((key, KiroEventContext {
-            account_name,
+        Ok((effective_key, KiroEventContext {
+            account_name: None,
             request_method: "POST".to_string(),
             request_url,
             endpoint: String::new(),
@@ -197,26 +199,14 @@ pub async fn list_admin_keys(
     headers: HeaderMap,
 ) -> Result<Json<AdminKiroKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let credit_rollups = build_kiro_key_credit_rollups(&state)
-        .await
-        .map_err(|err| internal_error("Failed to aggregate Kiro credit usage", err))?;
-    let keys = state
+    let base_keys = state
         .llm_gateway_store
         .list_keys_for_provider(LLM_GATEWAY_PROVIDER_KIRO)
         .await
         .map_err(|err| internal_error("Failed to list Kiro keys", err))?;
+    let keys = state.llm_gateway.overlay_key_usage_batch(&base_keys).await;
     Ok(Json(AdminKiroKeysResponse {
-        keys: keys
-            .iter()
-            .map(|key| {
-                let mut view = AdminKiroKeyView::from(key);
-                if let Some((credit_total, missing_events)) = credit_rollups.get(&key.id) {
-                    view.usage_credit_total = *credit_total;
-                    view.usage_credit_missing_events = *missing_events;
-                }
-                view
-            })
-            .collect(),
+        keys: keys.iter().map(AdminKiroKeyView::from).collect(),
         auth_cache_ttl_seconds: state
             .llm_gateway_runtime_config
             .read()
@@ -226,6 +216,7 @@ pub async fn list_admin_keys(
     }))
 }
 
+/// Create a new Kiro API key with the given name and billable token quota.
 pub async fn create_admin_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -268,6 +259,8 @@ pub async fn create_admin_key(
     Ok(Json(AdminKiroKeyView::from(&record)))
 }
 
+/// Update mutable fields on an existing Kiro key and return the view with
+/// in-memory usage rollup applied.
 pub async fn patch_admin_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -297,9 +290,11 @@ pub async fn patch_admin_key(
         .replace_key(&key)
         .await
         .map_err(|err| internal_error("Failed to update Kiro key", err))?;
-    Ok(Json(AdminKiroKeyView::from(&key)))
+    let effective_key = state.llm_gateway.overlay_key_usage(&key).await;
+    Ok(Json(AdminKiroKeyView::from(&effective_key)))
 }
 
+/// Delete a Kiro API key by ID.
 pub async fn delete_admin_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -320,6 +315,7 @@ pub async fn delete_admin_key(
     Ok(Json(json!({"deleted": true, "id": key.id})))
 }
 
+/// List Kiro usage events with pagination (admin-only).
 pub async fn list_admin_usage_events(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -367,6 +363,7 @@ pub async fn list_admin_usage_events(
     }))
 }
 
+/// List all configured Kiro accounts with their cached balance/status.
 pub async fn list_admin_accounts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -378,26 +375,18 @@ pub async fn list_admin_accounts(
     }))
 }
 
+/// Create a Kiro account from a manually supplied JSON payload.
 pub async fn create_manual_account(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateManualKiroAccountRequest>,
 ) -> Result<Json<KiroAccountView>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let set_as_current = request.set_as_current;
     let auth = auth_record_from_manual_request(request)?;
-    let set_as_current = set_as_current
-        || auth.name == "default"
-        || state
-            .kiro_gateway
-            .token_manager
-            .current_account_name()
-            .await
-            .is_none();
     let saved = state
         .kiro_gateway
         .token_manager
-        .upsert_auth(auth, set_as_current)
+        .upsert_auth(auth)
         .await
         .map_err(|err| internal_error("Failed to save Kiro account", err))?;
     if let Err(err) =
@@ -414,6 +403,8 @@ pub async fn create_manual_account(
         .map(Json)
 }
 
+/// Import a Kiro account from the local Kiro CLI SQLite store, optionally
+/// overriding scheduler settings.
 pub async fn import_local_account(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -435,11 +426,7 @@ pub async fn import_local_account(
     let imported = state
         .kiro_gateway
         .token_manager
-        .import_local_account(
-            request.name.as_deref(),
-            request.sqlite_path.as_deref(),
-            request.set_as_current,
-        )
+        .import_local_account(request.name.as_deref(), request.sqlite_path.as_deref())
         .await
         .map_err(|err| internal_error("Failed to import local Kiro auth", err))?;
     let mut saved = imported;
@@ -457,7 +444,7 @@ pub async fn import_local_account(
         saved = state
             .kiro_gateway
             .token_manager
-            .upsert_auth(saved, request.set_as_current)
+            .upsert_auth(saved)
             .await
             .map_err(|err| internal_error("Failed to save imported Kiro scheduler config", err))?;
     }
@@ -475,6 +462,7 @@ pub async fn import_local_account(
         .map(Json)
 }
 
+/// Update the per-account scheduler settings (concurrency and start interval).
 pub async fn patch_account(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -513,7 +501,7 @@ pub async fn patch_account(
     let saved = state
         .kiro_gateway
         .token_manager
-        .upsert_auth(auth, false)
+        .upsert_auth(auth)
         .await
         .map_err(|err| internal_error("Failed to update Kiro account", err))?;
     state.kiro_gateway.request_scheduler.notify_config_changed();
@@ -529,6 +517,7 @@ pub async fn patch_account(
         .map(Json)
 }
 
+/// Return the cached balance for one Kiro account.
 pub async fn get_account_balance(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -556,6 +545,7 @@ pub async fn get_account_balance(
     Ok(Json(balance))
 }
 
+/// Force-refresh the cached balance for one Kiro account and return it.
 pub async fn refresh_account_balance_cache(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -581,32 +571,7 @@ pub async fn refresh_account_balance_cache(
     Ok(Json(balance))
 }
 
-pub async fn use_account(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(name): Path<String>,
-) -> Result<Json<KiroAccountView>, (StatusCode, Json<ErrorResponse>)> {
-    ensure_admin_access(&state, &headers)?;
-    let auth = state
-        .kiro_gateway
-        .token_manager
-        .set_current_account(&name)
-        .await
-        .map_err(|err| internal_error("Failed to set active Kiro account", err))?;
-    if let Err(err) =
-        refresh_cached_status_for_account(&state.kiro_gateway, &auth.name, false).await
-    {
-        tracing::warn!(
-            account_name = %auth.name,
-            "failed to refresh cached Kiro status after activating account: {err:#}"
-        );
-    }
-    build_account_view_by_name(&state, &auth.name)
-        .await
-        .ok_or_else(|| internal_error_message("Activated Kiro account but failed to reload it"))
-        .map(Json)
-}
-
+/// Delete a Kiro account and evict its cached status entry.
 pub async fn delete_account(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -623,29 +588,23 @@ pub async fn delete_account(
     Ok(Json(json!({"status":"ok"})))
 }
 
+/// Assemble admin-facing account views by joining persisted auth records with
+/// the latest cached balance/status snapshot.
 async fn build_account_views(state: &AppState) -> Vec<KiroAccountView> {
     let cached = state.kiro_gateway.cached_status_snapshot().await;
-    let current_name = state
-        .kiro_gateway
-        .token_manager
-        .current_account_name()
-        .await;
     let Ok(auths) = state.kiro_gateway.token_manager.list_auths().await else {
         return Vec::new();
     };
     let mut views = Vec::with_capacity(auths.len());
     for auth in auths {
         let (balance, cache) = cached_status_parts(cached.accounts.get(&auth.name));
-        views.push(KiroAccountView::from_auth(
-            &auth,
-            balance,
-            current_name.as_deref() == Some(auth.name.as_str()),
-            cache,
-        ));
+        views.push(KiroAccountView::from_auth(&auth, balance, cache));
     }
     views
 }
 
+/// Load a single account view by name, returning `None` if the account does
+/// not exist on disk.
 async fn build_account_view_by_name(state: &AppState, name: &str) -> Option<KiroAccountView> {
     let auth = state
         .kiro_gateway
@@ -654,44 +613,27 @@ async fn build_account_view_by_name(state: &AppState, name: &str) -> Option<Kiro
         .await
         .ok()
         .flatten()?;
-    let current_name = state
-        .kiro_gateway
-        .token_manager
-        .current_account_name()
-        .await;
     let cached = state.kiro_gateway.cached_status_snapshot().await;
     let (balance, cache) = cached_status_parts(cached.accounts.get(name));
-    Some(KiroAccountView::from_auth(
-        &auth,
-        balance,
-        current_name.as_deref() == Some(auth.name.as_str()),
-        cache,
-    ))
+    Some(KiroAccountView::from_auth(&auth, balance, cache))
 }
 
+/// Build the unauthenticated public status list shown on the access endpoint.
 async fn build_public_statuses(state: &AppState) -> Vec<KiroPublicStatusView> {
     let cached = state.kiro_gateway.cached_status_snapshot().await;
-    let current_name = state
-        .kiro_gateway
-        .token_manager
-        .current_account_name()
-        .await;
     let Ok(auths) = state.kiro_gateway.token_manager.list_auths().await else {
         return Vec::new();
     };
     let mut statuses = Vec::with_capacity(auths.len());
     for auth in auths {
         let (balance, cache) = cached_status_parts(cached.accounts.get(&auth.name));
-        statuses.push(KiroPublicStatusView::from_auth_and_balance(
-            &auth,
-            balance.as_ref(),
-            current_name.as_deref() == Some(auth.name.as_str()),
-            cache,
-        ));
+        statuses.push(KiroPublicStatusView::from_auth_and_balance(&auth, balance.as_ref(), cache));
     }
     statuses
 }
 
+/// Split a cached account status entry into its balance and cache-health
+/// components, returning sensible defaults when no entry exists yet.
 fn cached_status_parts(
     entry: Option<&KiroCachedAccountStatus>,
 ) -> (Option<KiroBalanceView>, KiroCacheView) {
@@ -708,24 +650,8 @@ fn cached_status_parts(
         })
 }
 
-async fn build_kiro_key_credit_rollups(
-    state: &AppState,
-) -> anyhow::Result<HashMap<String, (f64, u64)>> {
-    let mut rollups = HashMap::<String, (f64, u64)>::new();
-    let events = state
-        .llm_gateway_store
-        .query_usage_events(None, Some(LLM_GATEWAY_PROVIDER_KIRO), None, Some(0))
-        .await?;
-    for event in events {
-        let entry = rollups.entry(event.key_id).or_insert((0.0, 0));
-        entry.0 += event.credit_usage.unwrap_or(0.0);
-        if event.credit_usage_missing {
-            entry.1 = entry.1.saturating_add(1);
-        }
-    }
-    Ok(rollups)
-}
-
+/// Persist a Kiro usage event and update the in-memory rollup via the shared
+/// LLM gateway runtime.
 pub async fn record_messages_usage(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
@@ -733,7 +659,6 @@ pub async fn record_messages_usage(
     usage: KiroUsageSummary,
     usage_missing: bool,
 ) -> anyhow::Result<()> {
-    let _guard = state.kiro_gateway.usage_write_lock.lock().await;
     let current = state
         .llm_gateway_store
         .get_key_by_id_for_provider(&key.id, LLM_GATEWAY_PROVIDER_KIRO)
@@ -771,9 +696,9 @@ pub async fn record_messages_usage(
         last_message_content: event_context.last_message_content.clone(),
         created_at: now_ms(),
     };
-    let _ = state
-        .llm_gateway_store
-        .apply_usage_event(&current, &event)
+    let _updated = state
+        .llm_gateway
+        .append_usage_event(&current, &event)
         .await?;
     tracing::info!(
         key_id = %current.id,
@@ -790,6 +715,8 @@ pub async fn record_messages_usage(
     Ok(())
 }
 
+/// Convert a manual account creation request into a canonicalized auth record,
+/// applying scheduler defaults and validation.
 fn auth_record_from_manual_request(
     request: CreateManualKiroAccountRequest,
 ) -> Result<KiroAuthRecord, (StatusCode, Json<ErrorResponse>)> {

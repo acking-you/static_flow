@@ -50,13 +50,11 @@ pub struct KiroCacheView {
 /// Public-facing status snapshot for one Kiro account.
 ///
 /// Exposed on the unauthenticated access endpoint so callers can see
-/// which accounts are active, their remaining quota, and cache health.
+/// account availability, remaining quota, and cache health.
 #[derive(Debug, Serialize)]
 pub struct KiroPublicStatusView {
     /// Display name of the account.
     pub name: String,
-    /// Whether this account is the currently selected (active) one.
-    pub is_active: bool,
     /// Upstream provider identifier (e.g. `"anthropic"`, `"bedrock"`).
     pub provider: Option<String>,
     /// Admin-set kill switch; `true` means the account is disabled.
@@ -84,12 +82,10 @@ impl KiroPublicStatusView {
     pub fn from_auth_and_balance(
         auth: &KiroAuthRecord,
         balance: Option<&KiroBalanceView>,
-        is_active: bool,
         cache: KiroCacheView,
     ) -> Self {
         Self {
             name: auth.name.clone(),
-            is_active,
             provider: auth.provider.clone(),
             disabled: auth.disabled,
             subscription_title: balance
@@ -316,7 +312,6 @@ impl KiroBalanceView {
 #[derive(Debug, Clone, Serialize)]
 pub struct KiroAccountView {
     pub name: String,
-    pub is_active: bool,
     pub auth_method: String,
     pub provider: Option<String>,
     pub email: Option<String>,
@@ -345,7 +340,6 @@ impl KiroAccountView {
     pub fn from_auth(
         auth: &KiroAuthRecord,
         balance: Option<KiroBalanceView>,
-        is_active: bool,
         cache: KiroCacheView,
     ) -> Self {
         let subscription_title = balance
@@ -354,7 +348,6 @@ impl KiroAccountView {
             .or_else(|| auth.subscription_title.clone());
         Self {
             name: auth.name.clone(),
-            is_active,
             auth_method: auth.auth_method().to_string(),
             provider: auth.provider.clone(),
             email: auth.email.clone(),
@@ -397,8 +390,6 @@ pub struct ImportLocalKiroAccountRequest {
     pub kiro_channel_max_concurrency: Option<u64>,
     #[serde(default)]
     pub kiro_channel_min_start_interval_ms: Option<u64>,
-    #[serde(default)]
-    pub set_as_current: bool,
 }
 
 /// Request body for manually creating a persisted Kiro account JSON record.
@@ -439,8 +430,6 @@ pub struct CreateManualKiroAccountRequest {
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     #[serde(default)]
     pub disabled: bool,
-    #[serde(default)]
-    pub set_as_current: bool,
 }
 
 /// Request body for editing only the mutable per-account scheduler settings.

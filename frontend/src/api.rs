@@ -6107,7 +6107,6 @@ pub struct KiroBalanceView {
 #[serde(default)]
 pub struct KiroPublicStatusView {
     pub name: String,
-    pub is_active: bool,
     pub provider: Option<String>,
     pub disabled: bool,
     pub subscription_title: Option<String>,
@@ -6142,7 +6141,6 @@ pub struct KiroCacheView {
 #[serde(default)]
 pub struct KiroAccountView {
     pub name: String,
-    pub is_active: bool,
     pub auth_method: String,
     pub provider: Option<String>,
     pub email: Option<String>,
@@ -6185,7 +6183,6 @@ pub struct CreateManualKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     pub disabled: bool,
-    pub set_as_current: bool,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Default)]
@@ -6504,17 +6501,11 @@ pub async fn import_admin_kiro_account(
     sqlite_path: Option<&str>,
     kiro_channel_max_concurrency: Option<u64>,
     kiro_channel_min_start_interval_ms: Option<u64>,
-    set_as_current: bool,
 ) -> Result<KiroAccountView, String> {
     #[cfg(feature = "mock")]
     {
-        let _ = (
-            name,
-            sqlite_path,
-            kiro_channel_max_concurrency,
-            kiro_channel_min_start_interval_ms,
-            set_as_current,
-        );
+        let _ =
+            (name, sqlite_path, kiro_channel_max_concurrency, kiro_channel_min_start_interval_ms);
         Err("mock not supported".to_string())
     }
 
@@ -6540,7 +6531,6 @@ pub async fn import_admin_kiro_account(
                 serde_json::Value::Number(serde_json::Number::from(value)),
             );
         }
-        body.insert("set_as_current".to_string(), serde_json::Value::Bool(set_as_current));
         let response = api_post(&url)
             .json(&serde_json::Value::Object(body))
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -6634,35 +6624,6 @@ pub async fn refresh_admin_kiro_account_balance(name: &str) -> Result<KiroBalanc
     {
         let url = format!(
             "{}/admin/kiro-gateway/accounts/{}/balance",
-            admin_base(),
-            urlencoding::encode(name)
-        );
-        let response = api_post(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
-        }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
-    }
-}
-
-pub async fn use_admin_kiro_account(name: &str) -> Result<KiroAccountView, String> {
-    #[cfg(feature = "mock")]
-    {
-        let _ = name;
-        Err("mock not supported".to_string())
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        let url = format!(
-            "{}/admin/kiro-gateway/accounts/{}/use",
             admin_base(),
             urlencoding::encode(name)
         );

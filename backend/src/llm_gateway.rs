@@ -205,11 +205,12 @@ pub async fn get_public_access(
     headers: HeaderMap,
 ) -> Result<Json<LlmGatewayAccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let config = state.llm_gateway_runtime_config.read().await.clone();
-    let keys = state
+    let base_keys = state
         .llm_gateway_store
         .list_public_keys()
         .await
         .map_err(|err| internal_error("Failed to list public gateway keys", err))?;
+    let keys = state.llm_gateway.overlay_key_usage_batch(&base_keys).await;
     let gateway_path = "/api/llm-gateway/v1".to_string();
     let base_url = external_origin(&headers)
         .map(|origin| format!("{origin}{gateway_path}"))
@@ -573,11 +574,12 @@ pub async fn list_admin_keys(
     headers: HeaderMap,
 ) -> Result<Json<AdminLlmGatewayKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let keys = state
+    let base_keys = state
         .llm_gateway_store
         .list_keys()
         .await
         .map_err(|err| internal_error("Failed to list llm gateway keys", err))?;
+    let keys = state.llm_gateway.overlay_key_usage_batch(&base_keys).await;
     let config = state.llm_gateway_runtime_config.read().await.clone();
 
     tracing::debug!(key_count = keys.len(), "Listed admin LLM gateway keys");
@@ -790,10 +792,11 @@ pub async fn patch_admin_key(
 
     if key.status == LLM_GATEWAY_KEY_STATUS_ACTIVE {
         let ttl = current_cache_ttl(&state).await;
+        let effective_key = state.llm_gateway.overlay_key_usage(&key).await;
         state
             .llm_gateway
             .key_cache
-            .renew(key.clone(), Duration::from_secs(ttl));
+            .renew(effective_key, Duration::from_secs(ttl));
     } else {
         state.llm_gateway.key_cache.invalidate(&key.key_hash);
     }
@@ -807,7 +810,8 @@ pub async fn patch_admin_key(
         "Updated LLM gateway key"
     );
 
-    Ok(Json(AdminLlmGatewayKeyView::from(&key)))
+    let effective_key = state.llm_gateway.overlay_key_usage(&key).await;
+    Ok(Json(AdminLlmGatewayKeyView::from(&effective_key)))
 }
 
 /// Delete one managed key and evict it from the in-memory cache immediately.
@@ -1268,28 +1272,17 @@ async fn run_codex_proxy_connectivity_check(
     }))
 }
 
+/// Run a connectivity check against the Kiro upstream through the given proxy.
+/// Picks the first non-disabled account for the probe.
 async fn run_kiro_proxy_connectivity_check(
     state: &AppState,
     config: &LlmGatewayProxyConfigRecord,
 ) -> Result<(String, AdminUpstreamProxyCheckTargetView)> {
-    let current_account_name = state
-        .kiro_gateway
-        .token_manager
-        .current_account_name()
-        .await;
     let auths = state.kiro_gateway.token_manager.list_auths().await?;
-    let account_name = current_account_name
-        .filter(|name| {
-            auths
-                .iter()
-                .any(|auth| auth.name == *name && !auth.disabled)
-        })
-        .or_else(|| {
-            auths
-                .iter()
-                .find(|item| !item.disabled)
-                .map(|item| item.name.clone())
-        })
+    let account_name = auths
+        .iter()
+        .find(|item| !item.disabled)
+        .map(|item| item.name.clone())
         .ok_or_else(|| anyhow!("no kiro account available for proxy check"))?;
     let ctx = state
         .kiro_gateway
@@ -2635,12 +2628,13 @@ async fn validate_gateway_key(
 ) -> Result<Arc<CachedKeyLease>, (StatusCode, Json<ErrorResponse>)> {
     if let Some(cached) = state.llm_gateway.key_cache.get(key_hash) {
         tracing::debug!(key_hash, "LLM gateway key cache hit");
-        validate_cached_key(&cached.record)?;
+        let effective = state.llm_gateway.overlay_key_usage(&cached.record).await;
+        validate_cached_key(&effective)?;
         let ttl = current_cache_ttl(state).await;
         return Ok(state
             .llm_gateway
             .key_cache
-            .renew(cached.record.clone(), Duration::from_secs(ttl)));
+            .renew(effective, Duration::from_secs(ttl)));
     }
 
     tracing::debug!(key_hash, "LLM gateway key cache miss");
@@ -2650,12 +2644,13 @@ async fn validate_gateway_key(
         .await
         .map_err(|err| internal_error("Failed to validate llm gateway key", err))?
         .ok_or_else(|| auth_error(StatusCode::FORBIDDEN, "invalid api key"))?;
-    validate_cached_key(&key)?;
+    let effective_key = state.llm_gateway.overlay_key_usage(&key).await;
+    validate_cached_key(&effective_key)?;
     let ttl = current_cache_ttl(state).await;
     Ok(state
         .llm_gateway
         .key_cache
-        .renew(key, Duration::from_secs(ttl)))
+        .renew(effective_key, Duration::from_secs(ttl)))
 }
 
 /// Enforce key status and quota invariants before any upstream request starts.
@@ -3309,7 +3304,6 @@ async fn persist_gateway_usage(
     event_context: Option<LlmGatewayEventContext>,
     selected_account_name: Option<&str>,
 ) -> Result<()> {
-    let _guard = gateway.usage_write_lock.lock().await;
     let current = gateway
         .store
         .get_key_by_id(&cached_key.record.id)
@@ -3376,7 +3370,7 @@ async fn persist_gateway_usage(
         last_message_content,
         created_at: now_ms(),
     };
-    let updated = gateway.store.apply_usage_event(&current, &event).await?;
+    let updated = gateway.append_usage_event(&current, &event).await?;
 
     tracing::info!(
         key_id = %updated.id,

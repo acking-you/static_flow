@@ -277,10 +277,6 @@ pub fn create_router(state: AppState) -> Router {
             post(kiro_gateway::import_local_account),
         )
         .route(
-            "/admin/kiro-gateway/accounts/:name/use",
-            post(kiro_gateway::use_account),
-        )
-        .route(
             "/admin/kiro-gateway/accounts/:name",
             delete(kiro_gateway::delete_account).patch(kiro_gateway::patch_account),
         )

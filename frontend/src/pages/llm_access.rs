@@ -1038,11 +1038,6 @@ pub fn llm_access_page() -> Html {
                                             <span class={classes!("font-mono", "text-[11px]", "font-bold", "uppercase", "tracking-wider", "text-[var(--text)]")}>
                                                 { acct.name }
                                             </span>
-                                            if acct.is_active {
-                                                <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2", "py-0.5", "text-[10px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-emerald-700", "dark:text-emerald-200")}>
-                                                    { "active" }
-                                                </span>
-                                            }
                                             if acct.disabled {
                                                 <span class={classes!("text-[10px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
                                                     { "disabled" }

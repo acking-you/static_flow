@@ -15,9 +15,11 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use reqwest::header::HeaderValue as ReqwestHeaderValue;
 use serde::Deserialize;
-use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayStore};
+use static_flow_shared::llm_gateway_store::{
+    LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord, LlmGatewayStore,
+};
 use tokio::{
-    sync::{mpsc, Mutex as AsyncMutex},
+    sync::{mpsc, Mutex as AsyncMutex, RwLock},
     time::MissedTickBehavior,
 };
 
@@ -37,6 +39,9 @@ pub struct LlmGatewayRuntimeState {
     pub(crate) key_cache: Arc<LlmGatewayKeyCache>,
     pub(crate) request_scheduler: Arc<LlmGatewayKeyRequestScheduler>,
     pub(crate) rate_limit_status: Arc<tokio::sync::RwLock<LlmGatewayRateLimitStatusResponse>>,
+    /// In-memory per-key usage rollups aggregated from usage events.
+    /// Rebuilt on startup and incrementally updated on each new event.
+    pub(crate) usage_rollups: Arc<RwLock<HashMap<String, LlmGatewayKeyUsageRollupRecord>>>,
     pub(crate) usage_write_lock: Arc<AsyncMutex<()>>,
 }
 
@@ -67,6 +72,7 @@ impl LlmGatewayRuntimeState {
                     buckets: Vec::new(),
                 },
             )),
+            usage_rollups: Arc::new(RwLock::new(HashMap::new())),
             usage_write_lock: Arc::new(AsyncMutex::new(())),
         })
     }
@@ -89,6 +95,115 @@ impl LlmGatewayRuntimeState {
             .build()
             .context("failed to build llm gateway reqwest client")
     }
+
+    /// Rebuild the in-memory usage rollups by scanning all usage events.
+    /// Called once at startup.
+    pub(crate) async fn rebuild_usage_rollups(&self) -> Result<()> {
+        let rows = self
+            .store
+            .aggregate_usage_rollups()
+            .await
+            .context("failed to aggregate gateway usage events for rollup rebuild")?;
+        let key_count = rows.len();
+        let rollups = rows
+            .into_iter()
+            .map(|row| (row.key_id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        *self.usage_rollups.write().await = rollups;
+        tracing::info!(key_count, "rebuilt in-memory llm gateway usage rollups from usage events");
+        Ok(())
+    }
+
+    /// Return a copy of `key` with `usage_*` fields replaced by the
+    /// in-memory rollup totals.
+    pub(crate) async fn overlay_key_usage(&self, key: &LlmGatewayKeyRecord) -> LlmGatewayKeyRecord {
+        let rollups = self.usage_rollups.read().await;
+        apply_usage_rollup(key, rollups.get(&key.id))
+    }
+
+    /// Batch variant of [`overlay_key_usage`](Self::overlay_key_usage).
+    pub(crate) async fn overlay_key_usage_batch(
+        &self,
+        keys: &[LlmGatewayKeyRecord],
+    ) -> Vec<LlmGatewayKeyRecord> {
+        let rollups = self.usage_rollups.read().await;
+        keys.iter()
+            .map(|key| apply_usage_rollup(key, rollups.get(&key.id)))
+            .collect()
+    }
+
+    /// Persist a usage event and incrementally update the in-memory rollup.
+    /// Returns the key record with refreshed usage totals.
+    pub(crate) async fn append_usage_event(
+        &self,
+        base_key: &LlmGatewayKeyRecord,
+        event: &static_flow_shared::llm_gateway_store::LlmGatewayUsageEventRecord,
+    ) -> Result<LlmGatewayKeyRecord> {
+        let _guard = self.usage_write_lock.lock().await;
+        self.store
+            .append_usage_event(event)
+            .await
+            .context("failed to append llm gateway usage event")?;
+        let updated = {
+            let mut rollups = self.usage_rollups.write().await;
+            let rollup = rollups.entry(event.key_id.clone()).or_insert_with(|| {
+                LlmGatewayKeyUsageRollupRecord {
+                    key_id: event.key_id.clone(),
+                    ..LlmGatewayKeyUsageRollupRecord::default()
+                }
+            });
+            apply_event_to_rollup(rollup, event);
+            apply_usage_rollup(base_key, Some(rollup))
+        };
+        Ok(updated)
+    }
+}
+
+/// Stamp a key record's `usage_*` fields with the aggregated rollup values.
+fn apply_usage_rollup(
+    key: &LlmGatewayKeyRecord,
+    rollup: Option<&LlmGatewayKeyUsageRollupRecord>,
+) -> LlmGatewayKeyRecord {
+    let mut effective = key.clone();
+    let rollup = rollup
+        .cloned()
+        .unwrap_or_else(|| LlmGatewayKeyUsageRollupRecord {
+            key_id: key.id.clone(),
+            ..LlmGatewayKeyUsageRollupRecord::default()
+        });
+    effective.usage_input_uncached_tokens = rollup.input_uncached_tokens;
+    effective.usage_input_cached_tokens = rollup.input_cached_tokens;
+    effective.usage_output_tokens = rollup.output_tokens;
+    effective.usage_billable_tokens = rollup.billable_tokens;
+    effective.usage_credit_total = rollup.credit_total;
+    effective.usage_credit_missing_events = rollup.credit_missing_events;
+    effective.last_used_at = rollup.last_used_at;
+    effective
+}
+
+/// Incrementally fold a single usage event into an existing rollup record.
+fn apply_event_to_rollup(
+    rollup: &mut LlmGatewayKeyUsageRollupRecord,
+    event: &static_flow_shared::llm_gateway_store::LlmGatewayUsageEventRecord,
+) {
+    rollup.input_uncached_tokens = rollup
+        .input_uncached_tokens
+        .saturating_add(event.input_uncached_tokens);
+    rollup.input_cached_tokens = rollup
+        .input_cached_tokens
+        .saturating_add(event.input_cached_tokens);
+    rollup.output_tokens = rollup.output_tokens.saturating_add(event.output_tokens);
+    rollup.billable_tokens = rollup.billable_tokens.saturating_add(event.billable_tokens);
+    rollup.credit_total += event.credit_usage.unwrap_or(0.0);
+    if event.credit_usage_missing {
+        rollup.credit_missing_events = rollup.credit_missing_events.saturating_add(1);
+    }
+    rollup.last_used_at = Some(
+        rollup
+            .last_used_at
+            .map(|current| current.max(event.created_at))
+            .unwrap_or(event.created_at),
+    );
 }
 
 #[derive(Debug, Clone)]

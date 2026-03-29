@@ -147,6 +147,32 @@ pub struct LlmGatewayUsageEventRecord {
     pub created_at: i64,
 }
 
+/// Per-key usage totals aggregated from `llm_gateway_usage_events`.
+///
+/// These values are derived data rather than the source of truth. The gateway
+/// rebuilds them from immutable usage events on startup and then maintains them
+/// incrementally in memory for real-time quota enforcement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LlmGatewayKeyUsageRollupRecord {
+    /// The gateway key this rollup belongs to.
+    pub key_id: String,
+    /// Sum of non-cached input tokens across all events for this key.
+    pub input_uncached_tokens: u64,
+    /// Sum of cached (prompt-cache hit) input tokens.
+    pub input_cached_tokens: u64,
+    /// Sum of output (completion) tokens.
+    pub output_tokens: u64,
+    /// Sum of billable tokens (the quota-relevant metric).
+    pub billable_tokens: u64,
+    /// Accumulated Kiro credit cost (only meaningful for `provider_type =
+    /// kiro`).
+    pub credit_total: f64,
+    /// Number of events where credit usage was expected but unavailable.
+    pub credit_missing_events: u64,
+    /// Timestamp (ms) of the most recent usage event, if any.
+    pub last_used_at: Option<i64>,
+}
+
 /// Persisted upstream proxy config row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LlmGatewayProxyConfigRecord {

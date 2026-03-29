@@ -307,6 +307,7 @@ impl AppState {
             account_pool.clone(),
             upstream_proxy_registry.clone(),
         )?);
+        llm_gateway.rebuild_usage_rollups().await?;
         let kiro_gateway = Arc::new(
             KiroGatewayRuntimeState::new(
                 llm_gateway_store.clone(),

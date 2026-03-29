@@ -12,10 +12,10 @@ use crate::{
         delete_admin_kiro_key, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
         fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings,
         import_admin_kiro_account, patch_admin_kiro_account, patch_admin_kiro_key,
-        refresh_admin_kiro_account_balance, use_admin_kiro_account as activate_admin_kiro_account,
-        AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
-        AdminUpstreamProxyBindingView, CreateManualKiroAccountInput, KiroAccountView,
-        KiroBalanceView, PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
+        refresh_admin_kiro_account_balance, AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView,
+        AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
+        CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView,
+        PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
     },
     pages::llm_access_shared::{
         format_float2, format_ms, format_number_i64, format_number_u64, format_reset_hint,
@@ -23,6 +23,61 @@ use crate::{
     },
     router::Route,
 };
+
+const TAB_OVERVIEW: &str = "overview";
+const TAB_ACCOUNTS: &str = "accounts";
+const TAB_KEYS: &str = "keys";
+const TAB_USAGE: &str = "usage";
+
+/// Shared Tailwind classes for the dark "Kiro" pill badge.
+fn kiro_badge() -> Classes {
+    classes!(
+        "inline-flex",
+        "items-center",
+        "rounded-full",
+        "bg-slate-900",
+        "px-2.5",
+        "py-1",
+        "font-mono",
+        "text-[11px]",
+        "font-semibold",
+        "uppercase",
+        "tracking-[0.16em]",
+        "text-emerald-300"
+    )
+}
+
+/// Render a horizontal tab bar. Each `(id, label)` pair becomes a button;
+/// the one matching `active` gets the primary style.
+fn render_tab_bar(active: &str, tabs: &[(&str, &str)], on_click: &Callback<String>) -> Html {
+    html! {
+        <nav class={classes!(
+            "flex", "items-center", "gap-1.5", "flex-wrap",
+            "rounded-xl", "border", "border-[var(--border)]",
+            "bg-[var(--surface)]", "p-1.5"
+        )} role="tablist">
+            { for tabs.iter().map(|(id, label)| {
+                let is_active = active == *id;
+                let id_owned = id.to_string();
+                let on_click = on_click.clone();
+                html! {
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={is_active.to_string()}
+                        class={classes!(
+                            "btn-terminal",
+                            if is_active { "btn-terminal-primary" } else { "" }
+                        )}
+                        onclick={Callback::from(move |_| on_click.emit(id_owned.clone()))}
+                    >
+                        { *label }
+                    </button>
+                }
+            }) }
+        </nav>
+    }
+}
 
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
@@ -117,43 +172,6 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                             ),
                             true,
                         ));
-                    },
-                }
-                busy.set(false);
-            });
-        })
-    };
-
-    let on_use_account = {
-        let account_name = props.account.name.clone();
-        let flash = props.flash.clone();
-        let notify = props.notify.clone();
-        let error = props.error.clone();
-        let feedback = feedback.clone();
-        let busy = busy.clone();
-        let on_reload = props.on_reload.clone();
-        Callback::from(move |_| {
-            let account_name = account_name.clone();
-            let flash = flash.clone();
-            let notify = notify.clone();
-            let error = error.clone();
-            let feedback = feedback.clone();
-            let busy = busy.clone();
-            let on_reload = on_reload.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                busy.set(true);
-                error.set(None);
-                match activate_admin_kiro_account(&account_name).await {
-                    Ok(_) => {
-                        feedback.set(Some("Activated.".to_string()));
-                        let message = format!("Activated `{account_name}`.");
-                        flash.set(Some(message.clone()));
-                        notify.emit((message, false));
-                        on_reload.emit(());
-                    },
-                    Err(err) => {
-                        error.set(Some(err.clone()));
-                        notify.emit((format!("Failed to activate `{account_name}`.\n{err}"), true));
                     },
                 }
                 busy.set(false);
@@ -304,19 +322,14 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
     let last_imported = format_timestamp_opt(account.last_imported_at);
 
     html! {
-        <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+        <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
             <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                 <div>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                        <span class={kiro_badge()}>
                             { "Kiro" }
                         </span>
                         <h3 class={classes!("m-0", "text-lg", "font-semibold")}>{ account.name.clone() }</h3>
-                        if account.is_active {
-                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-700", "dark:text-emerald-200")}>
-                                { "active" }
-                            </span>
-                        }
                         if account.disabled {
                             <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2.5", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-amber-700", "dark:text-amber-200")}>
                                 { "disabled" }
@@ -345,9 +358,6 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                 <div class={classes!("flex", "gap-2", "flex-wrap")}>
                     <button type="button" class={classes!("btn-terminal")} onclick={on_refresh_cache.clone()} disabled={*busy}>
                         { "Refresh Cache" }
-                    </button>
-                    <button type="button" class={classes!("btn-terminal")} disabled={account.is_active || *busy} onclick={on_use_account.clone()}>
-                        { if account.is_active { "Active" } else { "Use This Account" } }
                     </button>
                     <button type="button" class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")} onclick={on_delete_account.clone()} disabled={*busy}>
                         { "Delete" }
@@ -649,11 +659,11 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let key_pct = (key_ratio * 100.0).round() as i32;
 
     html! {
-        <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+        <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
             <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                 <div>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                        <span class={kiro_badge()}>
                             { "Kiro" }
                         </span>
                         <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.key_item.name.clone() }</h3>
@@ -668,9 +678,21 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         }
                     </p>
                 </div>
-                <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
-                    { format!("created {} · used {}", format_ms(props.key_item.created_at), format_timestamp_opt(props.key_item.last_used_at)) }
-                </span>
+                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                    <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                        { format!("created {} · used {}", format_ms(props.key_item.created_at), format_timestamp_opt(props.key_item.last_used_at)) }
+                    </span>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal", "text-xs")}
+                        onclick={{
+                            let on_reload = props.on_reload.clone();
+                            Callback::from(move |_| on_reload.emit(()))
+                        }}
+                    >
+                        { "Refresh" }
+                    </button>
+                </div>
             </div>
 
             <div class={classes!("mt-3")}>
@@ -808,13 +830,17 @@ pub fn admin_kiro_gateway_page() -> Html {
         })
     };
     let refresh_tick = use_state(|| 0u32);
+    let active_tab = use_state(|| TAB_OVERVIEW.to_string());
+    let on_tab_click = {
+        let active_tab = active_tab.clone();
+        Callback::from(move |tab: String| active_tab.set(tab))
+    };
     let manual_form_expanded = use_state(|| false);
 
     let import_name = use_state(|| "default".to_string());
     let import_sqlite_path = use_state(String::new);
     let import_scheduler_max = use_state(|| "1".to_string());
     let import_scheduler_min = use_state(|| "0".to_string());
-    let import_set_current = use_state(|| true);
 
     let manual_name = use_state(String::new);
     let manual_auth_method = use_state(|| "social".to_string());
@@ -834,7 +860,6 @@ pub fn admin_kiro_gateway_page() -> Html {
     let manual_scheduler_max = use_state(|| "1".to_string());
     let manual_scheduler_min = use_state(|| "0".to_string());
     let manual_disabled = use_state(|| false);
-    let manual_set_current = use_state(|| false);
 
     let new_key_name = use_state(|| "kiro-private".to_string());
     let new_key_quota = use_state(|| "1000000".to_string());
@@ -904,7 +929,6 @@ pub fn admin_kiro_gateway_page() -> Html {
         let import_sqlite_path = import_sqlite_path.clone();
         let import_scheduler_max = import_scheduler_max.clone();
         let import_scheduler_min = import_scheduler_min.clone();
-        let import_set_current = import_set_current.clone();
         let flash = flash.clone();
         let notify = notify.clone();
         let error = error.clone();
@@ -914,7 +938,6 @@ pub fn admin_kiro_gateway_page() -> Html {
             let import_sqlite_path = (*import_sqlite_path).clone();
             let import_scheduler_max = (*import_scheduler_max).clone();
             let import_scheduler_min = (*import_scheduler_min).clone();
-            let import_set_current = *import_set_current;
             let flash = flash.clone();
             let notify = notify.clone();
             let error = error.clone();
@@ -949,7 +972,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                     },
                     Some(parsed_max),
                     Some(parsed_min),
-                    import_set_current,
                 )
                 .await
                 {
@@ -987,7 +1009,6 @@ pub fn admin_kiro_gateway_page() -> Html {
         let manual_scheduler_max = manual_scheduler_max.clone();
         let manual_scheduler_min = manual_scheduler_min.clone();
         let manual_disabled = manual_disabled.clone();
-        let manual_set_current = manual_set_current.clone();
         let flash = flash.clone();
         let notify = notify.clone();
         let error = error.clone();
@@ -1036,7 +1057,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                 kiro_channel_max_concurrency: Some(parsed_max),
                 kiro_channel_min_start_interval_ms: Some(parsed_min),
                 disabled: *manual_disabled,
-                set_as_current: *manual_set_current,
             };
             wasm_bindgen_futures::spawn_local(async move {
                 error.set(None);
@@ -1097,12 +1117,25 @@ pub fn admin_kiro_gateway_page() -> Html {
         })
     };
 
+    let disabled_account_count = accounts.iter().filter(|a| a.disabled).count();
+    let active_key_count = keys.iter().filter(|k| k.status == "active").count();
+
     html! {
-        <main class={classes!("container", "py-8")}>
-            <section class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-6", "shadow-[var(--shadow)]")}>
+        <main class={classes!(
+            "min-h-screen",
+            "bg-[var(--bg)]",
+            "px-4",
+            "py-8",
+            "lg:px-6",
+            "lg:py-10"
+        )}>
+            <div class={classes!("mx-auto", "max-w-6xl", "space-y-4")}>
+
+            // ── Header (always visible) ──
+            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-4", "flex-wrap")}>
                     <div class={classes!("flex", "items-center", "gap-3")}>
-                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                        <span class={kiro_badge()}>
                             { "Kiro" }
                         </span>
                         <h1 class={classes!("m-0", "font-mono", "text-xl", "font-bold", "text-[var(--text)]")}>{ "Gateway Admin" }</h1>
@@ -1132,10 +1165,39 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { err }
                     </div>
                 }
+
+                <div class={classes!("mt-4", "grid", "gap-3", "grid-cols-2", "xl:grid-cols-4")}>
+                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Accounts" }</div>
+                        <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ accounts.len() }</div>
+                    </div>
+                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Disabled" }</div>
+                        <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", if disabled_account_count > 0 { "text-amber-600" } else { "" })}>{ disabled_account_count }</div>
+                    </div>
+                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Keys" }</div>
+                        <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ keys.len() }</div>
+                    </div>
+                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Active Keys" }</div>
+                        <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ active_key_count }</div>
+                    </div>
+                </div>
             </section>
 
-            <section class={classes!("mt-6", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Effective Upstream Proxy" }</h2>
+            // ── Tab Bar (always visible) ──
+            { render_tab_bar(&active_tab, &[
+                (TAB_OVERVIEW, "Overview"),
+                (TAB_ACCOUNTS, "Accounts"),
+                (TAB_KEYS, "Keys"),
+                (TAB_USAGE, "Usage"),
+            ], &on_tab_click) }
+
+            // ── Overview Tab ──
+            if *active_tab == TAB_OVERVIEW {
+            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Effective Upstream Proxy" }</h2>
                 {
                     if let Some(binding) = proxy_bindings.iter().find(|item| item.provider_type == "kiro") {
                         html! {
@@ -1168,10 +1230,13 @@ pub fn admin_kiro_gateway_page() -> Html {
                     }
                 }
             </section>
+            } // end TAB_OVERVIEW
 
-            <section class={classes!("mt-6", "grid", "gap-6", "xl:grid-cols-2")}>
-                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Import Local Kiro CLI Auth" }</h2>
+            // ── Accounts Tab ──
+            if *active_tab == TAB_ACCOUNTS {
+            <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
+                <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Import Local Kiro CLI Auth" }</h2>
                     <div class={classes!("mt-4", "space-y-3")}>
                         <label class={classes!("block", "text-sm")}>
                             <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Account Name" }</div>
@@ -1232,30 +1297,16 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 />
                             </label>
                         </div>
-                        <label class={classes!("inline-flex", "items-center", "gap-2", "text-sm", "text-[var(--muted)]")}>
-                            <input
-                                type="checkbox"
-                                checked={*import_set_current}
-                                onchange={{
-                                    let import_set_current = import_set_current.clone();
-                                    Callback::from(move |event: Event| {
-                                        let input: HtmlInputElement = event.target_unchecked_into();
-                                        import_set_current.set(input.checked());
-                                    })
-                                }}
-                            />
-                            { "Import 后设为 active 账号" }
-                        </label>
                         <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_import_local}>
                             { "Import Local Auth" }
                         </button>
                     </div>
                 </article>
 
-                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
                         <div>
-                            <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Create Manual Kiro Account" }</h2>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Create Manual Kiro Account" }</h2>
                             <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
                                 { "手动填写必要或完整字段，保存成单独 JSON 文件。适合已有 refresh token / profileArn / IDC 凭据的场景。" }
                             </p>
@@ -1322,20 +1373,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                             />
                             { "disabled" }
                         </label>
-                        <label class={classes!("inline-flex", "items-center", "gap-2")}>
-                            <input
-                                type="checkbox"
-                                checked={*manual_set_current}
-                                onchange={{
-                                    let manual_set_current = manual_set_current.clone();
-                                    Callback::from(move |event: Event| {
-                                        let input: HtmlInputElement = event.target_unchecked_into();
-                                        manual_set_current.set(input.checked());
-                                    })
-                                }}
-                            />
-                            { "保存后设为 active" }
-                        </label>
                     </div>
                     <button type="button" class={classes!("mt-4", "btn-terminal", "btn-terminal-primary")} onclick={on_create_manual}>
                         { "Save Manual Account" }
@@ -1344,10 +1381,10 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </article>
             </section>
 
-            <section class={classes!("mt-6")}>
+            <section>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
-                        <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Kiro Accounts" }</h2>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Accounts" }</h2>
                     </div>
                 </div>
                 <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
@@ -1375,10 +1412,13 @@ pub fn admin_kiro_gateway_page() -> Html {
                     }
                 </div>
             </section>
+            } // end TAB_ACCOUNTS
 
-            <section class={classes!("mt-6")}>
-                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Create Kiro Key" }</h2>
+            // ── Keys Tab ──
+            if *active_tab == TAB_KEYS {
+            <section>
+                <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Create Kiro Key" }</h2>
                     <div class={classes!("mt-4", "space-y-3")}>
                         <label class={classes!("block", "text-sm")}>
                             <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Key Name" }</div>
@@ -1415,11 +1455,21 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </article>
             </section>
 
-            <section class={classes!("mt-6")}>
+            <section>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
-                        <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Kiro Key Inventory" }</h2>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Key Inventory" }</h2>
                     </div>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal")}
+                        onclick={{
+                            let on_reload = on_reload.clone();
+                            Callback::from(move |_| on_reload.emit(()))
+                        }}
+                    >
+                        { if *loading { "Refreshing..." } else { "Refresh" } }
+                    </button>
                 </div>
                 <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
                     {
@@ -1445,8 +1495,11 @@ pub fn admin_kiro_gateway_page() -> Html {
                     }
                 </div>
             </section>
+            } // end TAB_KEYS
 
-            <section class={classes!("mt-6", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+            // ── Usage Tab ──
+            if *active_tab == TAB_USAGE {
+            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Recent Usage" }</h2>
                     <Link<Route> to={Route::AdminLlmGateway} classes={classes!("btn-terminal")}>
@@ -1473,6 +1526,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     </div>
                 }
             </section>
+            } // end TAB_USAGE
 
             if let Some((message, is_error)) = (*toast).clone() {
                 <div class={classes!(
@@ -1490,6 +1544,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     { message }
                 </div>
             }
+            </div>
         </main>
     }
 }

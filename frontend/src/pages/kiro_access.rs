@@ -47,13 +47,16 @@ pub fn kiro_access_page() -> Html {
     let copy_timeout = use_mut_ref(|| None::<Timeout>);
     // 0 = Claude Code env, 1 = curl
     let active_tab = use_state(|| 0u8);
-
-    {
+    // Reusable callback to (re-)fetch Kiro access data from the backend.
+    // Shared between the initial mount effect and manual refresh buttons.
+    let reload_access = {
         let access = access.clone();
         let loading = loading.clone();
         let error = error.clone();
-        // effect: fetch kiro access on mount
-        use_effect_with((), move |_| {
+        Callback::from(move |_| {
+            let access = access.clone();
+            let loading = loading.clone();
+            let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 loading.set(true);
                 error.set(None);
@@ -63,6 +66,14 @@ pub fn kiro_access_page() -> Html {
                 }
                 loading.set(false);
             });
+        })
+    };
+
+    {
+        let reload_access = reload_access.clone();
+        // effect: fetch kiro access on mount
+        use_effect_with((), move |_| {
+            reload_access.emit(());
             || ()
         });
     }
@@ -88,7 +99,7 @@ pub fn kiro_access_page() -> Html {
     let example_secret = "<your-kiro-key>".to_string();
     let claude_env_example = format!(
         "export ANTHROPIC_BASE_URL=\"{resolved_base}\"\nexport \
-         ANTHROPIC_API_KEY=\"{example_secret}\"\nclaude"
+         ANTHROPIC_AUTH_TOKEN=\"{example_secret}\"\nclaude"
     );
     let curl_example = format!(
         "curl {resolved_base}/v1/messages \\\n  -H 'x-api-key: {example_secret}' \\\n  -H \
@@ -111,6 +122,18 @@ pub fn kiro_access_page() -> Html {
                         </h1>
                     </div>
                     <div class={classes!("flex", "items-center", "gap-2")}>
+                        <button
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let reload_access = reload_access.clone();
+                                Callback::from(move |_| reload_access.emit(()))
+                            }}
+                            disabled={*loading}
+                            title="刷新可用额度"
+                            aria-label="刷新可用额度"
+                        >
+                            <i class={classes!("fas", if *loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                        </button>
                         <button
                             class={classes!("btn-terminal")}
                             onclick={{
@@ -147,7 +170,24 @@ pub fn kiro_access_page() -> Html {
                 if let Some(ref access_data) = access_value {
                     if !access_data.accounts.is_empty() {
                         html! {
-                            <section class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
+                            <section class={classes!("space-y-3")}>
+                                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                    <h2 class={classes!("m-0", "font-mono", "text-sm", "font-bold", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>
+                                        { "Quota Snapshot" }
+                                    </h2>
+                                    <button
+                                        type="button"
+                                        class={classes!("btn-terminal")}
+                                        onclick={{
+                                            let reload_access = reload_access.clone();
+                                            Callback::from(move |_| reload_access.emit(()))
+                                        }}
+                                        disabled={*loading}
+                                    >
+                                        { if *loading { "Refreshing..." } else { "Refresh Quota" } }
+                                    </button>
+                                </div>
+                                <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
                                 { for access_data.accounts.iter().map(|status| {
                                     let ratio = kiro_credit_ratio(status.current_usage, status.usage_limit);
                                     let pct = (ratio * 100.0).round() as i32;
@@ -162,11 +202,6 @@ pub fn kiro_access_page() -> Html {
                                         )}>
                                             <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                                                 <span class={classes!("font-mono", "text-sm", "font-bold", "text-[var(--text)]")}>{ status.name.clone() }</span>
-                                                if status.is_active {
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2", "py-0.5", "text-[10px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-emerald-700", "dark:text-emerald-200")}>
-                                                        { "active" }
-                                                    </span>
-                                                }
                                                 if status.disabled {
                                                     <span class={classes!("inline-flex", "rounded-full", "bg-amber-500/10", "px-2", "py-0.5", "text-[10px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
                                                         { "disabled" }
@@ -215,6 +250,7 @@ pub fn kiro_access_page() -> Html {
                                         </article>
                                     }
                                 }) }
+                                </div>
                             </section>
                         }
                     } else {
@@ -281,6 +317,31 @@ pub fn kiro_access_page() -> Html {
                     <span>{ "/v1/messages/count_tokens" }</span>
                     <span>{ "/cc/v1/messages" }</span>
                 </div>
+            </section>
+
+            // ── Recommended Settings ──
+            <section class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <h2 class={classes!("m-0", "font-mono", "text-sm", "font-bold", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>
+                    { "Recommended ~/.claude/settings.json" }
+                </h2>
+                <ul class={classes!("mt-3", "space-y-3", "list-none", "p-0", "m-0")}>
+                    <li class={classes!("rounded-lg", "bg-[var(--surface-alt)]", "p-3")}>
+                        <code class={classes!("font-mono", "text-xs", "text-[var(--text)]")}>
+                            { r#""skipWebFetchPreflight": true"# }
+                        </code>
+                        <p class={classes!("mt-1", "mb-0", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                            { "允许 Claude Code 正常使用 WebFetch 工具，跳过预检限制" }
+                        </p>
+                    </li>
+                    <li class={classes!("rounded-lg", "bg-[var(--surface-alt)]", "p-3")}>
+                        <code class={classes!("font-mono", "text-xs", "text-[var(--text)]")}>
+                            { r#""showClearContextOnPlanAccept": true"# }
+                        </code>
+                        <p class={classes!("mt-1", "mb-0", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                            { "Plan Mode 批准时保留旧版 context 感知能力，显示清除上下文选项" }
+                        </p>
+                    </li>
+                </ul>
             </section>
 
             // Fixed bottom-right toast

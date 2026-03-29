@@ -1,11 +1,11 @@
 //! Multi-account Kiro upstream provider with retry, cooldown, and
 //! quota-exhaustion failover.
 //!
-//! [`KiroProvider`] iterates over configured accounts in round-robin order,
-//! skipping those that are disabled, cooling down, or quota-exhausted. Each
-//! per-account attempt retries up to 3 times (with forced token refresh on
-//! 401/403), and the outer loop sleeps through cooldown windows before giving
-//! up.
+//! [`KiroProvider`] iterates over configured accounts in balance-descending
+//! order (highest remaining quota first), skipping those that are disabled,
+//! cooling down, or quota-exhausted. Each per-account attempt retries up to
+//! 3 times (with forced token refresh on 401/403), and the outer loop sleeps
+//! through cooldown windows before giving up.
 
 use std::{
     sync::Arc,
@@ -24,7 +24,8 @@ use super::{
     runtime::{CallContext, KiroGatewayRuntimeState},
     scheduler::KiroRequestLease,
     status_cache::{
-        account_is_request_eligible, mark_account_quota_exhausted, STATUS_QUOTA_EXHAUSTED,
+        account_is_request_eligible, mark_account_quota_exhausted, KiroStatusCacheSnapshot,
+        STATUS_QUOTA_EXHAUSTED,
     },
     wire::{ConversationState, KiroRequest},
 };
@@ -118,7 +119,6 @@ impl KiroProvider {
         &self,
         conversation_state: &ConversationState,
     ) -> Result<ProviderCallResult> {
-        let mut current_name = self.runtime.token_manager.current_account_name().await;
         let queued_at = Instant::now();
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
@@ -133,8 +133,8 @@ impl KiroProvider {
             let mut saw_local_limit = false;
             let mut blocked_accounts = Vec::new();
 
-            // Iterate accounts starting from the current one (round-robin).
-            for auth in ordered_account_records(&auths, current_name.as_deref()) {
+            // Iterate accounts in balance-descending order (highest remaining first).
+            for auth in balance_ordered_accounts(&auths, &snapshot) {
                 // Skip accounts still in an upstream cooldown window.
                 if let Some(cooldown) = self
                     .runtime
@@ -243,21 +243,6 @@ impl KiroProvider {
                         continue;
                     },
                 };
-                if let Err(err) = self
-                    .activate_account_if_needed(&mut current_name, &auth.name)
-                    .await
-                {
-                    tracing::warn!(
-                        account_name = %auth.name,
-                        error = %err,
-                        "failed to activate kiro account before request"
-                    );
-                    blocked_accounts
-                        .push(format!("{}: activation_failed error={}", auth.name, err));
-                    drop(channel_lease);
-                    last_error = Some(err);
-                    continue;
-                }
                 tracing::info!(
                     account_name = %auth.name,
                     request_kind = "messages",
@@ -367,7 +352,6 @@ impl KiroProvider {
     }
 
     async fn call_mcp_inner(&self, request_body: &str) -> Result<ProviderCallResult> {
-        let mut current_name = self.runtime.token_manager.current_account_name().await;
         let queued_at = Instant::now();
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
@@ -382,7 +366,7 @@ impl KiroProvider {
             let mut saw_local_limit = false;
             let mut blocked_accounts = Vec::new();
 
-            for auth in ordered_account_records(&auths, current_name.as_deref()) {
+            for auth in balance_ordered_accounts(&auths, &snapshot) {
                 if let Some(cooldown) = self
                     .runtime
                     .request_scheduler
@@ -489,21 +473,6 @@ impl KiroProvider {
                         continue;
                     },
                 };
-                if let Err(err) = self
-                    .activate_account_if_needed(&mut current_name, &auth.name)
-                    .await
-                {
-                    tracing::warn!(
-                        account_name = %auth.name,
-                        error = %err,
-                        "failed to activate kiro account before mcp request"
-                    );
-                    blocked_accounts
-                        .push(format!("{}: activation_failed error={}", auth.name, err));
-                    drop(channel_lease);
-                    last_error = Some(err);
-                    continue;
-                }
                 tracing::info!(
                     account_name = %auth.name,
                     request_kind = "mcp",
@@ -611,29 +580,6 @@ impl KiroProvider {
                 last_error.unwrap_or_else(|| anyhow!("no kiro account available for mcp request"));
             return Err(anyhow!("{base_error}; blocked_accounts={}", blocked_accounts.join(" | ")));
         }
-    }
-
-    async fn activate_account_if_needed(
-        &self,
-        current_name: &mut Option<String>,
-        next_name: &str,
-    ) -> Result<()> {
-        if current_name.as_deref() == Some(next_name) {
-            return Ok(());
-        }
-        let previous = current_name.clone();
-        self.runtime
-            .token_manager
-            .set_current_account(next_name)
-            .await
-            .with_context(|| format!("switch active kiro account to `{next_name}`"))?;
-        tracing::info!(
-            previous_account = previous.as_deref().unwrap_or("none"),
-            next_account = next_name,
-            "switched active kiro account for sequential request routing"
-        );
-        *current_name = Some(next_name.to_string());
-        Ok(())
     }
 
     // Per-account retry loop (up to 3 attempts). Forces a token refresh on
@@ -953,25 +899,32 @@ fn build_mcp_headers(ctx: &CallContext) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-/// Rotate the account list so that `current_name` is first, wrapping around
-/// to cover all accounts exactly once.
-fn ordered_account_records(
+/// Order accounts by cached remaining balance (descending). Accounts without
+/// cached balance information are placed last (still eligible, just unknown
+/// priority).
+fn balance_ordered_accounts(
     auths: &[KiroAuthRecord],
-    current_name: Option<&str>,
+    snapshot: &KiroStatusCacheSnapshot,
 ) -> Vec<KiroAuthRecord> {
-    if auths.is_empty() {
-        return Vec::new();
-    }
-    let start = current_name
-        .and_then(|name| auths.iter().position(|auth| auth.name == name))
-        .unwrap_or(0);
-    auths
-        .iter()
-        .cycle()
-        .skip(start)
-        .take(auths.len())
-        .cloned()
-        .collect()
+    let mut sorted = auths.to_vec();
+    sorted.sort_by(|a, b| {
+        let remaining_a = snapshot
+            .accounts
+            .get(&a.name)
+            .and_then(|s| s.balance.as_ref())
+            .map(|bal| bal.remaining)
+            .unwrap_or(-1.0);
+        let remaining_b = snapshot
+            .accounts
+            .get(&b.name)
+            .and_then(|s| s.balance.as_ref())
+            .map(|bal| bal.remaining)
+            .unwrap_or(-1.0);
+        remaining_b
+            .partial_cmp(&remaining_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    sorted
 }
 
 fn is_monthly_request_limit(body: &str) -> bool {
@@ -1029,30 +982,55 @@ mod tests {
         }
     }
 
+    /// Build a test snapshot entry with a known remaining balance for one
+    /// account.
+    fn snapshot_with_balance(name: &str, remaining: f64) -> (String, KiroCachedAccountStatus) {
+        (name.to_string(), KiroCachedAccountStatus {
+            balance: Some(KiroBalanceView {
+                current_usage: 100.0 - remaining,
+                usage_limit: 100.0,
+                remaining,
+                next_reset_at: None,
+                subscription_title: None,
+            }),
+            cache: KiroCacheView {
+                status: "ready".to_string(),
+                refresh_interval_seconds: 60,
+                last_checked_at: Some(1),
+                last_success_at: Some(1),
+                error_message: None,
+            },
+        })
+    }
+
     #[test]
-    fn ordered_accounts_start_from_current_and_wrap() {
+    fn balance_ordered_sorts_by_remaining_descending() {
         let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
+        let (na, sa) = snapshot_with_balance("alpha", 10.0);
+        let (nb, sb) = snapshot_with_balance("beta", 80.0);
+        let (nc, sc) = snapshot_with_balance("gamma", 40.0);
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [(na, sa), (nb, sb), (nc, sc)].into_iter().collect(),
+            ..Default::default()
+        };
 
-        let ordered = ordered_account_records(&auths, Some("beta"));
-        let names = ordered
-            .iter()
-            .map(|auth| auth.name.as_str())
-            .collect::<Vec<_>>();
-
+        let ordered = balance_ordered_accounts(&auths, &snapshot);
+        let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["beta", "gamma", "alpha"]);
     }
 
     #[test]
-    fn ordered_accounts_fall_back_to_sorted_first_when_current_missing() {
-        let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
+    fn balance_ordered_unknown_accounts_sort_last() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let (na, sa) = snapshot_with_balance("alpha", 50.0);
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [(na, sa)].into_iter().collect(),
+            ..Default::default()
+        };
 
-        let ordered = ordered_account_records(&auths, Some("missing"));
-        let names = ordered
-            .iter()
-            .map(|auth| auth.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(names, vec!["alpha", "beta", "gamma"]);
+        let ordered = balance_ordered_accounts(&auths, &snapshot);
+        let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
     }
 
     #[test]

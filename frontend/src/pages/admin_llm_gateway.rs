@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use gloo_timers::callback::Timeout;
 use js_sys::Date;
 use wasm_bindgen::prelude::*;
-use web_sys::{window, Element, HtmlElement, HtmlInputElement, HtmlSelectElement};
+use web_sys::{window, HtmlElement, HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -44,6 +44,62 @@ const USAGE_PAGE_SIZE: usize = 20;
 const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
 const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
+
+const TAB_OVERVIEW: &str = "overview";
+const TAB_KEYS: &str = "keys";
+const TAB_ACCOUNTS: &str = "accounts";
+const TAB_USAGE: &str = "usage";
+const TAB_REQUESTS: &str = "requests";
+const TAB_SETTINGS: &str = "settings";
+
+/// Render a horizontal tab bar with an optional numeric badge on one tab.
+/// `badge_tab` is `Some((tab_id, count))` to show a pending-count pill.
+fn render_tab_bar(
+    active: &str,
+    tabs: &[(&str, &str)],
+    on_click: &Callback<String>,
+    badge_tab: Option<(&str, usize)>,
+) -> Html {
+    html! {
+        <nav class={classes!(
+            "flex", "items-center", "gap-1.5", "flex-wrap",
+            "rounded-xl", "border", "border-[var(--border)]",
+            "bg-[var(--surface)]", "p-1.5"
+        )} role="tablist">
+            { for tabs.iter().map(|(id, label)| {
+                let is_active = active == *id;
+                let id_owned = id.to_string();
+                let on_click = on_click.clone();
+                let badge_count = badge_tab
+                    .filter(|(bid, count)| *bid == *id && *count > 0)
+                    .map(|(_, count)| count);
+                html! {
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={is_active.to_string()}
+                        class={classes!(
+                            "btn-terminal",
+                            if is_active { "btn-terminal-primary" } else { "" }
+                        )}
+                        onclick={Callback::from(move |_| on_click.emit(id_owned.clone()))}
+                    >
+                        { *label }
+                        if let Some(count) = badge_count {
+                            <span class={classes!(
+                                "ml-1.5", "inline-flex", "items-center", "justify-center",
+                                "min-w-[1.25rem]", "h-5", "rounded-full",
+                                "bg-amber-500", "text-white", "text-[10px]", "font-bold"
+                            )}>
+                                { count }
+                            </span>
+                        }
+                    </button>
+                }
+            }) }
+        </nav>
+    }
+}
 
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
@@ -1254,13 +1310,11 @@ pub fn admin_llm_gateway_page() -> Html {
     let importing = use_state(|| false);
     let account_action_inflight = use_state(HashSet::<String>::new);
     let show_import_form = use_state(|| false);
-    // Section navigation refs
-    let keys_section_ref = use_node_ref();
-    let accounts_section_ref = use_node_ref();
-    let usage_section_ref = use_node_ref();
-    let wishes_section_ref = use_node_ref();
-    let contributions_section_ref = use_node_ref();
-    let sponsors_section_ref = use_node_ref();
+    let active_tab = use_state(|| TAB_OVERVIEW.to_string());
+    let on_tab_click = {
+        let active_tab = active_tab.clone();
+        Callback::from(move |tab: String| active_tab.set(tab))
+    };
 
     // Usage events are fetched independently so paging and key filters do not
     // need to re-fetch the rest of the admin page chrome.
@@ -1914,6 +1968,23 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
+    // Programmatically scroll the usage table left/right by `delta` pixels,
+    // keeping the top mirror scrollbar in sync.
+    let scroll_usage_table_by = {
+        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
+        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
+        Callback::from(move |delta: i32| {
+            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
+                return;
+            };
+            let next_left = (bottom.scroll_left() + delta).max(0);
+            bottom.set_scroll_left(next_left);
+            if let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() {
+                top.set_scroll_left(next_left);
+            }
+        })
+    };
+
     {
         let usage_scroll_top_ref = usage_scroll_top_ref.clone();
         let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
@@ -2410,8 +2481,12 @@ pub fn admin_llm_gateway_page() -> Html {
         .iter()
         .map(|item| item.usage_credit_missing_events)
         .sum();
+    // Derive usage percentage from quota and remaining (billable-token basis).
     let usage_percent = if total_quota > 0 {
-        (total_used as f64 / total_quota as f64 * 100.0).round() as u64
+        let used = total_quota as f64 - (total_remaining.max(0) as f64);
+        (used / total_quota as f64 * 100.0)
+            .clamp(0.0, 100.0)
+            .round() as u64
     } else {
         0
     };
@@ -2429,6 +2504,207 @@ pub fn admin_llm_gateway_page() -> Html {
         .count();
     let total_pending =
         pending_token_requests + pending_contribution_requests + pending_sponsor_requests;
+    // Build the full-screen modal for a selected usage event (request detail,
+    // headers, last message, copy buttons). Rendered outside the tab flow so
+    // it overlays the entire viewport.
+    let usage_detail_modal = (*selected_usage_event).clone().map(|event| {
+        let request_detail_summary = format!(
+            "{} {} · {} / {} · key {} · account {} · status {} · model {} · route {} · latency {}",
+            event.request_method,
+            event.request_url,
+            event.client_ip,
+            event.ip_region,
+            event.key_name,
+            event.account_name
+                .clone()
+                .unwrap_or_else(|| "legacy auth".to_string()),
+            event.status_code,
+            event.model.clone().unwrap_or_else(|| "-".to_string()),
+            event.endpoint,
+            format_latency_ms(event.latency_ms),
+        );
+        let last_message_for_copy = event
+            .last_message_content
+            .clone()
+            .unwrap_or_else(|| "-".to_string());
+        let headers_json_for_copy = pretty_headers_json(&event.request_headers_json);
+        html! {
+            <div
+                class={classes!(
+                    "fixed",
+                    "inset-0",
+                    "z-[90]",
+                    "flex",
+                    "items-start",
+                    "sm:items-center",
+                    "justify-center",
+                    "overflow-y-auto",
+                    "bg-slate-950/58",
+                    "backdrop-blur-sm",
+                    "px-4",
+                    "py-8"
+                )}
+                onclick={{
+                    let selected_usage_event = selected_usage_event.clone();
+                    Callback::from(move |_| selected_usage_event.set(None))
+                }}
+            >
+                <div
+                    class={classes!(
+                        "w-full",
+                        "mx-auto",
+                        "flex",
+                        "max-h-[92vh]",
+                        "max-w-4xl",
+                        "flex-col",
+                        "overflow-y-auto",
+                        "rounded-xl",
+                        "border",
+                        "border-[var(--border)]",
+                        "bg-[var(--surface)]",
+                        "p-5",
+                        "shadow-[0_16px_48px_rgba(0,0,0,0.2)]"
+                    )}
+                    onclick={Callback::from(|event: MouseEvent| event.stop_propagation())}
+                >
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap", "shrink-0")}>
+                        <div class={classes!("max-w-3xl")}>
+                            <p class={classes!("m-0", "text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Request Detail" }</p>
+                            <h2 class={classes!("mt-3", "text-2xl", "font-black", "tracking-[-0.03em]")}>{ event.key_name.clone() }</h2>
+                            <p class={classes!("mt-2", "m-0", "break-all", "text-sm", "leading-7", "text-[var(--muted)]")}>
+                                { format!("{} {} · {} / {}", event.request_method, event.request_url, event.client_ip, event.ip_region) }
+                            </p>
+                        </div>
+                        <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                            <button
+                                class={classes!("btn-terminal")}
+                                onclick={{
+                                    let on_copy = on_copy.clone();
+                                    let request_detail_summary = request_detail_summary.clone();
+                                    Callback::from(move |_| on_copy.emit(("Request Summary".to_string(), request_detail_summary.clone())))
+                                }}
+                            >
+                                { "复制摘要" }
+                            </button>
+                            <button
+                                class={classes!("btn-terminal")}
+                                onclick={{
+                                    let on_copy = on_copy.clone();
+                                    let headers_json_for_copy = headers_json_for_copy.clone();
+                                    Callback::from(move |_| on_copy.emit(("Headers".to_string(), headers_json_for_copy.clone())))
+                                }}
+                            >
+                                { "复制 Headers" }
+                            </button>
+                            <button
+                                class={classes!("btn-terminal", "btn-terminal-primary")}
+                                onclick={{
+                                    let selected_usage_event = selected_usage_event.clone();
+                                    Callback::from(move |_| selected_usage_event.set(None))
+                                }}
+                            >
+                                { "关闭" }
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-6")}>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key ID" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.key_id.clone() }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Account" }</div>
+                            <div class={classes!("mt-1", "text-sm")}>{ event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string()) }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Status / Model" }</div>
+                            <div class={classes!("mt-1", "text-sm")}>{ format!("{} · {}", event.status_code, event.model.clone().unwrap_or_else(|| "-".to_string())) }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Route" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.endpoint.clone() }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Latency" }</div>
+                            <div class={classes!("mt-1", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Credit" }</div>
+                            <div class={classes!("mt-1", "text-sm", "font-semibold")}>
+                                { event.credit_usage.map(format_credit4).unwrap_or_else(|| "-".to_string()) }
+                            </div>
+                            if event.credit_usage_missing {
+                                <div class={classes!("mt-1", "text-xs", "text-amber-700", "dark:text-amber-200")}>{ "missing" }</div>
+                            }
+                        </div>
+                    </div>
+
+                    <div class={classes!("mt-4")}>
+                        <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Last Message" }</div>
+                            <button
+                                class={classes!("btn-terminal")}
+                                onclick={{
+                                    let on_copy = on_copy.clone();
+                                    let last_message_for_copy = last_message_for_copy.clone();
+                                    Callback::from(move |_| on_copy.emit(("Last Message".to_string(), last_message_for_copy.clone())))
+                                }}
+                            >
+                                { "复制 Last Message" }
+                            </button>
+                        </div>
+                        <pre class={classes!(
+                            "max-h-[40vh]",
+                            "overflow-x-auto",
+                            "overflow-y-auto",
+                            "rounded-lg",
+                            "bg-slate-950",
+                            "p-3",
+                            "text-xs",
+                            "leading-6",
+                            "text-amber-100",
+                            "whitespace-pre-wrap",
+                            "break-words"
+                        )}>
+                            { last_message_for_copy }
+                        </pre>
+                    </div>
+
+                    <div class={classes!("mt-4")}>
+                        <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Headers" }</div>
+                            <button
+                                class={classes!("btn-terminal")}
+                                onclick={{
+                                    let on_copy = on_copy.clone();
+                                    let headers_json_for_copy = headers_json_for_copy.clone();
+                                    Callback::from(move |_| on_copy.emit(("Headers".to_string(), headers_json_for_copy.clone())))
+                                }}
+                            >
+                                { "复制 Headers" }
+                            </button>
+                        </div>
+                        <pre class={classes!(
+                            "max-h-[42vh]",
+                            "overflow-x-auto",
+                            "overflow-y-auto",
+                            "rounded-lg",
+                            "bg-slate-950",
+                            "p-3",
+                            "text-xs",
+                            "leading-6",
+                            "text-emerald-200",
+                            "whitespace-pre-wrap",
+                            "break-words"
+                        )}>
+                            { headers_json_for_copy }
+                        </pre>
+                    </div>
+                </div>
+            </div>
+        }
+    });
 
     html! {
         <main class={classes!(
@@ -2462,7 +2738,36 @@ pub fn admin_llm_gateway_page() -> Html {
                             { err }
                         </div>
                     }
+                </section>
 
+                // ── Tab Bar (always visible) ──
+                { render_tab_bar(&active_tab, &[
+                    (TAB_OVERVIEW, "Overview"),
+                    (TAB_KEYS, "Keys"),
+                    (TAB_ACCOUNTS, "Accounts"),
+                    (TAB_USAGE, "Usage"),
+                    (TAB_REQUESTS, "Requests"),
+                    (TAB_SETTINGS, "Settings"),
+                ], &on_tab_click, Some((TAB_REQUESTS, total_pending))) }
+
+                // ── Overview Tab ──
+                if *active_tab == TAB_OVERVIEW {
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Dashboard" }</h2>
+                        <button
+                            class={classes!("btn-terminal")}
+                            title="刷新 Dashboard"
+                            aria-label="刷新 Dashboard"
+                            onclick={{
+                                let reload = reload.clone();
+                                Callback::from(move |_| reload.emit(()))
+                            }}
+                            disabled={*loading}
+                        >
+                            <i class={classes!("fas", if *loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                        </button>
+                    </div>
                     <div class={classes!("mt-4", "grid", "gap-3", "grid-cols-2", "xl:grid-cols-4")}>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key 总数" }</div>
@@ -2485,8 +2790,26 @@ pub fn admin_llm_gateway_page() -> Html {
                             <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format_number_u64(total_used) }</div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "使用率" }</div>
-                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format!("{}%", usage_percent) }</div>
+                            <div class={classes!("flex", "items-center", "justify-between")}>
+                                <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "使用率" }</div>
+                                <div class={classes!("font-mono", "text-sm", "font-bold", "text-[var(--text)]")}>{ format!("{}%", usage_percent) }</div>
+                            </div>
+                            <div class={classes!("mt-2", "h-2", "w-full", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
+                                <div
+                                    class={classes!(
+                                        "h-full", "rounded-full",
+                                        "transition-all", "duration-700", "ease-out",
+                                        if usage_percent >= 90 { "bg-red-500" }
+                                        else if usage_percent >= 70 { "bg-amber-500" }
+                                        else { "bg-emerald-500" }
+                                    )}
+                                    style={format!("width: {}%", usage_percent)}
+                                />
+                            </div>
+                            <div class={classes!("mt-1.5", "flex", "justify-between", "font-mono", "text-[10px]", "text-[var(--muted)]")}>
+                                <span>{ format!("剩余 {}", format_number_i64(total_remaining)) }</span>
+                                <span>{ format!("总计 {}", format_number_u64(total_quota)) }</span>
+                            </div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Credit 已记录" }</div>
@@ -2505,35 +2828,10 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
                 </section>
+                } // end TAB_OVERVIEW
 
-                // Quick navigation bar
-                <section class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                    <button type="button" class={classes!("btn-terminal")}
-                        onclick={{ let r = keys_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
-                        <i class="fas fa-key"></i>{ " Keys" }
-                    </button>
-                    <button type="button" class={classes!("btn-terminal")}
-                        onclick={{ let r = accounts_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
-                        <i class="fas fa-users"></i>{ " Accounts" }
-                    </button>
-                    <button type="button" class={classes!("btn-terminal")}
-                        onclick={{ let r = usage_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
-                        <i class="fas fa-chart-bar"></i>{ " Usage" }
-                    </button>
-                    <button type="button" class={classes!("btn-terminal")}
-                        onclick={{ let r = wishes_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
-                        <i class="fas fa-wand-magic-sparkles"></i>{ " Wishes" }
-                    </button>
-                    <button type="button" class={classes!("btn-terminal")}
-                        onclick={{ let r = contributions_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
-                        <i class="fas fa-user-plus"></i>{ " Contributions" }
-                    </button>
-                    <button type="button" class={classes!("btn-terminal")}
-                        onclick={{ let r = sponsors_section_ref.clone(); Callback::from(move |_| { if let Some(el) = r.cast::<Element>() { el.scroll_into_view(); } }) }}>
-                        <i class="fas fa-mug-hot"></i>{ " Sponsors" }
-                    </button>
-                </section>
-
+                // ── Settings Tab ──
+                if *active_tab == TAB_SETTINGS {
                 <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
                     <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Runtime Config" }</h2>
@@ -2900,8 +3198,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </section>
                 </section>
+                } // end TAB_SETTINGS
 
-                <section ref={keys_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                // ── Keys Tab ──
+                if *active_tab == TAB_KEYS {
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                         <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Key Inventory" }</h2>
                             <button class={classes!("btn-terminal")} onclick={{
@@ -2932,9 +3233,12 @@ pub fn admin_llm_gateway_page() -> Html {
                             }
                         </div>
                 </section>
+                } // end TAB_KEYS
 
+                // ── Accounts Tab ──
+                if *active_tab == TAB_ACCOUNTS {
                 // === Codex Accounts ===
-                <section ref={accounts_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Codex Accounts" }</h2>
                     <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
                         { format!("已导入 {} 个账号", accounts.len()) }
@@ -3136,8 +3440,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     }
                 </section>
+                } // end TAB_ACCOUNTS
 
-                <section ref={usage_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                // ── Usage Tab ──
+                if *active_tab == TAB_USAGE {
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Usage Events" }</h2>
                         <button
@@ -3188,23 +3495,55 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     }
 
+                    <div class={classes!("mt-3", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                            { "列较多，可用按钮或下方滚动条随时左右查看。" }
+                        </div>
+                        <div class={classes!("flex", "items-center", "gap-2")}>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal")}
+                                title="向左滚动"
+                                aria-label="向左滚动"
+                                onclick={{
+                                    let scroll_usage_table_by = scroll_usage_table_by.clone();
+                                    Callback::from(move |_| scroll_usage_table_by.emit(-320))
+                                }}
+                            >
+                                <i class={classes!("fas", "fa-arrow-left")} />
+                            </button>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal")}
+                                title="向右滚动"
+                                aria-label="向右滚动"
+                                onclick={{
+                                    let scroll_usage_table_by = scroll_usage_table_by.clone();
+                                    Callback::from(move |_| scroll_usage_table_by.emit(320))
+                                }}
+                            >
+                                <i class={classes!("fas", "fa-arrow-right")} />
+                            </button>
+                        </div>
+                    </div>
+
                     <div
                         ref={usage_scroll_top_ref}
-                        class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-1", "py-1")}
+                        class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-2", "py-2")}
                         onscroll={on_usage_scroll_top}
                     >
                         <div
-                            class={classes!("h-[1px]")}
+                            class={classes!("h-3", "rounded-full", "bg-[linear-gradient(90deg,rgba(37,99,235,0.18),rgba(16,185,129,0.22))]")}
                             style={format!("width: {}px;", (*usage_scroll_width).max(1))}
                         />
                     </div>
 
                     <div
                         ref={usage_scroll_bottom_ref}
-                        class={classes!("mt-4", "overflow-x-auto")}
+                        class={classes!("mt-4", "overflow-x-auto", "rounded-xl", "border", "border-[var(--border)]")}
                         onscroll={on_usage_scroll_bottom}
                     >
-                        <table class={classes!("w-full", "text-sm")}>
+                        <table class={classes!("min-w-[110rem]", "w-full", "text-sm")}>
                             <thead>
                                 <tr class={classes!("text-left", "text-[var(--muted)]")}>
                                     <th class={classes!("py-2", "pr-3")}>{ "时间" }</th>
@@ -3378,8 +3717,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         <Pagination current_page={*usage_page} total_pages={usage_total_pages} on_page_change={on_usage_page_change} />
                     </div>
                 </section>
+                } // end TAB_USAGE
 
-                <section ref={wishes_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                // ── Requests Tab ──
+                if *active_tab == TAB_REQUESTS {
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Token Wishes" }</h2>
@@ -3529,7 +3871,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
                 </section>
 
-                <section ref={contributions_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Account Contributions" }</h2>
@@ -3702,7 +4044,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
                 </section>
 
-                <section ref={sponsors_section_ref.clone()} class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Sponsors" }</h2>
@@ -3853,150 +4195,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         />
                     </div>
                 </section>
+                } // end TAB_REQUESTS
 
             </div>
 
-            if let Some(event) = (*selected_usage_event).clone() {
-                <div
-                    class={classes!(
-                        "fixed",
-                        "inset-0",
-                        "z-[90]",
-                        "flex",
-                        "items-center",
-                        "justify-center",
-                        "overflow-y-auto",
-                        "bg-slate-950/58",
-                        "backdrop-blur-sm",
-                        "px-4",
-                        "py-8"
-                    )}
-                    onclick={{
-                        let selected_usage_event = selected_usage_event.clone();
-                        Callback::from(move |_| selected_usage_event.set(None))
-                    }}
-                >
-                    <div
-                        class={classes!(
-                            "w-full",
-                            "mx-auto",
-                            "flex",
-                            "h-[min(90vh,56rem)]",
-                            "min-h-0",
-                            "max-w-4xl",
-                            "flex-col",
-                            "overflow-hidden",
-                            "rounded-xl",
-                            "border",
-                            "border-[var(--border)]",
-                            "bg-[var(--surface)]",
-                            "p-5",
-                            "shadow-[0_16px_48px_rgba(0,0,0,0.2)]"
-                        )}
-                        onclick={Callback::from(|event: MouseEvent| event.stop_propagation())}
-                    >
-                        <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap", "shrink-0")}>
-                            <div class={classes!("max-w-3xl")}>
-                                <p class={classes!("m-0", "text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Request Detail" }</p>
-                                <h2 class={classes!("mt-3", "text-2xl", "font-black", "tracking-[-0.03em]")}>{ event.key_name.clone() }</h2>
-                                <p class={classes!("mt-2", "m-0", "break-all", "text-sm", "leading-7", "text-[var(--muted)]")}>
-                                    { format!("{} {} · {} / {}", event.request_method, event.request_url, event.client_ip, event.ip_region) }
-                                </p>
-                            </div>
-                            <div class={classes!("flex", "gap-2")}>
-                                <button
-                                    class={classes!("btn-terminal")}
-                                    onclick={{
-                                        let on_copy = on_copy.clone();
-                                        let headers_json = event.request_headers_json.clone();
-                                        Callback::from(move |_| on_copy.emit(("Headers".to_string(), headers_json.clone())))
-                                    }}
-                                >
-                                    { "复制 JSON" }
-                                </button>
-                                <button
-                                    class={classes!("btn-terminal", "btn-terminal-primary")}
-                                    onclick={{
-                                        let selected_usage_event = selected_usage_event.clone();
-                                        Callback::from(move |_| selected_usage_event.set(None))
-                                    }}
-                                >
-                                    { "关闭" }
-                                </button>
-                            </div>
-                        </div>
-
-                        <div class={classes!("mt-4", "grid", "shrink-0", "gap-3", "lg:grid-cols-6")}>
-                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key ID" }</div>
-                                <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.key_id.clone() }</div>
-                            </div>
-                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Account" }</div>
-                                <div class={classes!("mt-1", "text-sm")}>{ event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string()) }</div>
-                            </div>
-                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Status / Model" }</div>
-                                <div class={classes!("mt-1", "text-sm")}>{ format!("{} · {}", event.status_code, event.model.clone().unwrap_or_else(|| "-".to_string())) }</div>
-                            </div>
-                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Route" }</div>
-                                <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.endpoint.clone() }</div>
-                            </div>
-                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Latency" }</div>
-                                <div class={classes!("mt-1", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
-                            </div>
-                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
-                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Credit" }</div>
-                                <div class={classes!("mt-1", "text-sm", "font-semibold")}>
-                                    { event.credit_usage.map(format_credit4).unwrap_or_else(|| "-".to_string()) }
-                                </div>
-                                if event.credit_usage_missing {
-                                    <div class={classes!("mt-1", "text-xs", "text-amber-700", "dark:text-amber-200")}>{ "missing" }</div>
-                                }
-                            </div>
-                        </div>
-
-                        <div class={classes!("mt-4", "shrink-0")}>
-                            <div class={classes!("mb-2", "text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Last Message" }</div>
-                            <pre class={classes!(
-                                "max-h-40",
-                                "overflow-x-auto",
-                                "overflow-y-auto",
-                                "rounded-lg",
-                                "bg-slate-950",
-                                "p-3",
-                                "text-xs",
-                                "leading-6",
-                                "text-amber-100",
-                                "whitespace-pre-wrap",
-                                "break-words"
-                            )}>
-                                { event.last_message_content.clone().unwrap_or_else(|| "-".to_string()) }
-                            </pre>
-                        </div>
-
-                        <div class={classes!("mt-4", "min-h-0", "flex-1", "overflow-hidden")}>
-                            <pre class={classes!(
-                                "h-full",
-                                "overflow-x-auto",
-                                "overflow-y-auto",
-                                "rounded-lg",
-                                "bg-slate-950",
-                                "p-3",
-                                "text-xs",
-                                "leading-6",
-                                "text-emerald-200",
-                                "whitespace-pre-wrap",
-                                "break-words"
-                            )}>
-                                { pretty_headers_json(&event.request_headers_json) }
-                            </pre>
-                        </div>
-                    </div>
-                </div>
-            }
+            { usage_detail_modal.unwrap_or_default() }
 
             if let Some((message, is_error)) = (*toast).clone() {
                 <div class={classes!(

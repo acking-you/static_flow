@@ -9,25 +9,32 @@ mod schema;
 mod types;
 
 use anyhow::{Context, Result};
-use arrow_array::{RecordBatchIterator, RecordBatchReader};
+use arrow_array::{
+    Array, Float64Array, Int64Array, RecordBatchIterator, RecordBatchReader, StringArray,
+    TimestampMillisecondArray, UInt64Array,
+};
 use futures::TryStreamExt;
+use lance::Dataset;
 use lancedb::{
     connect,
+    database::CreateTableMode,
     query::{ExecutableQuery, QueryBase, Select},
+    table::{OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
 
 pub use self::types::{
     now_ms, LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-    LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
-    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
-    NewLlmGatewayTokenRequestInput, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-    DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
-    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
-    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
-    LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
+    LlmGatewayKeyUsageRollupRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
+    LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
+    LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
+    NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
+    DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+    DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_KEYS_TABLE,
+    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
+    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
+    LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
@@ -53,6 +60,7 @@ use self::{
         proxy_config_columns, sponsor_request_columns, token_request_columns, usage_event_columns,
     },
 };
+use crate::optimize::compact_table_with_fallback;
 
 /// Owns the LanceDB-backed storage layer for all LLM gateway admin data.
 pub struct LlmGatewayStore {
@@ -80,6 +88,8 @@ impl LlmGatewayStore {
         store.account_contribution_requests_table().await?;
         store.sponsor_requests_table().await?;
         store.ensure_default_runtime_config().await?;
+        store.canonicalize_keys_table_if_needed().await?;
+        store.repair_keys_table_for_safe_reads().await?;
         tracing::info!("LLM gateway store ready");
         Ok(store)
     }
@@ -126,6 +136,182 @@ impl LlmGatewayStore {
             self.upsert_runtime_config(&LlmGatewayRuntimeConfigRecord::default())
                 .await?;
         }
+        Ok(())
+    }
+
+    /// Rebuild scalar indices on the keys table after any write operation.
+    /// Keeps filtered queries (by id, status, etc.) fast on small tables.
+    async fn optimize_key_table_indices(&self) -> Result<()> {
+        let table = self.keys_table().await?;
+        table
+            .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+            .await
+            .context("failed to optimize llm gateway key-table indices")?;
+        Ok(())
+    }
+
+    /// Detect and fix legacy keys tables that have nullable columns where the
+    /// canonical schema requires non-null (e.g. `provider_type`,
+    /// `protocol_family`, `usage_credit_total`,
+    /// `usage_credit_missing_events`).
+    ///
+    /// When any of these columns are nullable in the Arrow schema or contain
+    /// actual NULL values, the entire table is rewritten with the canonical
+    /// non-null schema. This is a one-time migration that runs at startup.
+    async fn canonicalize_keys_table_if_needed(&self) -> Result<()> {
+        let table = self.keys_table().await?;
+        let schema = table.schema().await?;
+        let canonical_fields = [
+            "provider_type",
+            "protocol_family",
+            "usage_credit_total",
+            "usage_credit_missing_events",
+        ];
+        let nullable_fields = canonical_fields
+            .iter()
+            .filter_map(|name| {
+                schema
+                    .field_with_name(name)
+                    .ok()
+                    .and_then(|field| field.is_nullable().then_some((*name).to_string()))
+            })
+            .collect::<Vec<_>>();
+        let null_fields = self
+            .keys_table_null_fields(&table, &canonical_fields)
+            .await?;
+        if nullable_fields.is_empty() && null_fields.is_empty() {
+            return Ok(());
+        }
+        let mut reasons = Vec::new();
+        if !nullable_fields.is_empty() {
+            reasons.push(format!("nullable_schema_fields={}", nullable_fields.join(",")));
+        }
+        if !null_fields.is_empty() {
+            reasons.push(format!("null_rows={}", null_fields.join(",")));
+        }
+        let keys = self
+            .list_keys()
+            .await
+            .context("failed to read llm gateway keys before canonical rewrite")?;
+        let batch = build_keys_batch(&keys)?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        tracing::warn!(
+            row_count = keys.len(),
+            reasons = %reasons.join(";"),
+            "rewriting llm gateway keys table to canonical non-null schema"
+        );
+        self.db
+            .create_table(
+                LLM_GATEWAY_KEYS_TABLE,
+                Box::new(batches) as Box<dyn RecordBatchReader + Send>,
+            )
+            .mode(CreateTableMode::Overwrite)
+            .storage_option("new_table_enable_stable_row_ids", "true")
+            .storage_option("new_table_enable_v2_manifest_paths", "true")
+            .execute()
+            .await
+            .context("failed to overwrite llm gateway keys table with canonical schema")?;
+        ensure_keys_table(&self.db)
+            .await
+            .context("failed to reopen canonicalized llm gateway keys table")?;
+        tracing::info!(
+            row_count = keys.len(),
+            "completed llm gateway keys table canonical rewrite"
+        );
+        Ok(())
+    }
+
+    /// Scan the given columns and return the names of any that contain at
+    /// least one NULL value in the current data.
+    async fn keys_table_null_fields(&self, table: &Table, columns: &[&str]) -> Result<Vec<String>> {
+        let batches = table
+            .query()
+            .select(Select::columns(columns))
+            .execute()
+            .await
+            .context("failed to scan llm gateway key-table canonical fields")?;
+        let batch_list = batches
+            .try_collect::<Vec<_>>()
+            .await
+            .context("failed to collect llm gateway key-table canonical scan")?;
+        let mut null_fields = Vec::new();
+        for &column in columns {
+            let has_nulls = batch_list.iter().any(|batch| {
+                batch
+                    .column_by_name(column)
+                    .is_some_and(|array| array.null_count() > 0)
+            });
+            if has_nulls {
+                null_fields.push(column.to_string());
+            }
+        }
+        Ok(null_fields)
+    }
+
+    /// Ensure the keys table is in a healthy state for filtered reads.
+    ///
+    /// Checks fragment count and index coverage; if any rows are unindexed,
+    /// compacts multi-fragment tables and rebuilds indices. Also repairs
+    /// `frag_reuse` metadata that can go stale after delete+add cycles.
+    pub async fn repair_keys_table_for_safe_reads(&self) -> Result<()> {
+        let table = self.keys_table().await?;
+        let fragment_count = table
+            .dataset()
+            .context("llm gateway key-table maintenance requires a native Lance table")?
+            .get()
+            .await
+            .context("failed to open key-table dataset for maintenance")?
+            .fragments()
+            .len();
+        let indices = table
+            .list_indices()
+            .await
+            .context("failed to list llm gateway key-table indices")?;
+        let mut max_unindexed_rows = 0usize;
+        for index in &indices {
+            if let Some(stats) = table
+                .index_stats(&index.name)
+                .await
+                .with_context(|| format!("failed to inspect key-table index `{}`", index.name))?
+            {
+                max_unindexed_rows = max_unindexed_rows.max(stats.num_unindexed_rows);
+            }
+        }
+        if max_unindexed_rows == 0 && fragment_count <= 1 {
+            tracing::debug!(
+                fragment_count,
+                "llm gateway key table already has full index coverage"
+            );
+            return Ok(());
+        }
+        table
+            .repair_missing_frag_reuse_index()
+            .await
+            .context("failed to repair llm gateway key-table frag_reuse metadata")?;
+        if max_unindexed_rows > 0 {
+            if fragment_count > 1 {
+                let action = compact_table_with_fallback(&table)
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("failed to compact llm gateway key table for read safety")?;
+                tracing::info!(
+                    fragment_count,
+                    max_unindexed_rows,
+                    compact_action = action.as_str(),
+                    "compacted llm gateway key table before rebuilding indices"
+                );
+            }
+            table
+                .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+                .await
+                .context("failed to rebuild llm gateway key-table indices for read safety")?;
+        }
+        tracing::info!(
+            fragment_count,
+            max_unindexed_rows,
+            "verified llm gateway key table read-path safety"
+        );
         Ok(())
     }
 
@@ -325,6 +511,7 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway key")?;
+        self.optimize_key_table_indices().await?;
         Ok(())
     }
 
@@ -336,15 +523,8 @@ impl LlmGatewayStore {
     /// guaranteed by the caller.
     /// Insert a brand-new gateway API key.
     pub async fn create_key(&self, record: &LlmGatewayKeyRecord) -> Result<()> {
-        let table = self.keys_table().await?;
-        let batch = build_keys_batch(std::slice::from_ref(record))?;
-        let schema = batch.schema();
-        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-        table
-            .add(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
-            .execute()
-            .await
-            .context("failed to create llm gateway key")?;
+        self.create_key_raw(record).await?;
+        self.optimize_key_table_indices().await?;
         Ok(())
     }
 
@@ -359,11 +539,36 @@ impl LlmGatewayStore {
     /// This is used by admin edit flows that must be able to clear nullable
     /// fields back to `NULL` instead of relying on merge semantics.
     pub async fn replace_key(&self, record: &LlmGatewayKeyRecord) -> Result<()> {
-        self.delete_key(&record.id).await?;
-        self.create_key(record).await
+        self.delete_key_raw(&record.id).await?;
+        self.create_key_raw(record).await?;
+        self.optimize_key_table_indices().await
     }
 
+    /// Delete a gateway key by id and rebuild indices.
     pub async fn delete_key(&self, key_id: &str) -> Result<()> {
+        self.delete_key_raw(key_id).await?;
+        self.optimize_key_table_indices().await?;
+        Ok(())
+    }
+
+    /// Low-level append of a single key row without index optimization.
+    /// Callers are responsible for calling `optimize_key_table_indices`
+    /// after all writes in a logical operation are complete.
+    async fn create_key_raw(&self, record: &LlmGatewayKeyRecord) -> Result<()> {
+        let table = self.keys_table().await?;
+        let batch = build_keys_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        table
+            .add(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .execute()
+            .await
+            .context("failed to create llm gateway key")?;
+        Ok(())
+    }
+
+    /// Low-level delete of a key row without index optimization.
+    async fn delete_key_raw(&self, key_id: &str) -> Result<()> {
         let table = self.keys_table().await?;
         let escaped = escape_literal(key_id);
         table
@@ -525,6 +730,9 @@ impl LlmGatewayStore {
         Ok(rows)
     }
 
+    /// Append a single usage event row to the events table (append-only).
+    /// Does not update the key record; callers maintain usage totals
+    /// via in-memory rollups.
     pub async fn append_usage_event(&self, record: &LlmGatewayUsageEventRecord) -> Result<()> {
         let table = self.usage_events_table().await?;
         let batch = build_usage_events_batch(std::slice::from_ref(record))?;
@@ -630,36 +838,17 @@ impl LlmGatewayStore {
         batches_to_usage_events(&batch_list)
     }
 
-    pub async fn apply_usage_event(
-        &self,
-        key: &LlmGatewayKeyRecord,
-        usage_event: &LlmGatewayUsageEventRecord,
-    ) -> Result<LlmGatewayKeyRecord> {
-        self.append_usage_event(usage_event).await?;
-        let mut updated = key.clone();
-        updated.usage_input_uncached_tokens = updated
-            .usage_input_uncached_tokens
-            .saturating_add(usage_event.input_uncached_tokens);
-        updated.usage_input_cached_tokens = updated
-            .usage_input_cached_tokens
-            .saturating_add(usage_event.input_cached_tokens);
-        updated.usage_output_tokens = updated
-            .usage_output_tokens
-            .saturating_add(usage_event.output_tokens);
-        updated.usage_billable_tokens = updated
-            .usage_billable_tokens
-            .saturating_add(usage_event.billable_tokens);
-        if usage_event.provider_type == LLM_GATEWAY_PROVIDER_KIRO {
-            updated.usage_credit_total += usage_event.credit_usage.unwrap_or(0.0);
-            if usage_event.credit_usage_missing {
-                updated.usage_credit_missing_events =
-                    updated.usage_credit_missing_events.saturating_add(1);
-            }
-        }
-        updated.last_used_at = Some(usage_event.created_at);
-        updated.updated_at = usage_event.created_at;
-        self.upsert_key(&updated).await?;
-        Ok(updated)
+    /// Aggregate all usage events into per-key rollup totals via a SQL
+    /// GROUP BY over the underlying Lance dataset.
+    pub async fn aggregate_usage_rollups(&self) -> Result<Vec<LlmGatewayKeyUsageRollupRecord>> {
+        let table = self.usage_events_table().await?;
+        let dataset = table
+            .dataset()
+            .context("llm gateway usage-event aggregation requires a native Lance table")?
+            .get()
+            .await
+            .context("failed to open usage-event dataset for aggregation")?;
+        aggregate_usage_rollups_from_dataset(&dataset).await
     }
 
     pub async fn upsert_token_request(&self, record: &LlmGatewayTokenRequestRecord) -> Result<()> {
@@ -1060,6 +1249,111 @@ impl LlmGatewayStore {
     }
 }
 
+/// Run a SQL `GROUP BY key_id` aggregation over the raw usage-event dataset
+/// and return per-key rollup totals. Uses Lance's built-in SQL engine so the
+/// aggregation happens inside the storage layer without materializing all rows.
+async fn aggregate_usage_rollups_from_dataset(
+    dataset: &Dataset,
+) -> Result<Vec<LlmGatewayKeyUsageRollupRecord>> {
+    let sql = r#"
+        SELECT
+            key_id,
+            CAST(COALESCE(SUM(input_uncached_tokens), 0) AS BIGINT) AS input_uncached_tokens,
+            CAST(COALESCE(SUM(input_cached_tokens), 0) AS BIGINT) AS input_cached_tokens,
+            CAST(COALESCE(SUM(output_tokens), 0) AS BIGINT) AS output_tokens,
+            CAST(COALESCE(SUM(billable_tokens), 0) AS BIGINT) AS billable_tokens,
+            CAST(COALESCE(SUM(credit_usage), 0.0) AS DOUBLE) AS credit_total,
+            CAST(
+                COALESCE(
+                    SUM(CASE WHEN credit_usage_missing THEN 1 ELSE 0 END),
+                    0
+                ) AS BIGINT
+            ) AS credit_missing_events,
+            MAX(created_at) AS last_used_at
+        FROM dataset
+        GROUP BY key_id
+    "#;
+    let batches = dataset
+        .sql(sql)
+        .table_name("dataset")
+        .build()
+        .await
+        .context("failed to build usage rollup aggregate query")?
+        .into_batch_records()
+        .await
+        .context("failed to execute usage rollup aggregate query")?;
+
+    let mut rows = Vec::<LlmGatewayKeyUsageRollupRecord>::new();
+    for batch in batches {
+        let key_ids = batch
+            .column_by_name("key_id")
+            .context("aggregate result missing key_id")?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("aggregate key_id column was not Utf8")?;
+        let input_uncached_tokens = batch
+            .column_by_name("input_uncached_tokens")
+            .context("aggregate result missing input_uncached_tokens")?;
+        let input_cached_tokens = batch
+            .column_by_name("input_cached_tokens")
+            .context("aggregate result missing input_cached_tokens")?;
+        let output_tokens = batch
+            .column_by_name("output_tokens")
+            .context("aggregate result missing output_tokens")?;
+        let billable_tokens = batch
+            .column_by_name("billable_tokens")
+            .context("aggregate result missing billable_tokens")?;
+        let credit_total = batch
+            .column_by_name("credit_total")
+            .context("aggregate result missing credit_total")?
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .context("aggregate credit_total column was not Float64")?;
+        let credit_missing_events = batch
+            .column_by_name("credit_missing_events")
+            .context("aggregate result missing credit_missing_events")?;
+        let last_used_at = batch
+            .column_by_name("last_used_at")
+            .context("aggregate result missing last_used_at")?
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .context("aggregate last_used_at column was not Timestamp(Millisecond)")?;
+
+        for idx in 0..batch.num_rows() {
+            rows.push(LlmGatewayKeyUsageRollupRecord {
+                key_id: key_ids.value(idx).to_string(),
+                input_uncached_tokens: array_value_as_u64(input_uncached_tokens, idx)
+                    .context("failed to decode aggregate input_uncached_tokens")?,
+                input_cached_tokens: array_value_as_u64(input_cached_tokens, idx)
+                    .context("failed to decode aggregate input_cached_tokens")?,
+                output_tokens: array_value_as_u64(output_tokens, idx)
+                    .context("failed to decode aggregate output_tokens")?,
+                billable_tokens: array_value_as_u64(billable_tokens, idx)
+                    .context("failed to decode aggregate billable_tokens")?,
+                credit_total: credit_total.value(idx),
+                credit_missing_events: array_value_as_u64(credit_missing_events, idx)
+                    .context("failed to decode aggregate credit_missing_events")?,
+                last_used_at: (!last_used_at.is_null(idx)).then(|| last_used_at.value(idx)),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Extract a `u64` from an Arrow array at `idx`, accepting both `UInt64` and
+/// non-negative `Int64` (Lance SQL CAST may produce either).
+fn array_value_as_u64(array: &dyn Array, idx: usize) -> Result<u64> {
+    if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+        return Ok(values.value(idx));
+    }
+    if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+        return u64::try_from(values.value(idx)).context(
+            "aggregate produced a negative Int64 where a non-negative value was expected",
+        );
+    }
+    anyhow::bail!("aggregate column had unsupported integer type")
+}
+
 /// Joins an iterator of optional SQL filter clauses with ` AND `.
 ///
 /// `None` and empty/whitespace-only entries are silently dropped.
@@ -1083,7 +1377,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, sync::Arc};
+
+    use arrow_array::{
+        builder::{
+            BooleanBuilder, Float64Builder, StringBuilder, TimestampMillisecondBuilder,
+            UInt64Builder,
+        },
+        RecordBatch,
+    };
+    use arrow_schema::{DataType, Field, Schema};
+    use lancedb::connect;
 
     use super::*;
 
@@ -1222,12 +1526,20 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             created_at: now,
         };
-        let updated = store
-            .apply_usage_event(&key, &event)
+        store
+            .append_usage_event(&event)
             .await
-            .expect("apply usage event");
-        assert_eq!(updated.usage_credit_total, 0.125);
-        assert_eq!(updated.usage_credit_missing_events, 0);
+            .expect("append usage event");
+        let rollups = store
+            .aggregate_usage_rollups()
+            .await
+            .expect("aggregate usage rollups");
+        let updated = rollups
+            .iter()
+            .find(|row| row.key_id == key.id)
+            .expect("rollup row for key");
+        assert_eq!(updated.credit_total, 0.125);
+        assert_eq!(updated.credit_missing_events, 0);
 
         let missing = LlmGatewayUsageEventRecord {
             id: "evt-2".to_string(),
@@ -1236,12 +1548,178 @@ mod tests {
             credit_usage_missing: true,
             ..event
         };
-        let updated = store
-            .apply_usage_event(&updated, &missing)
+        store
+            .append_usage_event(&missing)
             .await
-            .expect("apply missing-credit usage event");
-        assert_eq!(updated.usage_credit_total, 0.125);
-        assert_eq!(updated.usage_credit_missing_events, 1);
+            .expect("append missing-credit usage event");
+        let rollups = store
+            .aggregate_usage_rollups()
+            .await
+            .expect("aggregate usage rollups after missing event");
+        let updated = rollups
+            .iter()
+            .find(|row| row.key_id == key.id)
+            .expect("rollup row for key after missing event");
+        assert_eq!(updated.credit_total, 0.125);
+        assert_eq!(updated.credit_missing_events, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn connect_canonicalizes_legacy_nullable_key_fields() {
+        let dir = temp_store_dir("legacy-key-canonicalize");
+        let db = connect(&dir.to_string_lossy())
+            .execute()
+            .await
+            .expect("connect raw lancedb");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("secret", DataType::Utf8, false),
+            Field::new("key_hash", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+            Field::new("public_visible", DataType::Boolean, false),
+            Field::new("quota_billable_limit", DataType::UInt64, false),
+            Field::new("usage_input_uncached_tokens", DataType::UInt64, false),
+            Field::new("usage_input_cached_tokens", DataType::UInt64, false),
+            Field::new("usage_output_tokens", DataType::UInt64, false),
+            Field::new("usage_billable_tokens", DataType::UInt64, false),
+            Field::new(
+                "last_used_at",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+                true,
+            ),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new(
+                "updated_at",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new("route_strategy", DataType::Utf8, true),
+            Field::new("fixed_account_name", DataType::Utf8, true),
+            Field::new("auto_account_names_json", DataType::Utf8, true),
+            Field::new("provider_type", DataType::Utf8, true),
+            Field::new("protocol_family", DataType::Utf8, true),
+            Field::new("usage_credit_total", DataType::Float64, true),
+            Field::new("usage_credit_missing_events", DataType::UInt64, true),
+            Field::new("request_max_concurrency", DataType::UInt64, true),
+            Field::new("request_min_start_interval_ms", DataType::UInt64, true),
+        ]));
+        let now = now_ms();
+        let mut id = StringBuilder::new();
+        let mut name = StringBuilder::new();
+        let mut secret = StringBuilder::new();
+        let mut key_hash = StringBuilder::new();
+        let mut status = StringBuilder::new();
+        let mut public_visible = BooleanBuilder::new();
+        let mut quota_billable_limit = UInt64Builder::new();
+        let mut usage_input_uncached_tokens = UInt64Builder::new();
+        let mut usage_input_cached_tokens = UInt64Builder::new();
+        let mut usage_output_tokens = UInt64Builder::new();
+        let mut usage_billable_tokens = UInt64Builder::new();
+        let mut last_used_at = TimestampMillisecondBuilder::new();
+        let mut created_at = TimestampMillisecondBuilder::new();
+        let mut updated_at = TimestampMillisecondBuilder::new();
+        let mut route_strategy = StringBuilder::new();
+        let mut fixed_account_name = StringBuilder::new();
+        let mut auto_account_names_json = StringBuilder::new();
+        let mut provider_type = StringBuilder::new();
+        let mut protocol_family = StringBuilder::new();
+        let mut usage_credit_total = Float64Builder::new();
+        let mut usage_credit_missing_events = UInt64Builder::new();
+        let mut request_max_concurrency = UInt64Builder::new();
+        let mut request_min_start_interval_ms = UInt64Builder::new();
+        id.append_value("legacy-key");
+        name.append_value("Legacy Key");
+        secret.append_value("sf-legacy-secret");
+        key_hash.append_value("sf-legacy-hash");
+        status.append_value(LLM_GATEWAY_KEY_STATUS_ACTIVE);
+        public_visible.append_value(true);
+        quota_billable_limit.append_value(1000);
+        usage_input_uncached_tokens.append_value(0);
+        usage_input_cached_tokens.append_value(0);
+        usage_output_tokens.append_value(0);
+        usage_billable_tokens.append_value(0);
+        last_used_at.append_null();
+        created_at.append_value(now);
+        updated_at.append_value(now);
+        route_strategy.append_null();
+        fixed_account_name.append_null();
+        auto_account_names_json.append_null();
+        provider_type.append_null();
+        protocol_family.append_null();
+        usage_credit_total.append_null();
+        usage_credit_missing_events.append_null();
+        request_max_concurrency.append_null();
+        request_min_start_interval_ms.append_null();
+        let batch = RecordBatch::try_new(schema, vec![
+            Arc::new(id.finish()),
+            Arc::new(name.finish()),
+            Arc::new(secret.finish()),
+            Arc::new(key_hash.finish()),
+            Arc::new(status.finish()),
+            Arc::new(public_visible.finish()),
+            Arc::new(quota_billable_limit.finish()),
+            Arc::new(usage_input_uncached_tokens.finish()),
+            Arc::new(usage_input_cached_tokens.finish()),
+            Arc::new(usage_output_tokens.finish()),
+            Arc::new(usage_billable_tokens.finish()),
+            Arc::new(last_used_at.finish()),
+            Arc::new(created_at.finish()),
+            Arc::new(updated_at.finish()),
+            Arc::new(route_strategy.finish()),
+            Arc::new(fixed_account_name.finish()),
+            Arc::new(auto_account_names_json.finish()),
+            Arc::new(provider_type.finish()),
+            Arc::new(protocol_family.finish()),
+            Arc::new(usage_credit_total.finish()),
+            Arc::new(usage_credit_missing_events.finish()),
+            Arc::new(request_max_concurrency.finish()),
+            Arc::new(request_min_start_interval_ms.finish()),
+        ])
+        .expect("build legacy batch");
+        db.create_table(LLM_GATEWAY_KEYS_TABLE, batch)
+            .storage_option("new_table_enable_stable_row_ids", "true")
+            .storage_option("new_table_enable_v2_manifest_paths", "true")
+            .execute()
+            .await
+            .expect("create legacy keys table");
+
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+        let reloaded = store
+            .get_key_by_id("legacy-key")
+            .await
+            .expect("load canonicalized key")
+            .expect("legacy key exists");
+        assert_eq!(reloaded.provider_type, LLM_GATEWAY_PROVIDER_CODEX);
+        assert_eq!(reloaded.protocol_family, LLM_GATEWAY_PROTOCOL_OPENAI);
+        assert_eq!(reloaded.usage_credit_total, 0.0);
+        assert_eq!(reloaded.usage_credit_missing_events, 0);
+
+        let schema = store
+            .connection()
+            .open_table(LLM_GATEWAY_KEYS_TABLE)
+            .execute()
+            .await
+            .expect("open canonicalized keys table")
+            .schema()
+            .await
+            .expect("load canonicalized schema");
+        assert!(!schema
+            .field_with_name("usage_credit_total")
+            .expect("usage_credit_total field")
+            .is_nullable());
+        assert!(!schema
+            .field_with_name("usage_credit_missing_events")
+            .expect("usage_credit_missing_events field")
+            .is_nullable());
 
         let _ = fs::remove_dir_all(&dir);
     }

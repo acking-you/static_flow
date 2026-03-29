@@ -1,8 +1,8 @@
 //! Runtime state and token lifecycle management for the Kiro gateway.
 //!
-//! This module owns persistent account selection, refresh-token driven access
-//! token renewal, and the account-backed status/runtime caches that sit beneath
-//! the Anthropic-compatible HTTP handlers.
+//! This module owns refresh-token driven access token renewal and the
+//! account-backed status/runtime caches that sit beneath the
+//! Anthropic-compatible HTTP handlers.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -14,9 +14,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::{
     auth_file::{
-        clear_current_account_name, delete_auth_record, load_auth_records,
-        load_current_account_name, resolve_auths_dir, save_auth_record, save_current_account_name,
-        KiroAuthRecord, DEFAULT_KIRO_VERSION, DEFAULT_NODE_VERSION, DEFAULT_SYSTEM_VERSION,
+        delete_auth_record, load_auth_records, resolve_auths_dir, save_auth_record, KiroAuthRecord,
+        DEFAULT_KIRO_VERSION, DEFAULT_NODE_VERSION, DEFAULT_SYSTEM_VERSION,
     },
     local_import,
     provider::build_client,
@@ -49,8 +48,7 @@ pub struct CallContext {
 /// Top-level runtime state shared across all Kiro gateway request handlers.
 ///
 /// Wraps the [`KiroTokenManager`] (for credential lifecycle), a cached status
-/// snapshot (for dashboard polling), and a write lock that serializes
-/// usage-event persistence so concurrent requests don't race on the store.
+/// snapshot (for dashboard polling), and the per-account request scheduler.
 ///
 /// Cloneable via inner `Arc`s; intended to be stored in Axum's application
 /// state.
@@ -58,7 +56,6 @@ pub struct CallContext {
 pub struct KiroGatewayRuntimeState {
     pub(crate) token_manager: Arc<KiroTokenManager>,
     pub(crate) status_cache: Arc<RwLock<KiroStatusCacheSnapshot>>,
-    pub(crate) usage_write_lock: Arc<Mutex<()>>,
     pub(crate) request_scheduler: Arc<KiroRequestScheduler>,
     pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
 }
@@ -91,7 +88,6 @@ impl KiroGatewayRuntimeState {
         Ok(Self {
             token_manager,
             status_cache: Arc::new(RwLock::new(KiroStatusCacheSnapshot::default())),
-            usage_write_lock: Arc::new(Mutex::new(())),
             request_scheduler: KiroRequestScheduler::new(),
             upstream_proxy_registry,
         })
@@ -105,56 +101,28 @@ impl KiroGatewayRuntimeState {
 
 /// File-backed Kiro credential manager with refresh-token support.
 ///
-/// The manager keeps one current-account pointer, exposes CRUD helpers for the
-/// persisted auth files, and guarantees that concurrent refresh attempts are
-/// serialized through `refresh_lock`.
+/// The manager exposes CRUD helpers for the persisted auth files and guarantees
+/// that concurrent refresh attempts are serialized through `refresh_lock`.
 pub struct KiroTokenManager {
     auths_dir: PathBuf,
-    current_name: RwLock<Option<String>>,
-    current: RwLock<Option<KiroAuthRecord>>,
     refresh_lock: Mutex<()>,
     upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
 }
 
 impl KiroTokenManager {
-    /// Initialize the token manager from the auth directory and persisted
-    /// current-account marker.
+    /// Initialize the token manager from the auth directory.
     pub async fn new(upstream_proxy_registry: Arc<UpstreamProxyRegistry>) -> Result<Self> {
         let auths_dir = resolve_auths_dir();
-        let current_name = load_current_account_name(&auths_dir).await?;
-        let records = load_auth_records(&auths_dir).await?;
-        let selected_name = choose_current_name(&records, current_name.as_deref());
-        persist_current_selection(&auths_dir, selected_name.as_deref()).await?;
-        let current = selected_name
-            .as_ref()
-            .and_then(|name| records.iter().find(|record| record.name == *name).cloned());
         Ok(Self {
             auths_dir,
-            current_name: RwLock::new(selected_name),
-            current: RwLock::new(current),
             refresh_lock: Mutex::new(()),
             upstream_proxy_registry,
         })
     }
 
-    /// Load all configured accounts, refreshing the cached current-account
-    /// pointer if the on-disk selection changed.
+    /// Load all configured accounts.
     pub async fn list_auths(&self) -> Result<Vec<KiroAuthRecord>> {
-        let records = load_auth_records(&self.auths_dir).await?;
-        let preferred = self.current_name.read().await.clone();
-        let selected_name = choose_current_name(&records, preferred.as_deref());
-        self.update_cached_current(&records, selected_name.as_deref())
-            .await?;
-        Ok(records)
-    }
-
-    /// Return the current account name, reloading from disk lazily if needed.
-    pub async fn current_account_name(&self) -> Option<String> {
-        if let Some(name) = self.current_name.read().await.clone() {
-            return Some(name);
-        }
-        let _ = self.reload_current().await;
-        self.current_name.read().await.clone()
+        load_auth_records(&self.auths_dir).await
     }
 
     /// Load one configured account by name.
@@ -163,42 +131,17 @@ impl KiroTokenManager {
         Ok(records.into_iter().find(|record| record.name == name))
     }
 
-    /// Insert or update a persisted auth record and optionally make it the
-    /// current account.
-    pub async fn upsert_auth(
-        &self,
-        auth: KiroAuthRecord,
-        set_as_current: bool,
-    ) -> Result<KiroAuthRecord> {
+    /// Insert or update a persisted auth record.
+    pub async fn upsert_auth(&self, auth: KiroAuthRecord) -> Result<KiroAuthRecord> {
         let auth = auth.canonicalize();
         save_auth_record(&self.auths_dir, &auth).await?;
-        let should_set_current = set_as_current || self.current_name.read().await.is_none();
-        if should_set_current {
-            self.set_current_account(&auth.name).await?;
-        } else if self.current_name.read().await.as_deref() == Some(auth.name.as_str()) {
-            *self.current.write().await = Some(auth.clone());
-        }
         Ok(auth)
     }
 
-    /// Delete one configured account and recompute the current selection.
+    /// Delete one configured account.
     pub async fn delete_auth(&self, name: &str) -> Result<()> {
         delete_auth_record(&self.auths_dir, name).await?;
-        self.reload_current().await?;
         Ok(())
-    }
-
-    /// Mark an existing account as the current account and cache its record in
-    /// memory.
-    pub async fn set_current_account(&self, name: &str) -> Result<KiroAuthRecord> {
-        let auth = self
-            .auth_by_name(name)
-            .await?
-            .ok_or_else(|| anyhow!("kiro account `{name}` not found"))?;
-        save_current_account_name(&self.auths_dir, &auth.name).await?;
-        *self.current_name.write().await = Some(auth.name.clone());
-        *self.current.write().await = Some(auth.clone());
-        Ok(auth)
     }
 
     /// Import one account from the local Kiro CLI SQLite store.
@@ -206,13 +149,12 @@ impl KiroTokenManager {
         &self,
         name: Option<&str>,
         sqlite_path: Option<&str>,
-        set_as_current: bool,
     ) -> Result<KiroAuthRecord> {
         let sqlite_path = sqlite_path
             .map(PathBuf::from)
             .unwrap_or_else(local_import::default_sqlite_path);
         let auth = local_import::import_from_sqlite(&sqlite_path, name).await?;
-        self.upsert_auth(auth, set_as_current).await
+        self.upsert_auth(auth).await
     }
 
     /// Fill in missing per-account scheduler settings from the legacy global
@@ -241,7 +183,7 @@ impl KiroTokenManager {
             updated += 1;
         }
         if updated > 0 {
-            self.reload_current().await?;
+            tracing::info!(updated, "backfilled missing scheduler limits on kiro accounts");
         }
         Ok(updated)
     }
@@ -400,57 +342,7 @@ impl KiroTokenManager {
 
     async fn persist_refreshed_auth(&self, auth: &KiroAuthRecord) -> Result<()> {
         save_auth_record(&self.auths_dir, auth).await?;
-        if self.current_name.read().await.as_deref() == Some(auth.name.as_str()) {
-            *self.current.write().await = Some(auth.clone());
-        }
         Ok(())
-    }
-
-    async fn reload_current(&self) -> Result<Option<KiroAuthRecord>> {
-        let records = load_auth_records(&self.auths_dir).await?;
-        let preferred = self.current_name.read().await.clone();
-        let selected_name = choose_current_name(&records, preferred.as_deref());
-        self.update_cached_current(&records, selected_name.as_deref())
-            .await
-    }
-
-    async fn update_cached_current(
-        &self,
-        records: &[KiroAuthRecord],
-        selected_name: Option<&str>,
-    ) -> Result<Option<KiroAuthRecord>> {
-        persist_current_selection(&self.auths_dir, selected_name).await?;
-        let current = selected_name
-            .and_then(|name| records.iter().find(|record| record.name == name).cloned());
-        *self.current_name.write().await = selected_name.map(str::to_string);
-        *self.current.write().await = current.clone();
-        Ok(current)
-    }
-}
-
-fn choose_current_name(records: &[KiroAuthRecord], preferred: Option<&str>) -> Option<String> {
-    if records.is_empty() {
-        return None;
-    }
-    if let Some(preferred) = preferred {
-        if records.iter().any(|record| record.name == preferred) {
-            return Some(preferred.to_string());
-        }
-    }
-    if let Some(default) = records.iter().find(|record| record.name == "default") {
-        return Some(default.name.clone());
-    }
-    records.first().map(|record| record.name.clone())
-}
-
-async fn persist_current_selection(
-    dir: &std::path::Path,
-    selected_name: Option<&str>,
-) -> Result<()> {
-    if let Some(name) = selected_name {
-        save_current_account_name(dir, name).await
-    } else {
-        clear_current_account_name(dir).await
     }
 }
 
