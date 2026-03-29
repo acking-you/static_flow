@@ -5,28 +5,27 @@
 //! 2. Polls the upstream `/wham/usage` endpoint for each account to update the
 //!    cached rate-limit snapshot used by the routing layer.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use reqwest::Proxy;
 
 use super::{
     accounts::{AccountPool, AccountRateLimitSnapshot, AccountStatus},
     runtime::CodexAuthSnapshot,
 };
+use crate::upstream_proxy::{standard_client_builder, UpstreamProxyRegistry};
 
 const REFRESH_INTERVAL_SECONDS: u64 = 60;
 const TOKEN_REFRESH_AHEAD_SECONDS: i64 = 600;
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const DEFAULT_UPSTREAM_PROXY_URL: &str = "http://127.0.0.1:11111";
 
 /// Spawn the background refresh task. Returns a `JoinHandle` that runs until
 /// the shutdown signal fires.
 pub(crate) fn spawn_account_refresh_task(
     pool: Arc<AccountPool>,
-    client: reqwest::Client,
+    proxy_registry: Arc<UpstreamProxyRegistry>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
@@ -43,7 +42,7 @@ pub(crate) fn spawn_account_refresh_task(
                     }
                 }
                 _ = ticker.tick() => {
-                    if let Err(err) = refresh_all_accounts(&pool, &client).await {
+                    if let Err(err) = refresh_all_accounts(&pool, &proxy_registry).await {
                         tracing::warn!("Account refresh cycle failed: {err:#}");
                     }
                 }
@@ -52,7 +51,10 @@ pub(crate) fn spawn_account_refresh_task(
     });
 }
 
-async fn refresh_all_accounts(pool: &AccountPool, client: &reqwest::Client) -> Result<()> {
+async fn refresh_all_accounts(
+    pool: &AccountPool,
+    proxy_registry: &UpstreamProxyRegistry,
+) -> Result<()> {
     let entries = pool.all_entries().await;
     let now = Utc::now().timestamp();
 
@@ -82,7 +84,7 @@ async fn refresh_all_accounts(pool: &AccountPool, client: &reqwest::Client) -> R
         };
 
         if needs_refresh {
-            match refresh_account_token(entry, client).await {
+            match refresh_account_token(entry, proxy_registry).await {
                 Ok(()) => {
                     if let Err(err) = pool.persist(name).await {
                         tracing::warn!(
@@ -110,7 +112,7 @@ async fn refresh_all_accounts(pool: &AccountPool, client: &reqwest::Client) -> R
             }
             account.to_auth_snapshot()
         };
-        match fetch_account_usage(client, &snapshot).await {
+        match fetch_account_usage(proxy_registry, &snapshot).await {
             Ok(rl) => pool.update_rate_limit(name, rl).await,
             Err(err) => {
                 tracing::debug!(account = name, "Usage poll failed: {err:#}");
@@ -146,7 +148,7 @@ use base64::Engine;
 
 async fn refresh_account_token(
     entry: &Arc<tokio::sync::RwLock<super::accounts::CodexAccount>>,
-    client: &reqwest::Client,
+    proxy_registry: &UpstreamProxyRegistry,
 ) -> Result<()> {
     let refresh_token = {
         let account = entry.read().await;
@@ -156,6 +158,7 @@ async fn refresh_account_token(
         account.refresh_token.clone()
     };
 
+    let client = build_refresh_client(proxy_registry).await?;
     let body = format!(
         "client_id={}&grant_type=refresh_token&refresh_token={}",
         urlencoding::encode(CODEX_CLIENT_ID),
@@ -201,9 +204,10 @@ async fn refresh_account_token(
 }
 
 async fn fetch_account_usage(
-    client: &reqwest::Client,
+    proxy_registry: &UpstreamProxyRegistry,
     auth: &CodexAuthSnapshot,
 ) -> Result<AccountRateLimitSnapshot> {
+    let client = build_refresh_client(proxy_registry).await?;
     let upstream_base = std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL")
         .ok()
         .map(|v| v.trim().trim_end_matches('/').to_string())
@@ -257,26 +261,81 @@ fn compute_usage_url(upstream_base: &str) -> String {
 /// Validate that an account can reach the upstream usage endpoint.
 /// Used during import to verify the account tokens work before persisting.
 pub(crate) async fn validate_account_usage(
-    client: &reqwest::Client,
+    proxy_registry: &UpstreamProxyRegistry,
     auth: &CodexAuthSnapshot,
 ) -> Result<AccountRateLimitSnapshot> {
-    fetch_account_usage(client, auth).await
+    fetch_account_usage(proxy_registry, auth).await
+}
+
+/// Refresh the cached usage snapshot for the accounts participating in one
+/// auto-routing decision so account selection sees current 5h/weekly limits.
+pub(crate) async fn refresh_routing_candidates(
+    pool: &AccountPool,
+    proxy_registry: &UpstreamProxyRegistry,
+    allowed_names: Option<&HashSet<String>>,
+) {
+    let entries = pool.all_entries().await;
+    let candidate_names = allowed_names
+        .map(|names| names.len())
+        .unwrap_or(entries.len());
+    let mut refreshed = 0usize;
+    let mut failed = 0usize;
+
+    for (name, entry) in entries {
+        if let Some(allowed_names) = allowed_names {
+            if !allowed_names.contains(&name) {
+                continue;
+            }
+        }
+
+        let snapshot = {
+            let account = entry.read().await;
+            if account.status != AccountStatus::Active {
+                tracing::debug!(
+                    account = %name,
+                    "skipping codex routing usage refresh because account is not active"
+                );
+                continue;
+            }
+            account.to_auth_snapshot()
+        };
+
+        match fetch_account_usage(proxy_registry, &snapshot).await {
+            Ok(usage) => {
+                pool.update_rate_limit(&name, usage).await;
+                refreshed += 1;
+            },
+            Err(err) => {
+                failed += 1;
+                tracing::warn!(
+                    account = %name,
+                    "failed to refresh codex routing usage snapshot: {err:#}"
+                );
+            },
+        }
+    }
+
+    tracing::info!(
+        candidate_count = candidate_names,
+        refreshed_count = refreshed,
+        failed_count = failed,
+        allowed_names = ?allowed_names,
+        "refreshed codex routing candidate usage snapshots"
+    );
 }
 
 /// Build the HTTP client used for token refresh and usage polling.
 /// Shares the same proxy configuration as the gateway upstream client.
-pub(crate) fn build_refresh_client() -> Result<reqwest::Client> {
-    let proxy_url = std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_UPSTREAM_PROXY_URL.to_string());
-    let proxy = Proxy::all(proxy_url.as_str()).context("failed to build refresh proxy")?;
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .pool_max_idle_per_host(8)
-        .pool_idle_timeout(Duration::from_secs(60))
-        .proxy(proxy)
-        .build()
-        .context("failed to build refresh client")
+pub(crate) async fn build_refresh_client(
+    proxy_registry: &UpstreamProxyRegistry,
+) -> Result<reqwest::Client> {
+    let builder = standard_client_builder(60, 8, 60);
+    let builder = proxy_registry
+        .apply_provider_proxy(
+            static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_CODEX,
+            builder,
+        )
+        .await
+        .context("failed to resolve codex refresh proxy")?;
+    builder.build().context("failed to build refresh client")
 }

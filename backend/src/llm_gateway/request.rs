@@ -19,17 +19,21 @@ use super::{
         PreparedGatewayRequest,
     },
     FAST_BILLABLE_MULTIPLIER, GPT53_CODEX_MODEL_ID, GPT53_CODEX_SPARK_MODEL_ID,
-    MAX_GATEWAY_BODY_BYTES, MAX_OPENAI_TOOL_NAME_LEN,
+    MAX_OPENAI_TOOL_NAME_LEN,
 };
 
 /// Normalize an incoming OpenAI-compatible request into the upstream Codex
 /// shape.
+///
+/// `max_request_body_bytes` caps the body read to prevent oversized payloads
+/// from exhausting backend memory.
 pub(crate) async fn prepare_gateway_request(
     gateway_path: &str,
     query: &str,
     method: Method,
     headers: &HeaderMap,
     body: Body,
+    max_request_body_bytes: usize,
 ) -> Result<
     PreparedGatewayRequest,
     (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>),
@@ -51,7 +55,7 @@ pub(crate) async fn prepare_gateway_request(
         .filter(|value| !value.is_empty())
         .unwrap_or("application/json")
         .to_string();
-    let body = to_bytes(body, MAX_GATEWAY_BODY_BYTES)
+    let body = to_bytes(body, max_request_body_bytes)
         .await
         .map_err(|err| internal_error("Failed to read llm gateway request body", err))?;
     let mut json_value = if content_type.starts_with("application/json") && !body.is_empty() {

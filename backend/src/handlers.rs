@@ -52,6 +52,10 @@ use tokio::time::sleep;
 use crate::{
     email::{normalize_frontend_page_url_input, normalize_requester_email_input},
     memory_profiler::{self, MemoryProfilerConfigUpdate},
+    public_submit_guard::{
+        build_client_fingerprint, build_submit_rate_limit_key, enforce_public_submit_rate_limit,
+        extract_client_ip,
+    },
     state::{
         ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, CompactionRuntimeConfig,
         MusicRuntimeConfig, ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
@@ -1438,7 +1442,7 @@ pub async fn admin_api_behavior_overview(
     let since_ms = behavior_window_start_ms(days);
     let events = state
         .store
-        .list_api_behavior_events(Some(since_ms), None, Some(50000))
+        .list_api_behavior_events(Some(since_ms), None, None)
         .await
         .map_err(|e| internal_error("Failed to list api behavior events", e))?;
     let overview = build_api_behavior_overview(events, days, top_limit);
@@ -1741,11 +1745,12 @@ pub async fn submit_comment(
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let runtime_config = state.comment_runtime_config.read().await.clone();
-    enforce_comment_submit_rate_limit(
+    enforce_public_submit_rate_limit(
         state.comment_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms,
         runtime_config.submit_rate_limit_seconds,
+        "comment submission",
     )
     .await?;
 
@@ -3192,110 +3197,6 @@ async fn ensure_article_exists(
     }
 }
 
-pub(crate) fn build_client_fingerprint(headers: &HeaderMap) -> String {
-    let ip = extract_client_ip(headers);
-    let user_agent = headers
-        .get(header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown");
-    let raw = format!("{ip}|{user_agent}");
-
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-pub(crate) fn build_submit_rate_limit_key(headers: &HeaderMap, fingerprint: &str) -> String {
-    let ip = extract_client_ip(headers);
-    if ip == "unknown" {
-        format!("fp:{fingerprint}")
-    } else {
-        format!("ip:{ip}")
-    }
-}
-
-pub(crate) fn extract_client_ip(headers: &HeaderMap) -> String {
-    // Prefer proxy chain source headers, then vendor/common real-ip headers.
-    parse_first_ip_from_header(headers.get("x-forwarded-for"))
-        .or_else(|| parse_first_ip_from_header(headers.get("x-real-ip")))
-        .or_else(|| parse_first_ip_from_header(headers.get("cf-connecting-ip")))
-        .or_else(|| parse_first_ip_from_header(headers.get("x-client-ip")))
-        .or_else(|| parse_ip_from_forwarded_header(headers.get("forwarded")))
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn parse_first_ip_from_header(value: Option<&axum::http::HeaderValue>) -> Option<String> {
-    let raw = value?.to_str().ok()?;
-    raw.split(',').find_map(normalize_ip_token)
-}
-
-fn parse_ip_from_forwarded_header(value: Option<&axum::http::HeaderValue>) -> Option<String> {
-    let raw = value?.to_str().ok()?;
-    raw.split(',').find_map(|entry| {
-        entry.split(';').find_map(|segment| {
-            let token = segment.trim();
-            if token
-                .get(..4)
-                .map(|prefix| prefix.eq_ignore_ascii_case("for="))
-                .unwrap_or(false)
-            {
-                normalize_ip_token(token)
-            } else {
-                None
-            }
-        })
-    })
-}
-
-fn normalize_ip_token(token: &str) -> Option<String> {
-    let mut value = token.trim().trim_matches('"');
-    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
-        return None;
-    }
-
-    // Handle RFC7239 style token fragment: for=1.2.3.4
-    if value
-        .get(..4)
-        .map(|prefix| prefix.eq_ignore_ascii_case("for="))
-        .unwrap_or(false)
-    {
-        value = value[4..].trim().trim_matches('"');
-    }
-
-    // [IPv6]:port
-    if value.starts_with('[') {
-        if let Some(end) = value.find(']') {
-            let host = &value[1..end];
-            let remain = value[end + 1..].trim();
-            let valid_suffix = remain.is_empty()
-                || (remain.starts_with(':') && remain[1..].chars().all(|ch| ch.is_ascii_digit()));
-            if valid_suffix {
-                if let Ok(ip) = host.parse::<IpAddr>() {
-                    return Some(ip.to_string());
-                }
-            }
-        }
-    }
-
-    // Plain IP literal (IPv4 or IPv6).
-    if let Ok(ip) = value.parse::<IpAddr>() {
-        return Some(ip.to_string());
-    }
-
-    // IPv4:port
-    if let Some((host, port)) = value.rsplit_once(':') {
-        if host.contains('.') && !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) {
-            if let Ok(ip) = host.parse::<IpAddr>() {
-                return Some(ip.to_string());
-            }
-        }
-    }
-
-    None
-}
-
 fn parse_raw_markdown_lang(raw: &str) -> Option<&'static str> {
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -3303,31 +3204,6 @@ fn parse_raw_markdown_lang(raw: &str) -> Option<&'static str> {
         "en" => Some("en"),
         _ => None,
     }
-}
-
-pub(crate) async fn enforce_comment_submit_rate_limit(
-    guard: &tokio::sync::RwLock<HashMap<String, i64>>,
-    rate_limit_key: &str,
-    now_ms: i64,
-    rate_limit_seconds: u64,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let window_ms = (rate_limit_seconds.max(1) as i64) * 1_000;
-    let mut writer = guard.write().await;
-    if let Some(last) = writer.get(rate_limit_key) {
-        if now_ms - *last < window_ms {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(ErrorResponse {
-                    error: format!("Submit rate-limited. Retry in {} seconds.", rate_limit_seconds),
-                    code: 429,
-                }),
-            ));
-        }
-    }
-    writer.insert(rate_limit_key.to_string(), now_ms);
-    let stale_before = now_ms - window_ms * 6;
-    writer.retain(|_, value| *value >= stale_before);
-    Ok(())
 }
 
 /// Enforce admin access rules using the configured token and local-only policy.
@@ -4436,11 +4312,12 @@ pub async fn submit_music_comment(
     let config = state.music_runtime_config.read().await.clone();
 
     // Reuse blog comment limiter semantics.
-    enforce_comment_submit_rate_limit(
+    enforce_public_submit_rate_limit(
         state.music_comment_guard.as_ref(),
         &rate_limit_key,
         now_ms,
         config.comment_rate_limit_seconds,
+        "music comment submission",
     )
     .await?;
 
@@ -4588,11 +4465,12 @@ pub async fn submit_music_wish(
     let nickname = normalize_public_nickname_input(request.nickname, &fingerprint)?;
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
-    enforce_comment_submit_rate_limit(
+    enforce_public_submit_rate_limit(
         state.music_wish_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms,
         60,
+        "music wish submission",
     )
     .await?;
 
@@ -5093,11 +4971,12 @@ pub async fn submit_article_request(
     let nickname = normalize_public_nickname_input(request.nickname, &fingerprint)?;
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
-    enforce_comment_submit_rate_limit(
+    enforce_public_submit_rate_limit(
         state.article_request_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms,
         60,
+        "article request submission",
     )
     .await?;
 
@@ -5521,13 +5400,13 @@ mod tests {
 
     use super::{
         apply_api_behavior_config_update, apply_compaction_runtime_config_update,
-        apply_view_analytics_config_update, build_submit_rate_limit_key, extract_client_ip,
-        is_local_host_header, normalize_public_nickname_input, parse_raw_markdown_lang,
-        UpdateApiBehaviorConfigRequest, UpdateCompactionRuntimeConfigRequest,
-        UpdateViewAnalyticsConfigRequest,
+        apply_view_analytics_config_update, is_local_host_header, normalize_public_nickname_input,
+        parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
+        UpdateCompactionRuntimeConfigRequest, UpdateViewAnalyticsConfigRequest,
     };
-    use crate::state::{
-        ApiBehaviorRuntimeConfig, CompactionRuntimeConfig, ViewAnalyticsRuntimeConfig,
+    use crate::{
+        public_submit_guard::{build_submit_rate_limit_key, extract_client_ip},
+        state::{ApiBehaviorRuntimeConfig, CompactionRuntimeConfig, ViewAnalyticsRuntimeConfig},
     };
 
     #[test]

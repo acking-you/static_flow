@@ -367,6 +367,13 @@ pub fn home_page() -> Html {
                                             <i class="fas fa-key"></i>
                                             { t::BTN_LLM_ACCESS }
                                         </Link<Route>>
+                                        <Link<Route>
+                                            to={Route::KiroAccess}
+                                            classes={classes!("btn-terminal")}
+                                        >
+                                            <i class="fas fa-bolt"></i>
+                                            { "Kiro Access" }
+                                        </Link<Route>>
                                     </div>
                                 </div>
 

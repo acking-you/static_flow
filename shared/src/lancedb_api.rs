@@ -425,11 +425,33 @@ impl StaticFlowDataStore {
         }
 
         let filter = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
-        let mut events = self.query_api_behavior_events(filter, limit, None).await?;
+        let mut events = if let Some(limit) = limit {
+            let fetch_count = limit.max(1);
+            let total = self
+                .count_api_behavior_events_with_filter(filter.clone())
+                .await?;
+            if total == 0 {
+                Vec::new()
+            } else {
+                // Reverse-offset pagination: LanceDB returns rows in insertion
+                // order, but the caller wants the newest `fetch_count` rows.
+                // We compute the tail offset so the subsequent query fetches
+                // the last page, then sort descending in memory.
+                let fetch_count = total.min(fetch_count);
+                let reverse_offset = total.saturating_sub(fetch_count);
+                self.query_api_behavior_events(filter, Some(fetch_count), Some(reverse_offset))
+                    .await?
+            }
+        } else {
+            self.query_api_behavior_events(filter, None, None).await?
+        };
         events.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
         Ok(events)
     }
 
+    /// Counts api_behavior_events rows matching an optional SQL filter.
+    ///
+    /// Acquires a shared file lock to avoid racing with concurrent writers.
     pub async fn count_api_behavior_events_with_filter(
         &self,
         filter: Option<String>,
@@ -3967,6 +3989,47 @@ mod tests {
             count_regular_files(&dir.join("api_behavior_events.lance/_indices")) == 0,
             "stable-row-id compaction should not leave frag_reuse index files behind"
         );
+
+        fs::remove_dir_all(&dir).expect("cleanup temp db dir");
+    }
+
+    #[tokio::test]
+    async fn list_api_behavior_events_with_limit_returns_newest_rows() {
+        let dir = temp_db_dir();
+        fs::create_dir_all(&dir).expect("create temp db dir");
+        let uri = dir.to_string_lossy().to_string();
+        let store = StaticFlowDataStore::connect(&uri)
+            .await
+            .expect("connect temp db");
+        let base_ms = 1_710_000_000_000i64;
+
+        let mut batch = Vec::new();
+        for index in 0..64 {
+            batch.push(make_api_behavior_input(index, base_ms + index as i64 * 1_000));
+        }
+        store
+            .append_api_behavior_events(batch)
+            .await
+            .expect("append api behavior rows");
+
+        let limited = store
+            .list_api_behavior_events(Some(base_ms), None, Some(10))
+            .await
+            .expect("list limited api behavior rows");
+        assert_eq!(limited.len(), 10);
+        assert_eq!(limited.first().map(|row| row.occurred_at), Some(base_ms + 63_000));
+        assert_eq!(limited.last().map(|row| row.occurred_at), Some(base_ms + 54_000));
+        assert!(limited
+            .windows(2)
+            .all(|window| window[0].occurred_at >= window[1].occurred_at));
+
+        let all_rows = store
+            .list_api_behavior_events(Some(base_ms), None, None)
+            .await
+            .expect("list all api behavior rows");
+        assert_eq!(all_rows.len(), 64);
+        assert_eq!(all_rows.first().map(|row| row.occurred_at), Some(base_ms + 63_000));
+        assert_eq!(all_rows.last().map(|row| row.occurred_at), Some(base_ms));
 
         fs::remove_dir_all(&dir).expect("cleanup temp db dir");
     }

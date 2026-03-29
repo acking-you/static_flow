@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
 use axum::{
     body::{Body, Bytes},
@@ -37,9 +37,11 @@ use reqwest::header::{HeaderMap as ReqwestHeaderMap, HeaderValue as ReqwestHeade
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    now_ms, LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
+    now_ms, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
+    LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
     NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
     NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
@@ -50,10 +52,10 @@ pub use self::runtime::LlmGatewayRuntimeState;
 pub(crate) use self::{
     accounts::{resolve_auths_dir, AccountPool},
     support::{load_support_asset, load_support_config, render_payment_email_markdown},
-    token_refresh::{build_refresh_client, spawn_account_refresh_task},
+    token_refresh::spawn_account_refresh_task,
 };
 use self::{
-    models::respond_local_models,
+    models::{append_client_version_query, respond_local_models},
     request::{
         apply_gpt53_codex_spark_mapping, ensure_supported_gateway_path, external_origin,
         extract_last_message_content, extract_presented_key, normalize_name, normalize_status,
@@ -65,27 +67,36 @@ use self::{
         encode_json_sse_chunk, encode_sse_event_with_model_alias, extract_usage_from_bytes,
         rewrite_json_response_model_alias, SseUsageCollector,
     },
-    runtime::{bearer_header, gateway_auth_cache_ttl, CachedKeyLease, CodexAuthSnapshot},
+    runtime::{
+        bearer_header, gateway_auth_cache_ttl, CachedKeyLease, CodexAuthSnapshot,
+        CodexKeyRequestLease, CodexKeyRequestLimitRejection,
+    },
     types::{
-        AccountListResponse, AccountSummaryView, AdminLlmGatewayAccountContributionRequestQuery,
+        AccountListResponse, AccountSummaryView, AdminLegacyKiroProxyMigrationResponse,
+        AdminLlmGatewayAccountContributionRequestQuery,
         AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsResponse, AdminLlmGatewayKeyView,
         AdminLlmGatewayKeysResponse, AdminLlmGatewaySponsorRequestQuery,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsResponse,
         AdminLlmGatewayTokenRequestQuery, AdminLlmGatewayTokenRequestView,
         AdminLlmGatewayTokenRequestsResponse, AdminLlmGatewayUsageEventView,
-        AdminLlmGatewayUsageEventsResponse, AdminLlmGatewayUsageQuery, CreateLlmGatewayKeyRequest,
-        GatewayResponseAdapter, ImportAccountRequest, LlmGatewayAccessResponse,
-        LlmGatewayCreditsView, LlmGatewayEventContext, LlmGatewayPublicKeyView,
-        LlmGatewayRateLimitBucketView, LlmGatewayRateLimitStatusResponse,
-        LlmGatewayRateLimitWindowView, LlmGatewayRuntimeConfigResponse,
-        LlmGatewaySupportConfigView, PatchAccountSettingsRequest, PatchLlmGatewayKeyRequest,
-        PreparedGatewayRequest, PublicLlmGatewayAccountContributionView,
-        PublicLlmGatewayAccountContributionsResponse, PublicLlmGatewaySponsorView,
-        PublicLlmGatewaySponsorsResponse, SubmitLlmGatewayAccountContributionRequest,
+        AdminLlmGatewayUsageEventsResponse, AdminLlmGatewayUsageQuery,
+        AdminUpstreamProxyBindingView, AdminUpstreamProxyBindingsResponse,
+        AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
+        AdminUpstreamProxyConfigView, AdminUpstreamProxyConfigsResponse,
+        CreateAdminUpstreamProxyConfigRequest, CreateLlmGatewayKeyRequest, GatewayResponseAdapter,
+        ImportAccountRequest, LlmGatewayAccessResponse, LlmGatewayCreditsView,
+        LlmGatewayEventContext, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
+        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
+        LlmGatewayRuntimeConfigResponse, LlmGatewaySupportConfigView, PatchAccountSettingsRequest,
+        PatchAdminUpstreamProxyConfigRequest, PatchLlmGatewayKeyRequest, PreparedGatewayRequest,
+        PublicLlmGatewayAccountContributionView, PublicLlmGatewayAccountContributionsResponse,
+        PublicLlmGatewaySponsorView, PublicLlmGatewaySponsorsResponse,
+        SubmitLlmGatewayAccountContributionRequest,
         SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewaySponsorRequest,
         SubmitLlmGatewaySponsorRequestResponse, SubmitLlmGatewayTokenRequest,
-        SubmitLlmGatewayTokenRequestResponse, UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
+        SubmitLlmGatewayTokenRequestResponse, UpdateAdminUpstreamProxyBindingRequest,
+        UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
     },
 };
 use crate::{
@@ -93,24 +104,31 @@ use crate::{
         build_llm_access_url, build_llm_gateway_base_url, normalize_frontend_page_url_input,
         normalize_requester_email_input,
     },
-    handlers::{
-        build_client_fingerprint, build_submit_rate_limit_key, enforce_comment_submit_rate_limit,
-        ensure_admin_access, extract_client_ip, generate_task_id, AdminTaskActionRequest,
-        ErrorResponse,
+    handlers::{ensure_admin_access, generate_task_id, AdminTaskActionRequest, ErrorResponse},
+    public_submit_guard::{
+        build_client_fingerprint, build_submit_rate_limit_key, enforce_public_submit_rate_limit,
+        extract_client_ip,
     },
     state::{AppState, LlmGatewayRuntimeConfig},
+    upstream_proxy::{validate_proxy_url, ResolvedUpstreamProxySource},
 };
 
 const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
 const DEFAULT_CODEX_CLI_VERSION: &str = "0.116.0";
 const FAST_BILLABLE_MULTIPLIER: u64 = 2;
-const MAX_GATEWAY_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
 const MIN_RUNTIME_CACHE_TTL_SECONDS: u64 = 1;
+/// Hard upper bound on the configurable request body size (256 MiB).
+const MAX_RUNTIME_REQUEST_BODY_BYTES: u64 = 256 * 1024 * 1024;
+/// Hard lower bound on the configurable request body size (1 KiB).
+const MIN_RUNTIME_REQUEST_BODY_BYTES: u64 = 1024;
+const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
+const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
 const PUBLIC_RATE_LIMIT_REFRESH_SECONDS: u64 = 60;
 const LAST_MESSAGE_CONTENT_EXTRACT_FAILED: &str = "[extract_failed]";
+const PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS: u64 = 10;
 const MAX_PUBLIC_TOKEN_WISH_REASON_CHARS: usize = 4000;
 const MAX_PUBLIC_TOKEN_WISH_QUOTA: u64 = 100_000_000_000;
 const MAX_PUBLIC_ACCOUNT_CONTRIBUTION_MESSAGE_CHARS: usize = 4000;
@@ -237,6 +255,7 @@ pub async fn get_admin_runtime_config(
     let config = state.llm_gateway_runtime_config.read().await.clone();
     Ok(Json(LlmGatewayRuntimeConfigResponse {
         auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
+        max_request_body_bytes: config.max_request_body_bytes,
     }))
 }
 
@@ -247,16 +266,28 @@ pub async fn update_admin_runtime_config(
     Json(request): Json<UpdateLlmGatewayRuntimeConfigRequest>,
 ) -> Result<Json<LlmGatewayRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
+    let current = state.llm_gateway_runtime_config.read().await.clone();
     let ttl = request
         .auth_cache_ttl_seconds
-        .ok_or_else(|| bad_request("auth_cache_ttl_seconds is required"))?;
+        .unwrap_or(current.auth_cache_ttl_seconds);
     if !(MIN_RUNTIME_CACHE_TTL_SECONDS..=MAX_RUNTIME_CACHE_TTL_SECONDS).contains(&ttl) {
         return Err(bad_request("auth_cache_ttl_seconds is out of range"));
     }
-
+    // Validate max_request_body_bytes within [1 KiB, 256 MiB].
+    let max_request_body_bytes = request
+        .max_request_body_bytes
+        .unwrap_or(current.max_request_body_bytes);
+    if !(MIN_RUNTIME_REQUEST_BODY_BYTES..=MAX_RUNTIME_REQUEST_BODY_BYTES)
+        .contains(&max_request_body_bytes)
+    {
+        return Err(bad_request("max_request_body_bytes is out of range"));
+    }
     let config = LlmGatewayRuntimeConfigRecord {
         id: "default".to_string(),
         auth_cache_ttl_seconds: ttl,
+        max_request_body_bytes,
+        kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
+        kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
         updated_at: now_ms(),
     };
     state
@@ -268,13 +299,271 @@ pub async fn update_admin_runtime_config(
         let mut runtime = state.llm_gateway_runtime_config.write().await;
         *runtime = LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: ttl,
+            max_request_body_bytes,
+            kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
         };
     }
 
-    tracing::info!(auth_cache_ttl_seconds = ttl, "Updated LLM gateway runtime config");
+    tracing::info!(
+        auth_cache_ttl_seconds = ttl,
+        max_request_body_bytes,
+        "Updated LLM gateway runtime config"
+    );
 
     Ok(Json(LlmGatewayRuntimeConfigResponse {
         auth_cache_ttl_seconds: ttl,
+        max_request_body_bytes,
+    }))
+}
+
+/// List reusable upstream proxy configs managed from the admin UI.
+pub async fn list_admin_proxy_configs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AdminUpstreamProxyConfigsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let proxy_configs = state
+        .llm_gateway_store
+        .list_proxy_configs()
+        .await
+        .map_err(|err| internal_error("Failed to list upstream proxy configs", err))?;
+    Ok(Json(AdminUpstreamProxyConfigsResponse {
+        proxy_configs: proxy_configs
+            .iter()
+            .map(AdminUpstreamProxyConfigView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Create one reusable upstream proxy config.
+pub async fn create_admin_proxy_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAdminUpstreamProxyConfigRequest>,
+) -> Result<Json<AdminUpstreamProxyConfigView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let record = build_proxy_config_record(None, request)?;
+    state
+        .llm_gateway_store
+        .create_proxy_config(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create upstream proxy config", err))?;
+    state
+        .upstream_proxy_registry
+        .refresh()
+        .await
+        .map_err(|err| internal_error("Failed to refresh upstream proxy registry", err))?;
+    Ok(Json(AdminUpstreamProxyConfigView::from(&record)))
+}
+
+/// Patch one reusable upstream proxy config.
+pub async fn patch_admin_proxy_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(proxy_id): axum::extract::Path<String>,
+    Json(request): Json<PatchAdminUpstreamProxyConfigRequest>,
+) -> Result<Json<AdminUpstreamProxyConfigView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let mut record = state
+        .llm_gateway_store
+        .get_proxy_config_by_id(&proxy_id)
+        .await
+        .map_err(|err| internal_error("Failed to load upstream proxy config", err))?
+        .ok_or_else(|| not_found("Upstream proxy config not found"))?;
+    if let Some(name) = request.name.as_deref() {
+        record.name = normalize_name(name)?;
+    }
+    if let Some(proxy_url) = request.proxy_url.as_deref() {
+        record.proxy_url = normalize_required_proxy_url(proxy_url)
+            .map_err(|err| bad_request_with_detail("invalid proxy_url", err))?;
+    }
+    if request.proxy_username.is_some() {
+        record.proxy_username = normalize_optional_secret(request.proxy_username.as_deref());
+    }
+    if request.proxy_password.is_some() {
+        record.proxy_password = normalize_optional_secret(request.proxy_password.as_deref());
+    }
+    if let Some(status) = request.status.as_deref() {
+        record.status = normalize_status(status)?;
+    }
+    record.updated_at = now_ms();
+    state
+        .llm_gateway_store
+        .upsert_proxy_config(&record)
+        .await
+        .map_err(|err| internal_error("Failed to update upstream proxy config", err))?;
+    state
+        .upstream_proxy_registry
+        .refresh()
+        .await
+        .map_err(|err| internal_error("Failed to refresh upstream proxy registry", err))?;
+    Ok(Json(AdminUpstreamProxyConfigView::from(&record)))
+}
+
+/// Delete one reusable upstream proxy config. Bound configs must be unbound
+/// first to avoid ambiguous runtime behavior.
+pub async fn delete_admin_proxy_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(proxy_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let config = state
+        .llm_gateway_store
+        .get_proxy_config_by_id(&proxy_id)
+        .await
+        .map_err(|err| internal_error("Failed to load upstream proxy config", err))?
+        .ok_or_else(|| not_found("Upstream proxy config not found"))?;
+    let bindings = state
+        .llm_gateway_store
+        .list_proxy_bindings()
+        .await
+        .map_err(|err| internal_error("Failed to list upstream proxy bindings", err))?;
+    if let Some(binding) = bindings
+        .iter()
+        .find(|binding| binding.proxy_config_id == proxy_id)
+    {
+        return Err(conflict_error(&format!(
+            "proxy config is still bound to provider `{}`",
+            binding.provider_type
+        )));
+    }
+    state
+        .llm_gateway_store
+        .delete_proxy_config(&proxy_id)
+        .await
+        .map_err(|err| internal_error("Failed to delete upstream proxy config", err))?;
+    state
+        .upstream_proxy_registry
+        .refresh()
+        .await
+        .map_err(|err| internal_error("Failed to refresh upstream proxy registry", err))?;
+    Ok(Json(json!({ "deleted": true, "id": config.id })))
+}
+
+/// Probe a reusable upstream proxy config against the real upstream hostnames
+/// used by Codex and Kiro so the admin UI can surface immediate diagnostics.
+pub async fn check_admin_proxy_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path((proxy_id, provider_type)): axum::extract::Path<(String, String)>,
+) -> Result<Json<AdminUpstreamProxyCheckResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    validate_provider_type(&provider_type)?;
+    let config = state
+        .llm_gateway_store
+        .get_proxy_config_by_id(&proxy_id)
+        .await
+        .map_err(|err| internal_error("Failed to load upstream proxy config", err))?
+        .ok_or_else(|| not_found("Upstream proxy config not found"))?;
+    let check = run_proxy_connectivity_check(&state, &config, &provider_type)
+        .await
+        .map_err(|err| internal_error("Failed to check upstream proxy config", err))?;
+    Ok(Json(check))
+}
+
+/// Show the effective provider-level proxy bindings for Codex and Kiro.
+pub async fn list_admin_proxy_bindings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AdminUpstreamProxyBindingsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let views = load_proxy_binding_views(&state)
+        .await
+        .map_err(|err| internal_error("Failed to list upstream proxy bindings", err))?;
+    Ok(Json(AdminUpstreamProxyBindingsResponse {
+        bindings: views,
+        generated_at: now_ms(),
+    }))
+}
+
+/// Update or clear the proxy binding for one provider.
+pub async fn update_admin_proxy_binding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(provider_type): axum::extract::Path<String>,
+    Json(request): Json<UpdateAdminUpstreamProxyBindingRequest>,
+) -> Result<Json<AdminUpstreamProxyBindingView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    validate_provider_type(&provider_type)?;
+    if let Some(proxy_config_id) = request
+        .proxy_config_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let config = state
+            .llm_gateway_store
+            .get_proxy_config_by_id(proxy_config_id)
+            .await
+            .map_err(|err| internal_error("Failed to load upstream proxy config", err))?
+            .ok_or_else(|| not_found("Upstream proxy config not found"))?;
+        if config.status != LLM_GATEWAY_KEY_STATUS_ACTIVE {
+            return Err(bad_request("proxy config must be active before binding"));
+        }
+        let binding = LlmGatewayProxyBindingRecord {
+            provider_type: provider_type.clone(),
+            proxy_config_id: config.id.clone(),
+            updated_at: now_ms(),
+        };
+        state
+            .llm_gateway_store
+            .upsert_proxy_binding(&binding)
+            .await
+            .map_err(|err| internal_error("Failed to update upstream proxy binding", err))?;
+    } else {
+        state
+            .llm_gateway_store
+            .delete_proxy_binding(&provider_type)
+            .await
+            .map_err(|err| internal_error("Failed to clear upstream proxy binding", err))?;
+    }
+    state
+        .upstream_proxy_registry
+        .refresh()
+        .await
+        .map_err(|err| internal_error("Failed to refresh upstream proxy registry", err))?;
+    let view = load_proxy_binding_views(&state)
+        .await
+        .map_err(|err| internal_error("Failed to load updated upstream proxy binding", err))?
+        .into_iter()
+        .find(|view| view.provider_type == provider_type)
+        .ok_or_else(|| {
+            internal_error(
+                "Updated upstream proxy binding disappeared",
+                "binding missing after refresh",
+            )
+        })?;
+    Ok(Json(view))
+}
+
+/// Import legacy Kiro account-level proxy settings into the shared proxy
+/// registry and clear them from the per-account auth JSON files.
+pub async fn import_legacy_kiro_proxy_configs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AdminLegacyKiroProxyMigrationResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let result = state
+        .upstream_proxy_registry
+        .import_legacy_kiro_account_proxies()
+        .await
+        .map_err(|err| internal_error("Failed to import legacy Kiro proxy configs", err))?;
+    Ok(Json(AdminLegacyKiroProxyMigrationResponse {
+        created_configs: result
+            .created_configs
+            .iter()
+            .map(AdminUpstreamProxyConfigView::from)
+            .collect(),
+        reused_configs: result
+            .reused_configs
+            .iter()
+            .map(AdminUpstreamProxyConfigView::from)
+            .collect(),
+        migrated_account_names: result.migrated_account_names,
+        generated_at: now_ms(),
     }))
 }
 
@@ -308,15 +597,20 @@ pub async fn create_admin_key(
 ) -> Result<Json<AdminLlmGatewayKeyView>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let name = normalize_name(&request.name)?;
-    let record = create_managed_key_record(
-        &state,
+    validate_codex_key_request_limit_inputs(
+        request.request_max_concurrency,
+        request.request_min_start_interval_ms,
+    )?;
+    let record = create_managed_key_record(&state, ManagedKeyCreateInput {
         name,
-        request.quota_billable_limit,
-        request.public_visible,
-        None,
-        None,
-        None,
-    )
+        quota_billable_limit: request.quota_billable_limit,
+        public_visible: request.public_visible,
+        route_strategy: None,
+        fixed_account_name: None,
+        auto_account_names: None,
+        request_max_concurrency: request.request_max_concurrency,
+        request_min_start_interval_ms: request.request_min_start_interval_ms,
+    })
     .await?;
 
     tracing::info!(
@@ -330,40 +624,52 @@ pub async fn create_admin_key(
     Ok(Json(AdminLlmGatewayKeyView::from(&record)))
 }
 
-async fn create_managed_key_record(
-    state: &AppState,
+struct ManagedKeyCreateInput {
     name: String,
     quota_billable_limit: u64,
     public_visible: bool,
     route_strategy: Option<String>,
     fixed_account_name: Option<String>,
     auto_account_names: Option<Vec<String>>,
+    request_max_concurrency: Option<u64>,
+    request_min_start_interval_ms: Option<u64>,
+}
+
+async fn create_managed_key_record(
+    state: &AppState,
+    input: ManagedKeyCreateInput,
 ) -> Result<LlmGatewayKeyRecord, (StatusCode, Json<ErrorResponse>)> {
     let secret = generate_secret();
     let key_hash = sha256_hex(secret.as_bytes());
     let now = now_ms();
     let record = LlmGatewayKeyRecord {
         id: generate_id("llm-key"),
-        name,
+        name: input.name,
         secret,
         key_hash: key_hash.clone(),
         status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
-        public_visible,
-        quota_billable_limit,
+        provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+        protocol_family: LLM_GATEWAY_PROTOCOL_OPENAI.to_string(),
+        public_visible: input.public_visible,
+        quota_billable_limit: input.quota_billable_limit,
         usage_input_uncached_tokens: 0,
         usage_input_cached_tokens: 0,
         usage_output_tokens: 0,
         usage_billable_tokens: 0,
+        usage_credit_total: 0.0,
+        usage_credit_missing_events: 0,
         last_used_at: None,
         created_at: now,
         updated_at: now,
-        route_strategy,
-        fixed_account_name,
-        auto_account_names,
+        route_strategy: input.route_strategy,
+        fixed_account_name: input.fixed_account_name,
+        auto_account_names: input.auto_account_names,
+        request_max_concurrency: input.request_max_concurrency,
+        request_min_start_interval_ms: input.request_min_start_interval_ms,
     };
     state
         .llm_gateway_store
-        .upsert_key(&record)
+        .create_key(&record)
         .await
         .map_err(|err| internal_error("Failed to create llm gateway key", err))?;
     let ttl = current_cache_ttl(state).await;
@@ -389,6 +695,10 @@ pub async fn patch_admin_key(
         .map_err(|err| internal_error("Failed to load llm gateway key", err))?
         .ok_or_else(|| not_found("LLM gateway key not found"))?;
 
+    if key.provider_type != LLM_GATEWAY_PROVIDER_CODEX {
+        return Err(bad_request("Kiro keys must be managed from /admin/kiro-gateway"));
+    }
+
     if let Some(name) = request.name.as_deref() {
         key.name = normalize_name(name)?;
     }
@@ -413,6 +723,21 @@ pub async fn patch_admin_key(
         key.auto_account_names = normalize_auto_account_names_input(Some(account_names))
             .map_err(|err| bad_request_with_detail("invalid auto_account_names", err))?;
     }
+    if request.request_max_concurrency_unlimited {
+        key.request_max_concurrency = None;
+    } else if let Some(value) = request.request_max_concurrency {
+        key.request_max_concurrency = Some(value);
+    }
+    if request.request_min_start_interval_ms_unlimited {
+        key.request_min_start_interval_ms = None;
+    } else if let Some(value) = request.request_min_start_interval_ms {
+        key.request_min_start_interval_ms = Some(value);
+    }
+
+    validate_codex_key_request_limit_inputs(
+        key.request_max_concurrency,
+        key.request_min_start_interval_ms,
+    )?;
 
     match key.route_strategy.as_deref().unwrap_or("auto") {
         "fixed" => {
@@ -427,8 +752,31 @@ pub async fn patch_admin_key(
         "auto" => {
             key.fixed_account_name = None;
             if let Some(ref auto_account_names) = key.auto_account_names {
-                validate_account_names_exist(&state.llm_gateway.account_pool, auto_account_names)
-                    .await?;
+                let (existing_account_names, missing_account_names) =
+                    partition_existing_account_names(
+                        &state.llm_gateway.account_pool,
+                        auto_account_names,
+                    )
+                    .await;
+                if existing_account_names.is_empty() {
+                    return Err(bad_request_with_detail(
+                        "invalid auto_account_names",
+                        anyhow!(
+                            "none of the configured auto accounts exist anymore: {}",
+                            missing_account_names.join(", ")
+                        ),
+                    ));
+                }
+                if !missing_account_names.is_empty() {
+                    tracing::warn!(
+                        key_id = %key.id,
+                        key_name = %key.name,
+                        missing_auto_account_names = ?missing_account_names,
+                        effective_auto_account_names = ?existing_account_names,
+                        "dropping unknown codex auto account names while saving key"
+                    );
+                }
+                key.auto_account_names = Some(existing_account_names);
             }
         },
         _ => return Err(bad_request("route_strategy must be `auto` or `fixed`")),
@@ -436,7 +784,7 @@ pub async fn patch_admin_key(
     key.updated_at = now_ms();
     state
         .llm_gateway_store
-        .upsert_key(&key)
+        .replace_key(&key)
         .await
         .map_err(|err| internal_error("Failed to update llm gateway key", err))?;
 
@@ -530,7 +878,7 @@ pub async fn list_admin_usage_events(
     let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
     let mut events = state
         .llm_gateway_store
-        .query_usage_events(query.key_id.as_deref(), Some(fetch_count), Some(reverse_offset))
+        .query_usage_events(query.key_id.as_deref(), None, Some(fetch_count), Some(reverse_offset))
         .await
         .map_err(|err| internal_error("Failed to query llm gateway usage events", err))?;
     events.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -587,11 +935,12 @@ pub async fn submit_public_token_request(
     let client_ip = extract_client_ip(&headers);
     let fingerprint = build_client_fingerprint(&headers);
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
-    enforce_comment_submit_rate_limit(
-        state.llm_gateway_token_request_submit_guard.as_ref(),
+    enforce_public_submit_rate_limit(
+        state.llm_gateway_public_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms(),
         60,
+        "llm-access public submission",
     )
     .await?;
 
@@ -714,6 +1063,326 @@ fn normalize_auto_account_names_input(value: Option<Vec<String>>) -> Result<Opti
     Ok(Some(names))
 }
 
+fn validate_codex_key_request_limit_inputs(
+    request_max_concurrency: Option<u64>,
+    request_min_start_interval_ms: Option<u64>,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if let Some(value) = request_max_concurrency {
+        if value == 0 || value > MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY {
+            return Err(bad_request("request_max_concurrency is out of range"));
+        }
+    }
+    if let Some(value) = request_min_start_interval_ms {
+        if value > MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS {
+            return Err(bad_request("request_min_start_interval_ms is out of range"));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_required_proxy_url(raw: &str) -> Result<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        anyhow::bail!("proxy_url is required");
+    }
+    validate_proxy_url(value)?;
+    Ok(value.to_string())
+}
+
+fn normalize_optional_secret(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn validate_provider_type(provider_type: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    match provider_type {
+        LLM_GATEWAY_PROVIDER_CODEX | LLM_GATEWAY_PROVIDER_KIRO => Ok(()),
+        _ => Err(bad_request("provider_type must be `codex` or `kiro`")),
+    }
+}
+
+fn build_proxy_config_record(
+    existing: Option<&LlmGatewayProxyConfigRecord>,
+    request: CreateAdminUpstreamProxyConfigRequest,
+) -> Result<LlmGatewayProxyConfigRecord, (StatusCode, Json<ErrorResponse>)> {
+    let now = now_ms();
+    Ok(LlmGatewayProxyConfigRecord {
+        id: existing
+            .map(|value| value.id.clone())
+            .unwrap_or_else(|| generate_id("llm-proxy")),
+        name: normalize_name(&request.name)?,
+        proxy_url: normalize_required_proxy_url(&request.proxy_url)
+            .map_err(|err| bad_request_with_detail("invalid proxy_url", err))?,
+        proxy_username: normalize_optional_secret(request.proxy_username.as_deref()),
+        proxy_password: normalize_optional_secret(request.proxy_password.as_deref()),
+        status: existing
+            .map(|value| value.status.clone())
+            .unwrap_or_else(|| LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string()),
+        created_at: existing.map(|value| value.created_at).unwrap_or(now),
+        updated_at: now,
+    })
+}
+
+async fn load_proxy_binding_views(state: &AppState) -> Result<Vec<AdminUpstreamProxyBindingView>> {
+    let mut views = Vec::new();
+    let configs = state.llm_gateway_store.list_proxy_configs().await?;
+    let configs_by_id = configs
+        .into_iter()
+        .map(|record| (record.id.clone(), record))
+        .collect::<std::collections::HashMap<_, _>>();
+    let bindings = state
+        .llm_gateway_store
+        .list_proxy_bindings()
+        .await?
+        .into_iter()
+        .map(|record| (record.provider_type.clone(), record))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for provider_type in [LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO] {
+        let binding = bindings.get(provider_type);
+        match state
+            .upstream_proxy_registry
+            .resolve_provider_proxy(provider_type)
+            .await
+        {
+            Ok(resolved) => views.push(AdminUpstreamProxyBindingView {
+                provider_type: provider_type.to_string(),
+                effective_source: match resolved.source {
+                    ResolvedUpstreamProxySource::Binding => "binding",
+                    ResolvedUpstreamProxySource::EnvFallback => "env_fallback",
+                }
+                .to_string(),
+                bound_proxy_config_id: binding.map(|value| value.proxy_config_id.clone()),
+                effective_proxy_config_name: resolved.proxy_config_name.clone(),
+                effective_proxy_url: Some(resolved.proxy_url.clone()),
+                effective_proxy_username: resolved.proxy_username.clone(),
+                effective_proxy_password: resolved.proxy_password.clone(),
+                binding_updated_at: resolved.binding_updated_at,
+                error_message: None,
+            }),
+            Err(err) => {
+                let bound_proxy_config_id = binding.map(|value| value.proxy_config_id.clone());
+                let effective_proxy_config_name = bound_proxy_config_id
+                    .as_ref()
+                    .and_then(|id| configs_by_id.get(id))
+                    .map(|config| config.name.clone());
+                views.push(AdminUpstreamProxyBindingView {
+                    provider_type: provider_type.to_string(),
+                    effective_source: "invalid".to_string(),
+                    bound_proxy_config_id,
+                    effective_proxy_config_name,
+                    effective_proxy_url: None,
+                    effective_proxy_username: None,
+                    effective_proxy_password: None,
+                    binding_updated_at: binding.map(|value| value.updated_at),
+                    error_message: Some(err.to_string()),
+                });
+            },
+        }
+    }
+
+    Ok(views)
+}
+
+async fn run_proxy_connectivity_check(
+    state: &AppState,
+    config: &LlmGatewayProxyConfigRecord,
+    provider_type: &str,
+) -> Result<AdminUpstreamProxyCheckResponse> {
+    let (auth_label, target) = match provider_type {
+        LLM_GATEWAY_PROVIDER_CODEX => run_codex_proxy_connectivity_check(state, config).await?,
+        LLM_GATEWAY_PROVIDER_KIRO => run_kiro_proxy_connectivity_check(state, config).await?,
+        _ => unreachable!("provider type must be validated before dispatch"),
+    };
+
+    Ok(AdminUpstreamProxyCheckResponse {
+        proxy_config_id: config.id.clone(),
+        proxy_config_name: config.name.clone(),
+        provider_type: provider_type.to_string(),
+        auth_label,
+        ok: target.reachable,
+        targets: vec![target],
+        checked_at: now_ms(),
+    })
+}
+
+async fn run_codex_proxy_connectivity_check(
+    state: &AppState,
+    config: &LlmGatewayProxyConfigRecord,
+) -> Result<(String, AdminUpstreamProxyCheckTargetView)> {
+    let (auth_snapshot, auth_label) = if let Some((account_name, snapshot, _)) = state
+        .llm_gateway
+        .account_pool
+        .select_best_account(None)
+        .await
+    {
+        (snapshot, format!("Codex account `{account_name}`"))
+    } else {
+        (
+            state.llm_gateway.auth_source.current().await?,
+            "legacy Codex auth `~/.codex/auth.json`".to_string(),
+        )
+    };
+    let upstream_base = std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL")
+        .ok()
+        .map(|value| normalize_upstream_base_url(&value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_UPSTREAM_BASE_URL.to_string());
+    let url = append_client_version_query(
+        &compute_upstream_url(&upstream_base, "/v1/models"),
+        DEFAULT_CODEX_CLI_VERSION,
+    );
+    let client = build_proxy_client(config, PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS)?;
+    let mut headers = ReqwestHeaderMap::new();
+    headers.insert(header::AUTHORIZATION, bearer_header(&auth_snapshot.access_token)?);
+    headers.insert(header::ACCEPT, ReqwestHeaderValue::from_static("application/json"));
+    headers.insert(header::USER_AGENT, ReqwestHeaderValue::from_str(&codex_user_agent())?);
+    headers.insert(
+        reqwest::header::HeaderName::from_static("originator"),
+        ReqwestHeaderValue::from_static(DEFAULT_WIRE_ORIGINATOR),
+    );
+    if let Some(account_id) = auth_snapshot.account_id.as_deref() {
+        headers.insert(
+            reqwest::header::HeaderName::from_static("chatgpt-account-id"),
+            ReqwestHeaderValue::from_str(account_id)?,
+        );
+    }
+    let started_at = Instant::now();
+    let response = client
+        .get(&url)
+        .headers(headers)
+        .send()
+        .await
+        .context("request codex proxy connectivity check")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Ok((auth_label, AdminUpstreamProxyCheckTargetView {
+        target: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+        url,
+        reachable: status.is_success(),
+        status_code: Some(status.as_u16()),
+        latency_ms: started_at.elapsed().as_millis() as i64,
+        error_message: (!status.is_success()).then(|| summarize_upstream_error_body(&body)),
+    }))
+}
+
+async fn run_kiro_proxy_connectivity_check(
+    state: &AppState,
+    config: &LlmGatewayProxyConfigRecord,
+) -> Result<(String, AdminUpstreamProxyCheckTargetView)> {
+    let current_account_name = state
+        .kiro_gateway
+        .token_manager
+        .current_account_name()
+        .await;
+    let auths = state.kiro_gateway.token_manager.list_auths().await?;
+    let account_name = current_account_name
+        .filter(|name| {
+            auths
+                .iter()
+                .any(|auth| auth.name == *name && !auth.disabled)
+        })
+        .or_else(|| {
+            auths
+                .iter()
+                .find(|item| !item.disabled)
+                .map(|item| item.name.clone())
+        })
+        .ok_or_else(|| anyhow!("no kiro account available for proxy check"))?;
+    let ctx = state
+        .kiro_gateway
+        .token_manager
+        .ensure_context_for_account(&account_name, false)
+        .await?;
+    let auth = ctx.auth.clone();
+    let region = auth.effective_api_region().to_string();
+    let host = format!("q.{region}.amazonaws.com");
+    let url = if let Some(profile_arn) = auth.profile_arn.as_deref() {
+        format!(
+            "https://{host}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST&profileArn={}",
+            urlencoding::encode(profile_arn)
+        )
+    } else {
+        format!("https://{host}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST")
+    };
+    let machine_id =
+        crate::kiro_gateway::machine_id::generate_from_auth(&auth).ok_or_else(|| {
+            anyhow!("failed to derive machine_id from selected kiro auth `{account_name}`")
+        })?;
+    let user_agent = format!(
+        "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E \
+         KiroIDE-{}-{}",
+        crate::kiro_gateway::auth_file::DEFAULT_SYSTEM_VERSION,
+        crate::kiro_gateway::auth_file::DEFAULT_NODE_VERSION,
+        crate::kiro_gateway::auth_file::DEFAULT_KIRO_VERSION,
+        machine_id
+    );
+    let amz_user_agent = format!(
+        "aws-sdk-js/1.0.0 KiroIDE-{}-{}",
+        crate::kiro_gateway::auth_file::DEFAULT_KIRO_VERSION,
+        machine_id
+    );
+    let client = build_proxy_client(config, PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS)?;
+    let started_at = Instant::now();
+    let response = client
+        .get(&url)
+        .header("x-amz-user-agent", amz_user_agent)
+        .header("user-agent", user_agent)
+        .header("host", host)
+        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+        .header("amz-sdk-request", "attempt=1; max=1")
+        .header("authorization", format!("Bearer {}", ctx.token))
+        .header("connection", "close")
+        .send()
+        .await
+        .context("request kiro proxy connectivity check")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Ok((format!("Kiro account `{account_name}`"), AdminUpstreamProxyCheckTargetView {
+        target: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+        url,
+        reachable: status.is_success(),
+        status_code: Some(status.as_u16()),
+        latency_ms: started_at.elapsed().as_millis() as i64,
+        error_message: (!status.is_success()).then(|| summarize_upstream_error_body(&body)),
+    }))
+}
+
+fn build_proxy_client(
+    config: &LlmGatewayProxyConfigRecord,
+    timeout_secs: u64,
+) -> Result<reqwest::Client> {
+    validate_proxy_url(&config.proxy_url)?;
+    let proxy = build_proxy_config(config)?;
+    reqwest::Client::builder()
+        .proxy(proxy)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .context("build proxy connectivity client")
+}
+
+fn build_proxy_config(config: &LlmGatewayProxyConfigRecord) -> Result<reqwest::Proxy> {
+    let mut proxy = reqwest::Proxy::all(&config.proxy_url)
+        .with_context(|| format!("failed to build proxy `{}`", config.proxy_url))?;
+    if let Some(username) = config.proxy_username.as_deref() {
+        proxy = proxy.basic_auth(username, config.proxy_password.as_deref().unwrap_or(""));
+    }
+    Ok(proxy)
+}
+
+fn summarize_upstream_error_body(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        "empty body".to_string()
+    } else {
+        trimmed.chars().take(200).collect()
+    }
+}
+
 async fn validate_account_names_exist(
     pool: &AccountPool,
     names: &[String],
@@ -724,6 +1393,22 @@ async fn validate_account_names_exist(
         }
     }
     Ok(())
+}
+
+async fn partition_existing_account_names(
+    pool: &AccountPool,
+    names: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut existing = Vec::new();
+    let mut missing = Vec::new();
+    for name in names {
+        if pool.exists(name).await {
+            existing.push(name.clone());
+        } else {
+            missing.push(name.clone());
+        }
+    }
+    (existing, missing)
 }
 
 /// Accept a public Codex account contribution request from `/llm-access`.
@@ -767,11 +1452,12 @@ pub async fn submit_public_account_contribution_request(
     let client_ip = extract_client_ip(&headers);
     let fingerprint = build_client_fingerprint(&headers);
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
-    enforce_comment_submit_rate_limit(
-        state.llm_gateway_token_request_submit_guard.as_ref(),
+    enforce_public_submit_rate_limit(
+        state.llm_gateway_public_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms(),
         60,
+        "llm-access public submission",
     )
     .await?;
 
@@ -904,11 +1590,12 @@ pub async fn submit_public_sponsor_request(
     let client_ip = extract_client_ip(&headers);
     let fingerprint = build_client_fingerprint(&headers);
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
-    enforce_comment_submit_rate_limit(
-        state.llm_gateway_token_request_submit_guard.as_ref(),
+    enforce_public_submit_rate_limit(
+        state.llm_gateway_public_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms(),
         60,
+        "llm-access public submission",
     )
     .await?;
 
@@ -1204,15 +1891,16 @@ pub async fn approve_and_issue_token_request(
             .ok_or_else(|| not_found("Previously issued LLM gateway key not found"))?
     } else {
         let key_name = normalize_name(&format!("wish-{}", token_request.request_id))?;
-        create_managed_key_record(
-            &state,
-            key_name,
-            token_request.requested_quota_billable_limit,
-            false,
-            None,
-            None,
-            None,
-        )
+        create_managed_key_record(&state, ManagedKeyCreateInput {
+            name: key_name,
+            quota_billable_limit: token_request.requested_quota_billable_limit,
+            public_visible: false,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        })
         .await?
     };
 
@@ -1453,27 +2141,29 @@ pub async fn approve_and_issue_account_contribution_request(
         contribution_request.access_token.clone(),
         contribution_request.account_id.clone(),
     );
-    let usage = match token_refresh::validate_account_usage(&state.llm_gateway.client, &auth).await
-    {
-        Ok(usage) => usage,
-        Err(err) => {
-            contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
-            contribution_request.failure_reason = Some(err.to_string());
-            contribution_request.updated_at = now_ms();
-            contribution_request.processed_at = Some(now_ms());
-            state
-                .llm_gateway_store
-                .upsert_account_contribution_request(&contribution_request)
-                .await
-                .map_err(|upsert_err| {
-                    internal_error(
-                        "Failed to persist llm gateway account contribution request failure",
-                        upsert_err,
-                    )
-                })?;
-            return Err(bad_request(&format!("account verification failed: {err}")));
-        },
-    };
+    let usage =
+        match token_refresh::validate_account_usage(state.upstream_proxy_registry.as_ref(), &auth)
+            .await
+        {
+            Ok(usage) => usage,
+            Err(err) => {
+                contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+                contribution_request.failure_reason = Some(err.to_string());
+                contribution_request.updated_at = now_ms();
+                contribution_request.processed_at = Some(now_ms());
+                state
+                    .llm_gateway_store
+                    .upsert_account_contribution_request(&contribution_request)
+                    .await
+                    .map_err(|upsert_err| {
+                        internal_error(
+                            "Failed to persist llm gateway account contribution request failure",
+                            upsert_err,
+                        )
+                    })?;
+                return Err(bad_request(&format!("account verification failed: {err}")));
+            },
+        };
 
     let imported_account_name = contribution_request
         .imported_account_name
@@ -1532,29 +2222,31 @@ pub async fn approve_and_issue_account_contribution_request(
             None => {
                 let key_name =
                     normalize_name(&format!("contrib-{}", contribution_request.request_id))?;
-                create_managed_key_record(
-                    &state,
-                    key_name,
-                    100_000_000_000,
-                    false,
-                    Some("fixed".to_string()),
-                    Some(imported_account_name.clone()),
-                    None,
-                )
+                create_managed_key_record(&state, ManagedKeyCreateInput {
+                    name: key_name,
+                    quota_billable_limit: 100_000_000_000,
+                    public_visible: false,
+                    route_strategy: Some("fixed".to_string()),
+                    fixed_account_name: Some(imported_account_name.clone()),
+                    auto_account_names: None,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
+                })
                 .await?
             },
         }
     } else {
         let key_name = normalize_name(&format!("contrib-{}", contribution_request.request_id))?;
-        create_managed_key_record(
-            &state,
-            key_name,
-            100_000_000_000,
-            false,
-            Some("fixed".to_string()),
-            Some(imported_account_name.clone()),
-            None,
-        )
+        create_managed_key_record(&state, ManagedKeyCreateInput {
+            name: key_name,
+            quota_billable_limit: 100_000_000_000,
+            public_visible: false,
+            route_strategy: Some("fixed".to_string()),
+            fixed_account_name: Some(imported_account_name.clone()),
+            auto_account_names: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        })
         .await?
     };
 
@@ -1880,8 +2572,9 @@ pub async fn proxy_gateway_request(
         "Validated LLM gateway key and forwarding request"
     );
 
+    let refresh_route_usage = !request::is_models_path(&gateway_path);
     let (auth_snapshot, selected_account_name, map_gpt53_codex_to_spark) =
-        resolve_auth_for_key(&state, &key_lease.record).await?;
+        resolve_auth_for_key(&state, &key_lease.record, refresh_route_usage).await?;
 
     if request::is_models_path(&gateway_path) {
         return respond_local_models(
@@ -1894,9 +2587,29 @@ pub async fn proxy_gateway_request(
         .await;
     }
 
-    let prepared =
-        normalize_gateway_request(&gateway_path, &query, parts.method, &parts.headers, body)
-            .await?;
+    let request_limit_lease = state
+        .llm_gateway
+        .request_scheduler
+        .try_acquire(&key_lease.record)
+        .map_err(|rejection| codex_key_request_limit_error(&key_lease.record, rejection))?;
+
+    let max_request_body_bytes = usize::try_from(
+        state
+            .llm_gateway_runtime_config
+            .read()
+            .await
+            .max_request_body_bytes,
+    )
+    .map_err(|err| internal_error("Invalid llm gateway max request body size", err))?;
+    let prepared = normalize_gateway_request(
+        &gateway_path,
+        &query,
+        parts.method,
+        &parts.headers,
+        body,
+        max_request_body_bytes,
+    )
+    .await?;
     let prepared = apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark)?;
 
     let response = send_upstream_with_retry(&state, &prepared, &parts.headers, &auth_snapshot)
@@ -1906,6 +2619,7 @@ pub async fn proxy_gateway_request(
     forward_upstream_response(
         state,
         key_lease,
+        request_limit_lease,
         prepared,
         response,
         event_context,
@@ -1960,14 +2674,16 @@ fn validate_cached_key(key: &LlmGatewayKeyRecord) -> Result<(), (StatusCode, Jso
 /// Routing order:
 /// 1. `fixed` + `fixed_account_name` → use that specific account from the pool.
 /// 2. `auto` + `auto_account_names` → pick the best active account only from
-///    that subset.
-/// 3. `auto` (or subset exhausted) → pick the best active account from the full
+///    that subset. If none of the configured subset accounts are usable, fail
+///    the request instead of widening the routing scope.
+/// 3. `auto` without a subset → pick the best active account from the full
 ///    pool.
 /// 4. Fallback → if the pool is empty, use the legacy single-file
 ///    `CodexAuthSource`.
 async fn resolve_auth_for_key(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
+    refresh_route_usage: bool,
 ) -> Result<(CodexAuthSnapshot, Option<String>, bool), (StatusCode, Json<ErrorResponse>)> {
     let pool = &state.llm_gateway.account_pool;
     let strategy = key.route_strategy.as_deref().unwrap_or("auto");
@@ -1978,7 +2694,8 @@ async fn resolve_auth_for_key(
             if name.is_empty() {
                 return Err(bad_request("fixed route_strategy requires fixed_account_name"));
             }
-            pool.get_account(name)
+            let selected = pool
+                .get_account(name)
                 .await
                 .map(|(snapshot, map_gpt53_codex_to_spark)| {
                     (snapshot, Some(name.to_string()), map_gpt53_codex_to_spark)
@@ -1988,30 +2705,136 @@ async fn resolve_auth_for_key(
                         StatusCode::SERVICE_UNAVAILABLE,
                         &format!("bound account `{name}` is unavailable"),
                     )
-                })
+                })?;
+            if refresh_route_usage {
+                pool.record_route_selection(name).await;
+            }
+            tracing::info!(
+                key_id = %key.id,
+                key_name = %key.name,
+                strategy = "fixed",
+                account = name,
+                "resolved codex upstream account for key"
+            );
+            Ok(selected)
         },
         "auto" => {
-            let auto_account_filter = key.auto_account_names.as_ref().and_then(|names| {
-                (!names.is_empty()).then(|| names.iter().cloned().collect::<HashSet<_>>())
-            });
+            let subset_resolution = if let Some(names) = key.auto_account_names.as_ref() {
+                let (existing_account_names, missing_account_names) =
+                    partition_existing_account_names(pool, names).await;
+                if !missing_account_names.is_empty() {
+                    tracing::warn!(
+                        key_id = %key.id,
+                        key_name = %key.name,
+                        missing_auto_account_names = ?missing_account_names,
+                        effective_auto_account_names = ?existing_account_names,
+                        "ignoring unknown codex auto account names during request routing"
+                    );
+                }
+                Some((existing_account_names, missing_account_names))
+            } else {
+                None
+            };
+
+            if let Some((existing_account_names, configured_missing_names)) =
+                subset_resolution.as_ref()
+            {
+                if existing_account_names.is_empty() {
+                    let configured_subset = key.auto_account_names.clone().unwrap_or_default();
+                    tracing::warn!(
+                        key_id = %key.id,
+                        key_name = %key.name,
+                        auto_account_names = ?configured_subset,
+                        missing_auto_account_names = ?configured_missing_names,
+                        "configured codex auto account subset has no existing accounts"
+                    );
+                    return Err(auth_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &format!(
+                            "configured auto account subset has no existing accounts: {}",
+                            configured_subset.join(", ")
+                        ),
+                    ));
+                }
+            }
+
+            let auto_account_filter = subset_resolution.as_ref().and_then(
+                |(existing_account_names, _configured_missing_names)| {
+                    (!existing_account_names.is_empty()).then(|| {
+                        existing_account_names
+                            .iter()
+                            .cloned()
+                            .collect::<HashSet<_>>()
+                    })
+                },
+            );
 
             if let Some(filter) = auto_account_filter.as_ref() {
+                if refresh_route_usage {
+                    token_refresh::refresh_routing_candidates(
+                        pool,
+                        state.llm_gateway.upstream_proxy_registry.as_ref(),
+                        Some(filter),
+                    )
+                    .await;
+                }
                 if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
                     pool.select_best_account(Some(filter)).await
                 {
+                    if refresh_route_usage {
+                        pool.record_route_selection(&name).await;
+                    }
+                    tracing::info!(
+                        key_id = %key.id,
+                        key_name = %key.name,
+                        strategy = "auto_subset",
+                        selected_account = %name,
+                        auto_account_names = ?key.auto_account_names,
+                        "resolved codex upstream account for key"
+                    );
                     return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
                 }
+                let configured_subset = subset_resolution
+                    .as_ref()
+                    .map(|(existing_account_names, _)| existing_account_names.clone())
+                    .unwrap_or_default();
                 tracing::warn!(
                     key_id = %key.id,
                     key_name = %key.name,
-                    auto_account_names = ?key.auto_account_names,
-                    "configured auto account subset had no usable accounts; falling back to global auto"
+                    auto_account_names = ?configured_subset,
+                    "configured codex auto account subset had no usable accounts"
                 );
+                return Err(auth_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    &format!(
+                        "configured auto account subset has no usable accounts: {}",
+                        configured_subset.join(", ")
+                    ),
+                ));
             }
 
+            if refresh_route_usage {
+                token_refresh::refresh_routing_candidates(
+                    pool,
+                    state.llm_gateway.upstream_proxy_registry.as_ref(),
+                    None,
+                )
+                .await;
+            }
             if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
                 pool.select_best_account(None).await
             {
+                if refresh_route_usage {
+                    pool.record_route_selection(&name).await;
+                }
+                tracing::info!(
+                    key_id = %key.id,
+                    key_name = %key.name,
+                    strategy = "auto_global",
+                    selected_account = %name,
+                    auto_account_names = ?key.auto_account_names,
+                    "resolved codex upstream account for key"
+                );
                 return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
             }
             state
@@ -2196,9 +3019,12 @@ async fn send_upstream(
         "Sending LLM gateway request upstream"
     );
 
-    let mut request_builder = state
+    let client = state
         .llm_gateway
-        .client
+        .build_upstream_client()
+        .await
+        .context("failed to build codex upstream client")?;
+    let mut request_builder = client
         .request(prepared.method.clone(), upstream_url)
         .headers(headers);
     if !prepared.request_body.is_empty() {
@@ -2217,6 +3043,7 @@ async fn send_upstream(
 async fn forward_upstream_response(
     state: AppState,
     key_lease: Arc<CachedKeyLease>,
+    request_limit_lease: CodexKeyRequestLease,
     prepared: PreparedGatewayRequest,
     upstream: reqwest::Response,
     event_context: Option<LlmGatewayEventContext>,
@@ -2325,8 +3152,10 @@ async fn forward_upstream_response(
 
         let gateway = state.llm_gateway.clone();
         let stream_key_lease = key_lease.clone();
+        let stream_request_limit_lease = request_limit_lease;
         let stream_response_adapter = response_adapter;
         let body_stream = stream! {
+            let _request_limit_lease = stream_request_limit_lease;
             let mut collector = SseUsageCollector::default();
             let mut chat_metadata = types::ChatStreamMetadata::default();
             let mut events = upstream
@@ -2523,6 +3352,7 @@ async fn persist_gateway_usage(
         id: generate_id("llm-usage"),
         key_id: current.id.clone(),
         key_name: current.name.clone(),
+        provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
         account_name: selected_account_name
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -2538,6 +3368,8 @@ async fn persist_gateway_usage(
         output_tokens: usage.output_tokens,
         billable_tokens: usage.billable_tokens_with_multiplier(prepared.billable_multiplier),
         usage_missing: usage.usage_missing,
+        credit_usage: None,
+        credit_usage_missing: false,
         client_ip: context.client_ip,
         ip_region: context.ip_region,
         request_headers_json: context.request_headers_json,
@@ -2597,8 +3429,8 @@ async fn send_rate_limit_status_request(
     source_url: &str,
     auth_snapshot: &CodexAuthSnapshot,
 ) -> Result<UsageStatusPayload> {
-    let mut request = runtime
-        .client
+    let client = runtime.build_upstream_client().await?;
+    let mut request = client
         .get(source_url)
         .header(reqwest::header::USER_AGENT, codex_user_agent())
         .header(reqwest::header::AUTHORIZATION, bearer_header(&auth_snapshot.access_token)?)
@@ -2888,6 +3720,64 @@ fn auth_error(status: StatusCode, message: &str) -> (StatusCode, Json<ErrorRespo
     )
 }
 
+fn codex_key_request_limit_error(
+    key: &LlmGatewayKeyRecord,
+    rejection: CodexKeyRequestLimitRejection,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let max_concurrency = rejection
+        .max_concurrency
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unlimited".to_string());
+    let min_start_interval_ms = rejection
+        .min_start_interval_ms
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unlimited".to_string());
+    let message = match rejection.reason {
+        "local_concurrency_limit" => format!(
+            "codex key request limit exceeded: key `{}` allows at most {} concurrent requests; \
+             currently {} requests are already in flight (request_max_concurrency={}, \
+             request_min_start_interval_ms={})",
+            key.name,
+            rejection.max_concurrency.unwrap_or(0),
+            rejection.in_flight,
+            max_concurrency,
+            min_start_interval_ms,
+        ),
+        "local_start_interval" => format!(
+            "codex key pacing limit exceeded: key `{}` requires at least {} ms between request \
+             starts; elapsed={} ms, remaining_wait={} ms, in_flight={}, \
+             request_max_concurrency={}, request_min_start_interval_ms={}",
+            key.name,
+            rejection.min_start_interval_ms.unwrap_or(0),
+            rejection.elapsed_since_last_start_ms.unwrap_or(0),
+            rejection
+                .wait
+                .map(|value| value.as_millis() as u64)
+                .unwrap_or(0),
+            rejection.in_flight,
+            max_concurrency,
+            min_start_interval_ms,
+        ),
+        other => format!(
+            "codex key request limit exceeded for key `{}`: reason={}, in_flight={}, \
+             request_max_concurrency={}, request_min_start_interval_ms={}",
+            key.name, other, rejection.in_flight, max_concurrency, min_start_interval_ms,
+        ),
+    };
+    tracing::warn!(
+        key_id = %key.id,
+        key_name = %key.name,
+        reason = rejection.reason,
+        in_flight = rejection.in_flight,
+        max_concurrency = ?rejection.max_concurrency,
+        min_start_interval_ms = ?rejection.min_start_interval_ms,
+        wait_ms = rejection.wait.map(|value| value.as_millis() as u64),
+        elapsed_since_last_start_ms = rejection.elapsed_since_last_start_ms,
+        "rejected codex request because the key-level local request limit was exceeded"
+    );
+    auth_error(StatusCode::TOO_MANY_REQUESTS, &message)
+}
+
 /// Build a standardized 500 error payload and log the internal failure detail.
 fn internal_error(message: &str, err: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
     tracing::error!("{message}: {err}");
@@ -2933,9 +3823,10 @@ pub async fn import_account(
 
     // Validate by fetching usage through the existing proxy.
     let auth = runtime::CodexAuthSnapshot::from_tokens(access_token.clone(), account_id.clone());
-    let usage = token_refresh::validate_account_usage(&state.llm_gateway.client, &auth)
-        .await
-        .map_err(|err| bad_request(&format!("account verification failed: {err}")))?;
+    let usage =
+        token_refresh::validate_account_usage(state.upstream_proxy_registry.as_ref(), &auth)
+            .await
+            .map_err(|err| bad_request(&format!("account verification failed: {err}")))?;
 
     let account = accounts::CodexAccount {
         name: name.clone(),

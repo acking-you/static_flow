@@ -157,6 +157,7 @@ pub(crate) struct AccountSummarySnapshot {
 pub(crate) struct AccountPool {
     accounts: RwLock<HashMap<String, Arc<RwLock<CodexAccount>>>>,
     rate_limits: RwLock<HashMap<String, AccountRateLimitSnapshot>>,
+    last_routed_at_ms: RwLock<HashMap<String, i64>>,
     auth_file_mtimes: RwLock<HashMap<String, Option<SystemTime>>>,
     auths_dir: PathBuf,
 }
@@ -166,6 +167,7 @@ impl AccountPool {
         Self {
             accounts: RwLock::new(HashMap::new()),
             rate_limits: RwLock::new(HashMap::new()),
+            last_routed_at_ms: RwLock::new(HashMap::new()),
             auth_file_mtimes: RwLock::new(HashMap::new()),
             auths_dir,
         }
@@ -288,6 +290,7 @@ impl AccountPool {
     pub async fn remove(&self, name: &str) -> Result<bool> {
         let existed = self.accounts.write().await.remove(name).is_some();
         self.rate_limits.write().await.remove(name);
+        self.last_routed_at_ms.write().await.remove(name);
         self.auth_file_mtimes.write().await.remove(name);
         let path = self.auths_dir.join(format!("{name}.json"));
         if path.is_file() {
@@ -333,8 +336,9 @@ impl AccountPool {
     ) -> Option<(String, CodexAuthSnapshot, bool)> {
         let accounts = self.accounts.read().await;
         let rate_limits = self.rate_limits.read().await;
+        let last_routed = self.last_routed_at_ms.read().await;
 
-        let mut best: Option<(f64, String, CodexAuthSnapshot, bool)> = None;
+        let mut best: Option<(f64, f64, i64, String, CodexAuthSnapshot, bool)> = None;
         for (name, entry) in accounts.iter() {
             if let Some(allowed_names) = allowed_names {
                 if !allowed_names.contains(name) {
@@ -345,29 +349,65 @@ impl AccountPool {
             if account.status != AccountStatus::Active {
                 continue;
             }
-            let remaining = rate_limits
+            let primary_remaining = rate_limits
                 .get(name)
                 .and_then(|rl| rl.primary_remaining_percent())
                 .unwrap_or(100.0);
-            if remaining <= 0.0 {
+            if primary_remaining <= 0.0 {
                 continue;
             }
+            let secondary_remaining = rate_limits
+                .get(name)
+                .and_then(|rl| rl.secondary_remaining_percent())
+                .unwrap_or(100.0);
+            let routed_at_ms = last_routed.get(name).copied().unwrap_or(0);
             let snapshot = account.to_auth_snapshot();
+            let candidate = (
+                primary_remaining,
+                secondary_remaining,
+                routed_at_ms,
+                name.clone(),
+                snapshot,
+                account.map_gpt53_codex_to_spark,
+            );
             match &best {
-                Some((best_remaining, _, _, _)) if remaining > *best_remaining => {
-                    best =
-                        Some((remaining, name.clone(), snapshot, account.map_gpt53_codex_to_spark));
+                Some(current_best) if account_candidate_preferred(&candidate, current_best) => {
+                    best = Some(candidate);
                 },
                 None => {
-                    best =
-                        Some((remaining, name.clone(), snapshot, account.map_gpt53_codex_to_spark));
+                    best = Some(candidate);
                 },
                 _ => {},
             }
         }
-        best.map(|(_, name, snapshot, map_gpt53_codex_to_spark)| {
-            (name, snapshot, map_gpt53_codex_to_spark)
-        })
+        best.map(
+            |(
+                primary_remaining,
+                secondary_remaining,
+                routed_at_ms,
+                name,
+                snapshot,
+                map_gpt53_codex_to_spark,
+            )| {
+                tracing::info!(
+                    account = %name,
+                    primary_remaining_percent = primary_remaining,
+                    secondary_remaining_percent = secondary_remaining,
+                    last_routed_at_ms = routed_at_ms,
+                    allowed_names = ?allowed_names,
+                    "selected codex account from pool"
+                );
+                (name, snapshot, map_gpt53_codex_to_spark)
+            },
+        )
+    }
+
+    /// Record that `name` has been chosen for a routed Codex request.
+    pub async fn record_route_selection(&self, name: &str) {
+        self.last_routed_at_ms
+            .write()
+            .await
+            .insert(name.to_string(), static_flow_shared::llm_gateway_store::now_ms());
     }
 
     /// Get a specific account by name.
@@ -577,6 +617,142 @@ fn modified_matches(left: Option<SystemTime>, right: Option<SystemTime>) -> bool
         (Some(left), Some(right)) => left == right,
         (None, None) => true,
         _ => false,
+    }
+}
+
+fn account_candidate_preferred(
+    candidate: &(f64, f64, i64, String, CodexAuthSnapshot, bool),
+    current_best: &(f64, f64, i64, String, CodexAuthSnapshot, bool),
+) -> bool {
+    const EPSILON: f64 = 1e-9;
+
+    if candidate.0 > current_best.0 + EPSILON {
+        return true;
+    }
+    if (candidate.0 - current_best.0).abs() > EPSILON {
+        return false;
+    }
+    if candidate.1 > current_best.1 + EPSILON {
+        return true;
+    }
+    if (candidate.1 - current_best.1).abs() > EPSILON {
+        return false;
+    }
+    if candidate.2 < current_best.2 {
+        return true;
+    }
+    if candidate.2 > current_best.2 {
+        return false;
+    }
+    candidate.3 < current_best.3
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::PathBuf, sync::Arc};
+
+    use super::*;
+    use crate::llm_gateway::types::{LlmGatewayRateLimitBucketView, LlmGatewayRateLimitWindowView};
+
+    fn test_auths_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "staticflow-codex-account-pool-{label}-{}",
+            static_flow_shared::llm_gateway_store::now_ms()
+        ));
+        std::fs::create_dir_all(&path).expect("create temp auths dir");
+        path
+    }
+
+    fn sample_account(name: &str) -> CodexAccount {
+        CodexAccount {
+            name: name.to_string(),
+            access_token: format!("{name}-access"),
+            account_id: Some(format!("{name}-acct")),
+            refresh_token: format!("{name}-refresh"),
+            id_token: format!("{name}-id"),
+            map_gpt53_codex_to_spark: false,
+            last_refresh: None,
+            status: AccountStatus::Active,
+        }
+    }
+
+    fn sample_snapshot(
+        primary_remaining: f64,
+        secondary_remaining: f64,
+    ) -> AccountRateLimitSnapshot {
+        AccountRateLimitSnapshot {
+            buckets: vec![LlmGatewayRateLimitBucketView {
+                limit_id: "codex".to_string(),
+                limit_name: None,
+                display_name: "codex".to_string(),
+                is_primary: true,
+                plan_type: Some("Pro".to_string()),
+                primary: Some(LlmGatewayRateLimitWindowView {
+                    used_percent: (100.0 - primary_remaining).clamp(0.0, 100.0),
+                    remaining_percent: primary_remaining,
+                    window_duration_mins: Some(300),
+                    resets_at: None,
+                }),
+                secondary: Some(LlmGatewayRateLimitWindowView {
+                    used_percent: (100.0 - secondary_remaining).clamp(0.0, 100.0),
+                    remaining_percent: secondary_remaining,
+                    window_duration_mins: Some(10080),
+                    resets_at: None,
+                }),
+                credits: None,
+                account_name: None,
+            }],
+            last_checked_at: Some(static_flow_shared::llm_gateway_store::now_ms()),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_best_account_prefers_highest_primary_remaining_percent() {
+        let auths_dir = test_auths_dir("primary");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+        pool.insert(sample_account("beta"))
+            .await
+            .expect("insert beta");
+        pool.update_rate_limit("alpha", sample_snapshot(61.0, 90.0))
+            .await;
+        pool.update_rate_limit("beta", sample_snapshot(84.0, 10.0))
+            .await;
+
+        let (selected, _, _) = pool.select_best_account(None).await.expect("best account");
+        assert_eq!(selected, "beta");
+        let _ = std::fs::remove_dir_all(auths_dir);
+    }
+
+    #[tokio::test]
+    async fn select_best_account_breaks_primary_ties_by_secondary_then_last_route() {
+        let auths_dir = test_auths_dir("tie-break");
+        let pool = Arc::new(AccountPool::new(auths_dir.clone()));
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+        pool.insert(sample_account("beta"))
+            .await
+            .expect("insert beta");
+        pool.update_rate_limit("alpha", sample_snapshot(100.0, 82.0))
+            .await;
+        pool.update_rate_limit("beta", sample_snapshot(100.0, 88.0))
+            .await;
+
+        let (selected, _, _) = pool.select_best_account(None).await.expect("best account");
+        assert_eq!(selected, "beta");
+
+        pool.update_rate_limit("alpha", sample_snapshot(100.0, 88.0))
+            .await;
+        pool.record_route_selection("alpha").await;
+        let (selected, _, _) = pool
+            .select_best_account(None)
+            .await
+            .expect("best account after tie");
+        assert_eq!(selected, "beta");
+        let _ = std::fs::remove_dir_all(auths_dir);
     }
 }
 

@@ -105,6 +105,13 @@ pub enum Route {
     LlmAccess,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/kiro-access")]
+    KiroAccess,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/kiro-access")]
+    KiroAccess,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/admin")]
     Admin,
     #[cfg(feature = "mock")]
@@ -117,6 +124,13 @@ pub enum Route {
     #[cfg(feature = "mock")]
     #[at("/static_flow/admin/llm-gateway")]
     AdminLlmGateway,
+
+    #[cfg(not(feature = "mock"))]
+    #[at("/admin/kiro-gateway")]
+    AdminKiroGateway,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/kiro-gateway")]
+    AdminKiroGateway,
 
     #[cfg(not(feature = "mock"))]
     #[at("/admin/comments/runs/:task_id")]
@@ -213,8 +227,10 @@ fn switch(route: Route) -> Html {
         Route::Search => html! { <pages::search::SearchPage /> },
         Route::LlmAccessGuide => html! { <pages::llm_access_guide::LlmAccessGuidePage /> },
         Route::LlmAccess => html! { <pages::llm_access::LlmAccessPage /> },
+        Route::KiroAccess => html! { <pages::kiro_access::KiroAccessPage /> },
         Route::Admin => html! { <pages::admin::AdminPage /> },
         Route::AdminLlmGateway => html! { <pages::admin_llm_gateway::AdminLlmGatewayPage /> },
+        Route::AdminKiroGateway => html! { <pages::admin_kiro_gateway::AdminKiroGatewayPage /> },
         Route::AdminCommentRuns {
             task_id,
         } => {

@@ -1938,6 +1938,10 @@ pub fn admin_page() -> Html {
                             <i class={classes!("fas", "fa-key", "mr-2")} aria-hidden="true"></i>
                             { "LLM Gateway" }
                         </Link<Route>>
+                        <Link<Route> to={Route::AdminKiroGateway} classes={classes!("btn-fluent-secondary")}>
+                            <i class={classes!("fas", "fa-bolt", "mr-2")} aria-hidden="true"></i>
+                            { "Kiro Gateway" }
+                        </Link<Route>>
                         <button class={classes!("btn-fluent-secondary")} onclick={on_reload_click.clone()}>
                             <i class={classes!("fas", "fa-rotate-right", "mr-2")} aria-hidden="true"></i>
                             { if *loading { "Loading..." } else { "Refresh" } }

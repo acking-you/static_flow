@@ -1,0 +1,816 @@
+//! Anthropic-compatible API handler for the Kiro gateway.
+//!
+//! Routes `/v1/messages`, `/cc/v1/messages`, `/v1/models`, and `count_tokens`
+//! requests. Converts Anthropic request payloads to Kiro wire format, streams
+//! responses as SSE (with optional buffered mode for Claude Code), and persists
+//! usage events.
+
+use std::convert::Infallible;
+
+use anyhow::Error;
+use async_stream::stream;
+use axum::{
+    body::Body,
+    extract::{Json as JsonExtractor, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Json, Response},
+};
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
+use tokio::{
+    sync::oneshot,
+    time::{interval, Duration},
+};
+
+use super::{
+    parser::decoder::EventStreamDecoder, provider::KiroProvider, token, AppKiroStateExt,
+    KiroUsageSummary,
+};
+use crate::kiro_gateway::{record_messages_usage, KiroEventContext};
+
+pub mod converter;
+pub mod stream;
+pub mod types;
+pub mod websearch;
+
+use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
+
+use self::{
+    converter::{convert_request, ConversionError},
+    stream::{BufferedStreamContext, StreamContext},
+    types::{
+        CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model,
+        ModelsResponse, OutputConfig, Thinking,
+    },
+    websearch::handle_websearch_request,
+};
+use crate::{kiro_gateway::wire::Event, state::AppState};
+
+// Bundles the state needed to persist usage after a streaming response
+// completes.
+struct UsagePersistContext {
+    state: AppState,
+    key_record: LlmGatewayKeyRecord,
+    event_context: KiroEventContext,
+}
+
+/// Maps a Kiro provider error into an appropriate HTTP error response.
+/// Recognizes context-length, input-length, and quota-exhaustion errors.
+pub(super) fn map_provider_error(err: Error) -> Response {
+    let err_text = err.to_string();
+    if err_text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "invalid_request_error",
+                "Context window is full. Reduce conversation history, system prompt, or tools.",
+            )),
+        )
+            .into_response();
+    }
+    if err_text.contains("Input is too long") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "invalid_request_error",
+                "Input is too long. Reduce the size of your messages.",
+            )),
+        )
+            .into_response();
+    }
+    if err_text.contains("quota exhausted") {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(ErrorResponse::new(
+                "rate_limit_error",
+                "All configured Kiro accounts are out of quota. Wait for reset or refresh another \
+                 account.",
+            )),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(ErrorResponse::new("api_error", format!("Kiro upstream request failed: {err_text}"))),
+    )
+        .into_response()
+}
+
+/// Returns the list of available models for the `/v1/models` endpoint.
+pub async fn get_models() -> impl IntoResponse {
+    Json(ModelsResponse {
+        object: "list".to_string(),
+        data: vec![
+            model("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
+            model(
+                "claude-sonnet-4-5-20250929-thinking",
+                "Claude Sonnet 4.5 (Thinking)",
+                1727568000,
+            ),
+            model("claude-opus-4-5-20251101", "Claude Opus 4.5", 1730419200),
+            model("claude-opus-4-5-20251101-thinking", "Claude Opus 4.5 (Thinking)", 1730419200),
+            model("claude-sonnet-4-6", "Claude Sonnet 4.6", 1770314400),
+            model("claude-sonnet-4-6-thinking", "Claude Sonnet 4.6 (Thinking)", 1770314400),
+            model("claude-opus-4-6", "Claude Opus 4.6", 1770314400),
+            model("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", 1770314400),
+            model("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 1727740800),
+            model("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
+        ],
+    })
+}
+
+/// Estimates token count for the given request payload.
+pub async fn count_tokens(
+    JsonExtractor(payload): JsonExtractor<CountTokensRequest>,
+) -> impl IntoResponse {
+    Json(CountTokensResponse {
+        input_tokens: token::count_all_tokens(
+            payload.model,
+            payload.system,
+            payload.messages,
+            payload.tools,
+        ) as i32,
+    })
+}
+
+/// Handler for `POST /v1/messages` — standard streaming mode.
+pub async fn post_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
+) -> Response {
+    handle_messages(state, headers, &mut payload, false).await
+}
+
+/// Handler for `POST /cc/v1/messages` — buffered mode for Claude Code.
+/// Collects all upstream events before flushing, so input_tokens can be
+/// rewritten with the actual value from context-usage feedback.
+pub async fn post_messages_cc(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
+) -> Response {
+    handle_messages(state, headers, &mut payload, true).await
+}
+
+// Shared implementation for both /v1/messages and /cc/v1/messages.
+// Authenticates the key, converts the request, and dispatches to the
+// appropriate stream/non-stream handler.
+async fn handle_messages(
+    state: AppState,
+    headers: HeaderMap,
+    payload: &mut MessagesRequest,
+    buffered_for_cc: bool,
+) -> Response {
+    let (key_record, mut event_context) = match state.authenticate_kiro_key(&headers).await {
+        Ok(value) => value,
+        Err(err) => return err.into_response(),
+    };
+    let public_path = if buffered_for_cc { "/cc/v1/messages" } else { "/v1/messages" };
+    event_context.request_url.push_str(public_path);
+    event_context.model = Some(payload.model.clone());
+    event_context.last_message_content = extract_last_message_content(payload);
+    let pure_web_search = websearch::has_web_search_tool(payload);
+    let tool_names = payload
+        .tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let web_search_tool_count = payload
+        .tools
+        .as_ref()
+        .map(|tools| tools.iter().filter(|tool| tool.is_web_search()).count())
+        .unwrap_or(0);
+    tracing::info!(
+        model = %payload.model,
+        stream = payload.stream,
+        buffered_for_cc,
+        route = if pure_web_search { "mcp_web_search" } else { "assistant_generate" },
+        message_count = payload.messages.len(),
+        tool_count = tool_names.len(),
+        web_search_tool_count,
+        tool_names = ?tool_names,
+        "received kiro anthropic request"
+    );
+    let input_tokens = token::count_all_tokens(
+        payload.model.clone(),
+        payload.system.clone(),
+        payload.messages.clone(),
+        payload.tools.clone(),
+    ) as i32;
+    override_thinking_from_model_name(payload);
+    let provider = KiroProvider::new(state.kiro_gateway.clone());
+    if pure_web_search {
+        event_context.endpoint = "/mcp".to_string();
+        return handle_websearch_request(
+            state,
+            key_record,
+            event_context,
+            &provider,
+            payload,
+            input_tokens,
+        )
+        .await;
+    }
+    let conversion = match convert_request(payload) {
+        Ok(result) => result,
+        Err(err) => {
+            let message = match err {
+                ConversionError::UnsupportedModel(model) => format!("Unsupported model: {model}"),
+                ConversionError::EmptyMessages => "messages are empty".to_string(),
+            };
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("invalid_request_error", message)),
+            )
+                .into_response();
+        },
+    };
+    let conversation_state = conversion.conversation_state;
+    let thinking_enabled = payload
+        .thinking
+        .as_ref()
+        .map(Thinking::is_enabled)
+        .unwrap_or(false);
+    event_context.endpoint = "/generateAssistantResponse".to_string();
+
+    if payload.stream {
+        let response = match provider.call_api_stream(&conversation_state).await {
+            Ok(response) => response,
+            Err(err) => return map_provider_error(err),
+        };
+        event_context.account_name = Some(response.account_name);
+        if buffered_for_cc {
+            return handle_stream_request_buffered(
+                UsagePersistContext {
+                    state,
+                    key_record,
+                    event_context,
+                },
+                response.response,
+                &payload.model,
+                input_tokens,
+                thinking_enabled,
+            )
+            .await;
+        }
+        return handle_stream_request(
+            UsagePersistContext {
+                state,
+                key_record,
+                event_context,
+            },
+            response.response,
+            &payload.model,
+            input_tokens,
+            thinking_enabled,
+        )
+        .await;
+    }
+
+    let response = match provider.call_api(&conversation_state).await {
+        Ok(response) => response,
+        Err(err) => return map_provider_error(err),
+    };
+    event_context.account_name = Some(response.account_name);
+    handle_non_stream_request(
+        state,
+        key_record,
+        event_context,
+        response.response,
+        &payload.model,
+        input_tokens,
+    )
+    .await
+}
+
+// Streams SSE events directly to the client as they arrive from Kiro.
+// Usage is persisted asynchronously via a oneshot channel after the stream
+// ends.
+async fn handle_stream_request(
+    usage_ctx: UsagePersistContext,
+    response: reqwest::Response,
+    model: &str,
+    input_tokens: i32,
+    thinking_enabled: bool,
+) -> Response {
+    let (done_tx, done_rx) = oneshot::channel::<KiroUsageSummary>();
+    let stream = create_sse_stream(
+        response,
+        StreamContext::new_with_thinking(model, input_tokens, thinking_enabled),
+        done_tx,
+    );
+    tokio::spawn(async move {
+        if let Ok(summary) = done_rx.await {
+            if let Err(err) = record_messages_usage(
+                &usage_ctx.state,
+                &usage_ctx.key_record,
+                &usage_ctx.event_context,
+                summary,
+                false,
+            )
+            .await
+            {
+                tracing::warn!("failed to persist kiro usage event: {err:#}");
+            }
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+// Buffers all Kiro events, then flushes them as SSE in one burst.
+// Allows rewriting input_tokens in message_start with the actual value.
+async fn handle_stream_request_buffered(
+    usage_ctx: UsagePersistContext,
+    response: reqwest::Response,
+    model: &str,
+    estimated_input_tokens: i32,
+    thinking_enabled: bool,
+) -> Response {
+    let (done_tx, done_rx) = oneshot::channel::<KiroUsageSummary>();
+    let stream = create_buffered_sse_stream(
+        response,
+        BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled),
+        done_tx,
+    );
+    tokio::spawn(async move {
+        if let Ok(summary) = done_rx.await {
+            if let Err(err) = record_messages_usage(
+                &usage_ctx.state,
+                &usage_ctx.key_record,
+                &usage_ctx.event_context,
+                summary,
+                false,
+            )
+            .await
+            {
+                tracing::warn!("failed to persist kiro usage event: {err:#}");
+            }
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+// Reads the full Kiro response body, decodes all events, assembles a
+// single JSON response with content blocks, and persists usage synchronously.
+async fn handle_non_stream_request(
+    state: AppState,
+    key_record: static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord,
+    event_context: KiroEventContext,
+    response: reqwest::Response,
+    model: &str,
+    input_tokens: i32,
+) -> Response {
+    tracing::info!(model, input_tokens, "starting kiro non-stream upstream request");
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse::new(
+                    "api_error",
+                    format!("Failed to read kiro response: {err}"),
+                )),
+            )
+                .into_response();
+        },
+    };
+    let mut decoder = EventStreamDecoder::new();
+    let _ = decoder.feed(&body);
+    let mut text_content = String::new();
+    let mut tool_uses = Vec::new();
+    let mut stop_reason = "end_turn".to_string();
+    let mut context_input_tokens = None;
+    let mut credit_usage = 0.0;
+    let mut credit_usage_observed = false;
+    let mut tool_json_buffers = std::collections::HashMap::<String, String>::new();
+    for result in decoder.decode_iter() {
+        match result {
+            Ok(frame) => match Event::from_frame(frame) {
+                Ok(Event::AssistantResponse(event)) => text_content.push_str(&event.content),
+                Ok(Event::ToolUse(event)) => {
+                    let buffer = tool_json_buffers
+                        .entry(event.tool_use_id.clone())
+                        .or_default();
+                    buffer.push_str(&event.input);
+                    if event.stop {
+                        let input = if buffer.is_empty() {
+                            serde_json::json!({})
+                        } else {
+                            serde_json::from_str(buffer).unwrap_or_else(|_| serde_json::json!({}))
+                        };
+                        tool_uses.push(serde_json::json!({
+                            "type":"tool_use",
+                            "id":event.tool_use_id,
+                            "name":event.name,
+                            "input":input
+                        }));
+                    }
+                },
+                Ok(Event::ContextUsage(event)) => {
+                    let actual_input_tokens = (event.context_usage_percentage
+                        * converter::get_context_window_size(model) as f64
+                        / 100.0) as i32;
+                    context_input_tokens = Some(actual_input_tokens);
+                    if event.context_usage_percentage >= 100.0 {
+                        stop_reason = "model_context_window_exceeded".to_string();
+                    }
+                },
+                Ok(Event::Metering(event)) => {
+                    if let Some(usage) = event.credit_usage() {
+                        credit_usage += usage;
+                        credit_usage_observed = true;
+                    }
+                },
+                Ok(Event::Error {
+                    error_code,
+                    error_message,
+                }) => {
+                    tracing::warn!("received kiro error event: {error_code} - {error_message}");
+                },
+                Ok(Event::Exception {
+                    exception_type,
+                    message,
+                }) => {
+                    if exception_type == "ContentLengthExceededException" {
+                        stop_reason = "max_tokens".to_string();
+                    }
+                    tracing::warn!("received kiro exception event: {exception_type} - {message}");
+                },
+                _ => {},
+            },
+            Err(err) => tracing::warn!("failed to decode kiro event frame: {err}"),
+        }
+    }
+
+    if !tool_uses.is_empty() && stop_reason == "end_turn" {
+        stop_reason = "tool_use".to_string();
+    }
+    let mut content = Vec::new();
+    if !text_content.is_empty() {
+        content.push(serde_json::json!({"type":"text","text":text_content}));
+    }
+    content.extend(tool_uses);
+    let output_tokens = token::estimate_output_tokens(&content);
+    let usage = KiroUsageSummary {
+        input_uncached_tokens: context_input_tokens.unwrap_or(input_tokens),
+        input_cached_tokens: 0,
+        output_tokens,
+        credit_usage: credit_usage_observed.then_some(credit_usage.max(0.0)),
+        credit_usage_missing: !credit_usage_observed,
+    };
+    tracing::info!(
+        model,
+        stop_reason,
+        content_block_count = content.len(),
+        usage_input_uncached_tokens = usage.input_uncached_tokens,
+        usage_input_cached_tokens = usage.input_cached_tokens,
+        usage_output_tokens = usage.output_tokens,
+        "finished kiro non-stream request"
+    );
+    if let Err(err) = record_messages_usage(&state, &key_record, &event_context, usage, false).await
+    {
+        tracing::warn!("failed to persist kiro usage event: {err:#}");
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+            "model": model,
+            "stop_reason": stop_reason,
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": usage.input_uncached_tokens + usage.input_cached_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": usage.input_cached_tokens,
+            }
+        })),
+    )
+        .into_response()
+}
+
+// Extracts a human-readable summary of the last message content for
+// logging/event context (text, tool_result placeholders, tool_use names).
+fn extract_last_message_content(payload: &MessagesRequest) -> Option<String> {
+    let message = payload.messages.last()?;
+    match &message.content {
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        },
+        serde_json::Value::Array(blocks) => {
+            let parts = blocks
+                .iter()
+                .filter_map(|block| match block.get("type").and_then(|value| value.as_str()) {
+                    Some("text") => block
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string),
+                    Some("tool_result") => Some("[tool_result]".to_string()),
+                    Some("tool_use") => block
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .map(|value| format!("[tool_use:{value}]")),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        },
+        _ => None,
+    }
+}
+
+fn create_sse_stream(
+    response: reqwest::Response,
+    mut ctx: StreamContext,
+    done_tx: oneshot::Sender<KiroUsageSummary>,
+) -> impl Stream<Item = Result<Bytes, Infallible>> {
+    stream! {
+        tracing::info!(
+            model = %ctx.model,
+            estimated_input_tokens = ctx.input_tokens,
+            thinking_enabled = ctx.thinking_enabled,
+            "starting kiro streaming response"
+        );
+        for event in ctx.generate_initial_events() {
+            yield Ok(Bytes::from(event.to_sse_string()));
+        }
+        let mut body_stream = response.bytes_stream();
+        let mut decoder = EventStreamDecoder::new();
+        let mut ping_interval = interval(Duration::from_secs(25));
+        ping_interval.tick().await;
+        let mut done_tx = Some(done_tx);
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = ping_interval.tick() => {
+                    yield Ok(Bytes::from("event: ping\ndata: {\"type\":\"ping\"}\n\n"));
+                }
+                chunk_result = body_stream.next() => {
+                    match chunk_result {
+                        Some(Ok(chunk)) => {
+                            let _ = decoder.feed(&chunk);
+                            for result in decoder.decode_iter() {
+                                match result {
+                                    Ok(frame) => {
+                                        if let Ok(event) = Event::from_frame(frame) {
+                                            for sse_event in ctx.process_kiro_event(&event) {
+                                                yield Ok(Bytes::from(sse_event.to_sse_string()));
+                                            }
+                                        }
+                                    }
+                                    Err(err) => tracing::warn!("failed to decode kiro event: {err}"),
+                                }
+                            }
+                        }
+                        Some(Err(err)) => {
+                            tracing::warn!("failed to read kiro event stream: {err}");
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        let final_events = ctx.generate_final_events();
+        let (input_tokens, output_tokens) = ctx.final_usage();
+        let (credit_usage, credit_usage_missing) = ctx.final_credit_usage();
+        tracing::info!(
+            model = %ctx.model,
+            final_event_count = final_events.len(),
+            input_tokens,
+            output_tokens,
+            credit_usage = credit_usage.unwrap_or_default(),
+            credit_usage_missing,
+            "finished kiro streaming response"
+        );
+        if let Some(sender) = done_tx.take() {
+            let _ = sender.send(KiroUsageSummary {
+                input_uncached_tokens: input_tokens,
+                input_cached_tokens: 0,
+                output_tokens,
+                credit_usage,
+                credit_usage_missing,
+            });
+        }
+        for event in final_events {
+            yield Ok(Bytes::from(event.to_sse_string()));
+        }
+    }
+}
+
+fn create_buffered_sse_stream(
+    response: reqwest::Response,
+    mut ctx: BufferedStreamContext,
+    done_tx: oneshot::Sender<KiroUsageSummary>,
+) -> impl Stream<Item = Result<Bytes, Infallible>> {
+    stream! {
+        tracing::info!(
+            model = %ctx.model(),
+            estimated_input_tokens = ctx.estimated_input_tokens(),
+            thinking_enabled = ctx.thinking_enabled(),
+            "starting kiro buffered streaming response"
+        );
+        let mut body_stream = response.bytes_stream();
+        let mut decoder = EventStreamDecoder::new();
+        let mut ping_interval = interval(Duration::from_secs(25));
+        ping_interval.tick().await;
+        let mut done_tx = Some(done_tx);
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = ping_interval.tick() => {
+                    yield Ok(Bytes::from("event: ping\ndata: {\"type\":\"ping\"}\n\n"));
+                }
+                chunk_result = body_stream.next() => {
+                    match chunk_result {
+                        Some(Ok(chunk)) => {
+                            let _ = decoder.feed(&chunk);
+                            for result in decoder.decode_iter() {
+                                match result {
+                                    Ok(frame) => {
+                                        if let Ok(event) = Event::from_frame(frame) {
+                                            ctx.process_and_buffer(&event);
+                                        }
+                                    }
+                                    Err(err) => tracing::warn!("failed to decode buffered kiro event: {err}"),
+                                }
+                            }
+                        }
+                        Some(Err(err)) => {
+                            tracing::warn!("failed to read buffered kiro stream: {err}");
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        let all_events = ctx.finish_and_get_all_events();
+        let (input_tokens, output_tokens) = ctx.final_usage();
+        let (credit_usage, credit_usage_missing) = ctx.final_credit_usage();
+        tracing::info!(
+            model = %ctx.model(),
+            buffered_event_count = all_events.len(),
+            input_tokens,
+            output_tokens,
+            credit_usage = credit_usage.unwrap_or_default(),
+            credit_usage_missing,
+            "finished kiro buffered streaming response"
+        );
+        if let Some(sender) = done_tx.take() {
+            let _ = sender.send(KiroUsageSummary {
+                input_uncached_tokens: input_tokens,
+                input_cached_tokens: 0,
+                output_tokens,
+                credit_usage,
+                credit_usage_missing,
+            });
+        }
+        for event in all_events {
+            yield Ok(Bytes::from(event.to_sse_string()));
+        }
+    }
+}
+
+fn model(id: &str, display_name: &str, created: i64) -> Model {
+    Model {
+        id: id.to_string(),
+        object: "model".to_string(),
+        created,
+        owned_by: "anthropic".to_string(),
+        display_name: display_name.to_string(),
+        model_type: "chat".to_string(),
+        max_tokens: 32_000,
+    }
+}
+
+/// If the model name contains "-thinking", auto-inject thinking configuration.
+/// Opus 4.6 gets adaptive/high; all others get enabled with 20K budget.
+fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
+    let model = payload.model.to_lowercase();
+    if !model.contains("thinking") {
+        return;
+    }
+    let is_opus_46 = model.contains("opus") && (model.contains("4-6") || model.contains("4.6"));
+    payload.thinking = Some(Thinking {
+        thinking_type: if is_opus_46 { "adaptive".to_string() } else { "enabled".to_string() },
+        budget_tokens: 20_000,
+    });
+    if is_opus_46 {
+        payload.output_config = Some(OutputConfig {
+            effort: "high".to_string(),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn base_request(model: &str) -> MessagesRequest {
+        MessagesRequest {
+            model: model.to_string(),
+            _max_tokens: 1024,
+            messages: vec![types::Message {
+                role: "user".to_string(),
+                content: json!("hello"),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            _tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn thinking_suffix_sets_enabled_mode_for_non_opus_46_models() {
+        let mut payload = base_request("claude-sonnet-4-6-thinking");
+        override_thinking_from_model_name(&mut payload);
+
+        let thinking = payload.thinking.expect("thinking should be injected");
+        assert_eq!(thinking.thinking_type, "enabled");
+        assert_eq!(thinking.budget_tokens, 20_000);
+        assert!(payload.output_config.is_none());
+    }
+
+    #[test]
+    fn thinking_suffix_sets_adaptive_high_for_opus_46_models() {
+        let mut payload = base_request("claude-opus-4-6-thinking");
+        override_thinking_from_model_name(&mut payload);
+
+        let thinking = payload.thinking.expect("thinking should be injected");
+        assert_eq!(thinking.thinking_type, "adaptive");
+        assert_eq!(thinking.budget_tokens, 20_000);
+        assert_eq!(
+            payload
+                .output_config
+                .as_ref()
+                .map(|config| config.effort.as_str()),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn non_thinking_model_does_not_override_existing_configuration() {
+        let mut payload = base_request("claude-sonnet-4-6");
+        payload.thinking = Some(Thinking {
+            thinking_type: "adaptive".to_string(),
+            budget_tokens: 8192,
+        });
+        payload.output_config = Some(OutputConfig {
+            effort: "medium".to_string(),
+        });
+
+        override_thinking_from_model_name(&mut payload);
+
+        let thinking = payload.thinking.expect("thinking should remain");
+        assert_eq!(thinking.thinking_type, "adaptive");
+        assert_eq!(thinking.budget_tokens, 8192);
+        assert_eq!(
+            payload
+                .output_config
+                .as_ref()
+                .map(|config| config.effort.as_str()),
+            Some("medium")
+        );
+    }
+}

@@ -4189,18 +4189,22 @@ pub struct LlmGatewayRateLimitStatusResponse {
 }
 
 /// Admin-only editable representation of a gateway key.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct AdminLlmGatewayKeyView {
     pub id: String,
     pub name: String,
     pub secret: String,
     pub key_hash: String,
     pub status: String,
+    pub provider_type: String,
     pub public_visible: bool,
     pub quota_billable_limit: u64,
     pub usage_input_uncached_tokens: u64,
     pub usage_input_cached_tokens: u64,
     pub usage_output_tokens: u64,
+    pub usage_credit_total: f64,
+    pub usage_credit_missing_events: u64,
     pub remaining_billable: i64,
     pub last_used_at: Option<i64>,
     pub created_at: i64,
@@ -4208,10 +4212,13 @@ pub struct AdminLlmGatewayKeyView {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
 }
 
 /// Combined admin payload for the key inventory screen.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct AdminLlmGatewayKeysResponse {
     pub keys: Vec<AdminLlmGatewayKeyView>,
     pub auth_cache_ttl_seconds: u64,
@@ -4219,7 +4226,8 @@ pub struct AdminLlmGatewayKeysResponse {
 }
 
 /// Rich per-request usage event used by the admin diagnostics view.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct AdminLlmGatewayUsageEventView {
     pub id: String,
     pub key_id: String,
@@ -4236,6 +4244,8 @@ pub struct AdminLlmGatewayUsageEventView {
     pub output_tokens: u64,
     pub billable_tokens: u64,
     pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
     pub client_ip: String,
     pub ip_region: String,
     pub request_headers_json: String,
@@ -4244,7 +4254,8 @@ pub struct AdminLlmGatewayUsageEventView {
 }
 
 /// Paginated usage-event response from the admin diagnostics endpoint.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct AdminLlmGatewayUsageEventsResponse {
     pub total: usize,
     pub offset: usize,
@@ -4483,6 +4494,97 @@ pub struct AdminLlmGatewayTokenRequestsQuery {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LlmGatewayRuntimeConfig {
     pub auth_cache_ttl_seconds: u64,
+    pub max_request_body_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminUpstreamProxyConfigView {
+    pub id: String,
+    pub name: String,
+    pub proxy_url: String,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminUpstreamProxyConfigsResponse {
+    pub proxy_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminUpstreamProxyCheckTargetView {
+    pub target: String,
+    pub url: String,
+    pub reachable: bool,
+    pub status_code: Option<u16>,
+    pub latency_ms: i64,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminUpstreamProxyCheckResponse {
+    pub proxy_config_id: String,
+    pub proxy_config_name: String,
+    pub provider_type: String,
+    pub auth_label: String,
+    pub ok: bool,
+    pub targets: Vec<AdminUpstreamProxyCheckTargetView>,
+    pub checked_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminUpstreamProxyBindingView {
+    pub provider_type: String,
+    pub effective_source: String,
+    pub bound_proxy_config_id: Option<String>,
+    pub effective_proxy_config_name: Option<String>,
+    pub effective_proxy_url: Option<String>,
+    pub effective_proxy_username: Option<String>,
+    pub effective_proxy_password: Option<String>,
+    pub binding_updated_at: Option<i64>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminUpstreamProxyBindingsResponse {
+    pub bindings: Vec<AdminUpstreamProxyBindingView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminLegacyKiroProxyMigrationResponse {
+    pub created_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub reused_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub migrated_account_names: Vec<String>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct CreateAdminUpstreamProxyConfigInput {
+    pub name: String,
+    pub proxy_url: String,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct PatchAdminUpstreamProxyConfigInput {
+    pub name: Option<String>,
+    pub proxy_url: Option<String>,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+    pub status: Option<String>,
 }
 
 /// Fetch the read-only public gateway access bundle used by `/llm-access`.
@@ -4840,6 +4942,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
     {
         Ok(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: 60,
+            max_request_body_bytes: 8 * 1024 * 1024,
         })
     }
 
@@ -4864,11 +4967,13 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
 /// Persist a new admin-selected auth cache TTL for gateway key validation.
 pub async fn update_admin_llm_gateway_config(
     auth_cache_ttl_seconds: u64,
+    max_request_body_bytes: u64,
 ) -> Result<LlmGatewayRuntimeConfig, String> {
     #[cfg(feature = "mock")]
     {
         Ok(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds,
+            max_request_body_bytes,
         })
     }
 
@@ -4876,8 +4981,293 @@ pub async fn update_admin_llm_gateway_config(
     {
         let url = format!("{}/admin/llm-gateway/config", admin_base());
         let response = api_post(&url)
-            .json(&serde_json::json!({ "auth_cache_ttl_seconds": auth_cache_ttl_seconds }))
+            .json(&serde_json::json!({
+                "auth_cache_ttl_seconds": auth_cache_ttl_seconds,
+                "max_request_body_bytes": max_request_body_bytes,
+            }))
             .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_llm_gateway_proxy_configs(
+) -> Result<AdminUpstreamProxyConfigsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminUpstreamProxyConfigsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/proxy-configs", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn create_admin_llm_gateway_proxy_config(
+    input: &CreateAdminUpstreamProxyConfigInput,
+) -> Result<AdminUpstreamProxyConfigView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminUpstreamProxyConfigView {
+            id: "mock-proxy".to_string(),
+            name: input.name.clone(),
+            proxy_url: input.proxy_url.clone(),
+            proxy_username: input.proxy_username.clone(),
+            proxy_password: input.proxy_password.clone(),
+            status: "active".to_string(),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/proxy-configs", admin_base());
+        let response = api_post(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_llm_gateway_proxy_config(
+    proxy_id: &str,
+    input: &PatchAdminUpstreamProxyConfigInput,
+) -> Result<AdminUpstreamProxyConfigView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = proxy_id;
+        Ok(AdminUpstreamProxyConfigView {
+            id: "mock-proxy".to_string(),
+            name: input.name.clone().unwrap_or_else(|| "mock".to_string()),
+            proxy_url: input
+                .proxy_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:11111".to_string()),
+            proxy_username: input.proxy_username.clone(),
+            proxy_password: input.proxy_password.clone(),
+            status: input.status.clone().unwrap_or_else(|| "active".to_string()),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/proxy-configs/{}",
+            admin_base(),
+            urlencoding::encode(proxy_id)
+        );
+        let response = api_patch(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_llm_gateway_proxy_config(proxy_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = proxy_id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/proxy-configs/{}",
+            admin_base(),
+            urlencoding::encode(proxy_id)
+        );
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn check_admin_llm_gateway_proxy_config(
+    proxy_id: &str,
+    provider_type: &str,
+) -> Result<AdminUpstreamProxyCheckResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminUpstreamProxyCheckResponse {
+            proxy_config_id: proxy_id.to_string(),
+            proxy_config_name: "mock-proxy".to_string(),
+            provider_type: provider_type.to_string(),
+            auth_label: format!("{provider_type} auth `mock`"),
+            ok: true,
+            targets: vec![AdminUpstreamProxyCheckTargetView {
+                target: provider_type.to_string(),
+                url: if provider_type == "kiro" {
+                    "https://q.us-east-1.amazonaws.com/getUsageLimits".to_string()
+                } else {
+                    "https://chatgpt.com/backend-api/codex/v1/models".to_string()
+                },
+                reachable: true,
+                status_code: Some(200),
+                latency_ms: 120,
+                error_message: None,
+            }],
+            checked_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/proxy-configs/{}/check/{}",
+            admin_base(),
+            urlencoding::encode(proxy_id),
+            urlencoding::encode(provider_type)
+        );
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_llm_gateway_proxy_bindings(
+) -> Result<AdminUpstreamProxyBindingsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminUpstreamProxyBindingsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/proxy-bindings", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn update_admin_llm_gateway_proxy_binding(
+    provider_type: &str,
+    proxy_config_id: Option<&str>,
+) -> Result<AdminUpstreamProxyBindingView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminUpstreamProxyBindingView {
+            provider_type: provider_type.to_string(),
+            effective_source: if proxy_config_id.is_some() {
+                "binding".to_string()
+            } else {
+                "env_fallback".to_string()
+            },
+            bound_proxy_config_id: proxy_config_id.map(ToString::to_string),
+            effective_proxy_config_name: Some("mock".to_string()),
+            effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
+            effective_proxy_username: None,
+            effective_proxy_password: None,
+            binding_updated_at: Some(0),
+            error_message: None,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/proxy-bindings/{}",
+            admin_base(),
+            urlencoding::encode(provider_type)
+        );
+        let response = api_post(&url)
+            .json(&serde_json::json!({ "proxy_config_id": proxy_config_id }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn import_admin_legacy_kiro_proxy_configs(
+) -> Result<AdminLegacyKiroProxyMigrationResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLegacyKiroProxyMigrationResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/proxy-configs/import-legacy-kiro", admin_base());
+        let response = api_post(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -5073,6 +5463,8 @@ pub async fn create_admin_llm_gateway_key(
     name: &str,
     quota_billable_limit: u64,
     public_visible: bool,
+    request_max_concurrency: Option<u64>,
+    request_min_start_interval_ms: Option<u64>,
 ) -> Result<AdminLlmGatewayKeyView, String> {
     #[cfg(feature = "mock")]
     {
@@ -5082,11 +5474,14 @@ pub async fn create_admin_llm_gateway_key(
             secret: "sfk_mock".to_string(),
             key_hash: "hash".to_string(),
             status: "active".to_string(),
+            provider_type: "codex".to_string(),
             public_visible,
             quota_billable_limit,
             usage_input_uncached_tokens: 0,
             usage_input_cached_tokens: 0,
             usage_output_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
             remaining_billable: quota_billable_limit as i64,
             last_used_at: None,
             created_at: 0,
@@ -5094,6 +5489,8 @@ pub async fn create_admin_llm_gateway_key(
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            request_max_concurrency,
+            request_min_start_interval_ms,
         })
     }
 
@@ -5104,7 +5501,9 @@ pub async fn create_admin_llm_gateway_key(
             .json(&serde_json::json!({
                 "name": name,
                 "quota_billable_limit": quota_billable_limit,
-                "public_visible": public_visible
+                "public_visible": public_visible,
+                "request_max_concurrency": request_max_concurrency,
+                "request_min_start_interval_ms": request_min_start_interval_ms
             }))
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
@@ -5131,6 +5530,10 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub route_strategy: Option<&'a str>,
     pub fixed_account_name: Option<&'a str>,
     pub auto_account_names: Option<&'a [String]>,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
+    pub request_max_concurrency_unlimited: bool,
+    pub request_min_start_interval_ms_unlimited: bool,
 }
 
 pub async fn patch_admin_llm_gateway_key(
@@ -5148,6 +5551,10 @@ pub async fn patch_admin_llm_gateway_key(
             request.route_strategy,
             request.fixed_account_name,
             request.auto_account_names,
+            request.request_max_concurrency,
+            request.request_min_start_interval_ms,
+            request.request_max_concurrency_unlimited,
+            request.request_min_start_interval_ms_unlimited,
         );
         Err("mock not supported".to_string())
     }
@@ -5201,6 +5608,30 @@ pub async fn patch_admin_llm_gateway_key(
                         .map(|value| serde_json::Value::String(value.clone()))
                         .collect(),
                 ),
+            );
+        }
+        if let Some(request_max_concurrency) = request.request_max_concurrency {
+            body.insert(
+                "request_max_concurrency".to_string(),
+                serde_json::Value::Number(request_max_concurrency.into()),
+            );
+        }
+        if let Some(request_min_start_interval_ms) = request.request_min_start_interval_ms {
+            body.insert(
+                "request_min_start_interval_ms".to_string(),
+                serde_json::Value::Number(request_min_start_interval_ms.into()),
+            );
+        }
+        if request.request_max_concurrency_unlimited {
+            body.insert(
+                "request_max_concurrency_unlimited".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        if request.request_min_start_interval_ms_unlimited {
+            body.insert(
+                "request_min_start_interval_ms_unlimited".to_string(),
+                serde_json::Value::Bool(true),
             );
         }
         let response = api_patch(&url)
@@ -5659,5 +6090,616 @@ pub async fn patch_admin_llm_gateway_account(
             .json()
             .await
             .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroBalanceView {
+    pub current_usage: f64,
+    pub usage_limit: f64,
+    pub remaining: f64,
+    pub next_reset_at: Option<i64>,
+    pub subscription_title: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroPublicStatusView {
+    pub name: String,
+    pub is_active: bool,
+    pub provider: Option<String>,
+    pub disabled: bool,
+    pub subscription_title: Option<String>,
+    pub current_usage: Option<f64>,
+    pub usage_limit: Option<f64>,
+    pub remaining: Option<f64>,
+    pub next_reset_at: Option<i64>,
+    pub cache: KiroCacheView,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroAccessResponse {
+    pub base_url: String,
+    pub gateway_path: String,
+    pub auth_cache_ttl_seconds: u64,
+    pub accounts: Vec<KiroPublicStatusView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroCacheView {
+    pub status: String,
+    pub refresh_interval_seconds: u64,
+    pub last_checked_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroAccountView {
+    pub name: String,
+    pub is_active: bool,
+    pub auth_method: String,
+    pub provider: Option<String>,
+    pub email: Option<String>,
+    pub expires_at: Option<String>,
+    pub profile_arn: Option<String>,
+    pub has_refresh_token: bool,
+    pub disabled: bool,
+    pub source: Option<String>,
+    pub source_db_path: Option<String>,
+    pub last_imported_at: Option<i64>,
+    pub subscription_title: Option<String>,
+    pub region: Option<String>,
+    pub auth_region: Option<String>,
+    pub api_region: Option<String>,
+    pub machine_id: Option<String>,
+    pub kiro_channel_max_concurrency: u64,
+    pub kiro_channel_min_start_interval_ms: u64,
+    pub proxy_url: Option<String>,
+    pub balance: Option<KiroBalanceView>,
+    pub cache: KiroCacheView,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct CreateManualKiroAccountInput {
+    pub name: String,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub profile_arn: Option<String>,
+    pub expires_at: Option<String>,
+    pub auth_method: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub region: Option<String>,
+    pub auth_region: Option<String>,
+    pub api_region: Option<String>,
+    pub machine_id: Option<String>,
+    pub provider: Option<String>,
+    pub email: Option<String>,
+    pub subscription_title: Option<String>,
+    pub kiro_channel_max_concurrency: Option<u64>,
+    pub kiro_channel_min_start_interval_ms: Option<u64>,
+    pub disabled: bool,
+    pub set_as_current: bool,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct PatchKiroAccountInput {
+    pub kiro_channel_max_concurrency: Option<u64>,
+    pub kiro_channel_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminKiroAccountsResponse {
+    pub accounts: Vec<KiroAccountView>,
+    pub generated_at: i64,
+}
+
+pub async fn fetch_kiro_access() -> Result<KiroAccessResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(KiroAccessResponse {
+            base_url: "http://localhost:3000/api/kiro-gateway".to_string(),
+            gateway_path: "/api/kiro-gateway".to_string(),
+            auth_cache_ttl_seconds: 60,
+            accounts: vec![KiroPublicStatusView {
+                name: "default".to_string(),
+                is_active: true,
+                provider: Some("github".to_string()),
+                disabled: false,
+                subscription_title: Some("KIRO STUDENT".to_string()),
+                current_usage: Some(7.0),
+                usage_limit: Some(1000.0),
+                remaining: Some(993.0),
+                next_reset_at: Some(1_775_001_600),
+                cache: KiroCacheView {
+                    status: "ready".to_string(),
+                    refresh_interval_seconds: 60,
+                    last_checked_at: Some(0),
+                    last_success_at: Some(0),
+                    error_message: None,
+                },
+            }],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/kiro-gateway/access?_ts={}", API_BASE, Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayKeysResponse {
+            keys: vec![],
+            auth_cache_ttl_seconds: 60,
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/keys", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn create_admin_kiro_key(
+    name: &str,
+    quota_billable_limit: u64,
+) -> Result<AdminLlmGatewayKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayKeyView {
+            id: "mock-kiro".to_string(),
+            name: name.to_string(),
+            secret: "sf-kiro-mock".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            public_visible: false,
+            quota_billable_limit,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            remaining_billable: quota_billable_limit as i64,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/keys", admin_base());
+        let response = api_post(&url)
+            .json(&serde_json::json!({
+                "name": name,
+                "quota_billable_limit": quota_billable_limit
+            }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_kiro_key(
+    key_id: &str,
+    request: PatchAdminLlmGatewayKeyRequest<'_>,
+) -> Result<AdminLlmGatewayKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (
+            key_id,
+            request.name,
+            request.status,
+            request.public_visible,
+            request.quota_billable_limit,
+            request.route_strategy,
+            request.fixed_account_name,
+            request.auto_account_names,
+            request.request_max_concurrency,
+            request.request_min_start_interval_ms,
+            request.request_max_concurrency_unlimited,
+            request.request_min_start_interval_ms_unlimited,
+        );
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/kiro-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let mut body = serde_json::Map::new();
+        if let Some(name) = request
+            .name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+        }
+        if let Some(status) = request
+            .status
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            body.insert("status".to_string(), serde_json::Value::String(status.to_string()));
+        }
+        if let Some(public_visible) = request.public_visible {
+            body.insert("public_visible".to_string(), serde_json::Value::Bool(public_visible));
+        }
+        if let Some(quota_billable_limit) = request.quota_billable_limit {
+            body.insert(
+                "quota_billable_limit".to_string(),
+                serde_json::Value::Number(quota_billable_limit.into()),
+            );
+        }
+        let response = api_patch(&url)
+            .json(&serde_json::Value::Object(body))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_kiro_key(key_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = key_id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/kiro-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn fetch_admin_kiro_usage_events(
+    query: &AdminLlmGatewayUsageEventsQuery,
+) -> Result<AdminLlmGatewayUsageEventsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = query;
+        Ok(AdminLlmGatewayUsageEventsResponse {
+            total: 0,
+            offset: 0,
+            limit: 20,
+            has_more: false,
+            events: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/kiro-gateway/usage", admin_base());
+        let mut params = Vec::new();
+        if let Some(key_id) = query.key_id.as_deref() {
+            params.push(format!("key_id={}", urlencoding::encode(key_id)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_kiro_accounts() -> Result<AdminKiroAccountsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminKiroAccountsResponse {
+            accounts: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/accounts", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn import_admin_kiro_account(
+    name: Option<&str>,
+    sqlite_path: Option<&str>,
+    kiro_channel_max_concurrency: Option<u64>,
+    kiro_channel_min_start_interval_ms: Option<u64>,
+    set_as_current: bool,
+) -> Result<KiroAccountView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (
+            name,
+            sqlite_path,
+            kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms,
+            set_as_current,
+        );
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/accounts/import-local", admin_base());
+        let mut body = serde_json::Map::new();
+        if let Some(name) = name.map(str::trim).filter(|value| !value.is_empty()) {
+            body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+        }
+        if let Some(path) = sqlite_path.map(str::trim).filter(|value| !value.is_empty()) {
+            body.insert("sqlite_path".to_string(), serde_json::Value::String(path.to_string()));
+        }
+        if let Some(value) = kiro_channel_max_concurrency {
+            body.insert(
+                "kiro_channel_max_concurrency".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(value)),
+            );
+        }
+        if let Some(value) = kiro_channel_min_start_interval_ms {
+            body.insert(
+                "kiro_channel_min_start_interval_ms".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(value)),
+            );
+        }
+        body.insert("set_as_current".to_string(), serde_json::Value::Bool(set_as_current));
+        let response = api_post(&url)
+            .json(&serde_json::Value::Object(body))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn create_admin_kiro_manual_account(
+    input: &CreateManualKiroAccountInput,
+) -> Result<KiroAccountView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/accounts", admin_base());
+        let response = api_post(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_kiro_account(
+    name: &str,
+    input: &PatchKiroAccountInput,
+) -> Result<KiroAccountView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (name, input);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/kiro-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let response = api_patch(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn refresh_admin_kiro_account_balance(name: &str) -> Result<KiroBalanceView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(KiroBalanceView {
+            current_usage: 0.0,
+            usage_limit: 1_000.0,
+            remaining: 1_000.0,
+            next_reset_at: None,
+            subscription_title: Some(format!("mock-{name}")),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/accounts/{}/balance",
+            admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn use_admin_kiro_account(name: &str) -> Result<KiroAccountView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = name;
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/accounts/{}/use",
+            admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_kiro_account(name: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = name;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/kiro-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
     }
 }

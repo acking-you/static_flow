@@ -11,7 +11,9 @@ use tower_http::{
     services::ServeDir,
 };
 
-use crate::{behavior_analytics, handlers, llm_gateway, request_context, seo, state::AppState};
+use crate::{
+    behavior_analytics, handlers, kiro_gateway, llm_gateway, request_context, seo, state::AppState,
+};
 
 /// Build the full application router, including public APIs, admin APIs, and
 /// SPA fallbacks.
@@ -67,6 +69,27 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
         .route("/api/llm-gateway/access", get(llm_gateway::get_public_access))
+        .route("/api/kiro-gateway/access", get(kiro_gateway::get_public_access))
+        .route(
+            "/api/kiro-gateway/v1/models",
+            get(kiro_gateway::anthropic::get_models),
+        )
+        .route(
+            "/api/kiro-gateway/v1/messages",
+            post(kiro_gateway::anthropic::post_messages),
+        )
+        .route(
+            "/api/kiro-gateway/v1/messages/count_tokens",
+            post(kiro_gateway::anthropic::count_tokens),
+        )
+        .route(
+            "/api/kiro-gateway/cc/v1/messages",
+            post(kiro_gateway::anthropic::post_messages_cc),
+        )
+        .route(
+            "/api/kiro-gateway/cc/v1/messages/count_tokens",
+            post(kiro_gateway::anthropic::count_tokens),
+        )
         .route("/api/llm-gateway/status", get(llm_gateway::get_public_rate_limit_status))
         .route(
             "/api/llm-gateway/support-config",
@@ -159,6 +182,31 @@ pub fn create_router(state: AppState) -> Router {
                 .post(llm_gateway::update_admin_runtime_config),
         )
         .route(
+            "/admin/llm-gateway/proxy-configs",
+            get(llm_gateway::list_admin_proxy_configs).post(llm_gateway::create_admin_proxy_config),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs/import-legacy-kiro",
+            post(llm_gateway::import_legacy_kiro_proxy_configs),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs/:proxy_id",
+            patch(llm_gateway::patch_admin_proxy_config)
+                .delete(llm_gateway::delete_admin_proxy_config),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs/:proxy_id/check/:provider_type",
+            post(llm_gateway::check_admin_proxy_config),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-bindings",
+            get(llm_gateway::list_admin_proxy_bindings),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-bindings/:provider_type",
+            post(llm_gateway::update_admin_proxy_binding),
+        )
+        .route(
             "/admin/llm-gateway/keys",
             get(llm_gateway::list_admin_keys).post(llm_gateway::create_admin_key),
         )
@@ -210,6 +258,35 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/llm-gateway/accounts/:name",
             delete(llm_gateway::remove_account).patch(llm_gateway::patch_account_settings),
+        )
+        .route(
+            "/admin/kiro-gateway/keys",
+            get(kiro_gateway::list_admin_keys).post(kiro_gateway::create_admin_key),
+        )
+        .route(
+            "/admin/kiro-gateway/keys/:key_id",
+            patch(kiro_gateway::patch_admin_key).delete(kiro_gateway::delete_admin_key),
+        )
+        .route("/admin/kiro-gateway/usage", get(kiro_gateway::list_admin_usage_events))
+        .route(
+            "/admin/kiro-gateway/accounts",
+            get(kiro_gateway::list_admin_accounts).post(kiro_gateway::create_manual_account),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts/import-local",
+            post(kiro_gateway::import_local_account),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts/:name/use",
+            post(kiro_gateway::use_account),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts/:name",
+            delete(kiro_gateway::delete_account).patch(kiro_gateway::patch_account),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts/:name/balance",
+            get(kiro_gateway::get_account_balance).post(kiro_gateway::refresh_account_balance_cache),
         )
         .route("/admin/api-behavior/overview", get(handlers::admin_api_behavior_overview))
         .route("/admin/api-behavior/events", get(handlers::admin_list_api_behavior_events))

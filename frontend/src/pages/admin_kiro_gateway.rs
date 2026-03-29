@@ -1,0 +1,1560 @@
+//! Admin UI for managing Kiro accounts, keys, usage, and proxy bindings.
+
+use gloo_timers::callback::Timeout;
+use wasm_bindgen::prelude::*;
+use web_sys::{HtmlInputElement, HtmlSelectElement};
+use yew::prelude::*;
+use yew_router::prelude::Link;
+
+use crate::{
+    api::{
+        create_admin_kiro_key, create_admin_kiro_manual_account, delete_admin_kiro_account,
+        delete_admin_kiro_key, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
+        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings,
+        import_admin_kiro_account, patch_admin_kiro_account, patch_admin_kiro_key,
+        refresh_admin_kiro_account_balance, use_admin_kiro_account as activate_admin_kiro_account,
+        AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
+        AdminUpstreamProxyBindingView, CreateManualKiroAccountInput, KiroAccountView,
+        KiroBalanceView, PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
+    },
+    pages::llm_access_shared::{
+        format_float2, format_ms, format_number_i64, format_number_u64, format_reset_hint,
+        kiro_credit_ratio, kiro_key_usage_ratio, MaskedSecretCode,
+    },
+    router::Route,
+};
+
+#[wasm_bindgen(inline_js = r#"
+export function copy_text(text) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).catch(function(){});
+    }
+}
+"#)]
+extern "C" {
+    fn copy_text(text: &str);
+}
+
+fn format_timestamp_opt(ts: Option<i64>) -> String {
+    ts.map(format_ms).unwrap_or_else(|| "-".to_string())
+}
+
+fn format_float4(value: f64) -> String {
+    format!("{value:.4}")
+}
+
+fn format_cache_summary(account: &KiroAccountView) -> String {
+    let status = account.cache.status.trim();
+    if status.is_empty() {
+        return "cache loading".to_string();
+    }
+    match account.cache.last_checked_at {
+        Some(ts) => format!("cache {status} · checked {}", format_ms(ts)),
+        None => format!("cache {status}"),
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct KiroAccountCardProps {
+    account: KiroAccountView,
+    on_reload: Callback<()>,
+    flash: UseStateHandle<Option<String>>,
+    notify: Callback<(String, bool)>,
+    error: UseStateHandle<Option<String>>,
+}
+
+#[function_component(KiroAccountCard)]
+fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
+    let expanded = use_state(|| false);
+    let scheduler_max = use_state(|| props.account.kiro_channel_max_concurrency.to_string());
+    let scheduler_min = use_state(|| props.account.kiro_channel_min_start_interval_ms.to_string());
+    let feedback = use_state(|| None::<String>);
+    let busy = use_state(|| false);
+
+    {
+        let account = props.account.clone();
+        let scheduler_max = scheduler_max.clone();
+        let scheduler_min = scheduler_min.clone();
+        use_effect_with(props.account.clone(), move |_| {
+            scheduler_max.set(account.kiro_channel_max_concurrency.to_string());
+            scheduler_min.set(account.kiro_channel_min_start_interval_ms.to_string());
+            || ()
+        });
+    }
+
+    let on_refresh_cache = {
+        let account_name = props.account.name.clone();
+        let flash = props.flash.clone();
+        let notify = props.notify.clone();
+        let error = props.error.clone();
+        let feedback = feedback.clone();
+        let busy = busy.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let account_name = account_name.clone();
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let feedback = feedback.clone();
+            let busy = busy.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                busy.set(true);
+                error.set(None);
+                match refresh_admin_kiro_account_balance(&account_name).await {
+                    Ok(_) => {
+                        feedback.set(Some("Cache refreshed.".to_string()));
+                        let message = format!("Refreshed cached balance for `{account_name}`.");
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((
+                            format!(
+                                "Failed to refresh cached balance for `{account_name}`.\n{err}"
+                            ),
+                            true,
+                        ));
+                    },
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    let on_use_account = {
+        let account_name = props.account.name.clone();
+        let flash = props.flash.clone();
+        let notify = props.notify.clone();
+        let error = props.error.clone();
+        let feedback = feedback.clone();
+        let busy = busy.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let account_name = account_name.clone();
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let feedback = feedback.clone();
+            let busy = busy.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                busy.set(true);
+                error.set(None);
+                match activate_admin_kiro_account(&account_name).await {
+                    Ok(_) => {
+                        feedback.set(Some("Activated.".to_string()));
+                        let message = format!("Activated `{account_name}`.");
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("Failed to activate `{account_name}`.\n{err}"), true));
+                    },
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    let on_delete_account = {
+        let account_name = props.account.name.clone();
+        let flash = props.flash.clone();
+        let notify = props.notify.clone();
+        let error = props.error.clone();
+        let feedback = feedback.clone();
+        let busy = busy.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let account_name = account_name.clone();
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let feedback = feedback.clone();
+            let busy = busy.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                busy.set(true);
+                error.set(None);
+                match delete_admin_kiro_account(&account_name).await {
+                    Ok(_) => {
+                        feedback.set(Some("Deleted.".to_string()));
+                        let message = format!("Deleted `{account_name}`.");
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("Failed to delete `{account_name}`.\n{err}"), true));
+                    },
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    let on_save_scheduler = {
+        let account_name = props.account.name.clone();
+        let scheduler_max = scheduler_max.clone();
+        let scheduler_min = scheduler_min.clone();
+        let flash = props.flash.clone();
+        let notify = props.notify.clone();
+        let error = props.error.clone();
+        let feedback = feedback.clone();
+        let busy = busy.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let account_name = account_name.clone();
+            let scheduler_max = scheduler_max.clone();
+            let scheduler_min = scheduler_min.clone();
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let feedback = feedback.clone();
+            let busy = busy.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let parsed_max = match (*scheduler_max).trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message = "Max concurrency must be a valid integer.".to_string();
+                        error.set(Some(message.clone()));
+                        notify.emit((message, true));
+                        return;
+                    },
+                };
+                let parsed_min = match (*scheduler_min).trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message = "Min start interval must be a valid integer.".to_string();
+                        error.set(Some(message.clone()));
+                        notify.emit((message, true));
+                        return;
+                    },
+                };
+                busy.set(true);
+                error.set(None);
+                match patch_admin_kiro_account(&account_name, &PatchKiroAccountInput {
+                    kiro_channel_max_concurrency: Some(parsed_max),
+                    kiro_channel_min_start_interval_ms: Some(parsed_min),
+                })
+                .await
+                {
+                    Ok(_) => {
+                        feedback.set(Some("Scheduler saved.".to_string()));
+                        let message = format!("Updated scheduler settings for `{account_name}`.");
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((
+                            format!(
+                                "Failed to update scheduler settings for `{account_name}`.\n{err}"
+                            ),
+                            true,
+                        ));
+                    },
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    let toggle_expanded = {
+        let expanded = expanded.clone();
+        Callback::from(move |_| expanded.set(!*expanded))
+    };
+
+    let account = props.account.clone();
+    let email = account.email.clone().unwrap_or_else(|| "-".to_string());
+    let expires_at = account
+        .expires_at
+        .clone()
+        .unwrap_or_else(|| "-".to_string());
+    let profile_arn = account
+        .profile_arn
+        .clone()
+        .unwrap_or_else(|| "-".to_string());
+    let machine_id = account
+        .machine_id
+        .clone()
+        .unwrap_or_else(|| "-".to_string());
+    let region = account.region.clone().unwrap_or_else(|| "-".to_string());
+    let auth_region = account
+        .auth_region
+        .clone()
+        .unwrap_or_else(|| "-".to_string());
+    let api_region = account
+        .api_region
+        .clone()
+        .unwrap_or_else(|| "-".to_string());
+    let proxy_url = account.proxy_url.clone().unwrap_or_else(|| "-".to_string());
+    let source = account.source.clone().unwrap_or_else(|| "-".to_string());
+    let source_db_path = account
+        .source_db_path
+        .clone()
+        .unwrap_or_else(|| "-".to_string());
+    let last_imported = format_timestamp_opt(account.last_imported_at);
+
+    html! {
+        <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+            <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                <div>
+                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                            { "Kiro" }
+                        </span>
+                        <h3 class={classes!("m-0", "text-lg", "font-semibold")}>{ account.name.clone() }</h3>
+                        if account.is_active {
+                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-700", "dark:text-emerald-200")}>
+                                { "active" }
+                            </span>
+                        }
+                        if account.disabled {
+                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2.5", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-amber-700", "dark:text-amber-200")}>
+                                { "disabled" }
+                            </span>
+                        }
+                    </div>
+                    <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                        { format!("{} · provider {} · refresh {}", account.auth_method, account.provider.clone().unwrap_or_else(|| "-".to_string()), if account.has_refresh_token { "present" } else { "missing" }) }
+                    </p>
+                    <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                        { format_cache_summary(&account) }
+                    </p>
+                    <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                        { format!(
+                            "scheduler {} in-flight · {} ms spacing",
+                            account.kiro_channel_max_concurrency,
+                            account.kiro_channel_min_start_interval_ms
+                        ) }
+                    </p>
+                    if let Some(cache_error) = account.cache.error_message.clone() {
+                        <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-amber-700", "dark:text-amber-200")}>
+                            { cache_error }
+                        </p>
+                    }
+                </div>
+                <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                    <button type="button" class={classes!("btn-terminal")} onclick={on_refresh_cache.clone()} disabled={*busy}>
+                        { "Refresh Cache" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")} disabled={account.is_active || *busy} onclick={on_use_account.clone()}>
+                        { if account.is_active { "Active" } else { "Use This Account" } }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")} onclick={on_delete_account.clone()} disabled={*busy}>
+                        { "Delete" }
+                    </button>
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Quota Snapshot" }</div>
+                if let Some(balance) = account.balance.clone() {
+                    { quota_progress_bar(&balance, account.subscription_title.clone()) }
+                } else {
+                    <p class={classes!("mt-3", "mb-0", "text-sm", "text-[var(--muted)]")}>{ "Balance not loaded yet." }</p>
+                }
+            </div>
+
+            <button
+                type="button"
+                class={classes!("mt-3", "btn-terminal", "text-xs")}
+                onclick={toggle_expanded}
+            >
+                { if *expanded { "收起详情 ▲" } else { "展开详情 ▼" } }
+            </button>
+
+            if *expanded {
+                <div class={classes!("mt-3", "grid", "gap-4", "lg:grid-cols-3")}>
+                    <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Identity" }</div>
+                        <dl class={classes!("mt-3", "space-y-2", "text-sm")}>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "email: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ email }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "expires_at: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ expires_at }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "profileArn: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ profile_arn }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "machineId: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ machine_id }</dd></div>
+                        </dl>
+                    </div>
+                    <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Regions / Proxy" }</div>
+                        <dl class={classes!("mt-3", "space-y-2", "text-sm")}>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "region: " }</dt><dd class={classes!("inline", "font-mono")}>{ region }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "auth_region: " }</dt><dd class={classes!("inline", "font-mono")}>{ auth_region }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "api_region: " }</dt><dd class={classes!("inline", "font-mono")}>{ api_region }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "legacy_proxy_url: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ proxy_url }</dd></div>
+                        </dl>
+                    </div>
+                    <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Source" }</div>
+                        <dl class={classes!("mt-3", "space-y-2", "text-sm")}>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "source: " }</dt><dd class={classes!("inline", "font-mono")}>{ source }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "source_db_path: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ source_db_path }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "last_imported_at: " }</dt><dd class={classes!("inline", "font-mono")}>{ last_imported }</dd></div>
+                        </dl>
+                    </div>
+                </div>
+                <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Scheduler" }</div>
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-2")}>
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Max Concurrency" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm", "font-mono")}
+                                value={(*scheduler_max).clone()}
+                                oninput={{
+                                    let scheduler_max = scheduler_max.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        scheduler_max.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Min Start Interval Ms" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm", "font-mono")}
+                                value={(*scheduler_min).clone()}
+                                oninput={{
+                                    let scheduler_min = scheduler_min.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        scheduler_min.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                    </div>
+                    <div class={classes!("mt-3", "flex", "items-center", "gap-3", "flex-wrap")}>
+                        <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save_scheduler} disabled={*busy}>
+                            { if *busy { "Saving..." } else { "Save Scheduler" } }
+                        </button>
+                        <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                            { "本地调度会优先切到下一个账号，只有所有账号都被本地限流或上游 cooldown 卡住时才统一等待。" }
+                        </span>
+                    </div>
+                </div>
+            }
+
+            if let Some(message) = (*feedback).clone() {
+                <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ message }</div>
+            }
+        </article>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct KiroKeyEditorCardProps {
+    key_item: AdminLlmGatewayKeyView,
+    on_reload: Callback<()>,
+    on_copy: Callback<(String, String)>,
+    on_flash: Callback<(String, bool)>,
+}
+
+#[function_component(KiroKeyEditorCard)]
+fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
+    let name = use_state(|| props.key_item.name.clone());
+    let quota = use_state(|| props.key_item.quota_billable_limit.to_string());
+    let status = use_state(|| props.key_item.status.clone());
+    let saving = use_state(|| false);
+    let feedback = use_state(|| None::<String>);
+
+    {
+        let key_item = props.key_item.clone();
+        let name = name.clone();
+        let quota = quota.clone();
+        let status = status.clone();
+        use_effect_with(props.key_item.clone(), move |_| {
+            name.set(key_item.name.clone());
+            quota.set(key_item.quota_billable_limit.to_string());
+            status.set(key_item.status.clone());
+            || ()
+        });
+    }
+
+    let on_save = {
+        let key_id = props.key_item.id.clone();
+        let key_name = props.key_item.name.clone();
+        let name = name.clone();
+        let quota = quota.clone();
+        let status = status.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let key_id = key_id.clone();
+            let key_name = key_name.clone();
+            let name_value = (*name).clone();
+            let quota_value = (*quota).clone();
+            let status_value = (*status).clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let parsed_quota = match quota_value.trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message = "Quota must be a valid integer.".to_string();
+                        feedback.set(Some(message.clone()));
+                        on_flash.emit((message, true));
+                        return;
+                    },
+                };
+                saving.set(true);
+                feedback.set(None);
+                match patch_admin_kiro_key(&key_id, PatchAdminLlmGatewayKeyRequest {
+                    name: Some(name_value.trim()),
+                    status: Some(status_value.trim()),
+                    public_visible: None,
+                    quota_billable_limit: Some(parsed_quota),
+                    route_strategy: None,
+                    fixed_account_name: None,
+                    auto_account_names: None,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
+                    request_max_concurrency_unlimited: false,
+                    request_min_start_interval_ms_unlimited: false,
+                })
+                .await
+                {
+                    Ok(_) => {
+                        feedback.set(Some("Saved.".to_string()));
+                        on_flash.emit((format!("Saved Kiro key `{key_name}`."), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash
+                            .emit((format!("Failed to save Kiro key `{key_name}`.\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_disable = {
+        let key_id = props.key_item.id.clone();
+        let key_name = props.key_item.name.clone();
+        let name = name.clone();
+        let quota = quota.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let key_id = key_id.clone();
+            let key_name = key_name.clone();
+            let name_value = (*name).clone();
+            let quota_value = (*quota).clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let parsed_quota = match quota_value.trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message = "Quota must be a valid integer.".to_string();
+                        feedback.set(Some(message.clone()));
+                        on_flash.emit((message, true));
+                        return;
+                    },
+                };
+                saving.set(true);
+                feedback.set(None);
+                match patch_admin_kiro_key(&key_id, PatchAdminLlmGatewayKeyRequest {
+                    name: Some(name_value.trim()),
+                    status: Some("disabled"),
+                    public_visible: None,
+                    quota_billable_limit: Some(parsed_quota),
+                    route_strategy: None,
+                    fixed_account_name: None,
+                    auto_account_names: None,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
+                    request_max_concurrency_unlimited: false,
+                    request_min_start_interval_ms_unlimited: false,
+                })
+                .await
+                {
+                    Ok(_) => {
+                        feedback.set(Some("Disabled.".to_string()));
+                        on_flash.emit((format!("Disabled Kiro key `{key_name}`."), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((
+                            format!("Failed to disable Kiro key `{key_name}`.\n{err}"),
+                            true,
+                        ));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_delete = {
+        let key_id = props.key_item.id.clone();
+        let key_name = props.key_item.name.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let key_id = key_id.clone();
+            let key_name = key_name.clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                feedback.set(None);
+                match delete_admin_kiro_key(&key_id).await {
+                    Ok(_) => {
+                        feedback.set(Some("Deleted.".to_string()));
+                        on_flash.emit((format!("Deleted Kiro key `{key_name}`."), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((
+                            format!("Failed to delete Kiro key `{key_name}`.\n{err}"),
+                            true,
+                        ));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let key_ratio = kiro_key_usage_ratio(
+        props.key_item.remaining_billable,
+        props.key_item.quota_billable_limit,
+    );
+    let key_pct = (key_ratio * 100.0).round() as i32;
+
+    html! {
+        <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+            <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                <div>
+                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                            { "Kiro" }
+                        </span>
+                        <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.key_item.name.clone() }</h3>
+                    </div>
+                    <p class={classes!("mt-2", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                        { format!("{} · remaining {}", props.key_item.status, format_number_i64(props.key_item.remaining_billable)) }
+                    </p>
+                    <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                        { format!("credits {}", format_float4(props.key_item.usage_credit_total)) }
+                        if props.key_item.usage_credit_missing_events > 0 {
+                            { format!(" · partial ({} missing)", props.key_item.usage_credit_missing_events) }
+                        }
+                    </p>
+                </div>
+                <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                    { format!("created {} · used {}", format_ms(props.key_item.created_at), format_timestamp_opt(props.key_item.last_used_at)) }
+                </span>
+            </div>
+
+            <div class={classes!("mt-3")}>
+                <div class={classes!("flex", "items-center", "justify-between", "font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>
+                    <span>{ "用量" }</span>
+                    <span>{ format!("{key_pct}%") }</span>
+                </div>
+                <div class={classes!("mt-1.5", "h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
+                    <div class={classes!("h-full", "rounded-full", "bg-[linear-gradient(90deg,#0f766e,#2563eb)]", "transition-[width]", "duration-300")}
+                         style={format!("width: {}%;", key_pct.clamp(0, 100))} />
+                </div>
+                <div class={classes!("mt-2", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                    <span>{ format!("remaining {}", format_number_i64(props.key_item.remaining_billable)) }</span>
+                    <span>{ format!("limit {}", format_number_u64(props.key_item.quota_billable_limit)) }</span>
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "grid", "gap-3", "md:grid-cols-2")}>
+                <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Secret" }</div>
+                    <MaskedSecretCode
+                        value={props.key_item.secret.clone()}
+                        copy_label={"Kiro Key"}
+                        on_copy={props.on_copy.clone()}
+                        code_class={classes!("leading-6", "text-[var(--text)]")}
+                    />
+                </div>
+                <label class={classes!("text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Name" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                        value={(*name).clone()}
+                        oninput={{
+                            let name = name.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                name.set(input.value());
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Quota" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm", "font-mono")}
+                        value={(*quota).clone()}
+                        oninput={{
+                            let quota = quota.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                quota.set(input.value());
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Status" }</div>
+                    <select
+                        key={format!("kiro-key-status-{}", props.key_item.id)}
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                        value={(*status).clone()}
+                        onchange={{
+                            let status = status.clone();
+                            Callback::from(move |event: Event| {
+                                let input: HtmlSelectElement = event.target_unchecked_into();
+                                status.set(input.value());
+                            })
+                        }}
+                    >
+                        <option value="active">{ "active" }</option>
+                        <option value="disabled">{ "disabled" }</option>
+                    </select>
+                </label>
+                <div class={classes!("flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}>
+                    <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                        { "private" }
+                    </span>
+                    <span>{ "Kiro key 不会在公开页面暴露。" }</span>
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "flex", "items-center", "gap-2", "flex-wrap")}>
+                <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save}>
+                    { if *saving { "Saving..." } else { "Save" } }
+                </button>
+                <button type="button" class={classes!("btn-terminal")} onclick={on_disable}>
+                    { "Disable" }
+                </button>
+                <button
+                    type="button"
+                    class={classes!("btn-terminal", "text-red-600", "dark:text-red-400")}
+                    onclick={on_delete}
+                >
+                    { "Delete" }
+                </button>
+            </div>
+
+            if let Some(message) = (*feedback).clone() {
+                <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ message }</div>
+            }
+        </article>
+    }
+}
+
+#[function_component(AdminKiroGatewayPage)]
+/// Render the Kiro-specific admin surface.
+///
+/// This page owns the full CRUD workflow for Kiro accounts and private keys,
+/// plus usage inspection and provider-level proxy context.
+pub fn admin_kiro_gateway_page() -> Html {
+    let accounts = use_state(Vec::<KiroAccountView>::new);
+    let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
+    let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
+    let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
+    let loading = use_state(|| true);
+    let error = use_state(|| None::<String>);
+    let flash = use_state(|| None::<String>);
+    let toast = use_state(|| None::<(String, bool)>);
+    let toast_timeout = use_mut_ref(|| None::<Timeout>);
+    let notify = {
+        let flash = flash.clone();
+        let toast = toast.clone();
+        let toast_timeout = toast_timeout.clone();
+        Callback::from(move |(message, is_error): (String, bool)| {
+            flash.set(Some(message.clone()));
+            toast.set(Some((message, is_error)));
+            toast_timeout.borrow_mut().take();
+            let toast = toast.clone();
+            let clear_handle = toast_timeout.clone();
+            let timeout = Timeout::new(2600, move || {
+                toast.set(None);
+                clear_handle.borrow_mut().take();
+            });
+            *toast_timeout.borrow_mut() = Some(timeout);
+        })
+    };
+    let refresh_tick = use_state(|| 0u32);
+    let manual_form_expanded = use_state(|| false);
+
+    let import_name = use_state(|| "default".to_string());
+    let import_sqlite_path = use_state(String::new);
+    let import_scheduler_max = use_state(|| "1".to_string());
+    let import_scheduler_min = use_state(|| "0".to_string());
+    let import_set_current = use_state(|| true);
+
+    let manual_name = use_state(String::new);
+    let manual_auth_method = use_state(|| "social".to_string());
+    let manual_access_token = use_state(String::new);
+    let manual_refresh_token = use_state(String::new);
+    let manual_profile_arn = use_state(String::new);
+    let manual_expires_at = use_state(String::new);
+    let manual_client_id = use_state(String::new);
+    let manual_client_secret = use_state(String::new);
+    let manual_region = use_state(|| "us-east-1".to_string());
+    let manual_auth_region = use_state(|| "us-east-1".to_string());
+    let manual_api_region = use_state(|| "us-east-1".to_string());
+    let manual_machine_id = use_state(String::new);
+    let manual_provider = use_state(String::new);
+    let manual_email = use_state(String::new);
+    let manual_subscription_title = use_state(String::new);
+    let manual_scheduler_max = use_state(|| "1".to_string());
+    let manual_scheduler_min = use_state(|| "0".to_string());
+    let manual_disabled = use_state(|| false);
+    let manual_set_current = use_state(|| false);
+
+    let new_key_name = use_state(|| "kiro-private".to_string());
+    let new_key_quota = use_state(|| "1000000".to_string());
+
+    {
+        let accounts = accounts.clone();
+        let keys = keys.clone();
+        let usage_events = usage_events.clone();
+        let proxy_bindings = proxy_bindings.clone();
+        let loading = loading.clone();
+        let error = error.clone();
+        use_effect_with(*refresh_tick, move |_| {
+            let accounts = accounts.clone();
+            let keys = keys.clone();
+            let usage_events = usage_events.clone();
+            let proxy_bindings = proxy_bindings.clone();
+            let loading = loading.clone();
+            let error = error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                loading.set(true);
+                error.set(None);
+                let accounts_result = fetch_admin_kiro_accounts().await;
+                let keys_result = fetch_admin_kiro_keys().await;
+                let proxy_bindings_result = fetch_admin_llm_gateway_proxy_bindings().await;
+                let usage_result =
+                    fetch_admin_kiro_usage_events(&AdminLlmGatewayUsageEventsQuery {
+                        key_id: None,
+                        limit: Some(5),
+                        offset: Some(0),
+                    })
+                    .await;
+                match (accounts_result, keys_result, proxy_bindings_result, usage_result) {
+                    (Ok(accounts_resp), Ok(keys_resp), Ok(proxy_bindings_resp), Ok(usage_resp)) => {
+                        accounts.set(accounts_resp.accounts);
+                        keys.set(keys_resp.keys);
+                        proxy_bindings.set(proxy_bindings_resp.bindings);
+                        usage_events.set(usage_resp.events);
+                    },
+                    (Err(err), _, _, _)
+                    | (_, Err(err), _, _)
+                    | (_, _, Err(err), _)
+                    | (_, _, _, Err(err)) => {
+                        error.set(Some(err));
+                    },
+                }
+                loading.set(false);
+            });
+            || ()
+        });
+    }
+
+    let on_reload = {
+        let refresh_tick = refresh_tick.clone();
+        Callback::from(move |_| refresh_tick.set(refresh_tick.wrapping_add(1)))
+    };
+
+    let on_copy = {
+        let notify = notify.clone();
+        Callback::from(move |(label, value): (String, String)| {
+            copy_text(&value);
+            notify.emit((format!("Copied {} to clipboard.", label), false));
+        })
+    };
+
+    let on_import_local = {
+        let import_name = import_name.clone();
+        let import_sqlite_path = import_sqlite_path.clone();
+        let import_scheduler_max = import_scheduler_max.clone();
+        let import_scheduler_min = import_scheduler_min.clone();
+        let import_set_current = import_set_current.clone();
+        let flash = flash.clone();
+        let notify = notify.clone();
+        let error = error.clone();
+        let on_reload = on_reload.clone();
+        Callback::from(move |_| {
+            let import_name = (*import_name).clone();
+            let import_sqlite_path = (*import_sqlite_path).clone();
+            let import_scheduler_max = (*import_scheduler_max).clone();
+            let import_scheduler_min = (*import_scheduler_min).clone();
+            let import_set_current = *import_set_current;
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let parsed_max = match import_scheduler_max.trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message = "Import max concurrency must be a valid integer.".to_string();
+                        error.set(Some(message.clone()));
+                        notify.emit((message, true));
+                        return;
+                    },
+                };
+                let parsed_min = match import_scheduler_min.trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message =
+                            "Import min start interval must be a valid integer.".to_string();
+                        error.set(Some(message.clone()));
+                        notify.emit((message, true));
+                        return;
+                    },
+                };
+                error.set(None);
+                match import_admin_kiro_account(
+                    Some(import_name.as_str()),
+                    if import_sqlite_path.trim().is_empty() {
+                        None
+                    } else {
+                        Some(import_sqlite_path.as_str())
+                    },
+                    Some(parsed_max),
+                    Some(parsed_min),
+                    import_set_current,
+                )
+                .await
+                {
+                    Ok(account) => {
+                        let message = format!("Imported local Kiro auth `{}`.", account.name);
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("Failed to import local Kiro auth.\n{err}"), true));
+                    },
+                }
+            });
+        })
+    };
+
+    let on_create_manual = {
+        let manual_name = manual_name.clone();
+        let manual_auth_method = manual_auth_method.clone();
+        let manual_access_token = manual_access_token.clone();
+        let manual_refresh_token = manual_refresh_token.clone();
+        let manual_profile_arn = manual_profile_arn.clone();
+        let manual_expires_at = manual_expires_at.clone();
+        let manual_client_id = manual_client_id.clone();
+        let manual_client_secret = manual_client_secret.clone();
+        let manual_region = manual_region.clone();
+        let manual_auth_region = manual_auth_region.clone();
+        let manual_api_region = manual_api_region.clone();
+        let manual_machine_id = manual_machine_id.clone();
+        let manual_provider = manual_provider.clone();
+        let manual_email = manual_email.clone();
+        let manual_subscription_title = manual_subscription_title.clone();
+        let manual_scheduler_max = manual_scheduler_max.clone();
+        let manual_scheduler_min = manual_scheduler_min.clone();
+        let manual_disabled = manual_disabled.clone();
+        let manual_set_current = manual_set_current.clone();
+        let flash = flash.clone();
+        let notify = notify.clone();
+        let error = error.clone();
+        let on_reload = on_reload.clone();
+        Callback::from(move |_| {
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let on_reload = on_reload.clone();
+            let parsed_max = match (*manual_scheduler_max).trim().parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    let message =
+                        "Manual account max concurrency must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                },
+            };
+            let parsed_min = match (*manual_scheduler_min).trim().parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    let message =
+                        "Manual account min start interval must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                },
+            };
+            let input = CreateManualKiroAccountInput {
+                name: (*manual_name).trim().to_string(),
+                access_token: normalized_str_option(&manual_access_token),
+                refresh_token: normalized_str_option(&manual_refresh_token),
+                profile_arn: normalized_str_option(&manual_profile_arn),
+                expires_at: normalized_str_option(&manual_expires_at),
+                auth_method: normalized_str_option(&manual_auth_method),
+                client_id: normalized_str_option(&manual_client_id),
+                client_secret: normalized_str_option(&manual_client_secret),
+                region: normalized_str_option(&manual_region),
+                auth_region: normalized_str_option(&manual_auth_region),
+                api_region: normalized_str_option(&manual_api_region),
+                machine_id: normalized_str_option(&manual_machine_id),
+                provider: normalized_str_option(&manual_provider),
+                email: normalized_str_option(&manual_email),
+                subscription_title: normalized_str_option(&manual_subscription_title),
+                kiro_channel_max_concurrency: Some(parsed_max),
+                kiro_channel_min_start_interval_ms: Some(parsed_min),
+                disabled: *manual_disabled,
+                set_as_current: *manual_set_current,
+            };
+            wasm_bindgen_futures::spawn_local(async move {
+                error.set(None);
+                match create_admin_kiro_manual_account(&input).await {
+                    Ok(account) => {
+                        let message = format!("Saved manual Kiro account `{}`.", account.name);
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("Failed to save manual Kiro account.\n{err}"), true));
+                    },
+                }
+            });
+        })
+    };
+
+    let on_create_key = {
+        let new_key_name = new_key_name.clone();
+        let new_key_quota = new_key_quota.clone();
+        let flash = flash.clone();
+        let notify = notify.clone();
+        let error = error.clone();
+        let on_reload = on_reload.clone();
+        Callback::from(move |_| {
+            let name = (*new_key_name).clone();
+            let quota = (*new_key_quota).clone();
+            let flash = flash.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let parsed_quota = match quota.trim().parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let message = "Quota must be a valid integer.".to_string();
+                        error.set(Some(message.clone()));
+                        notify.emit((message, true));
+                        return;
+                    },
+                };
+                error.set(None);
+                match create_admin_kiro_key(name.trim(), parsed_quota).await {
+                    Ok(key) => {
+                        let message = format!("Created Kiro key `{}`.", key.name);
+                        flash.set(Some(message.clone()));
+                        notify.emit((message, false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("Failed to create Kiro key.\n{err}"), true));
+                    },
+                }
+            });
+        })
+    };
+
+    html! {
+        <main class={classes!("container", "py-8")}>
+            <section class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-6", "shadow-[var(--shadow)]")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-4", "flex-wrap")}>
+                    <div class={classes!("flex", "items-center", "gap-3")}>
+                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                            { "Kiro" }
+                        </span>
+                        <h1 class={classes!("m-0", "font-mono", "text-xl", "font-bold", "text-[var(--text)]")}>{ "Gateway Admin" }</h1>
+                    </div>
+                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                        <Link<Route> to={Route::KiroAccess} classes={classes!("btn-terminal")}>{ "Kiro Access" }</Link<Route>>
+                        <Link<Route> to={Route::LlmAccess} classes={classes!("btn-terminal")}>{ "LLM Access" }</Link<Route>>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "btn-terminal-primary")}
+                            onclick={{
+                                let on_reload = on_reload.clone();
+                                Callback::from(move |_| on_reload.emit(()))
+                            }}
+                        >
+                            { if *loading { "Loading..." } else { "Refresh" } }
+                        </button>
+                    </div>
+                </div>
+                if let Some(message) = (*flash).clone() {
+                    <div class={classes!("mt-4", "rounded-lg", "bg-emerald-500/10", "px-3", "py-2", "text-sm", "text-emerald-700", "dark:text-emerald-200")}>
+                        { message }
+                    </div>
+                }
+                if let Some(err) = (*error).clone() {
+                    <div class={classes!("mt-4", "rounded-lg", "bg-red-500/10", "px-3", "py-2", "text-sm", "text-red-700", "dark:text-red-200")}>
+                        { err }
+                    </div>
+                }
+            </section>
+
+            <section class={classes!("mt-6", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Effective Upstream Proxy" }</h2>
+                {
+                    if let Some(binding) = proxy_bindings.iter().find(|item| item.provider_type == "kiro") {
+                        html! {
+                            <div class={classes!("mt-4", "space-y-2", "text-sm")}>
+                                <div class={classes!("font-mono", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>
+                                    { format!("source: {}", binding.effective_source) }
+                                </div>
+                                <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                                    <div class={classes!("font-mono", "text-xs", "break-all")}>
+                                        { binding.effective_proxy_url.clone().unwrap_or_else(|| "-".to_string()) }
+                                    </div>
+                                    if let Some(name) = binding.effective_proxy_config_name.as_deref() {
+                                        <div class={classes!("mt-2", "text-xs", "text-[var(--muted)]")}>{ format!("config: {}", name) }</div>
+                                    }
+                                    if let Some(error_message) = binding.error_message.as_deref() {
+                                        <div class={classes!("mt-2", "text-xs", "text-red-600", "dark:text-red-300")}>{ error_message }</div>
+                                    }
+                                </div>
+                                <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
+                                    { "Kiro 运行时只读这里的 provider 级代理绑定；账号 JSON 中遗留的 proxy 字段不会再参与请求路由。" }
+                                </p>
+                            </div>
+                        }
+                    } else {
+                        html! {
+                            <p class={classes!("mt-4", "text-sm", "text-[var(--muted)]")}>
+                                { "当前还没有拿到 Kiro provider 代理绑定状态。" }
+                            </p>
+                        }
+                    }
+                }
+            </section>
+
+            <section class={classes!("mt-6", "grid", "gap-6", "xl:grid-cols-2")}>
+                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Import Local Kiro CLI Auth" }</h2>
+                    <div class={classes!("mt-4", "space-y-3")}>
+                        <label class={classes!("block", "text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Account Name" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                                value={(*import_name).clone()}
+                                oninput={{
+                                    let import_name = import_name.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        import_name.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class={classes!("block", "text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "SQLite Path Override" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                placeholder="~/.local/share/kiro-cli/data.sqlite3"
+                                value={(*import_sqlite_path).clone()}
+                                oninput={{
+                                    let import_sqlite_path = import_sqlite_path.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        import_sqlite_path.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
+                            <label class={classes!("block", "text-sm")}>
+                                <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Max Concurrency" }</div>
+                                <input
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    value={(*import_scheduler_max).clone()}
+                                    oninput={{
+                                        let import_scheduler_max = import_scheduler_max.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            let input: HtmlInputElement = event.target_unchecked_into();
+                                            import_scheduler_max.set(input.value());
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm")}>
+                                <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Min Start Interval Ms" }</div>
+                                <input
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    value={(*import_scheduler_min).clone()}
+                                    oninput={{
+                                        let import_scheduler_min = import_scheduler_min.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            let input: HtmlInputElement = event.target_unchecked_into();
+                                            import_scheduler_min.set(input.value());
+                                        })
+                                    }}
+                                />
+                            </label>
+                        </div>
+                        <label class={classes!("inline-flex", "items-center", "gap-2", "text-sm", "text-[var(--muted)]")}>
+                            <input
+                                type="checkbox"
+                                checked={*import_set_current}
+                                onchange={{
+                                    let import_set_current = import_set_current.clone();
+                                    Callback::from(move |event: Event| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        import_set_current.set(input.checked());
+                                    })
+                                }}
+                            />
+                            { "Import 后设为 active 账号" }
+                        </label>
+                        <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_import_local}>
+                            { "Import Local Auth" }
+                        </button>
+                    </div>
+                </article>
+
+                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
+                        <div>
+                            <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Create Manual Kiro Account" }</h2>
+                            <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                                { "手动填写必要或完整字段，保存成单独 JSON 文件。适合已有 refresh token / profileArn / IDC 凭据的场景。" }
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "text-xs")}
+                            onclick={{
+                                let manual_form_expanded = manual_form_expanded.clone();
+                                Callback::from(move |_| manual_form_expanded.set(!*manual_form_expanded))
+                            }}
+                        >
+                            { if *manual_form_expanded { "收起 ▲" } else { "展开 ▼" } }
+                        </button>
+                    </div>
+                    if *manual_form_expanded {
+                    <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-2")}>
+                        { text_input("Name", &manual_name, None) }
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Auth Method" }</div>
+                            <select
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                                value={(*manual_auth_method).clone()}
+                                onchange={{
+                                    let manual_auth_method = manual_auth_method.clone();
+                                    Callback::from(move |event: Event| {
+                                        let input: HtmlSelectElement = event.target_unchecked_into();
+                                        manual_auth_method.set(input.value());
+                                    })
+                                }}
+                            >
+                                <option value="social">{ "social" }</option>
+                                <option value="idc">{ "idc" }</option>
+                            </select>
+                        </label>
+                        { text_input("Refresh Token", &manual_refresh_token, Some("lg:col-span-2")) }
+                        { text_input("Access Token", &manual_access_token, Some("lg:col-span-2")) }
+                        { text_input("Profile ARN", &manual_profile_arn, Some("lg:col-span-2")) }
+                        { text_input("Expires At (RFC3339)", &manual_expires_at, None) }
+                        { text_input("Provider", &manual_provider, None) }
+                        { text_input("Email", &manual_email, None) }
+                        { text_input("Subscription Title", &manual_subscription_title, None) }
+                        { text_input("Client ID", &manual_client_id, None) }
+                        { text_input("Client Secret", &manual_client_secret, None) }
+                        { text_input("Region", &manual_region, None) }
+                        { text_input("Auth Region", &manual_auth_region, None) }
+                        { text_input("API Region", &manual_api_region, None) }
+                        { text_input("Machine ID", &manual_machine_id, None) }
+                        { text_input("Max Concurrency", &manual_scheduler_max, None) }
+                        { text_input("Min Start Interval Ms", &manual_scheduler_min, None) }
+                    </div>
+                    <div class={classes!("mt-4", "flex", "items-center", "gap-4", "flex-wrap", "text-sm", "text-[var(--muted)]")}>
+                        <label class={classes!("inline-flex", "items-center", "gap-2")}>
+                            <input
+                                type="checkbox"
+                                checked={*manual_disabled}
+                                onchange={{
+                                    let manual_disabled = manual_disabled.clone();
+                                    Callback::from(move |event: Event| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        manual_disabled.set(input.checked());
+                                    })
+                                }}
+                            />
+                            { "disabled" }
+                        </label>
+                        <label class={classes!("inline-flex", "items-center", "gap-2")}>
+                            <input
+                                type="checkbox"
+                                checked={*manual_set_current}
+                                onchange={{
+                                    let manual_set_current = manual_set_current.clone();
+                                    Callback::from(move |event: Event| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        manual_set_current.set(input.checked());
+                                    })
+                                }}
+                            />
+                            { "保存后设为 active" }
+                        </label>
+                    </div>
+                    <button type="button" class={classes!("mt-4", "btn-terminal", "btn-terminal-primary")} onclick={on_create_manual}>
+                        { "Save Manual Account" }
+                    </button>
+                    } // end manual_form_expanded
+                </article>
+            </section>
+
+            <section class={classes!("mt-6")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Kiro Accounts" }</h2>
+                    </div>
+                </div>
+                <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
+                    {
+                        if (*accounts).is_empty() {
+                            html! {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                                    { "当前还没有导入任何 Kiro 账号。可以从上面的 SQLite 导入，或者手动填写字段生成一个账号文件。" }
+                                </div>
+                            }
+                        } else {
+                            html! {
+                                for (*accounts).iter().map(|account| html! {
+                                    <KiroAccountCard
+                                        key={account.name.clone()}
+                                        account={account.clone()}
+                                        on_reload={on_reload.clone()}
+                                        flash={flash.clone()}
+                                        notify={notify.clone()}
+                                        error={error.clone()}
+                                    />
+                                })
+                            }
+                        }
+                    }
+                </div>
+            </section>
+
+            <section class={classes!("mt-6")}>
+                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Create Kiro Key" }</h2>
+                    <div class={classes!("mt-4", "space-y-3")}>
+                        <label class={classes!("block", "text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Key Name" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                                value={(*new_key_name).clone()}
+                                oninput={{
+                                    let new_key_name = new_key_name.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        new_key_name.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class={classes!("block", "text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Quota" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm", "font-mono")}
+                                value={(*new_key_quota).clone()}
+                                oninput={{
+                                    let new_key_quota = new_key_quota.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        new_key_quota.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_create_key}>
+                            { "Create Kiro Key" }
+                        </button>
+                    </div>
+                </article>
+            </section>
+
+            <section class={classes!("mt-6")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Kiro Key Inventory" }</h2>
+                    </div>
+                </div>
+                <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
+                    {
+                        if (*keys).is_empty() {
+                            html! {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                                    { "还没有 Kiro key。先创建一个，然后把 base URL 和 key 发给 Claude Code 或 Anthropic SDK 使用。" }
+                                </div>
+                            }
+                        } else {
+                            html! {
+                                for (*keys).iter().map(|key_item| html! {
+                                    <KiroKeyEditorCard
+                                        key={key_item.id.clone()}
+                                        key_item={key_item.clone()}
+                                        on_reload={on_reload.clone()}
+                                        on_copy={on_copy.clone()}
+                                        on_flash={notify.clone()}
+                                    />
+                                })
+                            }
+                        }
+                    }
+                </div>
+            </section>
+
+            <section class={classes!("mt-6", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Recent Usage" }</h2>
+                    <Link<Route> to={Route::AdminLlmGateway} classes={classes!("btn-terminal")}>
+                        { "查看完整记录" }
+                    </Link<Route>>
+                </div>
+                if (*usage_events).is_empty() {
+                    <div class={classes!("mt-3", "font-mono", "text-sm", "text-[var(--muted)]")}>{ "暂无记录" }</div>
+                } else {
+                    <div class={classes!("mt-3", "space-y-2")}>
+                        { for (*usage_events).iter().take(5).map(|event| {
+                            let credit_text = event.credit_usage
+                                .map(|c| format!("{c:.4}"))
+                                .unwrap_or_else(|| "-".to_string());
+                            html! {
+                                <div class={classes!("flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-xs", "flex-wrap")}>
+                                    <span class={classes!("text-[var(--muted)]")}>{ format_ms(event.created_at) }</span>
+                                    <span class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</span>
+                                    <span class={classes!("text-[var(--muted)]")}>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</span>
+                                    <span class={classes!("ml-auto", "text-[var(--text)]")}>{ format!("credit {credit_text}") }</span>
+                                </div>
+                            }
+                        }) }
+                    </div>
+                }
+            </section>
+
+            if let Some((message, is_error)) = (*toast).clone() {
+                <div class={classes!(
+                    "fixed", "bottom-5", "right-5", "z-[90]",
+                    "max-w-[min(34rem,calc(100vw-2.5rem))]",
+                    "rounded-xl", "border", "px-4", "py-3",
+                    "text-sm", "font-semibold", "leading-5", "whitespace-pre-wrap",
+                    "shadow-[0_8px_24px_rgba(0,0,0,0.15)]",
+                    if is_error {
+                        classes!("border-red-400/35", "bg-red-500/92", "text-white")
+                    } else {
+                        classes!("border-emerald-400/35", "bg-emerald-500/92", "text-white")
+                    }
+                )}>
+                    { message }
+                </div>
+            }
+        </main>
+    }
+}
+
+fn normalized_str_option(state: &UseStateHandle<String>) -> Option<String> {
+    let value = (**state).trim();
+    (!value.is_empty()).then_some(value.to_string())
+}
+
+fn text_input(label: &str, state: &UseStateHandle<String>, extra_class: Option<&str>) -> Html {
+    let state_handle = state.clone();
+    let mut label_classes = classes!("block", "text-sm");
+    if let Some(extra_class) = extra_class {
+        label_classes.push(extra_class.to_string());
+    }
+    html! {
+        <label class={label_classes}>
+            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ label }</div>
+            <input
+                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm", "font-mono")}
+                value={(**state).clone()}
+                oninput={Callback::from(move |event: InputEvent| {
+                    let input: HtmlInputElement = event.target_unchecked_into();
+                    state_handle.set(input.value());
+                })}
+            />
+        </label>
+    }
+}
+
+fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<String>) -> Html {
+    let subscription_title = balance
+        .subscription_title
+        .clone()
+        .unwrap_or_else(|| account_sub_title.unwrap_or_else(|| "-".to_string()));
+    let ratio = kiro_credit_ratio(Some(balance.current_usage), Some(balance.usage_limit));
+    let pct = (ratio * 100.0).round() as i32;
+    html! { <>
+        <div class={classes!("mt-3", "grid", "gap-3", "grid-cols-2")}>
+            <div>
+                <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余" }</div>
+                <div class={classes!("mt-1", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>
+                    { format_float2(balance.remaining) }
+                </div>
+            </div>
+            <div>
+                <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "总额度" }</div>
+                <div class={classes!("mt-1", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>
+                    { format_float2(balance.usage_limit) }
+                </div>
+            </div>
+        </div>
+        <div class={classes!("mt-3")}>
+            <div class={classes!("flex", "items-center", "justify-between", "font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>
+                <span>{ "用量" }</span>
+                <span>{ format!("{pct}%") }</span>
+            </div>
+            <div class={classes!("mt-1.5", "h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface)]")}>
+                <div class={classes!("h-full", "rounded-full", "bg-[linear-gradient(90deg,#0f766e,#2563eb)]", "transition-[width]", "duration-300")}
+                     style={format!("width: {}%;", pct.clamp(0, 100))} />
+            </div>
+            <div class={classes!("mt-2", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                <span>{ subscription_title }</span>
+                <span class={classes!("ml-auto")}>{ format_reset_hint(balance.next_reset_at) }</span>
+            </div>
+        </div>
+    </> }
+}

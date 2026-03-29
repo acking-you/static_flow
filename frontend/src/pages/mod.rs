@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod admin_ai_stream;
 pub mod admin_article_request_stream;
+pub mod admin_kiro_gateway;
 pub mod admin_llm_gateway;
 pub mod admin_music_wish_stream;
 pub mod article_detail;
@@ -11,6 +12,7 @@ pub mod coming_soon;
 pub mod home;
 pub mod image_library;
 pub mod interactive_article;
+pub mod kiro_access;
 pub mod latest_articles;
 pub mod llm_access;
 pub mod llm_access_guide;

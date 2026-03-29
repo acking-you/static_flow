@@ -286,8 +286,10 @@ fn route_path_for(route: &Route) -> String {
         Route::Search => config::route_path("/search"),
         Route::LlmAccessGuide => config::route_path("/llm-access/help"),
         Route::LlmAccess => config::route_path("/llm-access"),
+        Route::KiroAccess => config::route_path("/kiro-access"),
         Route::Admin => config::route_path("/admin"),
         Route::AdminLlmGateway => config::route_path("/admin/llm-gateway"),
+        Route::AdminKiroGateway => config::route_path("/admin/kiro-gateway"),
         Route::AdminCommentRuns {
             task_id,
         } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
@@ -496,6 +498,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         },
         Route::Admin
         | Route::AdminLlmGateway
+        | Route::AdminKiroGateway
         | Route::AdminCommentRuns {
             ..
         }
@@ -572,6 +575,18 @@ pub fn apply_route_seo(route: Option<&Route>) {
             apply_common_seo(
                 "LLM Access · StaticFlow",
                 "查看当前公开可用的免费 API key 与 /v1 接入入口",
+                &canonical_url,
+                "website",
+                "index,follow",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::KiroAccess => {
+            apply_common_seo(
+                "Kiro Access · StaticFlow",
+                "查看 Kiro Anthropic / Claude Code 兼容入口、额度状态与接入方式。",
                 &canonical_url,
                 "website",
                 "index,follow",

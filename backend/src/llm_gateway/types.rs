@@ -4,7 +4,7 @@ use axum::{http::Method, response::Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use static_flow_shared::llm_gateway_store::{
-    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord, LlmGatewayProxyConfigRecord,
     LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
 };
 
@@ -108,11 +108,14 @@ pub struct AdminLlmGatewayKeyView {
     pub secret: String,
     pub key_hash: String,
     pub status: String,
+    pub provider_type: String,
     pub public_visible: bool,
     pub quota_billable_limit: u64,
     pub usage_input_uncached_tokens: u64,
     pub usage_input_cached_tokens: u64,
     pub usage_output_tokens: u64,
+    pub usage_credit_total: f64,
+    pub usage_credit_missing_events: u64,
     pub remaining_billable: i64,
     pub last_used_at: Option<i64>,
     pub created_at: i64,
@@ -120,6 +123,8 @@ pub struct AdminLlmGatewayKeyView {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
 }
 
 /// Paginated admin response for settled usage events.
@@ -380,6 +385,8 @@ pub struct AdminLlmGatewayUsageEventView {
     pub output_tokens: u64,
     pub billable_tokens: u64,
     pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
     pub client_ip: String,
     pub ip_region: String,
     pub request_headers_json: String,
@@ -391,12 +398,124 @@ pub struct AdminLlmGatewayUsageEventView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmGatewayRuntimeConfigResponse {
     pub auth_cache_ttl_seconds: u64,
+    /// Maximum allowed request body size in bytes for proxied calls.
+    pub max_request_body_bytes: u64,
+}
+
+/// One reusable upstream proxy config managed from the admin UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUpstreamProxyConfigView {
+    pub id: String,
+    pub name: String,
+    pub proxy_url: String,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Inventory response for shared upstream proxy configs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUpstreamProxyConfigsResponse {
+    pub proxy_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub generated_at: i64,
+}
+
+/// One connectivity probe result for a reusable proxy config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUpstreamProxyCheckTargetView {
+    pub target: String,
+    pub url: String,
+    pub reachable: bool,
+    pub status_code: Option<u16>,
+    pub latency_ms: i64,
+    pub error_message: Option<String>,
+}
+
+/// Admin response for checking whether a reusable proxy config can reach the
+/// upstream hosts used by StaticFlow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUpstreamProxyCheckResponse {
+    pub proxy_config_id: String,
+    pub proxy_config_name: String,
+    pub provider_type: String,
+    pub auth_label: String,
+    pub ok: bool,
+    pub targets: Vec<AdminUpstreamProxyCheckTargetView>,
+    pub checked_at: i64,
+}
+
+/// Effective binding state for one upstream provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUpstreamProxyBindingView {
+    pub provider_type: String,
+    pub effective_source: String,
+    pub bound_proxy_config_id: Option<String>,
+    pub effective_proxy_config_name: Option<String>,
+    pub effective_proxy_url: Option<String>,
+    pub effective_proxy_username: Option<String>,
+    pub effective_proxy_password: Option<String>,
+    pub binding_updated_at: Option<i64>,
+    pub error_message: Option<String>,
+}
+
+/// Snapshot of provider-level proxy bindings shown in admin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUpstreamProxyBindingsResponse {
+    pub bindings: Vec<AdminUpstreamProxyBindingView>,
+    pub generated_at: i64,
+}
+
+/// Create one reusable proxy config.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateAdminUpstreamProxyConfigRequest {
+    pub name: String,
+    pub proxy_url: String,
+    #[serde(default)]
+    pub proxy_username: Option<String>,
+    #[serde(default)]
+    pub proxy_password: Option<String>,
+}
+
+/// Patch one reusable proxy config.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchAdminUpstreamProxyConfigRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub proxy_username: Option<String>,
+    #[serde(default)]
+    pub proxy_password: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Update or clear a provider-level proxy binding.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateAdminUpstreamProxyBindingRequest {
+    #[serde(default)]
+    pub proxy_config_id: Option<String>,
+}
+
+/// Result payload after importing legacy Kiro account-level proxies into the
+/// shared registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLegacyKiroProxyMigrationResponse {
+    pub created_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub reused_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub migrated_account_names: Vec<String>,
+    pub generated_at: i64,
 }
 
 /// Admin request body for updating runtime cache configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateLlmGatewayRuntimeConfigRequest {
     pub auth_cache_ttl_seconds: Option<u64>,
+    /// New maximum request body size in bytes, if changing.
+    pub max_request_body_bytes: Option<u64>,
 }
 
 /// Admin request body for creating a new externally visible gateway key.
@@ -406,6 +525,10 @@ pub struct CreateLlmGatewayKeyRequest {
     pub quota_billable_limit: u64,
     #[serde(default)]
     pub public_visible: bool,
+    #[serde(default)]
+    pub request_max_concurrency: Option<u64>,
+    #[serde(default)]
+    pub request_min_start_interval_ms: Option<u64>,
 }
 
 /// Admin request body for mutating one existing gateway key.
@@ -418,6 +541,14 @@ pub struct PatchLlmGatewayKeyRequest {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    #[serde(default)]
+    pub request_max_concurrency: Option<u64>,
+    #[serde(default)]
+    pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub request_max_concurrency_unlimited: bool,
+    #[serde(default)]
+    pub request_min_start_interval_ms_unlimited: bool,
 }
 
 /// Admin query parameters for usage-event filtering and pagination.
@@ -579,11 +710,14 @@ impl From<&LlmGatewayKeyRecord> for AdminLlmGatewayKeyView {
             secret: value.secret.clone(),
             key_hash: value.key_hash.clone(),
             status: value.status.clone(),
+            provider_type: value.provider_type.clone(),
             public_visible: value.public_visible,
             quota_billable_limit: value.quota_billable_limit,
             usage_input_uncached_tokens: value.usage_input_uncached_tokens,
             usage_input_cached_tokens: value.usage_input_cached_tokens,
             usage_output_tokens: value.usage_output_tokens,
+            usage_credit_total: value.usage_credit_total,
+            usage_credit_missing_events: value.usage_credit_missing_events,
             remaining_billable: value.remaining_billable(),
             last_used_at: value.last_used_at,
             created_at: value.created_at,
@@ -591,6 +725,8 @@ impl From<&LlmGatewayKeyRecord> for AdminLlmGatewayKeyView {
             route_strategy: value.route_strategy.clone(),
             fixed_account_name: value.fixed_account_name.clone(),
             auto_account_names: value.auto_account_names.clone(),
+            request_max_concurrency: value.request_max_concurrency,
+            request_min_start_interval_ms: value.request_min_start_interval_ms,
         }
     }
 }
@@ -613,11 +749,28 @@ impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventView {
             output_tokens: value.output_tokens,
             billable_tokens: value.billable_tokens,
             usage_missing: value.usage_missing,
+            credit_usage: value.credit_usage,
+            credit_usage_missing: value.credit_usage_missing,
             client_ip: value.client_ip.clone(),
             ip_region: value.ip_region.clone(),
             request_headers_json: value.request_headers_json.clone(),
             last_message_content: value.last_message_content.clone(),
             created_at: value.created_at,
+        }
+    }
+}
+
+impl From<&LlmGatewayProxyConfigRecord> for AdminUpstreamProxyConfigView {
+    fn from(value: &LlmGatewayProxyConfigRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            name: value.name.clone(),
+            proxy_url: value.proxy_url.clone(),
+            proxy_username: value.proxy_username.clone(),
+            proxy_password: value.proxy_password.clone(),
+            status: value.status.clone(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
         }
     }
 }

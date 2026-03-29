@@ -13,24 +13,30 @@ use crate::{
         admin_approve_and_issue_llm_gateway_token_request,
         admin_approve_llm_gateway_sponsor_request,
         admin_reject_llm_gateway_account_contribution_request,
-        admin_reject_llm_gateway_token_request, create_admin_llm_gateway_key,
+        admin_reject_llm_gateway_token_request, check_admin_llm_gateway_proxy_config,
+        create_admin_llm_gateway_key, create_admin_llm_gateway_proxy_config,
         delete_admin_llm_gateway_account, delete_admin_llm_gateway_key,
-        delete_admin_llm_gateway_sponsor_request,
+        delete_admin_llm_gateway_proxy_config, delete_admin_llm_gateway_sponsor_request,
         fetch_admin_llm_gateway_account_contribution_requests, fetch_admin_llm_gateway_accounts,
         fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_keys,
+        fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
         fetch_admin_llm_gateway_sponsor_requests, fetch_admin_llm_gateway_token_requests,
-        fetch_admin_llm_gateway_usage_events, import_admin_llm_gateway_account,
-        patch_admin_llm_gateway_account, patch_admin_llm_gateway_key,
-        update_admin_llm_gateway_config, AccountSummaryView,
-        AdminLlmGatewayAccountContributionRequestView,
+        fetch_admin_llm_gateway_usage_events, import_admin_legacy_kiro_proxy_configs,
+        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
+        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
+        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
+        AccountSummaryView, AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
-        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery, LlmGatewayRuntimeConfig,
-        PatchAdminLlmGatewayKeyRequest,
+        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
+        AdminUpstreamProxyBindingView, AdminUpstreamProxyCheckResponse,
+        AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView,
+        CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
+        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
     },
     components::pagination::Pagination,
-    pages::llm_access_shared::{format_number_i64, format_number_u64},
+    pages::llm_access_shared::{format_number_i64, format_number_u64, MaskedSecretCode},
     router::Route,
 };
 
@@ -65,6 +71,86 @@ fn format_ms(ts_ms: i64) -> String {
 
 fn format_latency_ms(latency_ms: i32) -> String {
     format!("{} ms", latency_ms.max(0))
+}
+
+fn format_credit4(value: f64) -> String {
+    format!("{value:.4}")
+}
+
+fn key_credit_display(key_item: &AdminLlmGatewayKeyView) -> String {
+    if key_item.usage_credit_total > 0.0 || key_item.usage_credit_missing_events > 0 {
+        format_credit4(key_item.usage_credit_total)
+    } else {
+        "-".to_string()
+    }
+}
+
+fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]) -> Vec<String> {
+    let valid_names = accounts
+        .iter()
+        .map(|account| account.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut sanitized = names
+        .iter()
+        .filter(|name| valid_names.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    sanitized.sort();
+    sanitized.dedup();
+    sanitized
+}
+
+fn sanitize_fixed_account_name(value: Option<&str>, accounts: &[AccountSummaryView]) -> String {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return String::new();
+    };
+    if accounts.iter().any(|account| account.name == value) {
+        value.to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn format_proxy_check_target_line(target: &AdminUpstreamProxyCheckTargetView) -> String {
+    if target.reachable {
+        format!(
+            "{}: {} in {} ms",
+            target.target,
+            target
+                .status_code
+                .map(|status| status.to_string())
+                .unwrap_or_else(|| "ok".to_string()),
+            target.latency_ms.max(0)
+        )
+    } else {
+        format!(
+            "{}: {}",
+            target.target,
+            target
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "request failed".to_string())
+        )
+    }
+}
+
+fn format_proxy_check_message(result: &AdminUpstreamProxyCheckResponse) -> String {
+    let mut lines = vec![if result.ok {
+        format!(
+            "{} 代理检查成功：{}",
+            result.provider_type.to_uppercase(),
+            result.proxy_config_name
+        )
+    } else {
+        format!(
+            "{} 代理检查失败：{}",
+            result.provider_type.to_uppercase(),
+            result.proxy_config_name
+        )
+    }];
+    lines.push(format!("使用认证：{}", result.auth_label));
+    lines.extend(result.targets.iter().map(format_proxy_check_target_line));
+    lines.join("\n")
 }
 
 fn preview_text(text: &str, max_chars: usize) -> String {
@@ -172,6 +258,7 @@ struct KeyEditorCardProps {
     on_changed: Callback<()>,
     on_refresh: Callback<(String, String)>,
     on_copy: Callback<(String, String)>,
+    on_flash: Callback<(String, bool)>,
     refreshing: bool,
     accounts: Vec<AccountSummaryView>,
 }
@@ -179,6 +266,7 @@ struct KeyEditorCardProps {
 #[function_component(KeyEditorCard)]
 fn key_editor_card(props: &KeyEditorCardProps) -> Html {
     let key_item = props.key_item.clone();
+    let key_name_for_actions = key_item.name.clone();
     let name = use_state(|| key_item.name.clone());
     let quota = use_state(|| key_item.quota_billable_limit.to_string());
     let public_visible = use_state(|| key_item.public_visible);
@@ -189,14 +277,34 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             .clone()
             .unwrap_or_else(|| "auto".to_string())
     });
-    let fixed_account_name = use_state(|| key_item.fixed_account_name.clone().unwrap_or_default());
-    let auto_account_names = use_state(|| key_item.auto_account_names.clone().unwrap_or_default());
+    let fixed_account_name = use_state(|| {
+        sanitize_fixed_account_name(key_item.fixed_account_name.as_deref(), &props.accounts)
+    });
+    let auto_account_names = use_state(|| {
+        sanitize_auto_account_names(
+            key_item.auto_account_names.as_deref().unwrap_or(&[]),
+            &props.accounts,
+        )
+    });
+    let request_max_concurrency = use_state(|| {
+        key_item
+            .request_max_concurrency
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    });
+    let request_min_start_interval_ms = use_state(|| {
+        key_item
+            .request_min_start_interval_ms
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    });
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
     {
         // Reset editor controls whenever the parent list refreshes this card.
         let key_item = props.key_item.clone();
+        let accounts = props.accounts.clone();
         let name = name.clone();
         let quota = quota.clone();
         let public_visible = public_visible.clone();
@@ -204,7 +312,9 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let route_strategy = route_strategy.clone();
         let fixed_account_name = fixed_account_name.clone();
         let auto_account_names = auto_account_names.clone();
-        use_effect_with(props.key_item.clone(), move |_| {
+        let request_max_concurrency = request_max_concurrency.clone();
+        let request_min_start_interval_ms = request_min_start_interval_ms.clone();
+        use_effect_with((props.key_item.clone(), props.accounts.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
             public_visible.set(key_item.public_visible);
@@ -215,10 +325,76 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     .clone()
                     .unwrap_or_else(|| "auto".to_string()),
             );
-            fixed_account_name.set(key_item.fixed_account_name.clone().unwrap_or_default());
-            auto_account_names.set(key_item.auto_account_names.clone().unwrap_or_default());
+            fixed_account_name.set(sanitize_fixed_account_name(
+                key_item.fixed_account_name.as_deref(),
+                &accounts,
+            ));
+            auto_account_names.set(sanitize_auto_account_names(
+                key_item.auto_account_names.as_deref().unwrap_or(&[]),
+                &accounts,
+            ));
+            request_max_concurrency.set(
+                key_item
+                    .request_max_concurrency
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            );
+            request_min_start_interval_ms.set(
+                key_item
+                    .request_min_start_interval_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            );
             || ()
         });
+    }
+
+    if key_item.provider_type == "kiro" {
+        return html! {
+            <article class={classes!(
+                "rounded-xl",
+                "border",
+                "border-[var(--border)]",
+                "bg-[var(--surface)]",
+                "p-4"
+            )}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2.5", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
+                            { "Kiro Key" }
+                        </span>
+                        <h3 class={classes!("m-0", "text-base", "font-bold")}>{ key_item.name.clone() }</h3>
+                    </div>
+                    <Link<Route> to={Route::AdminKiroGateway} classes={classes!("btn-terminal")}>
+                        { "前往 /admin/kiro-gateway" }
+                    </Link<Route>>
+                </div>
+
+                <div class={classes!("mt-3", "rounded-lg", "bg-slate-950", "px-3", "py-2", "text-xs", "text-emerald-200")}>
+                    <MaskedSecretCode
+                        value={key_item.secret.clone()}
+                        copy_label={"Kiro Key"}
+                        on_copy={props.on_copy.clone()}
+                        code_class={classes!("text-emerald-200")}
+                    />
+                </div>
+
+                <div class={classes!("mt-3", "flex", "items-center", "gap-3", "flex-wrap", "text-xs", "text-[var(--muted)]")}>
+                    <span>{ format!("status {}", key_item.status) }</span>
+                    <span>{ format!("created {}", format_ms(key_item.created_at)) }</span>
+                    <button
+                        class={classes!("btn-terminal", "ml-auto")}
+                        onclick={{
+                            let on_copy = props.on_copy.clone();
+                            let secret = key_item.secret.clone();
+                            Callback::from(move |_| on_copy.emit(("Kiro Key".to_string(), secret.clone())))
+                        }}
+                    >
+                        { "复制" }
+                    </button>
+                </div>
+            </article>
+        };
     }
 
     let on_save = {
@@ -230,11 +406,16 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let route_strategy = route_strategy.clone();
         let fixed_account_name = fixed_account_name.clone();
         let auto_account_names = auto_account_names.clone();
+        let request_max_concurrency = request_max_concurrency.clone();
+        let request_min_start_interval_ms = request_min_start_interval_ms.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
         let on_changed = props.on_changed.clone();
+        let key_name_for_actions = key_name_for_actions.clone();
         Callback::from(move |_| {
             let key_id = key_id.clone();
+            let key_name = key_name_for_actions.clone();
             let name_value = (*name).trim().to_string();
             let quota_value = (*quota).trim().parse::<u64>();
             let public_visible_value = *public_visible;
@@ -242,17 +423,50 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             let route_strategy_value = (*route_strategy).clone();
             let fixed_account_name_value = (*fixed_account_name).clone();
             let auto_account_names_value = (*auto_account_names).clone();
+            let request_max_concurrency_value = (*request_max_concurrency).trim().to_string();
+            let request_min_start_interval_ms_value =
+                (*request_min_start_interval_ms).trim().to_string();
             let saving = saving.clone();
             let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
             let on_changed = on_changed.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 if *saving {
                     return;
                 }
                 let Ok(quota_value) = quota_value else {
-                    feedback.set(Some("额度必须是正整数".to_string()));
+                    let message = "额度必须是正整数".to_string();
+                    feedback.set(Some(message.clone()));
+                    on_flash.emit((message, true));
                     return;
                 };
+                let request_max_concurrency_value = if request_max_concurrency_value.is_empty() {
+                    None
+                } else {
+                    match request_max_concurrency_value.parse::<u64>() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            let message = "并发上限必须是整数，留空表示不限制".to_string();
+                            feedback.set(Some(message.clone()));
+                            on_flash.emit((message, true));
+                            return;
+                        },
+                    }
+                };
+                let request_min_start_interval_ms_value =
+                    if request_min_start_interval_ms_value.is_empty() {
+                        None
+                    } else {
+                        match request_min_start_interval_ms_value.parse::<u64>() {
+                            Ok(value) => Some(value),
+                            Err(_) => {
+                                let message = "请求间隔必须是整数毫秒，留空表示不限制".to_string();
+                                feedback.set(Some(message.clone()));
+                                on_flash.emit((message, true));
+                                return;
+                            },
+                        }
+                    };
                 saving.set(true);
                 match patch_admin_llm_gateway_key(&key_id, PatchAdminLlmGatewayKeyRequest {
                     name: Some(&name_value),
@@ -262,14 +476,23 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     route_strategy: Some(&route_strategy_value),
                     fixed_account_name: Some(&fixed_account_name_value),
                     auto_account_names: Some(auto_account_names_value.as_slice()),
+                    request_max_concurrency: request_max_concurrency_value,
+                    request_min_start_interval_ms: request_min_start_interval_ms_value,
+                    request_max_concurrency_unlimited: request_max_concurrency_value.is_none(),
+                    request_min_start_interval_ms_unlimited: request_min_start_interval_ms_value
+                        .is_none(),
                 })
                 .await
                 {
                     Ok(_) => {
                         feedback.set(Some("已保存".to_string()));
+                        on_flash.emit((format!("已保存 key `{}`", key_name), false));
                         on_changed.emit(());
                     },
-                    Err(err) => feedback.set(Some(err)),
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((format!("保存 key `{}` 失败\n{err}", key_name), true));
+                    },
                 }
                 saving.set(false);
             });
@@ -295,6 +518,8 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let on_changed = props.on_changed.clone();
         let feedback = feedback.clone();
         let saving = saving.clone();
+        let on_flash = props.on_flash.clone();
+        let key_name_for_actions = key_name_for_actions.clone();
         Callback::from(move |_| {
             let Some(window) = window() else {
                 return;
@@ -307,17 +532,23 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 return;
             }
             let key_id = key_id.clone();
+            let key_name = key_name_for_actions.clone();
             let feedback = feedback.clone();
             let saving = saving.clone();
+            let on_flash = on_flash.clone();
             let on_changed = on_changed.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 saving.set(true);
                 match delete_admin_llm_gateway_key(&key_id).await {
                     Ok(_) => {
                         feedback.set(Some("已删除".to_string()));
+                        on_flash.emit((format!("已删除 key `{}`", key_name), false));
                         on_changed.emit(());
                     },
-                    Err(err) => feedback.set(Some(err)),
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((format!("删除 key `{}` 失败\n{err}", key_name), true));
+                    },
                 }
                 saving.set(false);
             });
@@ -370,7 +601,12 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             </div>
 
             <div class={classes!("mt-3", "rounded-lg", "bg-slate-950", "px-3", "py-2", "text-xs", "text-emerald-200")}>
-                <code class={classes!("break-all")}>{ key_item.secret.clone() }</code>
+                <MaskedSecretCode
+                    value={key_item.secret.clone()}
+                    copy_label={"Key"}
+                    on_copy={props.on_copy.clone()}
+                    code_class={classes!("text-emerald-200")}
+                />
             </div>
 
             <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-2")}>
@@ -401,6 +637,43 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                             Callback::from(move |event: InputEvent| {
                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
                                     quota.set(target.value());
+                                }
+                            })
+                        }}
+                    />
+                </label>
+            </div>
+
+            <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-2")}>
+                <label class={classes!("text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "并发上限" }</span>
+                    <input
+                        type="number"
+                        placeholder="留空表示不限制"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                        value={(*request_max_concurrency).clone()}
+                        oninput={{
+                            let request_max_concurrency = request_max_concurrency.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    request_max_concurrency.set(target.value());
+                                }
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "请求起始间隔 ms" }</span>
+                    <input
+                        type="number"
+                        placeholder="留空表示不限制"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                        value={(*request_min_start_interval_ms).clone()}
+                        oninput={{
+                            let request_min_start_interval_ms = request_min_start_interval_ms.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    request_min_start_interval_ms.set(target.value());
                                 }
                             })
                         }}
@@ -542,7 +815,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     } else if auto_account_names.is_empty() {
                         "全账号池自动择优；如果某个账号不可用，会继续尝试其他账号。".to_string()
                     } else {
-                        format!("仅在这些账号中优先自动择优: {}；如果子集耗尽，会回退到全局 auto。", auto_account_names.join(", "))
+                        format!("仅在这些账号中自动择优: {}；如果子集里没有可用账号，请求会直接报错。", auto_account_names.join(", "))
                     }}
                 </span>
             </div>
@@ -552,6 +825,345 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 <span>{ format!("输入 {}", format_number_u64(key_item.usage_input_uncached_tokens)) }</span>
                 <span>{ format!("缓存 {}", format_number_u64(key_item.usage_input_cached_tokens)) }</span>
                 <span>{ format!("输出 {}", format_number_u64(key_item.usage_output_tokens)) }</span>
+                <span>{ format!(
+                    "并发 {}",
+                    key_item.request_max_concurrency.map(|value| value.to_string()).unwrap_or_else(|| "∞".to_string())
+                ) }</span>
+                <span>{ format!(
+                    "间隔 {}ms",
+                    key_item.request_min_start_interval_ms.map(|value| value.to_string()).unwrap_or_else(|| "∞".to_string())
+                ) }</span>
+                <span>{ format!("Credit {}", key_credit_display(&key_item)) }</span>
+                if key_item.usage_credit_missing_events > 0 {
+                    <span>{ format!("partial {}", key_item.usage_credit_missing_events) }</span>
+                }
+            </div>
+
+            if let Some(feedback) = (*feedback).clone() {
+                <p class={classes!("mt-2", "m-0", "text-xs", "text-[var(--muted)]")}>{ feedback }</p>
+            }
+        </article>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct ProxyConfigEditorCardProps {
+    proxy_config: AdminUpstreamProxyConfigView,
+    on_changed: Callback<()>,
+    on_copy: Callback<(String, String)>,
+    on_flash: Callback<(String, bool)>,
+}
+
+#[function_component(ProxyConfigEditorCard)]
+fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
+    let proxy_config = props.proxy_config.clone();
+    let name = use_state(|| proxy_config.name.clone());
+    let proxy_url = use_state(|| proxy_config.proxy_url.clone());
+    let proxy_username = use_state(|| proxy_config.proxy_username.clone().unwrap_or_default());
+    let proxy_password = use_state(|| proxy_config.proxy_password.clone().unwrap_or_default());
+    let status = use_state(|| proxy_config.status.clone());
+    let saving = use_state(|| false);
+    let checking = use_state(|| false);
+    let feedback = use_state(|| None::<String>);
+
+    {
+        let proxy_config = props.proxy_config.clone();
+        let name = name.clone();
+        let proxy_url = proxy_url.clone();
+        let proxy_username = proxy_username.clone();
+        let proxy_password = proxy_password.clone();
+        let status = status.clone();
+        use_effect_with(props.proxy_config.clone(), move |_| {
+            name.set(proxy_config.name.clone());
+            proxy_url.set(proxy_config.proxy_url.clone());
+            proxy_username.set(proxy_config.proxy_username.clone().unwrap_or_default());
+            proxy_password.set(proxy_config.proxy_password.clone().unwrap_or_default());
+            status.set(proxy_config.status.clone());
+            || ()
+        });
+    }
+
+    let on_save = {
+        let proxy_id = proxy_config.id.clone();
+        let name = name.clone();
+        let proxy_url = proxy_url.clone();
+        let proxy_username = proxy_username.clone();
+        let proxy_password = proxy_password.clone();
+        let status = status.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_changed = props.on_changed.clone();
+        let on_flash = props.on_flash.clone();
+        Callback::from(move |_| {
+            let proxy_id = proxy_id.clone();
+            let input = PatchAdminUpstreamProxyConfigInput {
+                name: Some((*name).trim().to_string()),
+                proxy_url: Some((*proxy_url).trim().to_string()),
+                proxy_username: {
+                    let value = (*proxy_username).trim().to_string();
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                },
+                proxy_password: {
+                    let value = (*proxy_password).trim().to_string();
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                },
+                status: Some((*status).trim().to_string()),
+            };
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_changed = on_changed.clone();
+            let on_flash = on_flash.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                match patch_admin_llm_gateway_proxy_config(&proxy_id, &input).await {
+                    Ok(_) => {
+                        feedback.set(Some("Saved.".to_string()));
+                        on_flash.emit(("已保存代理配置".to_string(), false));
+                        on_changed.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((format!("保存代理配置失败\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_delete = {
+        let proxy_id = proxy_config.id.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_changed = props.on_changed.clone();
+        let on_flash = props.on_flash.clone();
+        Callback::from(move |_| {
+            let proxy_id = proxy_id.clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_changed = on_changed.clone();
+            let on_flash = on_flash.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                match delete_admin_llm_gateway_proxy_config(&proxy_id).await {
+                    Ok(_) => {
+                        on_flash.emit(("已删除代理配置".to_string(), false));
+                        on_changed.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((format!("删除代理配置失败\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_check_provider = {
+        let proxy_id = proxy_config.id.clone();
+        let checking = checking.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        Callback::from(move |provider_type: String| {
+            let proxy_id = proxy_id.clone();
+            let checking = checking.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if *checking {
+                    return;
+                }
+                checking.set(true);
+                match check_admin_llm_gateway_proxy_config(&proxy_id, &provider_type).await {
+                    Ok(result) => {
+                        let message = format_proxy_check_message(&result);
+                        feedback.set(Some(if result.ok {
+                            format!("{} 检查完成", provider_type.to_uppercase())
+                        } else {
+                            format!("{} 检查失败", provider_type.to_uppercase())
+                        }));
+                        on_flash.emit((message, !result.ok));
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((
+                            format!("{} 代理检查失败\n{err}", provider_type.to_uppercase()),
+                            true,
+                        ));
+                    },
+                }
+                checking.set(false);
+            });
+        })
+    };
+
+    html! {
+        <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                <div>
+                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                        <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.proxy_config.name.clone() }</h3>
+                        <span class={classes!("inline-flex", "items-center", "rounded-full", "px-2.5", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]",
+                            if props.proxy_config.status == "active" { "bg-emerald-500/12 text-emerald-700 dark:text-emerald-200" } else { "bg-slate-500/12 text-slate-700 dark:text-slate-200" })}>
+                            { props.proxy_config.status.clone() }
+                        </span>
+                    </div>
+                    <p class={classes!("mt-2", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                        { format!("created {} · updated {}", format_ms(props.proxy_config.created_at), format_ms(props.proxy_config.updated_at)) }
+                    </p>
+                </div>
+                <div class={classes!("flex", "items-center", "gap-2")}>
+                    { copy_icon_button(&props.proxy_config.proxy_url, &props.on_copy) }
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "grid", "gap-3", "md:grid-cols-2")}>
+                <label class={classes!("text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "Name" }</span>
+                    <input
+                        type="text"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
+                        value={(*name).clone()}
+                        oninput={{
+                            let name = name.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    name.set(target.value());
+                                }
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "Status" }</span>
+                    <select
+                        key={format!("proxy-config-status-{}-{}", proxy_config.id, (*status).clone())}
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
+                        value={(*status).clone()}
+                        onchange={{
+                            let status = status.clone();
+                            Callback::from(move |event: Event| {
+                                if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                    status.set(target.value());
+                                }
+                            })
+                        }}
+                    >
+                        <option value="active" selected={*status == "active"}>{ "active" }</option>
+                        <option value="disabled" selected={*status == "disabled"}>{ "disabled" }</option>
+                    </select>
+                </label>
+                <label class={classes!("text-sm", "md:col-span-2")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "Proxy URL" }</span>
+                    <input
+                        type="text"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono")}
+                        value={(*proxy_url).clone()}
+                        oninput={{
+                            let proxy_url = proxy_url.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    proxy_url.set(target.value());
+                                }
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "Proxy Username" }</span>
+                    <input
+                        type="text"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
+                        value={(*proxy_username).clone()}
+                        oninput={{
+                            let proxy_username = proxy_username.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    proxy_username.set(target.value());
+                                }
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "Proxy Password" }</span>
+                    <input
+                        type="text"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
+                        value={(*proxy_password).clone()}
+                        oninput={{
+                            let proxy_password = proxy_password.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    proxy_password.set(target.value());
+                                }
+                            })
+                        }}
+                    />
+                </label>
+            </div>
+
+            <div class={classes!("mt-4", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
+                    <div class={classes!("min-w-0")}>
+                        <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Visible Credentials" }</div>
+                        <code class={classes!("mt-2", "block", "break-all", "font-mono", "text-xs")}>
+                            { format!("{} @ {}", props.proxy_config.proxy_username.clone().unwrap_or_else(|| "-".to_string()), props.proxy_config.proxy_url.clone()) }
+                        </code>
+                        if let Some(password) = props.proxy_config.proxy_password.as_deref() {
+                            <code class={classes!("mt-1", "block", "break-all", "font-mono", "text-xs")}>
+                                { password }
+                            </code>
+                        }
+                    </div>
+                    <div class={classes!("flex", "items-center", "gap-2")}>
+                        { copy_icon_button(&props.proxy_config.proxy_url, &props.on_copy) }
+                        if let Some(username) = props.proxy_config.proxy_username.as_deref() {
+                            { copy_icon_button(username, &props.on_copy) }
+                        }
+                        if let Some(password) = props.proxy_config.proxy_password.as_deref() {
+                            { copy_icon_button(password, &props.on_copy) }
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "flex", "items-center", "gap-2", "flex-wrap")}>
+                <button
+                    class={classes!("btn-terminal")}
+                    onclick={{
+                        let on_check_provider = on_check_provider.clone();
+                        Callback::from(move |_| on_check_provider.emit("codex".to_string()))
+                    }}
+                    disabled={*saving || *checking}
+                >
+                    { if *checking { "检查中..." } else { "检查 Codex" } }
+                </button>
+                <button
+                    class={classes!("btn-terminal")}
+                    onclick={{
+                        let on_check_provider = on_check_provider.clone();
+                        Callback::from(move |_| on_check_provider.emit("kiro".to_string()))
+                    }}
+                    disabled={*saving || *checking}
+                >
+                    { if *checking { "检查中..." } else { "检查 Kiro" } }
+                </button>
+                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save.clone()} disabled={*saving}>
+                    { if *saving { "保存中..." } else { "保存" } }
+                </button>
+                <button class={classes!("btn-terminal", "text-red-600", "dark:text-red-400")} onclick={on_delete} disabled={*saving}>
+                    { "删除" }
+                </button>
             </div>
 
             if let Some(feedback) = (*feedback).clone() {
@@ -596,14 +1208,43 @@ pub fn admin_llm_gateway_page() -> Html {
     let loading = use_state(|| true);
     let load_error = use_state(|| None::<String>);
     let ttl_input = use_state(|| "60".to_string());
-    let saving_ttl = use_state(|| false);
+    let max_request_body_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
+    let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
+    let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
+    let create_proxy_name = use_state(|| "shared-upstream".to_string());
+    let create_proxy_url = use_state(|| "http://127.0.0.1:11111".to_string());
+    let create_proxy_username = use_state(String::new);
+    let create_proxy_password = use_state(String::new);
+    let creating_proxy = use_state(|| false);
+    let codex_proxy_binding_input = use_state(String::new);
+    let kiro_proxy_binding_input = use_state(String::new);
+    let saving_proxy_binding_provider = use_state(|| None::<String>);
+    let migrating_legacy_kiro_proxy = use_state(|| false);
+    let saving_runtime_config = use_state(|| false);
     let create_name = use_state(String::new);
     let create_quota = use_state(|| "100000".to_string());
     let create_public = use_state(|| true);
+    let create_request_max_concurrency = use_state(String::new);
+    let create_request_min_start_interval_ms = use_state(String::new);
     let creating = use_state(|| false);
     let refreshing_key_id = use_state(|| None::<String>);
     let toast = use_state(|| None::<(String, bool)>);
     let toast_timeout = use_mut_ref(|| None::<Timeout>);
+    let flash = {
+        let toast = toast.clone();
+        let toast_timeout = toast_timeout.clone();
+        Callback::from(move |(message, is_error): (String, bool)| {
+            toast.set(Some((message, is_error)));
+            toast_timeout.borrow_mut().take();
+            let toast = toast.clone();
+            let clear_handle = toast_timeout.clone();
+            let timeout = Timeout::new(2600, move || {
+                toast.set(None);
+                clear_handle.borrow_mut().take();
+            });
+            *toast_timeout.borrow_mut() = Some(timeout);
+        })
+    };
     let accounts = use_state(Vec::<AccountSummaryView>::new);
     let import_name = use_state(String::new);
     let import_id_token = use_state(String::new);
@@ -783,9 +1424,14 @@ pub fn admin_llm_gateway_page() -> Html {
     let reload = {
         let config = config.clone();
         let keys = keys.clone();
+        let proxy_configs = proxy_configs.clone();
+        let proxy_bindings = proxy_bindings.clone();
         let loading = loading.clone();
         let load_error = load_error.clone();
         let ttl_input = ttl_input.clone();
+        let max_request_body_input = max_request_body_input.clone();
+        let codex_proxy_binding_input = codex_proxy_binding_input.clone();
+        let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_events = usage_events.clone();
         let usage_total = usage_total.clone();
         let usage_page = usage_page.clone();
@@ -794,9 +1440,14 @@ pub fn admin_llm_gateway_page() -> Html {
         Callback::from(move |_| {
             let config = config.clone();
             let keys = keys.clone();
+            let proxy_configs = proxy_configs.clone();
+            let proxy_bindings = proxy_bindings.clone();
             let loading = loading.clone();
             let load_error = load_error.clone();
             let ttl_input = ttl_input.clone();
+            let max_request_body_input = max_request_body_input.clone();
+            let codex_proxy_binding_input = codex_proxy_binding_input.clone();
+            let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_events = usage_events.clone();
             let usage_total = usage_total.clone();
             let usage_page = usage_page.clone();
@@ -809,6 +1460,8 @@ pub fn admin_llm_gateway_page() -> Html {
                 let result = async {
                     let cfg = fetch_admin_llm_gateway_config().await?;
                     let keys_resp = fetch_admin_llm_gateway_keys().await?;
+                    let proxy_configs_resp = fetch_admin_llm_gateway_proxy_configs().await?;
+                    let proxy_bindings_resp = fetch_admin_llm_gateway_proxy_bindings().await?;
                     let effective_key_filter = if current_key_filter.is_empty()
                         || keys_resp
                             .keys
@@ -830,6 +1483,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     Ok::<_, String>((
                         cfg,
                         keys_resp.keys,
+                        proxy_configs_resp.proxy_configs,
+                        proxy_bindings_resp.bindings,
                         effective_key_filter,
                         usage_resp,
                         accounts_resp,
@@ -838,10 +1493,33 @@ pub fn admin_llm_gateway_page() -> Html {
                 .await;
 
                 match result {
-                    Ok((cfg, key_items, effective_key_filter, usage_resp, accounts_resp)) => {
+                    Ok((
+                        cfg,
+                        key_items,
+                        proxy_config_items,
+                        proxy_binding_items,
+                        effective_key_filter,
+                        usage_resp,
+                        accounts_resp,
+                    )) => {
                         ttl_input.set(cfg.auth_cache_ttl_seconds.to_string());
+                        max_request_body_input.set(cfg.max_request_body_bytes.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
+                        let codex_bound = proxy_binding_items
+                            .iter()
+                            .find(|item| item.provider_type == "codex")
+                            .and_then(|item| item.bound_proxy_config_id.clone())
+                            .unwrap_or_default();
+                        let kiro_bound = proxy_binding_items
+                            .iter()
+                            .find(|item| item.provider_type == "kiro")
+                            .and_then(|item| item.bound_proxy_config_id.clone())
+                            .unwrap_or_default();
+                        proxy_configs.set(proxy_config_items);
+                        proxy_bindings.set(proxy_binding_items);
+                        codex_proxy_binding_input.set(codex_bound);
+                        kiro_proxy_binding_input.set(kiro_bound);
                         usage_key_filter.set(effective_key_filter);
                         usage_total.set(usage_resp.total);
                         usage_events.set(usage_resp.events);
@@ -871,14 +1549,16 @@ pub fn admin_llm_gateway_page() -> Html {
         });
     }
 
-    let on_save_ttl = {
+    let on_save_runtime_config = {
         let ttl_input = ttl_input.clone();
-        let saving_ttl = saving_ttl.clone();
+        let max_request_body_input = max_request_body_input.clone();
+        let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
         Callback::from(move |_| {
             let ttl = (*ttl_input).trim().parse::<u64>();
-            let saving_ttl = saving_ttl.clone();
+            let max_request_body_bytes = (*max_request_body_input).trim().parse::<u64>();
+            let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -886,15 +1566,175 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("TTL 必须是正整数".to_string()));
                     return;
                 };
-                saving_ttl.set(true);
-                match update_admin_llm_gateway_config(ttl).await {
+                let Ok(max_request_body_bytes) = max_request_body_bytes else {
+                    load_error.set(Some("请求体上限必须是正整数".to_string()));
+                    return;
+                };
+                saving_runtime_config.set(true);
+                match update_admin_llm_gateway_config(ttl, max_request_body_bytes).await {
                     Ok(_) => {
                         load_error.set(None);
                         reload.emit(());
                     },
                     Err(err) => load_error.set(Some(err)),
                 }
-                saving_ttl.set(false);
+                saving_runtime_config.set(false);
+            });
+        })
+    };
+
+    let on_create_proxy_config = {
+        let create_proxy_name = create_proxy_name.clone();
+        let create_proxy_url = create_proxy_url.clone();
+        let create_proxy_username = create_proxy_username.clone();
+        let create_proxy_password = create_proxy_password.clone();
+        let creating_proxy = creating_proxy.clone();
+        let load_error = load_error.clone();
+        let flash = flash.clone();
+        let reload = reload.clone();
+        Callback::from(move |_| {
+            let input = CreateAdminUpstreamProxyConfigInput {
+                name: (*create_proxy_name).trim().to_string(),
+                proxy_url: (*create_proxy_url).trim().to_string(),
+                proxy_username: {
+                    let value = (*create_proxy_username).trim().to_string();
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                },
+                proxy_password: {
+                    let value = (*create_proxy_password).trim().to_string();
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                },
+            };
+            let create_proxy_name = create_proxy_name.clone();
+            let create_proxy_username = create_proxy_username.clone();
+            let create_proxy_password = create_proxy_password.clone();
+            let creating_proxy = creating_proxy.clone();
+            let load_error = load_error.clone();
+            let flash = flash.clone();
+            let reload = reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                creating_proxy.set(true);
+                match create_admin_llm_gateway_proxy_config(&input).await {
+                    Ok(_) => {
+                        create_proxy_name.set(String::new());
+                        create_proxy_username.set(String::new());
+                        create_proxy_password.set(String::new());
+                        load_error.set(None);
+                        flash.emit(("已创建代理配置".to_string(), false));
+                        reload.emit(());
+                    },
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((format!("创建代理配置失败\n{err}"), true));
+                    },
+                }
+                creating_proxy.set(false);
+            });
+        })
+    };
+
+    let on_save_proxy_binding = {
+        let proxy_bindings = proxy_bindings.clone();
+        let codex_proxy_binding_input = codex_proxy_binding_input.clone();
+        let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
+        let saving_proxy_binding_provider = saving_proxy_binding_provider.clone();
+        let load_error = load_error.clone();
+        let flash = flash.clone();
+        Callback::from(move |provider_type: String| {
+            let proxy_config_id = match provider_type.as_str() {
+                "codex" => (*codex_proxy_binding_input).clone(),
+                "kiro" => (*kiro_proxy_binding_input).clone(),
+                _ => String::new(),
+            };
+            let proxy_bindings = proxy_bindings.clone();
+            let codex_proxy_binding_input = codex_proxy_binding_input.clone();
+            let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
+            let saving_proxy_binding_provider = saving_proxy_binding_provider.clone();
+            let load_error = load_error.clone();
+            let flash = flash.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving_proxy_binding_provider.set(Some(provider_type.clone()));
+                match update_admin_llm_gateway_proxy_binding(
+                    &provider_type,
+                    if proxy_config_id.trim().is_empty() {
+                        None
+                    } else {
+                        Some(proxy_config_id.trim())
+                    },
+                )
+                .await
+                {
+                    Ok(updated) => {
+                        let mut items = (*proxy_bindings).clone();
+                        if let Some(existing) = items
+                            .iter_mut()
+                            .find(|item| item.provider_type == updated.provider_type)
+                        {
+                            *existing = updated.clone();
+                        } else {
+                            items.push(updated.clone());
+                            items.sort_by(|left, right| {
+                                left.provider_type.cmp(&right.provider_type)
+                            });
+                        }
+                        proxy_bindings.set(items);
+                        let bound_value = updated.bound_proxy_config_id.clone().unwrap_or_default();
+                        match provider_type.as_str() {
+                            "codex" => codex_proxy_binding_input.set(bound_value),
+                            "kiro" => kiro_proxy_binding_input.set(bound_value),
+                            _ => {},
+                        }
+                        load_error.set(None);
+                        flash.emit((
+                            format!("已更新 {} 代理绑定", provider_type.to_uppercase()),
+                            false,
+                        ));
+                    },
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((
+                            format!("保存 {} 代理绑定失败\n{err}", provider_type.to_uppercase()),
+                            true,
+                        ));
+                    },
+                }
+                saving_proxy_binding_provider.set(None);
+            });
+        })
+    };
+
+    let on_import_legacy_kiro_proxy = {
+        let migrating_legacy_kiro_proxy = migrating_legacy_kiro_proxy.clone();
+        let load_error = load_error.clone();
+        let flash = flash.clone();
+        let reload = reload.clone();
+        Callback::from(move |_| {
+            let migrating_legacy_kiro_proxy = migrating_legacy_kiro_proxy.clone();
+            let load_error = load_error.clone();
+            let flash = flash.clone();
+            let reload = reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                migrating_legacy_kiro_proxy.set(true);
+                match import_admin_legacy_kiro_proxy_configs().await {
+                    Ok(_) => {
+                        load_error.set(None);
+                        flash.emit(("已导入 legacy Kiro 代理配置".to_string(), false));
+                        reload.emit(());
+                    },
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((format!("导入 legacy Kiro 代理配置失败\n{err}"), true));
+                    },
+                }
+                migrating_legacy_kiro_proxy.set(false);
             });
         })
     };
@@ -903,33 +1743,84 @@ pub fn admin_llm_gateway_page() -> Html {
         let create_name = create_name.clone();
         let create_quota = create_quota.clone();
         let create_public = create_public.clone();
+        let create_request_max_concurrency = create_request_max_concurrency.clone();
+        let create_request_min_start_interval_ms = create_request_min_start_interval_ms.clone();
         let creating = creating.clone();
         let load_error = load_error.clone();
+        let flash = flash.clone();
         let reload = reload.clone();
         let usage_page = usage_page.clone();
         Callback::from(move |_| {
             let name = (*create_name).trim().to_string();
             let quota = (*create_quota).trim().parse::<u64>();
             let public_visible = *create_public;
+            let request_max_concurrency = (*create_request_max_concurrency).trim().to_string();
+            let request_min_start_interval_ms =
+                (*create_request_min_start_interval_ms).trim().to_string();
             let creating = creating.clone();
             let load_error = load_error.clone();
+            let flash = flash.clone();
             let reload = reload.clone();
             let create_name = create_name.clone();
+            let create_request_max_concurrency = create_request_max_concurrency.clone();
+            let create_request_min_start_interval_ms = create_request_min_start_interval_ms.clone();
             let usage_page = usage_page.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Ok(quota) = quota else {
-                    load_error.set(Some("主额度必须是正整数".to_string()));
+                    let message = "主额度必须是正整数".to_string();
+                    load_error.set(Some(message.clone()));
+                    flash.emit((message, true));
                     return;
                 };
+                let request_max_concurrency = if request_max_concurrency.is_empty() {
+                    None
+                } else {
+                    match request_max_concurrency.parse::<u64>() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            let message = "并发上限必须是整数，留空表示不限制".to_string();
+                            load_error.set(Some(message.clone()));
+                            flash.emit((message, true));
+                            return;
+                        },
+                    }
+                };
+                let request_min_start_interval_ms = if request_min_start_interval_ms.is_empty() {
+                    None
+                } else {
+                    match request_min_start_interval_ms.parse::<u64>() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            let message = "请求间隔必须是整数毫秒，留空表示不限制".to_string();
+                            load_error.set(Some(message.clone()));
+                            flash.emit((message, true));
+                            return;
+                        },
+                    }
+                };
                 creating.set(true);
-                match create_admin_llm_gateway_key(&name, quota, public_visible).await {
+                match create_admin_llm_gateway_key(
+                    &name,
+                    quota,
+                    public_visible,
+                    request_max_concurrency,
+                    request_min_start_interval_ms,
+                )
+                .await
+                {
                     Ok(_) => {
                         create_name.set(String::new());
+                        create_request_max_concurrency.set(String::new());
+                        create_request_min_start_interval_ms.set(String::new());
                         usage_page.set(1);
                         load_error.set(None);
+                        flash.emit((format!("已创建 key `{}`", name), false));
                         reload.emit(());
                     },
-                    Err(err) => load_error.set(Some(err)),
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((format!("创建 key `{}` 失败\n{err}", name), true));
+                    },
                 }
                 creating.set(false);
             });
@@ -941,19 +1832,25 @@ pub fn admin_llm_gateway_page() -> Html {
     let on_refresh_key = {
         let keys = keys.clone();
         let load_error = load_error.clone();
+        let flash = flash.clone();
         let refreshing_key_id = refreshing_key_id.clone();
-        Callback::from(move |(key_id, _key_name): (String, String)| {
+        Callback::from(move |(key_id, key_name): (String, String)| {
             refreshing_key_id.set(Some(key_id.clone()));
             let keys = keys.clone();
             let load_error = load_error.clone();
+            let flash = flash.clone();
             let refreshing_key_id = refreshing_key_id.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match fetch_admin_llm_gateway_keys().await {
                     Ok(resp) => {
                         keys.set(resp.keys);
                         load_error.set(None);
+                        flash.emit((format!("已刷新 key `{}`", key_name), false));
                     },
-                    Err(err) => load_error.set(Some(err)),
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((format!("刷新 key `{}` 失败\n{err}", key_name), true));
+                    },
                 }
                 refreshing_key_id.set(None);
             });
@@ -1407,19 +2304,10 @@ pub fn admin_llm_gateway_page() -> Html {
     };
 
     let on_copy = {
-        let toast = toast.clone();
-        let toast_timeout = toast_timeout.clone();
+        let flash = flash.clone();
         Callback::from(move |(label, value): (String, String)| {
             copy_text(&value);
-            toast.set(Some((format!("已复制{}", label), false)));
-            toast_timeout.borrow_mut().take();
-            let toast = toast.clone();
-            let clear_handle = toast_timeout.clone();
-            let timeout = Timeout::new(1800, move || {
-                toast.set(None);
-                clear_handle.borrow_mut().take();
-            });
-            *toast_timeout.borrow_mut() = Some(timeout);
+            flash.emit((format!("已复制{}", label), false));
         })
     };
 
@@ -1514,6 +2402,14 @@ pub fn admin_llm_gateway_page() -> Html {
             k.usage_input_uncached_tokens + k.usage_input_cached_tokens + k.usage_output_tokens
         })
         .sum();
+    let credit_keys_present = keys
+        .iter()
+        .any(|item| item.usage_credit_total > 0.0 || item.usage_credit_missing_events > 0);
+    let total_credit_used: f64 = keys.iter().map(|item| item.usage_credit_total).sum();
+    let total_credit_missing_events: u64 = keys
+        .iter()
+        .map(|item| item.usage_credit_missing_events)
+        .sum();
     let usage_percent = if total_quota > 0 {
         (total_used as f64 / total_quota as f64 * 100.0).round() as u64
     } else {
@@ -1593,6 +2489,17 @@ pub fn admin_llm_gateway_page() -> Html {
                             <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>{ format!("{}%", usage_percent) }</div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Credit 已记录" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black")}>
+                                { if credit_keys_present { format_credit4(total_credit_used) } else { "-".to_string() } }
+                            </div>
+                            if total_credit_missing_events > 0 {
+                                <div class={classes!("mt-1", "text-xs", "text-amber-700", "dark:text-amber-200")}>
+                                    { format!("partial · {} events missing", total_credit_missing_events) }
+                                </div>
+                            }
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "待审核" }</div>
                             <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", if total_pending > 0 { "text-amber-600" } else { "" })}>{ total_pending }</div>
                         </div>
@@ -1629,8 +2536,8 @@ pub fn admin_llm_gateway_page() -> Html {
 
                 <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
                     <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Runtime TTL" }</h2>
-                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-[minmax(0,1fr)_auto]")}>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Runtime Config" }</h2>
+                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-2")}>
                             <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "auth_cache_ttl_seconds" }</span>
                                 <input
@@ -1647,16 +2554,37 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
-                            <div class={classes!("flex", "items-end")}>
-                                <button class={classes!("btn-terminal", "btn-terminal-primary", "w-full", "md:w-auto")} onclick={on_save_ttl} disabled={*saving_ttl}>
-                                    { if *saving_ttl { "保存中..." } else { "保存" } }
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "max_request_body_bytes" }</span>
+                                <input
+                                    type="number"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*max_request_body_input).clone()}
+                                    oninput={{
+                                        let max_request_body_input = max_request_body_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                max_request_body_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("flex", "items-end", "md:col-span-2")}>
+                                <button class={classes!("btn-terminal", "btn-terminal-primary", "w-full", "md:w-auto")} onclick={on_save_runtime_config} disabled={*saving_runtime_config}>
+                                    { if *saving_runtime_config { "保存中..." } else { "保存" } }
                                 </button>
                             </div>
                         </div>
                         if let Some(cfg) = (*config).clone() {
-                            <p class={classes!("mt-3", "m-0", "text-xs", "text-[var(--muted)]")}>
-                                { format!("当前生效：{} 秒", cfg.auth_cache_ttl_seconds) }
-                            </p>
+                            <div class={classes!("mt-3", "space-y-1", "text-xs", "text-[var(--muted)]")}>
+                                <p class={classes!("m-0")}>
+                                    { format!("当前 TTL：{} 秒", cfg.auth_cache_ttl_seconds) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!("当前请求体上限：{} bytes", format_number_u64(cfg.max_request_body_bytes)) }
+                                </p>
+                            </div>
                         }
                     </section>
 
@@ -1697,6 +2625,42 @@ pub fn admin_llm_gateway_page() -> Html {
                                     />
                                 </label>
                             </div>
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("text-[var(--muted)]")}>{ "并发上限" }</span>
+                                    <input
+                                        type="number"
+                                        placeholder="留空表示不限制"
+                                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                        value={(*create_request_max_concurrency).clone()}
+                                        oninput={{
+                                            let create_request_max_concurrency = create_request_max_concurrency.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                    create_request_max_concurrency.set(target.value());
+                                                }
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("text-[var(--muted)]")}>{ "请求起始间隔 ms" }</span>
+                                    <input
+                                        type="number"
+                                        placeholder="留空表示不限制"
+                                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                        value={(*create_request_min_start_interval_ms).clone()}
+                                        oninput={{
+                                            let create_request_min_start_interval_ms = create_request_min_start_interval_ms.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                    create_request_min_start_interval_ms.set(target.value());
+                                                }
+                                            })
+                                        }}
+                                    />
+                                </label>
+                            </div>
                             <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                                 <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
                                     <input
@@ -1717,6 +2681,222 @@ pub fn admin_llm_gateway_page() -> Html {
                                     { if *creating { "创建中..." } else { "创建" } }
                                 </button>
                             </div>
+                        </div>
+                    </section>
+                </section>
+
+                <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
+                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Provider Proxy Bindings" }</h2>
+                            <button class={classes!("btn-terminal")} onclick={{
+                                let reload = reload.clone();
+                                Callback::from(move |_| reload.emit(()))
+                            }}>
+                                { if *loading { "刷新中..." } else { "刷新" } }
+                            </button>
+                        </div>
+                        <div class={classes!("mt-4", "grid", "gap-4")}>
+                            {
+                                for ["codex", "kiro"].iter().map(|provider| {
+                                    let binding = proxy_bindings.iter().find(|item| item.provider_type == *provider).cloned();
+                                    let selected_value = if *provider == "codex" {
+                                        (*codex_proxy_binding_input).clone()
+                                    } else {
+                                        (*kiro_proxy_binding_input).clone()
+                                    };
+                                    let on_change = if *provider == "codex" {
+                                        let codex_proxy_binding_input = codex_proxy_binding_input.clone();
+                                        Callback::from(move |event: Event| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                codex_proxy_binding_input.set(target.value());
+                                            }
+                                        })
+                                    } else {
+                                        let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
+                                        Callback::from(move |event: Event| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                kiro_proxy_binding_input.set(target.value());
+                                            }
+                                        })
+                                    };
+                                    let provider_name = (*provider).to_string();
+                                    let select_key = format!(
+                                        "provider-proxy-binding-{}-{}",
+                                        provider_name,
+                                        selected_value.clone()
+                                    );
+                                    html! {
+                                        <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                                <div>
+                                                    <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ provider_name.to_uppercase() }</div>
+                                                    <div class={classes!("mt-1", "text-sm", "text-[var(--muted)]")}>
+                                                        {
+                                                            binding.as_ref()
+                                                                .map(|item| format!("{} · {}", item.effective_source, item.effective_proxy_url.clone().unwrap_or_else(|| "-".to_string())))
+                                                                .unwrap_or_else(|| "loading".to_string())
+                                                        }
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    class={classes!("btn-terminal", "btn-terminal-primary")}
+                                                    onclick={{
+                                                        let on_save_proxy_binding = on_save_proxy_binding.clone();
+                                                        let provider_name = provider_name.clone();
+                                                        Callback::from(move |_| on_save_proxy_binding.emit(provider_name.clone()))
+                                                    }}
+                                                    disabled={(*saving_proxy_binding_provider).as_deref() == Some(provider_name.as_str())}
+                                                >
+                                                    {
+                                                        if (*saving_proxy_binding_provider).as_deref() == Some(provider_name.as_str()) {
+                                                            "保存中..."
+                                                        } else {
+                                                            "保存绑定"
+                                                        }
+                                                    }
+                                                </button>
+                                            </div>
+                                            <label class={classes!("mt-4", "block", "text-sm")}>
+                                                <span class={classes!("text-[var(--muted)]")}>{ "绑定到代理配置" }</span>
+                                                <select
+                                                    key={select_key}
+                                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                                    value={selected_value.clone()}
+                                                    onchange={on_change}
+                                                >
+                                                    <option value="" selected={selected_value.is_empty()}>{ "Env fallback" }</option>
+                                                    { for proxy_configs.iter().map(|proxy_config| html! {
+                                                        <option value={proxy_config.id.clone()} selected={selected_value == proxy_config.id}>
+                                                            { format!("{} · {}", proxy_config.name, proxy_config.proxy_url) }
+                                                        </option>
+                                                    }) }
+                                                </select>
+                                            </label>
+                                            if let Some(binding) = binding {
+                                                <div class={classes!("mt-3", "space-y-1", "text-xs", "text-[var(--muted)]")}>
+                                                    <p class={classes!("m-0")}>
+                                                        { format!("effective_source: {}", binding.effective_source) }
+                                                    </p>
+                                                    <p class={classes!("m-0", "font-mono", "break-all")}>
+                                                        { format!("effective_proxy_url: {}", binding.effective_proxy_url.unwrap_or_else(|| "-".to_string())) }
+                                                    </p>
+                                                    if let Some(error_message) = binding.error_message {
+                                                        <p class={classes!("m-0", "text-red-600", "dark:text-red-300")}>
+                                                            { format!("error: {}", error_message) }
+                                                        </p>
+                                                    }
+                                                </div>
+                                            }
+                                        </article>
+                                    }
+                                })
+                            }
+                        </div>
+                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div>
+                                    <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Legacy Kiro Proxy Migration" }</h3>
+                                    <p class={classes!("mt-2", "mb-0", "text-xs", "text-[var(--muted)]")}>
+                                        { "扫描 ~/.static-flow/auths/kiro/*.json 中遗留的账号级代理字段，导入为共享代理配置，并从账号文件中清掉这些旧字段。" }
+                                    </p>
+                                </div>
+                                <button class={classes!("btn-terminal")} onclick={on_import_legacy_kiro_proxy} disabled={*migrating_legacy_kiro_proxy}>
+                                    { if *migrating_legacy_kiro_proxy { "导入中..." } else { "导入 Legacy Kiro Proxy" } }
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Proxy Config Inventory" }</h2>
+                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-2")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "Name" }</span>
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*create_proxy_name).clone()}
+                                    oninput={{
+                                        let create_proxy_name = create_proxy_name.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                create_proxy_name.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm", "md:col-span-2")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "Proxy URL" }</span>
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono")}
+                                    value={(*create_proxy_url).clone()}
+                                    oninput={{
+                                        let create_proxy_url = create_proxy_url.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                create_proxy_url.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "Proxy Username" }</span>
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*create_proxy_username).clone()}
+                                    oninput={{
+                                        let create_proxy_username = create_proxy_username.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                create_proxy_username.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "Proxy Password" }</span>
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*create_proxy_password).clone()}
+                                    oninput={{
+                                        let create_proxy_password = create_proxy_password.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                create_proxy_password.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("md:col-span-2")}>
+                                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_create_proxy_config} disabled={*creating_proxy}>
+                                    { if *creating_proxy { "创建中..." } else { "创建代理配置" } }
+                                </button>
+                            </div>
+                        </div>
+                        <div class={classes!("mt-5", "grid", "gap-4")}>
+                            if (*proxy_configs).is_empty() && !*loading {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                                    { "当前还没有可复用的代理配置。" }
+                                </div>
+                            } else {
+                                { for proxy_configs.iter().map(|proxy_config| html! {
+                                    <ProxyConfigEditorCard
+                                        key={proxy_config.id.clone()}
+                                        proxy_config={proxy_config.clone()}
+                                        on_changed={reload.clone()}
+                                        on_copy={on_copy.clone()}
+                                        on_flash={flash.clone()}
+                                    />
+                                }) }
+                            }
                         </div>
                     </section>
                 </section>
@@ -1744,6 +2924,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                         on_changed={reload.clone()}
                                         on_refresh={on_refresh_key.clone()}
                                         on_copy={on_copy.clone()}
+                                        on_flash={flash.clone()}
                                         refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
                                         accounts={(*accounts).clone()}
                                     />
@@ -2033,16 +3214,17 @@ pub fn admin_llm_gateway_page() -> Html {
                                     <th class={classes!("py-2", "pr-3")}>{ "Model" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Status" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Latency" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "IP / 属地" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Tokens" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "最后一条内容" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "Headers" }</th>
-                                </tr>
-                            </thead>
+                                <th class={classes!("py-2", "pr-3")}>{ "IP / 属地" }</th>
+                                <th class={classes!("py-2", "pr-3")}>{ "Tokens" }</th>
+                                <th class={classes!("py-2", "pr-3")}>{ "Credit" }</th>
+                                <th class={classes!("py-2", "pr-3")}>{ "最后一条内容" }</th>
+                                <th class={classes!("py-2", "pr-3")}>{ "Headers" }</th>
+                            </tr>
+                        </thead>
                             <tbody>
                                 if usage_events.is_empty() && !*loading && !*usage_loading {
                                     <tr class={classes!("border-t", "border-[var(--border)]")}>
-                                        <td colspan="11" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
+                                        <td colspan="12" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
                                     </tr>
                                 } else {
                                     { for usage_events.iter().map(|event| {
@@ -2108,10 +3290,20 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         <span class={classes!("font-semibold", "text-[var(--text)]")}>{ format!("Billable {}", format_number_u64(event.billable_tokens)) }</span>
                                                     </div>
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
-                                                    <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title={last_message_full.clone()}>
-                                                        { last_message_preview }
-                                                    </div>
+                                            <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
+                                                <div class={classes!("grid", "gap-1", "text-xs", "font-mono")}>
+                                                    <span class={classes!("font-semibold", "text-[var(--text)]")}>
+                                                        { event.credit_usage.map(format_credit4).unwrap_or_else(|| "-".to_string()) }
+                                                    </span>
+                                                    if event.credit_usage_missing {
+                                                        <span class={classes!("text-amber-700", "dark:text-amber-200")}>{ "missing" }</span>
+                                                    }
+                                                </div>
+                                            </td>
+                                            <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
+                                                <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title={last_message_full.clone()}>
+                                                    { last_message_preview }
+                                                </div>
                                                     <button
                                                         type="button"
                                                         class={classes!(
@@ -2734,7 +3926,7 @@ pub fn admin_llm_gateway_page() -> Html {
                             </div>
                         </div>
 
-                        <div class={classes!("mt-4", "grid", "shrink-0", "gap-3", "lg:grid-cols-5")}>
+                        <div class={classes!("mt-4", "grid", "shrink-0", "gap-3", "lg:grid-cols-6")}>
                             <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                                 <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Key ID" }</div>
                                 <div class={classes!("mt-1", "font-mono", "text-xs", "break-all")}>{ event.key_id.clone() }</div>
@@ -2754,6 +3946,15 @@ pub fn admin_llm_gateway_page() -> Html {
                             <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                                 <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Latency" }</div>
                                 <div class={classes!("mt-1", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
+                            </div>
+                            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Credit" }</div>
+                                <div class={classes!("mt-1", "text-sm", "font-semibold")}>
+                                    { event.credit_usage.map(format_credit4).unwrap_or_else(|| "-".to_string()) }
+                                </div>
+                                if event.credit_usage_missing {
+                                    <div class={classes!("mt-1", "text-xs", "text-amber-700", "dark:text-amber-200")}>{ "missing" }</div>
+                                }
                             </div>
                         </div>
 
@@ -2800,8 +4001,9 @@ pub fn admin_llm_gateway_page() -> Html {
             if let Some((message, is_error)) = (*toast).clone() {
                 <div class={classes!(
                     "fixed", "bottom-5", "right-5", "z-[90]",
-                    "rounded-full", "border", "px-4", "py-3",
-                    "text-sm", "font-semibold",
+                    "max-w-[min(34rem,calc(100vw-2.5rem))]",
+                    "rounded-xl", "border", "px-4", "py-3",
+                    "text-sm", "font-semibold", "leading-5", "whitespace-pre-wrap",
                     "shadow-[0_8px_24px_rgba(0,0,0,0.15)]",
                     if is_error {
                         classes!("border-red-400/35", "bg-red-500/92", "text-white")

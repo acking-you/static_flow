@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     env,
     path::PathBuf,
     sync::{
@@ -13,7 +13,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use reqwest::{header::HeaderValue as ReqwestHeaderValue, Proxy};
+use reqwest::header::HeaderValue as ReqwestHeaderValue;
 use serde::Deserialize;
 use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayStore};
 use tokio::{
@@ -22,10 +22,9 @@ use tokio::{
 };
 
 use super::{accounts::AccountPool, types::LlmGatewayRateLimitStatusResponse};
-use crate::state::LlmGatewayRuntimeConfig;
+use crate::{state::LlmGatewayRuntimeConfig, upstream_proxy::UpstreamProxyRegistry};
 
 const CLEANER_TICK_SECONDS: u64 = 1;
-const DEFAULT_UPSTREAM_PROXY_URL: &str = "http://127.0.0.1:11111";
 
 /// Long-lived runtime state shared by all gateway handlers.
 #[derive(Clone)]
@@ -34,9 +33,10 @@ pub struct LlmGatewayRuntimeState {
     pub(crate) runtime_config: Arc<tokio::sync::RwLock<LlmGatewayRuntimeConfig>>,
     pub(crate) auth_source: Arc<CodexAuthSource>,
     pub(crate) account_pool: Arc<AccountPool>,
+    pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     pub(crate) key_cache: Arc<LlmGatewayKeyCache>,
+    pub(crate) request_scheduler: Arc<LlmGatewayKeyRequestScheduler>,
     pub(crate) rate_limit_status: Arc<tokio::sync::RwLock<LlmGatewayRateLimitStatusResponse>>,
-    pub(crate) client: reqwest::Client,
     pub(crate) usage_write_lock: Arc<AsyncMutex<()>>,
 }
 
@@ -46,14 +46,16 @@ impl LlmGatewayRuntimeState {
         store: Arc<LlmGatewayStore>,
         runtime_config: Arc<tokio::sync::RwLock<LlmGatewayRuntimeConfig>>,
         account_pool: Arc<AccountPool>,
+        upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     ) -> Result<Self> {
-        let client = build_llm_gateway_upstream_client()?;
         Ok(Self {
             store,
             runtime_config,
             auth_source: Arc::new(CodexAuthSource::new()),
             account_pool,
+            upstream_proxy_registry,
             key_cache: Arc::new(LlmGatewayKeyCache::new()),
+            request_scheduler: Arc::new(LlmGatewayKeyRequestScheduler::new()),
             rate_limit_status: Arc::new(tokio::sync::RwLock::new(
                 LlmGatewayRateLimitStatusResponse {
                     status: "loading".to_string(),
@@ -65,9 +67,155 @@ impl LlmGatewayRuntimeState {
                     buckets: Vec::new(),
                 },
             )),
-            client,
             usage_write_lock: Arc::new(AsyncMutex::new(())),
         })
+    }
+
+    pub(crate) async fn build_upstream_client(&self) -> Result<reqwest::Client> {
+        let builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .pool_max_idle_per_host(32)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(30));
+        let builder = self
+            .upstream_proxy_registry
+            .apply_provider_proxy(
+                static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_CODEX,
+                builder,
+            )
+            .await
+            .context("failed to resolve codex upstream proxy")?;
+        builder
+            .build()
+            .context("failed to build llm gateway reqwest client")
+    }
+}
+
+#[derive(Debug, Clone)]
+struct KeyRequestState {
+    in_flight: usize,
+    next_start_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CodexKeyRequestLimitRejection {
+    pub reason: &'static str,
+    pub in_flight: usize,
+    pub max_concurrency: Option<u64>,
+    pub min_start_interval_ms: Option<u64>,
+    pub wait: Option<Duration>,
+    pub elapsed_since_last_start_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LlmGatewayKeyRequestScheduler {
+    states: Arc<Mutex<HashMap<String, KeyRequestState>>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodexKeyRequestLease {
+    scheduler: Option<Arc<LlmGatewayKeyRequestScheduler>>,
+    key_id: String,
+    released: bool,
+}
+
+impl LlmGatewayKeyRequestScheduler {
+    fn new() -> Self {
+        Self {
+            states: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub(crate) fn try_acquire(
+        self: &Arc<Self>,
+        key: &LlmGatewayKeyRecord,
+    ) -> Result<CodexKeyRequestLease, CodexKeyRequestLimitRejection> {
+        let max_concurrency = key.request_max_concurrency.filter(|value| *value > 0);
+        let min_start_interval_ms = key.request_min_start_interval_ms;
+        if max_concurrency.is_none() && min_start_interval_ms.is_none() {
+            return Ok(CodexKeyRequestLease {
+                scheduler: None,
+                key_id: key.id.clone(),
+                released: false,
+            });
+        }
+
+        let now = Instant::now();
+        let mut states = self.states.lock();
+        let state = states
+            .entry(key.id.clone())
+            .or_insert_with(|| KeyRequestState {
+                in_flight: 0,
+                next_start_at: now,
+            });
+
+        if let Some(limit) = max_concurrency {
+            if state.in_flight >= limit as usize {
+                return Err(CodexKeyRequestLimitRejection {
+                    reason: "local_concurrency_limit",
+                    in_flight: state.in_flight,
+                    max_concurrency,
+                    min_start_interval_ms,
+                    wait: None,
+                    elapsed_since_last_start_ms: None,
+                });
+            }
+        }
+
+        if let Some(interval_ms) = min_start_interval_ms {
+            if now < state.next_start_at {
+                let wait = state.next_start_at.saturating_duration_since(now);
+                let elapsed_since_last_start_ms =
+                    interval_ms.saturating_sub(wait.as_millis() as u64);
+                return Err(CodexKeyRequestLimitRejection {
+                    reason: "local_start_interval",
+                    in_flight: state.in_flight,
+                    max_concurrency,
+                    min_start_interval_ms,
+                    wait: Some(wait),
+                    elapsed_since_last_start_ms: Some(elapsed_since_last_start_ms),
+                });
+            }
+        }
+
+        state.in_flight += 1;
+        state.next_start_at = min_start_interval_ms
+            .map(|value| now + Duration::from_millis(value))
+            .unwrap_or(now);
+
+        Ok(CodexKeyRequestLease {
+            scheduler: Some(self.clone()),
+            key_id: key.id.clone(),
+            released: false,
+        })
+    }
+
+    fn release(&self, key_id: &str) {
+        let now = Instant::now();
+        let mut states = self.states.lock();
+        let remove_entry = if let Some(state) = states.get_mut(key_id) {
+            if state.in_flight > 0 {
+                state.in_flight -= 1;
+            }
+            state.in_flight == 0 && state.next_start_at <= now
+        } else {
+            false
+        };
+        if remove_entry {
+            states.remove(key_id);
+        }
+    }
+}
+
+impl Drop for CodexKeyRequestLease {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        if let Some(scheduler) = self.scheduler.as_ref() {
+            scheduler.release(&self.key_id);
+        }
     }
 }
 
@@ -334,27 +482,87 @@ pub(crate) async fn gateway_auth_cache_ttl(gateway: &LlmGatewayRuntimeState) -> 
     gateway.runtime_config.read().await.auth_cache_ttl_seconds
 }
 
-/// Build the shared reqwest client used for all upstream Codex traffic.
-pub(crate) fn build_llm_gateway_upstream_client() -> Result<reqwest::Client> {
-    let proxy_url = env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_UPSTREAM_PROXY_URL.to_string());
-    let proxy =
-        Proxy::all(proxy_url.as_str()).context("failed to build llm gateway upstream proxy")?;
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .pool_max_idle_per_host(32)
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(30))
-        .proxy(proxy)
-        .build()
-        .context("failed to build llm gateway reqwest client")
-}
-
 /// Build a reqwest bearer Authorization header value.
 pub(crate) fn bearer_header(token: &str) -> Result<ReqwestHeaderValue> {
     ReqwestHeaderValue::from_str(&format!("Bearer {token}"))
         .context("failed to build bearer header")
+}
+
+#[cfg(test)]
+mod tests {
+    use static_flow_shared::llm_gateway_store::{
+        LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+    };
+
+    use super::*;
+
+    fn sample_key() -> LlmGatewayKeyRecord {
+        LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "sfk_test".to_string(),
+            key_hash: "hash".to_string(),
+            status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            protocol_family: LLM_GATEWAY_PROTOCOL_OPENAI.to_string(),
+            public_visible: false,
+            quota_billable_limit: 1_000_000,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        }
+    }
+
+    #[test]
+    fn codex_request_scheduler_allows_unlimited_keys_without_tracking() {
+        let scheduler = Arc::new(LlmGatewayKeyRequestScheduler::new());
+        let lease = scheduler
+            .try_acquire(&sample_key())
+            .expect("unlimited keys should acquire immediately");
+        assert_eq!(lease.key_id, "key-1");
+        assert!(lease.scheduler.is_none());
+    }
+
+    #[test]
+    fn codex_request_scheduler_enforces_concurrency_and_start_interval() {
+        let scheduler = Arc::new(LlmGatewayKeyRequestScheduler::new());
+        let mut key = sample_key();
+        key.request_max_concurrency = Some(1);
+        key.request_min_start_interval_ms = Some(250);
+
+        let first_lease = scheduler
+            .try_acquire(&key)
+            .expect("first request should acquire");
+
+        let concurrency_rejection = scheduler
+            .try_acquire(&key)
+            .expect_err("second in-flight request should be rejected");
+        assert_eq!(concurrency_rejection.reason, "local_concurrency_limit");
+        assert_eq!(concurrency_rejection.in_flight, 1);
+        assert_eq!(concurrency_rejection.max_concurrency, Some(1));
+        assert_eq!(concurrency_rejection.min_start_interval_ms, Some(250));
+
+        drop(first_lease);
+
+        let pacing_rejection = scheduler
+            .try_acquire(&key)
+            .expect_err("request restart should honor min start interval");
+        assert_eq!(pacing_rejection.reason, "local_start_interval");
+        assert_eq!(pacing_rejection.in_flight, 0);
+        assert_eq!(pacing_rejection.max_concurrency, Some(1));
+        assert_eq!(pacing_rejection.min_start_interval_ms, Some(250));
+        assert!(pacing_rejection.wait.is_some());
+        assert!(pacing_rejection.elapsed_since_last_start_ms.is_some());
+    }
 }

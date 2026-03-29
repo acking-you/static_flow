@@ -1,27 +1,41 @@
+//! Arrow batch encoders/decoders for the LLM gateway store.
+//!
+//! These helpers keep LanceDB serialization in one place so schema changes are
+//! reflected consistently across table writes, reads, and migrations.
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_array::{
     builder::{
-        BooleanBuilder, Int32Builder, StringBuilder, TimestampMillisecondBuilder, UInt64Builder,
+        BooleanBuilder, Float64Builder, Int32Builder, StringBuilder, TimestampMillisecondBuilder,
+        UInt64Builder,
     },
-    Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray, TimestampMillisecondArray,
-    UInt64Array,
+    Array, ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
+    TimestampMillisecondArray, UInt64Array,
 };
 
 use super::{
     schema::{
         llm_gateway_account_contribution_requests_schema, llm_gateway_keys_schema,
+        llm_gateway_proxy_bindings_schema, llm_gateway_proxy_configs_schema,
         llm_gateway_runtime_config_schema, llm_gateway_sponsor_requests_schema,
         llm_gateway_token_requests_schema, llm_gateway_usage_events_schema,
     },
     types::{
         LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
-        LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
+        LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+        DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, LLM_GATEWAY_PROTOCOL_OPENAI,
+        LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     },
 };
 
+/// Serialize a slice of [`LlmGatewayKeyRecord`] into an Arrow [`RecordBatch`].
+///
+/// Includes the `provider_type` and `protocol_family` columns added for
+/// multi-provider gateway support.
 pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> {
     let schema = llm_gateway_keys_schema();
     let mut id = StringBuilder::new();
@@ -29,18 +43,24 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut secret = StringBuilder::new();
     let mut key_hash = StringBuilder::new();
     let mut status = StringBuilder::new();
+    let mut provider_type = StringBuilder::new(); // upstream LLM provider (e.g. "codex", "anthropic")
+    let mut protocol_family = StringBuilder::new(); // wire protocol dialect (e.g. "openai")
     let mut public_visible = BooleanBuilder::new();
     let mut quota_billable_limit = UInt64Builder::new();
     let mut usage_input_uncached_tokens = UInt64Builder::new();
     let mut usage_input_cached_tokens = UInt64Builder::new();
     let mut usage_output_tokens = UInt64Builder::new();
     let mut usage_billable_tokens = UInt64Builder::new();
+    let mut usage_credit_total = Float64Builder::new();
+    let mut usage_credit_missing_events = UInt64Builder::new();
     let mut last_used_at = TimestampMillisecondBuilder::new();
     let mut created_at = TimestampMillisecondBuilder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
     let mut route_strategy = StringBuilder::new();
     let mut fixed_account_name = StringBuilder::new();
     let mut auto_account_names_json = StringBuilder::new();
+    let mut request_max_concurrency = UInt64Builder::new();
+    let mut request_min_start_interval_ms = UInt64Builder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -48,12 +68,16 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         secret.append_value(&record.secret);
         key_hash.append_value(&record.key_hash);
         status.append_value(&record.status);
+        provider_type.append_value(&record.provider_type);
+        protocol_family.append_value(&record.protocol_family);
         public_visible.append_value(record.public_visible);
         quota_billable_limit.append_value(record.quota_billable_limit);
         usage_input_uncached_tokens.append_value(record.usage_input_uncached_tokens);
         usage_input_cached_tokens.append_value(record.usage_input_cached_tokens);
         usage_output_tokens.append_value(record.usage_output_tokens);
         usage_billable_tokens.append_value(record.usage_billable_tokens);
+        usage_credit_total.append_value(record.usage_credit_total);
+        usage_credit_missing_events.append_value(record.usage_credit_missing_events);
         append_optional_ts(&mut last_used_at, record.last_used_at);
         created_at.append_value(record.created_at);
         updated_at.append_value(record.updated_at);
@@ -63,6 +87,11 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
             &mut auto_account_names_json,
             serialize_string_vec_json(record.auto_account_names.as_deref())?.as_deref(),
         );
+        append_optional_u64(&mut request_max_concurrency, record.request_max_concurrency);
+        append_optional_u64(
+            &mut request_min_start_interval_ms,
+            record.request_min_start_interval_ms,
+        );
     }
 
     RecordBatch::try_new(schema, vec![
@@ -71,27 +100,39 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(secret.finish()),
         Arc::new(key_hash.finish()),
         Arc::new(status.finish()),
+        Arc::new(provider_type.finish()),
+        Arc::new(protocol_family.finish()),
         Arc::new(public_visible.finish()),
         Arc::new(quota_billable_limit.finish()),
         Arc::new(usage_input_uncached_tokens.finish()),
         Arc::new(usage_input_cached_tokens.finish()),
         Arc::new(usage_output_tokens.finish()),
         Arc::new(usage_billable_tokens.finish()),
+        Arc::new(usage_credit_total.finish()),
+        Arc::new(usage_credit_missing_events.finish()),
         Arc::new(last_used_at.finish()),
         Arc::new(created_at.finish()),
         Arc::new(updated_at.finish()),
         Arc::new(route_strategy.finish()),
         Arc::new(fixed_account_name.finish()),
         Arc::new(auto_account_names_json.finish()),
+        Arc::new(request_max_concurrency.finish()),
+        Arc::new(request_min_start_interval_ms.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
 
+/// Serialize a slice of [`LlmGatewayUsageEventRecord`] into an Arrow
+/// [`RecordBatch`].
+///
+/// The `provider_type` column records which upstream provider served the
+/// request.
 pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Result<RecordBatch> {
     let schema = llm_gateway_usage_events_schema();
     let mut id = StringBuilder::new();
     let mut key_id = StringBuilder::new();
     let mut key_name = StringBuilder::new();
+    let mut provider_type = StringBuilder::new(); // upstream LLM provider that handled this event
     let mut account_name = StringBuilder::new();
     let mut request_method = StringBuilder::new();
     let mut request_url = StringBuilder::new();
@@ -104,6 +145,8 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     let mut output_tokens = UInt64Builder::new();
     let mut billable_tokens = UInt64Builder::new();
     let mut usage_missing = BooleanBuilder::new();
+    let mut credit_usage = Float64Builder::new();
+    let mut credit_usage_missing = BooleanBuilder::new();
     let mut client_ip = StringBuilder::new();
     let mut ip_region = StringBuilder::new();
     let mut request_headers_json = StringBuilder::new();
@@ -114,6 +157,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         id.append_value(&record.id);
         key_id.append_value(&record.key_id);
         key_name.append_value(&record.key_name);
+        provider_type.append_value(&record.provider_type);
         append_optional_str(&mut account_name, record.account_name.as_deref());
         request_method.append_value(&record.request_method);
         request_url.append_value(&record.request_url);
@@ -126,6 +170,8 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         output_tokens.append_value(record.output_tokens);
         billable_tokens.append_value(record.billable_tokens);
         usage_missing.append_value(record.usage_missing);
+        append_optional_f64(&mut credit_usage, record.credit_usage);
+        credit_usage_missing.append_value(record.credit_usage_missing);
         client_ip.append_value(&record.client_ip);
         ip_region.append_value(&record.ip_region);
         request_headers_json.append_value(&record.request_headers_json);
@@ -137,6 +183,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(id.finish()) as ArrayRef,
         Arc::new(key_id.finish()),
         Arc::new(key_name.finish()),
+        Arc::new(provider_type.finish()),
         Arc::new(account_name.finish()),
         Arc::new(request_method.finish()),
         Arc::new(request_url.finish()),
@@ -149,6 +196,8 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(output_tokens.finish()),
         Arc::new(billable_tokens.finish()),
         Arc::new(usage_missing.finish()),
+        Arc::new(credit_usage.finish()),
+        Arc::new(credit_usage_missing.finish()),
         Arc::new(client_ip.finish()),
         Arc::new(ip_region.finish()),
         Arc::new(request_headers_json.finish()),
@@ -158,26 +207,95 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     .context("failed to build llm gateway usage events batch")
 }
 
+/// Serialize a slice of [`LlmGatewayRuntimeConfigRecord`] into an Arrow
+/// [`RecordBatch`].
+///
+/// Includes the `max_request_body_bytes` column for per-instance request size
+/// limits.
 pub fn build_runtime_config_batch(
     records: &[LlmGatewayRuntimeConfigRecord],
 ) -> Result<RecordBatch> {
     let schema = llm_gateway_runtime_config_schema();
     let mut id = StringBuilder::new();
     let mut auth_cache_ttl_seconds = UInt64Builder::new();
+    let mut max_request_body_bytes = UInt64Builder::new(); // max allowed request body size in bytes
+    let mut kiro_channel_max_concurrency = UInt64Builder::new();
+    let mut kiro_channel_min_start_interval_ms = UInt64Builder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
         auth_cache_ttl_seconds.append_value(record.auth_cache_ttl_seconds);
+        max_request_body_bytes.append_value(record.max_request_body_bytes);
+        kiro_channel_max_concurrency.append_value(record.kiro_channel_max_concurrency);
+        kiro_channel_min_start_interval_ms.append_value(record.kiro_channel_min_start_interval_ms);
         updated_at.append_value(record.updated_at);
     }
 
     RecordBatch::try_new(schema, vec![
         Arc::new(id.finish()) as ArrayRef,
         Arc::new(auth_cache_ttl_seconds.finish()),
+        Arc::new(max_request_body_bytes.finish()),
+        Arc::new(kiro_channel_max_concurrency.finish()),
+        Arc::new(kiro_channel_min_start_interval_ms.finish()),
         Arc::new(updated_at.finish()),
     ])
     .context("failed to build llm gateway runtime config batch")
+}
+
+pub fn build_proxy_configs_batch(records: &[LlmGatewayProxyConfigRecord]) -> Result<RecordBatch> {
+    let schema = llm_gateway_proxy_configs_schema();
+    let mut id = StringBuilder::new();
+    let mut name = StringBuilder::new();
+    let mut proxy_url = StringBuilder::new();
+    let mut proxy_username = StringBuilder::new();
+    let mut proxy_password = StringBuilder::new();
+    let mut status = StringBuilder::new();
+    let mut created_at = TimestampMillisecondBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        id.append_value(&record.id);
+        name.append_value(&record.name);
+        proxy_url.append_value(&record.proxy_url);
+        append_optional_str(&mut proxy_username, record.proxy_username.as_deref());
+        append_optional_str(&mut proxy_password, record.proxy_password.as_deref());
+        status.append_value(&record.status);
+        created_at.append_value(record.created_at);
+        updated_at.append_value(record.updated_at);
+    }
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(id.finish()) as ArrayRef,
+        Arc::new(name.finish()),
+        Arc::new(proxy_url.finish()),
+        Arc::new(proxy_username.finish()),
+        Arc::new(proxy_password.finish()),
+        Arc::new(status.finish()),
+        Arc::new(created_at.finish()),
+        Arc::new(updated_at.finish()),
+    ])
+    .context("failed to build llm gateway proxy configs batch")
+}
+
+pub fn build_proxy_bindings_batch(records: &[LlmGatewayProxyBindingRecord]) -> Result<RecordBatch> {
+    let schema = llm_gateway_proxy_bindings_schema();
+    let mut provider_type = StringBuilder::new();
+    let mut proxy_config_id = StringBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        provider_type.append_value(&record.provider_type);
+        proxy_config_id.append_value(&record.proxy_config_id);
+        updated_at.append_value(record.updated_at);
+    }
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(provider_type.finish()) as ArrayRef,
+        Arc::new(proxy_config_id.finish()),
+        Arc::new(updated_at.finish()),
+    ])
+    .context("failed to build llm gateway proxy bindings batch")
 }
 
 pub fn build_token_requests_batch(records: &[LlmGatewayTokenRequestRecord]) -> Result<RecordBatch> {
@@ -379,6 +497,11 @@ pub fn build_sponsor_requests_batch(
     .context("failed to build llm gateway sponsor requests batch")
 }
 
+/// Decode Arrow [`RecordBatch`]es back into [`LlmGatewayKeyRecord`] rows.
+///
+/// Columns added after the initial schema (`provider_type`, `protocol_family`)
+/// are read optionally so that rows written before the migration still decode
+/// with sensible defaults.
 pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecord>> {
     let mut rows = Vec::with_capacity(total_rows(batches));
     for batch in batches {
@@ -387,6 +510,14 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let secret = required_str_col(batch, "secret")?;
         let key_hash = required_str_col(batch, "key_hash")?;
         let status = required_str_col(batch, "status")?;
+        // Optional: column may be absent in rows written before multi-provider support
+        let provider_type = batch
+            .column_by_name("provider_type")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        // Optional: column may be absent in rows written before protocol-family support
+        let protocol_family = batch
+            .column_by_name("protocol_family")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let public_visible = required_bool_col(batch, "public_visible")?;
         let quota_billable_limit = required_u64_col(batch, "quota_billable_limit")?;
         let usage_input_uncached_tokens = required_u64_col(batch, "usage_input_uncached_tokens")?;
@@ -394,6 +525,12 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let usage_output_tokens = required_u64_col(batch, "usage_output_tokens")?;
         let usage_billable_tokens = batch
             .column_by_name("usage_billable_tokens")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let usage_credit_total = batch
+            .column_by_name("usage_credit_total")
+            .and_then(|column| column.as_any().downcast_ref::<Float64Array>());
+        let usage_credit_missing_events = batch
+            .column_by_name("usage_credit_missing_events")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
         let last_used_at = optional_ts_col(batch, "last_used_at")?;
         let created_at = required_ts_col(batch, "created_at")?;
@@ -407,6 +544,12 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let auto_account_names_json = batch
             .column_by_name("auto_account_names_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let request_max_concurrency = batch
+            .column_by_name("request_max_concurrency")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let request_min_start_interval_ms = batch
+            .column_by_name("request_min_start_interval_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = usage_input_uncached_tokens
@@ -418,6 +561,12 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 secret: secret.value(idx).to_string(),
                 key_hash: key_hash.value(idx).to_string(),
                 status: status.value(idx).to_string(),
+                provider_type: provider_type
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| LLM_GATEWAY_PROVIDER_CODEX.to_string()),
+                protocol_family: protocol_family
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| LLM_GATEWAY_PROTOCOL_OPENAI.to_string()),
                 public_visible: public_visible.value(idx),
                 quota_billable_limit: quota_billable_limit.value(idx),
                 usage_input_uncached_tokens: usage_input_uncached_tokens.value(idx),
@@ -426,6 +575,12 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 usage_billable_tokens: usage_billable_tokens
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(raw_billable_tokens),
+                usage_credit_total: usage_credit_total
+                    .and_then(|column| value_f64_opt(column, idx))
+                    .unwrap_or(0.0),
+                usage_credit_missing_events: usage_credit_missing_events
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(0),
                 last_used_at: value_ts_opt(last_used_at, idx),
                 created_at: created_at.value(idx),
                 updated_at: updated_at.value(idx),
@@ -436,6 +591,10 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                         .and_then(|col| value_string_opt(col, idx))
                         .as_deref(),
                 )?,
+                request_max_concurrency: request_max_concurrency
+                    .and_then(|column| value_u64_opt(column, idx)),
+                request_min_start_interval_ms: request_min_start_interval_ms
+                    .and_then(|column| value_u64_opt(column, idx)),
             });
         }
     }
@@ -468,6 +627,9 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let key_name = batch
             .column_by_name("key_name")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let provider_type = batch
+            .column_by_name("provider_type")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let account_name = batch
             .column_by_name("account_name")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -488,6 +650,12 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let output_tokens = required_u64_col(batch, "output_tokens")?;
         let billable_tokens = required_u64_col(batch, "billable_tokens")?;
         let usage_missing = required_bool_col(batch, "usage_missing")?;
+        let credit_usage = batch
+            .column_by_name("credit_usage")
+            .and_then(|column| column.as_any().downcast_ref::<Float64Array>());
+        let credit_usage_missing = batch
+            .column_by_name("credit_usage_missing")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
         let client_ip = batch
             .column_by_name("client_ip")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -503,12 +671,17 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let created_at = required_ts_col(batch, "created_at")?;
 
         for idx in 0..batch.num_rows() {
+            let provider_type_value = provider_type
+                .and_then(|column| value_string_opt(column, idx))
+                .unwrap_or_else(|| LLM_GATEWAY_PROVIDER_CODEX.to_string());
+            let credit_usage_value = credit_usage.and_then(|column| value_f64_opt(column, idx));
             rows.push(LlmGatewayUsageEventRecord {
                 id: id.value(idx).to_string(),
                 key_id: key_id.value(idx).to_string(),
                 key_name: key_name
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| key_id.value(idx).to_string()),
+                provider_type: provider_type_value.clone(),
                 account_name: account_name.and_then(|column| value_string_opt(column, idx)),
                 request_method: request_method
                     .and_then(|column| value_string_opt(column, idx))
@@ -527,6 +700,13 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
                 output_tokens: output_tokens.value(idx),
                 billable_tokens: billable_tokens.value(idx),
                 usage_missing: usage_missing.value(idx),
+                credit_usage: credit_usage_value,
+                credit_usage_missing: credit_usage_missing
+                    .and_then(|column| value_bool_opt(column, idx))
+                    .unwrap_or(
+                        provider_type_value == LLM_GATEWAY_PROVIDER_KIRO
+                            && credit_usage_value.is_none(),
+                    ),
                 client_ip: client_ip
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| "unknown".to_string()),
@@ -545,6 +725,13 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
     Ok(rows)
 }
 
+/// Decode Arrow [`RecordBatch`]es back into
+/// [`LlmGatewayRuntimeConfigRecord`] rows.
+///
+/// Columns added after the initial schema (`max_request_body_bytes`,
+/// `kiro_channel_max_concurrency`, `kiro_channel_min_start_interval_ms`) are
+/// read optionally so that rows written before the migration still decode with
+/// sensible defaults.
 pub fn batches_to_runtime_config(
     batches: &[RecordBatch],
 ) -> Result<Vec<LlmGatewayRuntimeConfigRecord>> {
@@ -552,11 +739,77 @@ pub fn batches_to_runtime_config(
     for batch in batches {
         let id = required_str_col(batch, "id")?;
         let auth_cache_ttl_seconds = required_u64_col(batch, "auth_cache_ttl_seconds")?;
+        let max_request_body_bytes = batch
+            .column_by_name("max_request_body_bytes")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_channel_max_concurrency = batch
+            .column_by_name("kiro_channel_max_concurrency")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_channel_min_start_interval_ms = batch
+            .column_by_name("kiro_channel_min_start_interval_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
         let updated_at = required_ts_col(batch, "updated_at")?;
         for idx in 0..batch.num_rows() {
             rows.push(LlmGatewayRuntimeConfigRecord {
                 id: id.value(idx).to_string(),
                 auth_cache_ttl_seconds: auth_cache_ttl_seconds.value(idx),
+                max_request_body_bytes: max_request_body_bytes
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES),
+                kiro_channel_max_concurrency: kiro_channel_max_concurrency
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
+                kiro_channel_min_start_interval_ms: kiro_channel_min_start_interval_ms
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
+                updated_at: updated_at.value(idx),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+pub fn batches_to_proxy_configs(
+    batches: &[RecordBatch],
+) -> Result<Vec<LlmGatewayProxyConfigRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let id = required_str_col(batch, "id")?;
+        let name = required_str_col(batch, "name")?;
+        let proxy_url = required_str_col(batch, "proxy_url")?;
+        let proxy_username = optional_str_col(batch, "proxy_username")?;
+        let proxy_password = optional_str_col(batch, "proxy_password")?;
+        let status = required_str_col(batch, "status")?;
+        let created_at = required_ts_col(batch, "created_at")?;
+        let updated_at = required_ts_col(batch, "updated_at")?;
+        for idx in 0..batch.num_rows() {
+            rows.push(LlmGatewayProxyConfigRecord {
+                id: id.value(idx).to_string(),
+                name: name.value(idx).to_string(),
+                proxy_url: proxy_url.value(idx).to_string(),
+                proxy_username: value_string_opt(proxy_username, idx),
+                proxy_password: value_string_opt(proxy_password, idx),
+                status: status.value(idx).to_string(),
+                created_at: created_at.value(idx),
+                updated_at: updated_at.value(idx),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+pub fn batches_to_proxy_bindings(
+    batches: &[RecordBatch],
+) -> Result<Vec<LlmGatewayProxyBindingRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let provider_type = required_str_col(batch, "provider_type")?;
+        let proxy_config_id = required_str_col(batch, "proxy_config_id")?;
+        let updated_at = required_ts_col(batch, "updated_at")?;
+        for idx in 0..batch.num_rows() {
+            rows.push(LlmGatewayProxyBindingRecord {
+                provider_type: provider_type.value(idx).to_string(),
+                proxy_config_id: proxy_config_id.value(idx).to_string(),
                 updated_at: updated_at.value(idx),
             });
         }
@@ -838,6 +1091,22 @@ fn value_i32_opt(array: &Int32Array, idx: usize) -> Option<i32> {
     }
 }
 
+fn value_f64_opt(array: &Float64Array, idx: usize) -> Option<f64> {
+    if array.is_null(idx) {
+        None
+    } else {
+        Some(array.value(idx))
+    }
+}
+
+fn value_bool_opt(array: &BooleanArray, idx: usize) -> Option<bool> {
+    if array.is_null(idx) {
+        None
+    } else {
+        Some(array.value(idx))
+    }
+}
+
 fn append_optional_str(builder: &mut StringBuilder, value: Option<&str>) {
     match value {
         Some(value) if !value.trim().is_empty() => builder.append_value(value),
@@ -846,6 +1115,20 @@ fn append_optional_str(builder: &mut StringBuilder, value: Option<&str>) {
 }
 
 fn append_optional_ts(builder: &mut TimestampMillisecondBuilder, value: Option<i64>) {
+    match value {
+        Some(value) => builder.append_value(value),
+        None => builder.append_null(),
+    }
+}
+
+fn append_optional_f64(builder: &mut Float64Builder, value: Option<f64>) {
+    match value {
+        Some(value) => builder.append_value(value),
+        None => builder.append_null(),
+    }
+}
+
+fn append_optional_u64(builder: &mut UInt64Builder, value: Option<u64>) {
     match value {
         Some(value) => builder.append_value(value),
         None => builder.append_null(),

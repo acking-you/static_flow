@@ -1,8 +1,66 @@
 use js_sys::Date;
+use yew::prelude::*;
 
 use crate::api::{LlmGatewayAccessResponse, LlmGatewayPublicKeyView};
 
 pub const REMOTE_COMPACT_ARTICLE_ID: &str = "codex-compact-local-and-remote-deep-dive";
+
+fn masked_secret_value(value: &str) -> String {
+    let len = value.chars().count().clamp(12, 32);
+    "•".repeat(len)
+}
+
+#[derive(Properties, PartialEq)]
+pub struct MaskedSecretCodeProps {
+    pub value: String,
+    pub copy_label: AttrValue,
+    pub on_copy: Callback<(String, String)>,
+    #[prop_or_default]
+    pub code_class: Classes,
+}
+
+#[function_component(MaskedSecretCode)]
+pub fn masked_secret_code(props: &MaskedSecretCodeProps) -> Html {
+    let revealed = use_state(|| false);
+    let value = props.value.clone();
+    let visible_value = if *revealed { value.clone() } else { masked_secret_value(&value) };
+
+    html! {
+        <div class={classes!("flex", "items-start", "justify-between", "gap-3")}>
+            <code class={classes!("min-w-0", "flex-1", "break-all", "font-mono", "text-xs", props.code_class.clone())}>
+                { visible_value }
+            </code>
+            <div class={classes!("flex", "items-center", "gap-2", "shrink-0")}>
+                <button
+                    type="button"
+                    class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                    title={if *revealed { "隐藏" } else { "显示" }}
+                    aria-label={if *revealed { "隐藏" } else { "显示" }}
+                    onclick={{
+                        let revealed = revealed.clone();
+                        Callback::from(move |_| revealed.set(!*revealed))
+                    }}
+                >
+                    <i class={classes!("fas", if *revealed { "fa-eye-slash" } else { "fa-eye" })}></i>
+                </button>
+                <button
+                    type="button"
+                    class={classes!("btn-terminal", "btn-terminal-primary", "!px-2.5", "!py-1.5", "!text-xs")}
+                    title="复制"
+                    aria-label="复制"
+                    onclick={{
+                        let on_copy = props.on_copy.clone();
+                        let copy_label = props.copy_label.to_string();
+                        let value = value.clone();
+                        Callback::from(move |_| on_copy.emit((copy_label.clone(), value.clone())))
+                    }}
+                >
+                    <i class={classes!("fas", "fa-copy")}></i>
+                </button>
+            </div>
+        </div>
+    }
+}
 
 pub fn format_ms(ts_ms: i64) -> String {
     let d = Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64));
@@ -207,4 +265,26 @@ resp = client.chat.completions.create(
 
 print(resp.choices[0].message.content)"#
     )
+}
+
+/// Format a float with 2 decimal places.
+pub fn format_float2(value: f64) -> String {
+    format!("{value:.2}")
+}
+
+/// Compute usage ratio (0.0–1.0) from optional Kiro credit fields.
+pub fn kiro_credit_ratio(current: Option<f64>, limit: Option<f64>) -> f64 {
+    match (current, limit) {
+        (Some(used), Some(cap)) if cap > 0.0 => (used / cap).clamp(0.0, 1.0),
+        _ => 0.0,
+    }
+}
+
+/// Compute usage ratio (0.0–1.0) from a Kiro key's remaining/limit fields.
+pub fn kiro_key_usage_ratio(remaining: i64, limit: u64) -> f64 {
+    if limit == 0 {
+        return 0.0;
+    }
+    let used = (limit as i64 - remaining).max(0) as f64;
+    (used / limit as f64).clamp(0.0, 1.0)
 }

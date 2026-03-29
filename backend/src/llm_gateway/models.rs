@@ -100,8 +100,8 @@ async fn fetch_codex_models(
             ReqwestHeaderValue::from_str(account_id)?,
         );
     }
-    let response = gateway
-        .client
+    let client = gateway.build_upstream_client().await?;
+    let response = client
         .get(url)
         .headers(headers)
         .send()

@@ -4,13 +4,16 @@ mod comment_worker;
 mod email;
 mod geoip;
 mod handlers;
+mod kiro_gateway;
 mod llm_gateway;
 mod memory_profiler;
 mod music_wish_worker;
+mod public_submit_guard;
 mod request_context;
 mod routes;
 mod seo;
 mod state;
+mod upstream_proxy;
 
 use std::env;
 

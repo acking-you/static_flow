@@ -14,7 +14,11 @@ use static_flow_shared::{
     lancedb_api::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
-    llm_gateway_store::{self, LlmGatewayStore, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS},
+    llm_gateway_store::{
+        self, LlmGatewayStore, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
+        DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+    },
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
     optimize::{scan_and_compact_tables, CompactConfig},
@@ -26,8 +30,11 @@ use crate::{
     comment_worker::{self, CommentAiWorkerConfig},
     email::EmailNotifier,
     geoip::GeoIpResolver,
+    kiro_gateway::KiroGatewayRuntimeState,
     llm_gateway::LlmGatewayRuntimeState,
     music_wish_worker::{self, MusicWishWorkerConfig},
+    public_submit_guard::PublicSubmitGuard,
+    upstream_proxy::UpstreamProxyRegistry,
 };
 
 type ListCacheEntry<T> = Option<(Vec<T>, Instant)>;
@@ -153,12 +160,21 @@ impl Default for CompactionRuntimeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmGatewayRuntimeConfig {
     pub auth_cache_ttl_seconds: u64,
+    /// Maximum allowed request body size in bytes for proxied gateway calls.
+    pub max_request_body_bytes: u64,
+    /// Maximum number of concurrent Kiro upstream requests.
+    pub kiro_channel_max_concurrency: u64,
+    /// Minimum milliseconds between consecutive Kiro upstream request starts.
+    pub kiro_channel_min_start_interval_ms: u64,
 }
 
 impl Default for LlmGatewayRuntimeConfig {
     fn default() -> Self {
         Self {
             auth_cache_ttl_seconds: DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
+            max_request_body_bytes: DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+            kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+            kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
         }
     }
 }
@@ -194,7 +210,7 @@ pub struct AppState {
     pub(crate) api_behavior_runtime_config: Arc<RwLock<ApiBehaviorRuntimeConfig>>,
     pub(crate) compaction_runtime_config: Arc<RwLock<CompactionRuntimeConfig>>,
     pub(crate) llm_gateway_runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
-    pub(crate) comment_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) comment_submit_guard: Arc<PublicSubmitGuard>,
     pub(crate) comment_worker_tx: mpsc::Sender<String>,
     pub(crate) admin_access: AdminAccessConfig,
     pub(crate) music_store: Arc<MusicDataStore>,
@@ -203,14 +219,17 @@ pub struct AppState {
     pub(crate) music_runtime_config: Arc<RwLock<MusicRuntimeConfig>>,
     pub(crate) music_wish_store: Arc<MusicWishStore>,
     pub(crate) music_wish_worker_tx: mpsc::Sender<String>,
-    pub(crate) music_wish_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) music_wish_submit_guard: Arc<PublicSubmitGuard>,
     pub(crate) article_request_store: Arc<ArticleRequestStore>,
     pub(crate) article_request_worker_tx: mpsc::Sender<String>,
-    pub(crate) article_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
-    pub(crate) llm_gateway_token_request_submit_guard: Arc<RwLock<HashMap<String, i64>>>,
+    pub(crate) article_request_submit_guard: Arc<PublicSubmitGuard>,
+    pub(crate) llm_gateway_public_submit_guard: Arc<PublicSubmitGuard>,
     pub(crate) interactive_store: Arc<InteractivePageStore>,
     pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
+    pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     pub(crate) llm_gateway: Arc<LlmGatewayRuntimeState>,
+    /// Kiro (Anthropic-protocol) gateway runtime state and request scheduler.
+    pub(crate) kiro_gateway: Arc<KiroGatewayRuntimeState>,
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
     pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
     pub(crate) shutdown_tx: watch::Sender<bool>,
@@ -237,6 +256,8 @@ impl AppState {
         let article_request_store = Arc::new(ArticleRequestStore::connect(content_db_uri).await?);
         let interactive_store = Arc::new(InteractivePageStore::connect(content_db_uri).await?);
         let llm_gateway_store = Arc::new(LlmGatewayStore::connect(content_db_uri).await?);
+        let upstream_proxy_registry =
+            Arc::new(UpstreamProxyRegistry::new(llm_gateway_store.clone()).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
         let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
@@ -246,16 +267,28 @@ impl AppState {
             Arc::new(RwLock::new(read_api_behavior_runtime_config_from_env()));
         let compaction_runtime_config =
             Arc::new(RwLock::new(read_compaction_runtime_config_from_env()));
-        let llm_gateway_auth_cache_ttl_seconds = llm_gateway_store
-            .get_runtime_config_or_default()
-            .await?
-            .auth_cache_ttl_seconds;
+        let llm_gateway_runtime_config_record =
+            llm_gateway_store.get_runtime_config_or_default().await?;
+        let llm_gateway_auth_cache_ttl_seconds =
+            llm_gateway_runtime_config_record.auth_cache_ttl_seconds;
+        let llm_gateway_max_request_body_bytes =
+            llm_gateway_runtime_config_record.max_request_body_bytes;
+        let kiro_channel_max_concurrency =
+            llm_gateway_runtime_config_record.kiro_channel_max_concurrency;
+        let kiro_channel_min_start_interval_ms =
+            llm_gateway_runtime_config_record.kiro_channel_min_start_interval_ms;
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
+            max_request_body_bytes = llm_gateway_max_request_body_bytes,
+            kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms,
             "loaded llm gateway runtime config from storage"
         );
         let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: llm_gateway_auth_cache_ttl_seconds,
+            max_request_body_bytes: llm_gateway_max_request_body_bytes,
+            kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms,
         }));
         let auths_dir = crate::llm_gateway::resolve_auths_dir();
         let account_pool = Arc::new(crate::llm_gateway::AccountPool::new(auths_dir.clone()));
@@ -272,9 +305,21 @@ impl AppState {
             llm_gateway_store.clone(),
             llm_gateway_runtime_config.clone(),
             account_pool.clone(),
+            upstream_proxy_registry.clone(),
         )?);
+        let kiro_gateway = Arc::new(
+            KiroGatewayRuntimeState::new(
+                llm_gateway_store.clone(),
+                llm_gateway_runtime_config.clone(),
+                upstream_proxy_registry.clone(),
+            )
+            .await?,
+        );
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
+            max_request_body_bytes = llm_gateway_max_request_body_bytes,
+            kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms,
             "initialized llm gateway runtime state"
         );
         let comment_worker_tx = comment_worker::spawn_comment_worker(
@@ -314,17 +359,15 @@ impl AppState {
             llm_gateway.clone(),
             shutdown_rx.clone(),
         );
-        {
-            let refresh_client = crate::llm_gateway::build_refresh_client().unwrap_or_else(|err| {
-                tracing::warn!("Failed to build refresh client, using gateway client: {err:#}");
-                llm_gateway.client.clone()
-            });
-            crate::llm_gateway::spawn_account_refresh_task(
-                account_pool,
-                refresh_client,
-                shutdown_rx.clone(),
-            );
+        if let Err(err) = crate::kiro_gateway::refresh_cached_status(&kiro_gateway).await {
+            tracing::warn!("Initial Kiro cached status refresh failed: {err:#}");
         }
+        crate::kiro_gateway::spawn_status_refresher(kiro_gateway.clone(), shutdown_rx.clone());
+        crate::llm_gateway::spawn_account_refresh_task(
+            account_pool,
+            upstream_proxy_registry.clone(),
+            shutdown_rx.clone(),
+        );
 
         spawn_table_compactor(
             TableCompactorStores {
@@ -366,10 +409,12 @@ impl AppState {
             article_request_store,
             article_request_worker_tx,
             article_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
-            llm_gateway_token_request_submit_guard: Arc::new(RwLock::new(HashMap::new())),
+            llm_gateway_public_submit_guard: Arc::new(RwLock::new(HashMap::new())),
             interactive_store,
             llm_gateway_store,
+            upstream_proxy_registry,
             llm_gateway,
+            kiro_gateway,
             email_notifier,
             behavior_event_tx,
             shutdown_tx,

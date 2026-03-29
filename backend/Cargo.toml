@@ -35,3 +35,8 @@ memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
 base64 = "0.22.1"
+bytes = "1.10"
+crc = "3.3"
+hex = "0.4"
+rusqlite = { version = "0.37", features = ["bundled"] }
+uuid = { version = "1.18", features = ["v4"] }

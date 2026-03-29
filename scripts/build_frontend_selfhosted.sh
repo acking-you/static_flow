@@ -24,6 +24,12 @@ NPM_CACHE_DIR="${NPM_CACHE_DIR:-$ROOT_DIR/tmp/npm-cache}"
 log() { echo "[build-selfhosted] $*"; }
 fail() { echo "[build-selfhosted][ERROR] $*" >&2; exit 1; }
 
+# Newer trunk versions parse NO_COLOR as a boolean option and reject legacy
+# numeric values like "1". Normalize common truthy values before invoking trunk.
+if [[ "${NO_COLOR:-}" == "1" ]]; then
+  export NO_COLOR="true"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
