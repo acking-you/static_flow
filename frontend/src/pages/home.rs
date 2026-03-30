@@ -33,6 +33,7 @@ pub fn home_page() -> Html {
     let recent_songs = use_state(Vec::<SongListItem>::new);
     let songs_loaded = use_state(|| false);
     let active_page = use_state(|| 0usize);
+    let has_swiped = use_state(|| false);
     let slider_ref = use_node_ref();
 
     {
@@ -130,10 +131,12 @@ pub fn home_page() -> Html {
     {
         let slider_ref = slider_ref.clone();
         let active_page = active_page.clone();
+        let has_swiped = has_swiped.clone();
         use_effect_with((), move |_| {
             let closure = {
                 let slider_ref = slider_ref.clone();
                 let active_page = active_page.clone();
+                let has_swiped = has_swiped.clone();
                 Closure::<dyn Fn()>::new(move || {
                     if let Some(el) = slider_ref.cast::<HtmlElement>() {
                         let scroll_left = el.scroll_left() as f64;
@@ -143,74 +146,30 @@ pub fn home_page() -> Html {
                             if page != *active_page {
                                 active_page.set(page);
                             }
+                            if page == 1 {
+                                has_swiped.set(true);
+                            }
                         }
                     }
                 })
             };
 
             if let Some(el) = slider_ref.cast::<HtmlElement>() {
-                let _ =
-                    el.add_event_listener_with_callback("scroll", closure.as_ref().unchecked_ref());
+                let _ = el.add_event_listener_with_callback(
+                    "scrollend",
+                    closure.as_ref().unchecked_ref(),
+                );
             }
             closure.forget();
             || ()
         });
     }
 
-    // Mouse drag for PC
-    let is_dragging = use_state(|| false);
-    let drag_start_x = use_state(|| 0i32);
-    let drag_start_scroll = use_state(|| 0i32);
-
-    let on_mouse_down = {
-        let slider_ref = slider_ref.clone();
-        let is_dragging = is_dragging.clone();
-        let drag_start_x = drag_start_x.clone();
-        let drag_start_scroll = drag_start_scroll.clone();
-        Callback::from(move |e: MouseEvent| {
-            if let Some(el) = slider_ref.cast::<HtmlElement>() {
-                is_dragging.set(true);
-                drag_start_x.set(e.client_x());
-                drag_start_scroll.set(el.scroll_left());
-                let _ = el.class_list().add_1("dragging");
-            }
-        })
-    };
-
-    let on_mouse_move = {
-        let slider_ref = slider_ref.clone();
-        let is_dragging = is_dragging.clone();
-        let drag_start_x = drag_start_x.clone();
-        let drag_start_scroll = drag_start_scroll.clone();
-        Callback::from(move |e: MouseEvent| {
-            if !*is_dragging {
-                return;
-            }
-            let dx = e.client_x() - *drag_start_x;
-            if let Some(el) = slider_ref.cast::<HtmlElement>() {
-                el.set_scroll_left(*drag_start_scroll - dx);
-            }
-        })
-    };
-
-    let on_mouse_up = {
-        let slider_ref = slider_ref.clone();
-        let is_dragging = is_dragging.clone();
-        Callback::from(move |_: MouseEvent| {
-            if *is_dragging {
-                is_dragging.set(false);
-                if let Some(el) = slider_ref.cast::<HtmlElement>() {
-                    let _ = el.class_list().remove_1("dragging");
-                }
-            }
-        })
-    };
-
-    let on_mouse_leave = on_mouse_up.clone();
-
     let on_dot_click = {
         let slider_ref = slider_ref.clone();
+        let active_page = active_page.clone();
         Callback::from(move |page: usize| {
+            active_page.set(page);
             if let Some(el) = slider_ref.cast::<HtmlElement>() {
                 let width = el.client_width();
                 let opts = web_sys::ScrollToOptions::new();
@@ -351,7 +310,9 @@ pub fn home_page() -> Html {
         <div class={classes!(
             "relative",
             "w-full",
+            "min-w-0",
             "min-h-screen",
+            "overflow-x-hidden",
             "bg-[var(--bg)]",
         )}>
             <div class="page-dots">
@@ -367,12 +328,8 @@ pub fn home_page() -> Html {
             <div
                 class="page-slider"
                 ref={slider_ref.clone()}
-                onmousedown={on_mouse_down}
-                onmousemove={on_mouse_move}
-                onmouseup={on_mouse_up}
-                onmouseleave={on_mouse_leave}
             >
-            <div class={if *active_page == 0 { "page-slide" } else { "page-slide inactive" }}>
+            <div class="page-slide">
             <div class={classes!("w-full", "pb-6")}>
                 <section class={classes!(
                     "relative",
@@ -521,6 +478,44 @@ pub fn home_page() -> Html {
                                 </Link<Route>>
                             </div>
 
+                            // Social Links
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_SOCIAL }</span>
+                            </div>
+                            <div class={classes!("flex", "gap-3", "mt-3", "ml-8")}>
+                                <a
+                                    href="https://github.com/ACking-you"
+                                    target="_blank" rel="noopener noreferrer"
+                                    aria-label={common_text::GITHUB}
+                                    class={social_button_class.clone()}
+                                >
+                                    <i class={classes!("fa-brands", "fa-github-alt", "text-lg")} aria-hidden="true"></i>
+                                    <span class={classes!("sr-only")}>{ common_text::GITHUB }</span>
+                                </a>
+                                <a
+                                    href="https://space.bilibili.com/24264499"
+                                    target="_blank" rel="noopener noreferrer"
+                                    aria-label={common_text::BILIBILI}
+                                    class={social_button_class.clone()}
+                                >
+                                    <svg viewBox="0 0 24 24" role="img" aria-hidden="true" focusable="false" width="20" height="20">
+                                        <path
+                                            fill="currentColor"
+                                            d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"
+                                        />
+                                    </svg>
+                                    <span class={classes!("sr-only")}>{ common_text::BILIBILI }</span>
+                                </a>
+                            </div>
+
+                            // GitHub Wrapped
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
+                            </div>
+                            <GithubWrappedSelector />
+
                             // Blinking cursor
                             <div class="terminal-line" style="margin-top: 1.5rem;">
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
@@ -619,7 +614,7 @@ pub fn home_page() -> Html {
                 </section>
             </div>
             </div>
-            <div class={if *active_page == 1 { "page-slide" } else { "page-slide inactive" }}>
+            <div class="page-slide">
             <div class={classes!("w-full", "pb-6")}>
                 <section class={classes!(
                     "relative",
@@ -810,44 +805,6 @@ pub fn home_page() -> Html {
                                 }) }
                             </div>
 
-                            // Section 7: Social + GitHub Wrapped
-                            <div class="terminal-line" style="margin-top: 1.5rem;">
-                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                <span class="terminal-content">{ t::CMD_SHOW_SOCIAL }</span>
-                            </div>
-                            <div class={classes!("flex", "gap-3", "mt-3", "ml-8")}>
-                                <a
-                                    href="https://github.com/ACking-you"
-                                    target="_blank" rel="noopener noreferrer"
-                                    aria-label={common_text::GITHUB}
-                                    class={social_button_class.clone()}
-                                >
-                                    <i class={classes!("fa-brands", "fa-github-alt", "text-lg")} aria-hidden="true"></i>
-                                    <span class={classes!("sr-only")}>{ common_text::GITHUB }</span>
-                                </a>
-                                <a
-                                    href="https://space.bilibili.com/24264499"
-                                    target="_blank" rel="noopener noreferrer"
-                                    aria-label={common_text::BILIBILI}
-                                    class={social_button_class.clone()}
-                                >
-                                    <svg viewBox="0 0 24 24" role="img" aria-hidden="true" focusable="false" width="20" height="20">
-                                        <path
-                                            fill="currentColor"
-                                            d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"
-                                        />
-                                    </svg>
-                                    <span class={classes!("sr-only")}>{ common_text::BILIBILI }</span>
-                                </a>
-                            </div>
-
-                            // GitHub Wrapped
-                            <div class="terminal-line" style="margin-top: 1.5rem;">
-                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
-                            </div>
-                            <GithubWrappedSelector />
-
                             // Blinking cursor
                             <div class="terminal-line" style="margin-top: 1.5rem;">
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
@@ -859,6 +816,11 @@ pub fn home_page() -> Html {
             </div>
             </div>
             </div>
+            if *active_page == 0 && !*has_swiped {
+                <div class="swipe-hint" aria-hidden="true">
+                    <i class="fas fa-chevron-right swipe-hint-chevron"></i>
+                </div>
+            }
         </div>
     }
 }

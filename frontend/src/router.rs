@@ -305,7 +305,7 @@ fn app_router_inner() -> Html {
                 <Spotlight />
             }
             <Header />
-            <div class="flex-1 pt-[var(--space-sm)]">
+            <div class="flex-1 min-w-0 pt-[var(--space-sm)]">
                 <Switch<Route> render={switch} />
             </div>
             <Footer />

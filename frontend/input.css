@@ -6146,33 +6146,34 @@ html {
      ========================================== */
   .page-slider {
     display: flex;
-    overflow-x: auto;
-    scroll-snap-type: x mandatory;
-    scroll-behavior: smooth;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    cursor: grab;
-  }
-  .page-slider::-webkit-scrollbar {
-    display: none;
-  }
-  .page-slider.dragging {
-    cursor: grabbing;
-    scroll-behavior: auto;
-    user-select: none;
+    flex-direction: column;
+    width: 100%;
   }
 
   .page-slide {
-    min-width: 100%;
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
-    flex-shrink: 0;
-    transition: opacity 0.5s var(--ease-spring),
-                transform 0.5s var(--ease-spring);
+    width: 100%;
   }
-  .page-slide.inactive {
-    opacity: 0.6;
-    transform: scale(0.97);
+
+  /* Desktop: horizontal scroll-snap */
+  @media (min-width: 768px) {
+    .page-slider {
+      flex-direction: row;
+      overflow: hidden;
+      overflow-x: scroll;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .page-slider::-webkit-scrollbar {
+      display: none;
+    }
+    .page-slide {
+      min-width: 100%;
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      flex-shrink: 0;
+    }
   }
 
   /* ==========================================
@@ -6184,7 +6185,7 @@ html {
     left: 50%;
     transform: translateX(-50%);
     z-index: 50;
-    display: flex;
+    display: none;
     align-items: center;
     gap: 0.625rem;
     padding: 0.5rem 0.875rem;
@@ -6193,6 +6194,12 @@ html {
     backdrop-filter: blur(var(--acrylic-blur)) saturate(var(--acrylic-saturate));
     border: 1px solid rgba(var(--primary-rgb), 0.15);
     box-shadow: var(--shadow-4);
+  }
+
+  @media (min-width: 768px) {
+    .page-dots {
+      display: flex;
+    }
   }
 
   .page-dot {
@@ -6229,9 +6236,49 @@ html {
     box-shadow: 0 0 10px rgba(var(--primary-rgb), 0.7);
   }
 
-  /* Responsive */
-  @media (max-width: 767px) {
-    .page-dots {
-      bottom: 1rem;
+  /* ==========================================
+     Swipe Hint — right-edge pulsing chevron
+     ========================================== */
+  .swipe-hint {
+    position: fixed;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 40;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 3.5rem;
+    border-radius: 0.75rem 0 0 0.75rem;
+    background: linear-gradient(to right, rgba(var(--primary-rgb), 0.15), rgba(var(--primary-rgb), 0.3));
+    pointer-events: none;
+    animation: swipe-hint-fade 2s ease-in-out infinite;
+  }
+
+  .swipe-hint-chevron {
+    color: var(--primary);
+    font-size: 0.875rem;
+    animation: swipe-hint-bounce 1.2s ease-in-out infinite;
+  }
+
+  @keyframes swipe-hint-fade {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  @keyframes swipe-hint-bounce {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(4px); }
+  }
+
+  [data-theme="dark"] .swipe-hint,
+  [theme="dark"] .swipe-hint {
+    background: linear-gradient(to right, rgba(var(--primary-rgb), 0.2), rgba(var(--primary-rgb), 0.4));
+  }
+
+  @media (min-width: 768px) {
+    .swipe-hint {
+      display: flex;
     }
   }
