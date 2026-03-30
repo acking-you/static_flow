@@ -4,13 +4,21 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
+    api::{self, SongListItem},
     components::{
+        article_card::ArticleCard,
         icons::{Icon, IconName},
         image_with_loading::ImageWithLoading,
     },
     i18n::current::{common as common_text, home as t},
+    models::ArticleListItem,
     router::Route,
 };
+
+fn format_duration_short(ms: u64) -> String {
+    let s = ms / 1000;
+    format!("{}:{:02}", s / 60, s % 60)
+}
 
 #[function_component(HomePage)]
 pub fn home_page() -> Html {
@@ -20,6 +28,10 @@ pub fn home_page() -> Html {
     let total_music = use_state(|| 0usize);
     let total_images = use_state(|| 0usize);
     let stats_loaded = use_state(|| false);
+    let recent_articles = use_state(Vec::<ArticleListItem>::new);
+    let articles_loaded = use_state(|| false);
+    let recent_songs = use_state(Vec::<SongListItem>::new);
+    let songs_loaded = use_state(|| false);
 
     {
         let total_articles = total_articles.clone();
@@ -28,39 +40,75 @@ pub fn home_page() -> Html {
         let total_music = total_music.clone();
         let total_images = total_images.clone();
         let stats_loaded = stats_loaded.clone();
+        let recent_articles = recent_articles.clone();
+        let articles_loaded = articles_loaded.clone();
+        let recent_songs = recent_songs.clone();
+        let songs_loaded = songs_loaded.clone();
         use_effect_with((), move |_| {
-            wasm_bindgen_futures::spawn_local(async move {
-                match crate::api::fetch_site_stats().await {
-                    Ok(stats) => {
-                        total_articles.set(stats.total_articles);
-                        total_tags.set(stats.total_tags);
-                        total_categories.set(stats.total_categories);
-                    },
-                    Err(e) => {
-                        console::error_1(&format!("Failed to fetch home stats: {}", e).into());
-                    },
-                }
-
-                match crate::api::fetch_songs(Some(1), Some(0), None, None, None).await {
-                    Ok(resp) => {
-                        total_music.set(resp.total);
-                    },
-                    Err(e) => {
-                        console::error_1(&format!("Failed to fetch music stats: {}", e).into());
-                    },
-                }
-
-                match crate::api::fetch_images_page(Some(1), Some(0)).await {
-                    Ok(resp) => {
-                        total_images.set(resp.total);
-                    },
-                    Err(e) => {
-                        console::error_1(&format!("Failed to fetch image stats: {}", e).into());
-                    },
-                }
-
-                stats_loaded.set(true);
-            });
+            {
+                let total_articles = total_articles.clone();
+                let total_tags = total_tags.clone();
+                let total_categories = total_categories.clone();
+                let stats_loaded = stats_loaded.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_site_stats().await {
+                        Ok(stats) => {
+                            total_articles.set(stats.total_articles);
+                            total_tags.set(stats.total_tags);
+                            total_categories.set(stats.total_categories);
+                        },
+                        Err(e) => {
+                            console::error_1(&format!("Failed to fetch home stats: {e}").into());
+                        },
+                    }
+                    stats_loaded.set(true);
+                });
+            }
+            {
+                let total_images = total_images.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_images_page(Some(1), Some(0)).await {
+                        Ok(resp) => total_images.set(resp.total),
+                        Err(e) => {
+                            console::error_1(&format!("Failed to fetch image stats: {e}").into());
+                        },
+                    }
+                });
+            }
+            {
+                let total_music = total_music.clone();
+                let recent_songs = recent_songs.clone();
+                let songs_loaded = songs_loaded.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_songs(Some(4), Some(0), None, None, None).await {
+                        Ok(resp) => {
+                            total_music.set(resp.total);
+                            recent_songs.set(resp.songs);
+                        },
+                        Err(e) => {
+                            console::error_1(&format!("Failed to fetch songs: {e}").into());
+                        },
+                    }
+                    songs_loaded.set(true);
+                });
+            }
+            {
+                let recent_articles = recent_articles.clone();
+                let articles_loaded = articles_loaded.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_articles(None, None, Some(4), Some(0)).await {
+                        Ok(page) => {
+                            recent_articles.set(page.articles);
+                        },
+                        Err(e) => {
+                            console::error_1(
+                                &format!("Failed to fetch recent articles: {e}").into(),
+                            );
+                        },
+                    }
+                    articles_loaded.set(true);
+                });
+            }
             || ()
         });
     }
@@ -101,70 +149,6 @@ pub fn home_page() -> Html {
             let _ = crate::navigation_context::navigate_spa_to(&staticflow_search_href);
         })
     };
-
-    let social_button_class = classes!(
-        "btn-fluent-icon",
-        "border",
-        "border-[var(--border)]",
-        "hover:bg-[var(--surface-alt)]",
-        "hover:text-[var(--primary)]",
-        "transition-all",
-        "duration-100",
-        "ease-[var(--ease-snap)]"
-    );
-
-    let _tech_chip_class = classes!(
-        "group",
-        "inline-flex",
-        "items-center",
-        "gap-3",
-        "relative",
-        "overflow-hidden",
-        "rounded-lg",
-        "border",
-        "border-[var(--border)]",
-        "bg-[var(--surface)]",
-        "text-[var(--text)]",
-        "px-4",
-        "py-3",
-        "shadow-[var(--shadow-2)]",
-        "liquid-glass-subtle",
-        "shimmer-hover",
-        "transform-gpu",
-        "transition-all",
-        "duration-200",
-        "ease-[var(--ease-snap)]",
-        "hover:bg-[var(--surface-alt)]",
-        "hover:text-[var(--primary)]",
-        "hover:shadow-[var(--shadow-4)]",
-        "hover:scale-105"
-    );
-
-    let _tech_icon_wrapper_class = classes!(
-        "flex",
-        "items-center",
-        "justify-center",
-        "w-9",
-        "h-9",
-        "rounded",
-        "bg-[var(--surface-alt)]",
-        "text-[var(--primary)]",
-        "transition-all",
-        "duration-150",
-        "ease-[var(--ease-snap)]"
-    );
-
-    let _tech_label_class = classes!(
-        "text-sm",
-        "font-semibold",
-        "whitespace-nowrap",
-        "text-[var(--text)]",
-        "transition-colors",
-        "duration-150",
-        "opacity-90",
-        "group-hover:opacity-100",
-        "group-hover:text-[var(--primary)]"
-    );
 
     let tech_stack = [
         (
@@ -243,6 +227,18 @@ pub fn home_page() -> Html {
         if *avatar_hovered { "hero-avatar--spinning" } else { "" }
     );
 
+    // --- social button class (reused in Section 7) ---
+    let social_button_class = classes!(
+        "btn-fluent-icon",
+        "border",
+        "border-[var(--border)]",
+        "hover:bg-[var(--surface-alt)]",
+        "hover:text-[var(--primary)]",
+        "transition-all",
+        "duration-100",
+        "ease-[var(--ease-snap)]"
+    );
+
     html! {
         <div class={classes!(
             "relative",
@@ -252,355 +248,465 @@ pub fn home_page() -> Html {
             "overflow-x-hidden",
             "pb-8"
         )}>
-            <div class={classes!("w-full", "pb-6") }>
+            <div class={classes!("w-full", "pb-6")}>
                 <section class={classes!(
-                        "relative",
-                        "py-20",
-                        "md:py-24",
-                        "px-4",
-                        "max-[767px]:pb-16",
-                        "max-w-5xl",
-                        "mx-auto"
+                    "relative",
+                    "py-20",
+                    "md:py-24",
+                    "px-4",
+                    "max-[767px]:pb-16",
+                    "max-w-5xl",
+                    "mx-auto"
+                )}>
+                    <div class={classes!(
+                        "w-full",
+                        "mx-auto",
+                        "px-[clamp(1rem,4vw,2rem)]"
                     )}>
-                        <div class={classes!(
-                            "w-full",
-                            "mx-auto",
-                            "px-[clamp(1rem,4vw,2rem)]"
-                        )}>
-                            // Terminal Hero - Terminal Style Interface
-                            <div class="terminal-hero">
-                                // Terminal Header with macOS-style dots
-                                <div class="terminal-header">
-                                    <span class="terminal-dot terminal-dot-red"></span>
-                                    <span class="terminal-dot terminal-dot-yellow"></span>
-                                    <span class="terminal-dot terminal-dot-green"></span>
-                                    <span class="terminal-title">{ t::TERMINAL_TITLE }</span>
-                                </div>
-
-                                // Avatar displayed as command output
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_AVATAR }</span>
-                                </div>
-                                <div
-                                    class={classes!("flex", "justify-center", "my-6")}
-                                    onmouseover={on_avatar_enter.clone()}
-                                    onmouseout={on_avatar_leave.clone()}
-                                >
-                                    <div class={avatar_container_class.clone()}>
-                                        {
-                                            if !*avatar_loaded {
-                                                html! {
-                                                    <div class={classes!(
-                                                        "absolute",
-                                                        "inset-0",
-                                                        "rounded-full",
-                                                        "bg-gradient-to-br",
-                                                        "from-[var(--surface-alt)]",
-                                                        "to-[var(--surface)]",
-                                                        "animate-pulse"
-                                                    )} />
-                                                }
-                                            } else {
-                                                html! {}
-                                            }
-                                        }
-                                        <Link<Route>
-                                            to={Route::Posts}
-                                            classes={classes!("inline-flex", "w-full", "h-full", "justify-center", "items-center")}
-                                        >
-                                            <img
-                                                src={crate::config::asset_path("static/avatar.jpg")}
-                                                alt={t::AVATAR_ALT}
-                                                loading="eager"
-                                                onload={on_avatar_load}
-                                                class={avatar_image_class.clone()}
-                                            />
-                                            <span class={classes!("sr-only")}>{ t::AVATAR_LINK_SR }</span>
-                                        </Link<Route>>
-                                    </div>
-                                </div>
-
-                                // Introduction as terminal commands
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_MOTTO }</span>
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
-                                    <span class="terminal-content">{ t::MOTTO }</span>
-                                </div>
-
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_README }</span>
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
-                                    <span class="terminal-content">{ t::INTRO }</span>
-                                </div>
-
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_LLM_ACCESS }</span>
-                                </div>
-                                <div class={classes!(
-                                    "mt-4",
-                                    "ml-8",
-                                    "max-w-3xl",
-                                    "rounded-[1rem]",
-                                    "border",
-                                    "border-[var(--border)]",
-                                    "bg-[var(--surface)]/85",
-                                    "px-5",
-                                    "py-4",
-                                    "shadow-[var(--shadow-2)]"
-                                )}>
-                                    <p class={classes!("m-0", "text-sm", "leading-7", "text-[var(--muted)]")}>
-                                        { t::LLM_ACCESS_HINT }
-                                    </p>
-                                    <div class={classes!("mt-3", "flex", "flex-wrap", "gap-2")}>
-                                        <Link<Route>
-                                            to={Route::LlmAccess}
-                                            classes={classes!("btn-terminal", "btn-terminal-accent")}
-                                        >
-                                            <i class="fas fa-key"></i>
-                                            { t::BTN_LLM_ACCESS }
-                                        </Link<Route>>
-                                        <Link<Route>
-                                            to={Route::KiroAccess}
-                                            classes={classes!("btn-terminal")}
-                                        >
-                                            <i class="fas fa-bolt"></i>
-                                            { "Kiro Access" }
-                                        </Link<Route>>
-                                    </div>
-                                </div>
-
-                                // Quick navigation buttons styled as terminal commands
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_NAVIGATION }</span>
-                                </div>
-                                <div class={classes!(
-                                    "flex",
-                                    "flex-wrap",
-                                    "gap-2",
-                                    "mt-4",
-                                    "ml-8"
-                                )}>
-                                    <Link<Route>
-                                        to={Route::LatestArticles}
-                                        classes={classes!("btn-terminal", "btn-terminal-primary")}
-                                    >
-                                        <i class="fas fa-arrow-right"></i>
-                                        { t::BTN_VIEW_ARTICLES }
-                                    </Link<Route>>
-                                    <Link<Route>
-                                        to={Route::Posts}
-                                        classes={classes!("btn-terminal")}
-                                    >
-                                        <i class="fas fa-archive"></i>
-                                        { t::BTN_ARCHIVE }
-                                    </Link<Route>>
-                                    <Link<Route>
-                                        to={Route::MediaAudio}
-                                        classes={classes!("btn-terminal", "btn-terminal-accent")}
-                                    >
-                                        <i class="fas fa-headphones"></i>
-                                        { t::BTN_MEDIA_AUDIO }
-                                    </Link<Route>>
-                                    <Link<Route>
-                                        to={Route::Admin}
-                                        classes={classes!("btn-terminal")}
-                                    >
-                                        <i class="fas fa-sliders"></i>
-                                        { "Admin" }
-                                    </Link<Route>>
-                                    <a
-                                        href={staticflow_search_href.clone()}
-                                        onclick={on_staticflow_search_click}
-                                        class={classes!(
-                                            "btn-fluent-search-hero",
-                                            "no-underline"
-                                        )}
-                                    >
-                                        <i class="fas fa-search"></i>
-                                        { t::BTN_SEARCH_STATICFLOW }
-                                    </a>
-                                </div>
-
-                                // Media Hub entry
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_MEDIA_HUB }</span>
-                                </div>
-                                <div class={classes!("flex", "flex-wrap", "gap-2", "mt-3", "ml-8")}>
-                                    <Link<Route>
-                                        to={Route::MediaVideo}
-                                        classes={classes!("btn-terminal")}
-                                    >
-                                        <i class="fas fa-video"></i>
-                                        { t::BTN_MEDIA_VIDEO }
-                                    </Link<Route>>
-                                    <Link<Route>
-                                        to={Route::MediaAudio}
-                                        classes={classes!("btn-terminal")}
-                                    >
-                                        <i class="fas fa-headphones"></i>
-                                        { t::BTN_MEDIA_AUDIO }
-                                    </Link<Route>>
-                                    <Link<Route>
-                                        to={Route::MediaImage}
-                                        classes={classes!("btn-terminal")}
-                                    >
-                                        <i class="fas fa-image"></i>
-                                        { t::BTN_MEDIA_IMAGE }
-                                    </Link<Route>>
-                                </div>
-
-                                // Social links as terminal output
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_SOCIAL }</span>
-                                </div>
-                                <div class={classes!("flex", "gap-3", "mt-3", "ml-8")}>
-                                    <a
-                                        href="https://github.com/ACking-you"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        aria-label={common_text::GITHUB}
-                                        class={social_button_class.clone()}
-                                    >
-                                        <i class={classes!("fa-brands", "fa-github-alt", "text-lg")} aria-hidden="true"></i>
-                                        <span class={classes!("sr-only")}>{ common_text::GITHUB }</span>
-                                    </a>
-                                    <a
-                                        href="https://space.bilibili.com/24264499"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        aria-label={common_text::BILIBILI}
-                                        class={social_button_class.clone()}
-                                    >
-                                        <svg
-                                            viewBox="0 0 24 24"
-                                            role="img"
-                                            aria-hidden="true"
-                                            focusable="false"
-                                            width="20"
-                                            height="20"
-                                        >
-                                            <path
-                                                fill="currentColor"
-                                                d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"
-                                            />
-                                        </svg>
-                                        <span class={classes!("sr-only")}>{ common_text::BILIBILI }</span>
-                                    </a>
-                                </div>
-
-                                // GitHub Wrapped - Featured Entry with Year Selector
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
-                                </div>
-                                <GithubWrappedSelector />
-
-                                // Blinking cursor at the end
-                                <div class="terminal-line" style="margin-top: 1.5rem;">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-cursor"></span>
-                                </div>
+                        // Section 1: Hero Terminal
+                        <div class="terminal-hero">
+                            <div class="terminal-header">
+                                <span class="terminal-dot terminal-dot-red"></span>
+                                <span class="terminal-dot terminal-dot-yellow"></span>
+                                <span class="terminal-dot terminal-dot-green"></span>
+                                <span class="terminal-title">{ t::TERMINAL_TITLE }</span>
                             </div>
 
-                            // System Info Panels (Stats as system metrics)
-                            <div class={classes!("mt-12", "w-full")}>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                    <span class="terminal-content">{ t::CMD_SHOW_STATS }</span>
-                                </div>
-                                <div class={classes!(
-                                    "mt-4",
-                                    "grid",
-                                    "gap-3",
-                                    "grid-cols-2",
-                                    "sm:grid-cols-3",
-                                    "lg:grid-cols-5",
-                                    "w-full"
-                                )}>
-                                    { for stats.into_iter().map(|(icon, value, label, route)| {
-                                        let panel_content = html! {
-                                            <div class="system-panel-compact">
-                                                <div class={classes!(
-                                                    "inline-flex",
-                                                    "h-10",
-                                                    "w-10",
-                                                    "items-center",
-                                                    "justify-center",
-                                                    "rounded-lg",
-                                                    "border",
-                                                    "border-[var(--border)]",
-                                                    "bg-[var(--surface-alt)]",
-                                                    "text-[var(--primary)]"
-                                                )}>
-                                                    <Icon name={icon} size={20} />
-                                                </div>
-                                                <div class={classes!("text-[1.75rem]", "font-bold", "leading-none", "text-[var(--primary)]")}>
-                                                    if *stats_loaded {
-                                                        { value.clone() }
-                                                    } else {
-                                                        <div class="h-7 w-10 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
-                                                    }
-                                                </div>
-                                                <div class={classes!("text-[0.72rem]", "uppercase", "tracking-[0.15em]", "text-[var(--muted)]")}>{ label.clone() }</div>
-                                            </div>
-                                        };
-
-                                        if let Some(r) = route {
+                            // Avatar
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_AVATAR }</span>
+                            </div>
+                            <div
+                                class={classes!("flex", "justify-center", "my-6")}
+                                onmouseover={on_avatar_enter.clone()}
+                                onmouseout={on_avatar_leave.clone()}
+                            >
+                                <div class={avatar_container_class.clone()}>
+                                    {
+                                        if !*avatar_loaded {
                                             html! {
-                                                <Link<Route> to={r} classes={classes!("no-underline")}>
-                                                    { panel_content }
-                                                </Link<Route>>
+                                                <div class={classes!(
+                                                    "absolute", "inset-0", "rounded-full",
+                                                    "bg-gradient-to-br",
+                                                    "from-[var(--surface-alt)]",
+                                                    "to-[var(--surface)]",
+                                                    "animate-pulse"
+                                                )} />
                                             }
                                         } else {
-                                            panel_content
+                                            html! {}
                                         }
-                                    }) }
+                                    }
+                                    <Link<Route>
+                                        to={Route::Posts}
+                                        classes={classes!("inline-flex", "w-full", "h-full", "justify-center", "items-center")}
+                                    >
+                                        <img
+                                            src={crate::config::asset_path("static/avatar.jpg")}
+                                            alt={t::AVATAR_ALT}
+                                            loading="eager"
+                                            onload={on_avatar_load}
+                                            class={avatar_image_class.clone()}
+                                        />
+                                        <span class={classes!("sr-only")}>{ t::AVATAR_LINK_SR }</span>
+                                    </Link<Route>>
                                 </div>
                             </div>
+                            // Motto + README
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_MOTTO }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
+                                <span class="terminal-content">{ t::MOTTO }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_README }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
+                                <span class="terminal-content">{ t::INTRO }</span>
+                            </div>
 
-                            // Tech Stack as Command List
-                            <div class={classes!("mt-12", "w-full")}>
-                                <div class="command-list">
-                                    <div class="command-list-header">
-                                        <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                        <span class="command-list-title">{ t::POWERED_BY }</span>
-                                    </div>
-                                    { for tech_stack.iter().map(|(logo, name, href)| html! {
-                                        <a
-                                            class="command-item"
-                                            href={(*href).to_string()}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            title={*name}
-                                            aria-label={(*name).to_string()}
-                                        >
-                                            <ImageWithLoading
-                                                src={logo.clone()}
-                                                alt={*name}
-                                                loading={Some(AttrValue::from("lazy"))}
-                                                class="command-item-icon"
-                                                container_class={classes!("inline-flex")}
-                                            />
-                                            <span class="command-item-name">{ *name }</span>
-                                            <span class="command-item-arrow">{ common_text::ARROW_RIGHT }</span>
-                                        </a>
-                                    }) }
+                            // Open source inline
+                            <div class="terminal-line" style="margin-top: 0.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_OUTPUT }</span>
+                                <span class="terminal-content">
+                                    { t::OPEN_SOURCE_INLINE }
+                                    { " " }
+                                    <a href="https://github.com/acking-you/static_flow"
+                                       target="_blank" rel="noopener noreferrer"
+                                       class={classes!("underline", "text-[var(--primary)]", "font-semibold")}>
+                                        { t::OPEN_SOURCE_GITHUB_CTA }
+                                    </a>
+                                </span>
+                            </div>
+
+                            // CTA buttons (flat, no tabs)
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_NAVIGATION }</span>
+                            </div>
+                            <div class={classes!("flex", "flex-wrap", "gap-2", "mt-4", "ml-8")}>
+                                <Link<Route>
+                                    to={Route::LatestArticles}
+                                    classes={classes!("btn-terminal", "btn-terminal-primary")}
+                                >
+                                    <i class="fas fa-arrow-right"></i>
+                                    { t::BTN_VIEW_ARTICLES }
+                                </Link<Route>>
+                                <Link<Route>
+                                    to={Route::Posts}
+                                    classes={classes!("btn-terminal")}
+                                >
+                                    <i class="fas fa-archive"></i>
+                                    { t::BTN_ARCHIVE }
+                                </Link<Route>>
+                                <Link<Route>
+                                    to={Route::MediaAudio}
+                                    classes={classes!("btn-terminal", "btn-terminal-accent")}
+                                >
+                                    <i class="fas fa-headphones"></i>
+                                    { t::BTN_MEDIA_AUDIO }
+                                </Link<Route>>
+                                <Link<Route>
+                                    to={Route::MediaImage}
+                                    classes={classes!("btn-terminal")}
+                                >
+                                    <i class="fas fa-image"></i>
+                                    { t::BTN_IMAGE }
+                                </Link<Route>>
+                                <a
+                                    href={staticflow_search_href.clone()}
+                                    onclick={on_staticflow_search_click}
+                                    class={classes!("btn-fluent-search-hero", "no-underline")}
+                                >
+                                    <i class="fas fa-search"></i>
+                                    { t::BTN_SEARCH_STATICFLOW }
+                                </a>
+                                <Link<Route>
+                                    to={Route::Admin}
+                                    classes={classes!("btn-terminal")}
+                                >
+                                    <i class="fas fa-sliders"></i>
+                                    { "Admin" }
+                                </Link<Route>>
+                            </div>
+
+                            // Blinking cursor
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-cursor"></span>
+                            </div>
+                        </div>
+                        // Section 2: LLM/Kiro Access Banner
+                        <div class={classes!(
+                            "mt-8",
+                            "w-full",
+                            "rounded-[1rem]",
+                            "border",
+                            "border-[var(--border)]",
+                            "border-l-[4px]",
+                            "border-l-[var(--primary)]",
+                            "bg-[var(--surface)]/85",
+                            "px-5",
+                            "py-4",
+                            "shadow-[var(--shadow-2)]"
+                        )}>
+                            <div class={classes!(
+                                "flex", "flex-col", "md:flex-row",
+                                "md:items-center", "md:justify-between", "gap-3"
+                            )}>
+                                <p class={classes!("m-0", "text-sm", "leading-7", "text-[var(--muted)]")}>
+                                    { t::LLM_ACCESS_HINT }
+                                </p>
+                                <div class={classes!("flex", "flex-wrap", "gap-2", "shrink-0")}>
+                                    <Link<Route>
+                                        to={Route::LlmAccess}
+                                        classes={classes!("btn-terminal", "btn-terminal-accent")}
+                                    >
+                                        <i class="fas fa-key"></i>
+                                        { t::BTN_LLM_ACCESS }
+                                    </Link<Route>>
+                                    <Link<Route>
+                                        to={Route::KiroAccess}
+                                        classes={classes!("btn-terminal")}
+                                    >
+                                        <i class="fas fa-bolt"></i>
+                                        { "Kiro Access" }
+                                    </Link<Route>>
                                 </div>
                             </div>
                         </div>
-                    </section>
-                </div>
+                        // Section 3: Stats Bar
+                        <div class={classes!("mt-8", "w-full")}>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_STATS }</span>
+                            </div>
+                            <div class={classes!(
+                                "mt-4", "grid", "gap-3", "grid-cols-2",
+                                "sm:grid-cols-3", "lg:grid-cols-5", "w-full"
+                            )}>
+                                { for stats.into_iter().map(|(icon, value, label, route)| {
+                                    let panel_content = html! {
+                                        <div class="system-panel-compact">
+                                            <div class={classes!(
+                                                "inline-flex", "h-10", "w-10",
+                                                "items-center", "justify-center",
+                                                "rounded-lg", "border", "border-[var(--border)]",
+                                                "bg-[var(--surface-alt)]", "text-[var(--primary)]"
+                                            )}>
+                                                <Icon name={icon} size={20} />
+                                            </div>
+                                            <div class={classes!(
+                                                "text-[1.75rem]", "font-bold",
+                                                "leading-none", "text-[var(--primary)]"
+                                            )}>
+                                                if *stats_loaded {
+                                                    { value.clone() }
+                                                } else {
+                                                    <div class="h-7 w-10 rounded bg-[var(--surface-alt)] animate-pulse inline-block" />
+                                                }
+                                            </div>
+                                            <div class={classes!(
+                                                "text-[0.72rem]", "uppercase",
+                                                "tracking-[0.15em]", "text-[var(--muted)]"
+                                            )}>{ label.clone() }</div>
+                                        </div>
+                                    };
+                                    if let Some(r) = route {
+                                        html! {
+                                            <Link<Route> to={r} classes={classes!("no-underline")}>
+                                                { panel_content }
+                                            </Link<Route>>
+                                        }
+                                    } else {
+                                        panel_content
+                                    }
+                                }) }
+                            </div>
+                        </div>
+                        // Section 4: Recent Articles
+                        <div class={classes!("mt-12", "w-full")}>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_RECENT_ARTICLES }</span>
+                            </div>
+                            if *articles_loaded {
+                                <div class={classes!(
+                                    "mt-4", "grid", "gap-4",
+                                    "grid-cols-1", "md:grid-cols-2"
+                                )}>
+                                    { for recent_articles.iter().cloned().map(|article| html! {
+                                        <ArticleCard article={article} />
+                                    }) }
+                                </div>
+                            } else {
+                                <div class={classes!(
+                                    "mt-4", "grid", "gap-4",
+                                    "grid-cols-1", "md:grid-cols-2"
+                                )}>
+                                    { for (0..4).map(|_| html! {
+                                        <div class={classes!(
+                                            "rounded-lg", "border", "border-[var(--border)]",
+                                            "bg-[var(--surface)]", "p-4", "animate-pulse"
+                                        )}>
+                                            <div class="h-4 w-3/4 rounded bg-[var(--surface-alt)] mb-3" />
+                                            <div class="h-3 w-full rounded bg-[var(--surface-alt)] mb-2" />
+                                            <div class="h-3 w-2/3 rounded bg-[var(--surface-alt)]" />
+                                        </div>
+                                    }) }
+                                </div>
+                            }
+                            <div class={classes!("mt-4", "text-right")}>
+                                <Link<Route>
+                                    to={Route::LatestArticles}
+                                    classes={classes!(
+                                        "text-sm", "text-[var(--primary)]",
+                                        "hover:underline"
+                                    )}
+                                >
+                                    { t::BTN_VIEW_ALL_ARTICLES }
+                                </Link<Route>>
+                            </div>
+                        </div>
+                        // Section 5: Recent Music
+                        <div class={classes!("mt-12", "w-full")}>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_RECENT_MUSIC }</span>
+                            </div>
+                            if *songs_loaded {
+                                <div class={classes!(
+                                    "mt-4", "grid", "gap-3",
+                                    "grid-cols-2", "md:grid-cols-4"
+                                )}>
+                                    { for recent_songs.iter().map(|song| {
+                                        let has_cover = song.cover_image.as_ref().is_some_and(|c| !c.is_empty());
+                                        let cover_url = api::song_cover_url(song.cover_image.as_deref());
+                                        let duration = format_duration_short(song.duration_ms);
+                                        html! {
+                                            <Link<Route>
+                                                to={Route::MusicPlayer { id: song.id.clone() }}
+                                                classes={classes!(
+                                                    "no-underline", "group", "rounded-lg",
+                                                    "border", "border-[var(--border)]",
+                                                    "bg-[var(--surface)]", "overflow-hidden",
+                                                    "transition-all", "duration-150",
+                                                    "hover:shadow-[var(--shadow-4)]",
+                                                    "hover:border-[var(--primary)]"
+                                                )}
+                                            >
+                                                <div class={classes!(
+                                                    "aspect-square", "w-full",
+                                                    "bg-[var(--surface-alt)]",
+                                                    "flex", "items-center", "justify-center",
+                                                    "overflow-hidden"
+                                                )}>
+                                                    if has_cover {
+                                                        <ImageWithLoading
+                                                            src={cover_url}
+                                                            alt={song.title.clone()}
+                                                            loading={Some(AttrValue::from("lazy"))}
+                                                            class={classes!(
+                                                                "w-full", "h-full", "object-cover",
+                                                                "group-hover:scale-105",
+                                                                "transition-transform", "duration-200"
+                                                            )}
+                                                        />
+                                                    } else {
+                                                        <Icon name={IconName::Music} size={32} />
+                                                    }
+                                                </div>
+                                                <div class={classes!("p-2")}>
+                                                    <div class={classes!(
+                                                        "text-sm", "font-medium",
+                                                        "text-[var(--text)]", "truncate"
+                                                    )}>{ &song.title }</div>
+                                                    <div class={classes!(
+                                                        "text-xs", "text-[var(--muted)]",
+                                                        "truncate", "mt-0.5"
+                                                    )}>{ &song.artist }</div>
+                                                    <div class={classes!(
+                                                        "text-xs", "text-[var(--muted)]", "mt-0.5"
+                                                    )}>{ duration }</div>
+                                                </div>
+                                            </Link<Route>>
+                                        }
+                                    }) }
+                                </div>
+                            } else {
+                                <div class={classes!(
+                                    "mt-4", "grid", "gap-3",
+                                    "grid-cols-2", "md:grid-cols-4"
+                                )}>
+                                    { for (0..4).map(|_| html! {
+                                        <div class={classes!(
+                                            "rounded-lg", "border", "border-[var(--border)]",
+                                            "bg-[var(--surface)]", "overflow-hidden", "animate-pulse"
+                                        )}>
+                                            <div class="aspect-square w-full bg-[var(--surface-alt)]" />
+                                            <div class="p-2">
+                                                <div class="h-3 w-3/4 rounded bg-[var(--surface-alt)] mb-1" />
+                                                <div class="h-2 w-1/2 rounded bg-[var(--surface-alt)]" />
+                                            </div>
+                                        </div>
+                                    }) }
+                                </div>
+                            }
+                            <div class={classes!("mt-4", "text-right")}>
+                                <Link<Route>
+                                    to={Route::MediaAudio}
+                                    classes={classes!(
+                                        "text-sm", "text-[var(--primary)]",
+                                        "hover:underline"
+                                    )}
+                                >
+                                    { t::BTN_VIEW_ALL_MUSIC }
+                                </Link<Route>>
+                            </div>
+                        </div>
+                        // Section 6: Tech Stack Logo Strip
+                        <div class={classes!("mt-12", "w-full")}>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_TECH_STACK }</span>
+                            </div>
+                            <div class={classes!("mt-4", "flex", "flex-wrap", "gap-3")}>
+                                { for tech_stack.iter().map(|(logo, name, href)| html! {
+                                    <a
+                                        href={(*href).to_string()}
+                                        target="_blank" rel="noopener noreferrer"
+                                        title={*name}
+                                        aria-label={(*name).to_string()}
+                                        class={classes!(
+                                            "inline-flex", "items-center", "gap-2",
+                                            "rounded-lg", "border", "border-[var(--border)]",
+                                            "bg-[var(--surface)]", "px-3", "py-1.5",
+                                            "text-sm", "text-[var(--text)]",
+                                            "no-underline",
+                                            "transition-all", "duration-150",
+                                            "hover:bg-[var(--surface-alt)]",
+                                            "hover:text-[var(--primary)]",
+                                            "hover:border-[var(--primary)]"
+                                        )}
+                                    >
+                                        <ImageWithLoading
+                                            src={logo.clone()}
+                                            alt={*name}
+                                            loading={Some(AttrValue::from("lazy"))}
+                                            class={classes!("w-5", "h-5")}
+                                            container_class={classes!("inline-flex")}
+                                        />
+                                        <span>{ *name }</span>
+                                    </a>
+                                }) }
+                            </div>
+                        </div>
+                        // Section 7: Social + GitHub Wrapped
+                        <div class={classes!("mt-12", "w-full")}>
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_SOCIAL }</span>
+                            </div>
+                            <div class={classes!("flex", "gap-3", "mt-3", "ml-8")}>
+                                <a
+                                    href="https://github.com/ACking-you"
+                                    target="_blank" rel="noopener noreferrer"
+                                    aria-label={common_text::GITHUB}
+                                    class={social_button_class.clone()}
+                                >
+                                    <i class={classes!("fa-brands", "fa-github-alt", "text-lg")} aria-hidden="true"></i>
+                                    <span class={classes!("sr-only")}>{ common_text::GITHUB }</span>
+                                </a>
+                                <a
+                                    href="https://space.bilibili.com/24264499"
+                                    target="_blank" rel="noopener noreferrer"
+                                    aria-label={common_text::BILIBILI}
+                                    class={social_button_class.clone()}
+                                >
+                                    <svg viewBox="0 0 24 24" role="img" aria-hidden="true" focusable="false" width="20" height="20">
+                                        <path
+                                            fill="currentColor"
+                                            d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"
+                                        />
+                                    </svg>
+                                    <span class={classes!("sr-only")}>{ common_text::BILIBILI }</span>
+                                </a>
+                            </div>
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
+                            </div>
+                            <GithubWrappedSelector />
+                        </div>
+                    </div>
+                </section>
+            </div>
         </div>
     }
 }
