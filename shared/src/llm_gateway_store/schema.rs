@@ -31,12 +31,14 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("secret", DataType::Utf8, false),
         Field::new("key_hash", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
-        // Upstream LLM provider identifier (e.g. "anthropic", "openai"). Nullable for
-        // keys created before multi-provider support.
-        Field::new("provider_type", DataType::Utf8, true),
-        // Wire protocol family this key speaks (e.g. "openai-compatible", "anthropic-native").
-        // Nullable for backward compatibility with pre-existing keys.
-        Field::new("protocol_family", DataType::Utf8, true),
+        // Upstream LLM provider identifier (e.g. "codex", "kiro"). Legacy
+        // nullable rows are rewritten to this canonical non-null form during
+        // startup migration.
+        Field::new("provider_type", DataType::Utf8, false),
+        // Wire protocol family this key speaks (e.g. "openai",
+        // "anthropic"). Legacy nullable rows are rewritten to this
+        // canonical non-null form during startup migration.
+        Field::new("protocol_family", DataType::Utf8, false),
         Field::new("public_visible", DataType::Boolean, false),
         Field::new("quota_billable_limit", DataType::UInt64, false),
         Field::new("usage_input_uncached_tokens", DataType::UInt64, false),
@@ -224,10 +226,6 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
             .await
             .context("failed to add usage_billable_tokens to llm_gateway_keys")?;
     }
-    ensure_scalar_index(&table, "id").await?;
-    ensure_scalar_index(&table, "key_hash").await?;
-    ensure_scalar_index(&table, "status").await?;
-    ensure_scalar_index(&table, "public_visible").await?;
     // Backfill provider_type / protocol_family for tables created before
     // multi-provider support.
     ensure_nullable_utf8_column(&table, "provider_type").await?;
@@ -239,6 +237,10 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "auto_account_names_json").await?;
     ensure_nullable_u64_column(&table, "request_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "request_min_start_interval_ms").await?;
+    ensure_scalar_index(&table, "id").await?;
+    ensure_scalar_index(&table, "key_hash").await?;
+    ensure_scalar_index(&table, "status").await?;
+    ensure_scalar_index(&table, "public_visible").await?;
     Ok(table)
 }
 

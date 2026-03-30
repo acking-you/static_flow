@@ -666,6 +666,55 @@ fn account_candidate_preferred(
     candidate.3 < current_best.3
 }
 
+fn settings_path_for_auth_file(auth_path: &Path) -> PathBuf {
+    auth_path.with_extension("meta")
+}
+
+/// Resolve the auths directory, honoring `STATICFLOW_AUTHS_DIR` env override.
+pub(crate) fn resolve_auths_dir() -> PathBuf {
+    if let Ok(path) = env::var("STATICFLOW_AUTHS_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    let home = env::var("HOME").unwrap_or_else(|_| "/home/ts_user".to_string());
+    PathBuf::from(home).join(".static-flow").join("auths")
+}
+
+/// Resolve the Codex CLI auth.json path used as the seed source when the
+/// auths directory is empty.
+fn resolve_codex_auth_path() -> PathBuf {
+    if let Ok(path) = env::var("CODEX_AUTH_JSON_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    let home = env::var("HOME").unwrap_or_else(|_| "/home/ts_user".to_string());
+    PathBuf::from(home).join(".codex").join("auth.json")
+}
+
+/// Validate that an account name is safe for use as a filename.
+pub(crate) fn validate_account_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("account name is required".to_string());
+    }
+    if trimmed.len() > 64 {
+        return Err("account name must be 64 characters or fewer".to_string());
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("account name must contain only ASCII letters, digits, hyphens, or \
+                    underscores"
+            .to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, sync::Arc};
@@ -858,7 +907,7 @@ mod tests {
         // But beta's effective is 3 < alpha's 8. However the existing comparator
         // still picks by primary first. In the all-low fallback both are in the
         // same pool, so the existing comparator applies: beta wins on primary.
-        // This is acceptable — the key fix is that weekly-exhausted accounts are
+        // This is acceptable - the key fix is that weekly-exhausted accounts are
         // skipped entirely, and low accounts are deprioritized vs healthy ones.
         assert!(
             selected == "alpha" || selected == "beta",
@@ -866,53 +915,4 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(auths_dir);
     }
-}
-
-fn settings_path_for_auth_file(auth_path: &Path) -> PathBuf {
-    auth_path.with_extension("meta")
-}
-
-/// Resolve the auths directory, honoring `STATICFLOW_AUTHS_DIR` env override.
-pub(crate) fn resolve_auths_dir() -> PathBuf {
-    if let Ok(path) = env::var("STATICFLOW_AUTHS_DIR") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-    let home = env::var("HOME").unwrap_or_else(|_| "/home/ts_user".to_string());
-    PathBuf::from(home).join(".static-flow").join("auths")
-}
-
-/// Resolve the Codex CLI auth.json path used as the seed source when the
-/// auths directory is empty.
-fn resolve_codex_auth_path() -> PathBuf {
-    if let Ok(path) = env::var("CODEX_AUTH_JSON_PATH") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-    let home = env::var("HOME").unwrap_or_else(|_| "/home/ts_user".to_string());
-    PathBuf::from(home).join(".codex").join("auth.json")
-}
-
-/// Validate that an account name is safe for use as a filename.
-pub(crate) fn validate_account_name(name: &str) -> Result<String, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("account name is required".to_string());
-    }
-    if trimmed.len() > 64 {
-        return Err("account name must be 64 characters or fewer".to_string());
-    }
-    if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("account name must contain only ASCII letters, digits, hyphens, or \
-                    underscores"
-            .to_string());
-    }
-    Ok(trimmed.to_string())
 }

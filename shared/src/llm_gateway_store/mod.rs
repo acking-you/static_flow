@@ -72,6 +72,21 @@ impl LlmGatewayStore {
     /// the default runtime-config row if it is missing.
     pub async fn connect(db_uri: &str) -> Result<Self> {
         tracing::info!("Opening LLM gateway store at `{db_uri}`");
+        let mut store = Self::connect_inner(db_uri).await?;
+        let rewritten = store.canonicalize_keys_table_if_needed().await?;
+        if rewritten {
+            tracing::warn!(
+                "reconnecting llm gateway store after canonical key-table rewrite to avoid stale \
+                 Lance table state"
+            );
+            store = Self::connect_inner(db_uri).await?;
+        }
+        store.repair_keys_table_for_safe_reads().await?;
+        tracing::info!("LLM gateway store ready");
+        Ok(store)
+    }
+
+    async fn connect_inner(db_uri: &str) -> Result<Self> {
         let db = connect(db_uri)
             .execute()
             .await
@@ -88,9 +103,6 @@ impl LlmGatewayStore {
         store.account_contribution_requests_table().await?;
         store.sponsor_requests_table().await?;
         store.ensure_default_runtime_config().await?;
-        store.canonicalize_keys_table_if_needed().await?;
-        store.repair_keys_table_for_safe_reads().await?;
-        tracing::info!("LLM gateway store ready");
         Ok(store)
     }
 
@@ -158,7 +170,7 @@ impl LlmGatewayStore {
     /// When any of these columns are nullable in the Arrow schema or contain
     /// actual NULL values, the entire table is rewritten with the canonical
     /// non-null schema. This is a one-time migration that runs at startup.
-    async fn canonicalize_keys_table_if_needed(&self) -> Result<()> {
+    async fn canonicalize_keys_table_if_needed(&self) -> Result<bool> {
         let table = self.keys_table().await?;
         let schema = table.schema().await?;
         let canonical_fields = [
@@ -180,7 +192,7 @@ impl LlmGatewayStore {
             .keys_table_null_fields(&table, &canonical_fields)
             .await?;
         if nullable_fields.is_empty() && null_fields.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let mut reasons = Vec::new();
         if !nullable_fields.is_empty() {
@@ -212,14 +224,11 @@ impl LlmGatewayStore {
             .execute()
             .await
             .context("failed to overwrite llm gateway keys table with canonical schema")?;
-        ensure_keys_table(&self.db)
-            .await
-            .context("failed to reopen canonicalized llm gateway keys table")?;
         tracing::info!(
             row_count = keys.len(),
             "completed llm gateway keys table canonical rewrite"
         );
-        Ok(())
+        Ok(true)
     }
 
     /// Scan the given columns and return the names of any that contain at
@@ -1712,6 +1721,14 @@ mod tests {
             .schema()
             .await
             .expect("load canonicalized schema");
+        assert!(!schema
+            .field_with_name("provider_type")
+            .expect("provider_type field")
+            .is_nullable());
+        assert!(!schema
+            .field_with_name("protocol_family")
+            .expect("protocol_family field")
+            .is_nullable());
         assert!(!schema
             .field_with_name("usage_credit_total")
             .expect("usage_credit_total field")
