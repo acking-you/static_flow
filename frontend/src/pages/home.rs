@@ -1,5 +1,5 @@
-use wasm_bindgen::JsCast;
-use web_sys::console;
+use wasm_bindgen::{prelude::*, JsCast};
+use web_sys::{console, HtmlElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -32,6 +32,8 @@ pub fn home_page() -> Html {
     let articles_loaded = use_state(|| false);
     let recent_songs = use_state(Vec::<SongListItem>::new);
     let songs_loaded = use_state(|| false);
+    let active_page = use_state(|| 0usize);
+    let slider_ref = use_node_ref();
 
     {
         let total_articles = total_articles.clone();
@@ -123,6 +125,101 @@ pub fn home_page() -> Html {
             || ()
         });
     }
+
+    // Scroll listener to track active page
+    {
+        let slider_ref = slider_ref.clone();
+        let active_page = active_page.clone();
+        use_effect_with((), move |_| {
+            let closure = {
+                let slider_ref = slider_ref.clone();
+                let active_page = active_page.clone();
+                Closure::<dyn Fn()>::new(move || {
+                    if let Some(el) = slider_ref.cast::<HtmlElement>() {
+                        let scroll_left = el.scroll_left() as f64;
+                        let width = el.client_width() as f64;
+                        if width > 0.0 {
+                            let page = ((scroll_left / width) + 0.5) as usize;
+                            if page != *active_page {
+                                active_page.set(page);
+                            }
+                        }
+                    }
+                })
+            };
+
+            if let Some(el) = slider_ref.cast::<HtmlElement>() {
+                let _ =
+                    el.add_event_listener_with_callback("scroll", closure.as_ref().unchecked_ref());
+            }
+            closure.forget();
+            || ()
+        });
+    }
+
+    // Mouse drag for PC
+    let is_dragging = use_state(|| false);
+    let drag_start_x = use_state(|| 0i32);
+    let drag_start_scroll = use_state(|| 0i32);
+
+    let on_mouse_down = {
+        let slider_ref = slider_ref.clone();
+        let is_dragging = is_dragging.clone();
+        let drag_start_x = drag_start_x.clone();
+        let drag_start_scroll = drag_start_scroll.clone();
+        Callback::from(move |e: MouseEvent| {
+            if let Some(el) = slider_ref.cast::<HtmlElement>() {
+                is_dragging.set(true);
+                drag_start_x.set(e.client_x());
+                drag_start_scroll.set(el.scroll_left());
+                let _ = el.class_list().add_1("dragging");
+            }
+        })
+    };
+
+    let on_mouse_move = {
+        let slider_ref = slider_ref.clone();
+        let is_dragging = is_dragging.clone();
+        let drag_start_x = drag_start_x.clone();
+        let drag_start_scroll = drag_start_scroll.clone();
+        Callback::from(move |e: MouseEvent| {
+            if !*is_dragging {
+                return;
+            }
+            let dx = e.client_x() - *drag_start_x;
+            if let Some(el) = slider_ref.cast::<HtmlElement>() {
+                el.set_scroll_left(*drag_start_scroll - dx);
+            }
+        })
+    };
+
+    let on_mouse_up = {
+        let slider_ref = slider_ref.clone();
+        let is_dragging = is_dragging.clone();
+        Callback::from(move |_: MouseEvent| {
+            if *is_dragging {
+                is_dragging.set(false);
+                if let Some(el) = slider_ref.cast::<HtmlElement>() {
+                    let _ = el.class_list().remove_1("dragging");
+                }
+            }
+        })
+    };
+
+    let on_mouse_leave = on_mouse_up.clone();
+
+    let on_dot_click = {
+        let slider_ref = slider_ref.clone();
+        Callback::from(move |page: usize| {
+            if let Some(el) = slider_ref.cast::<HtmlElement>() {
+                let width = el.client_width();
+                let opts = web_sys::ScrollToOptions::new();
+                opts.set_left((page as f64) * (width as f64));
+                opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+                el.scroll_to_with_scroll_to_options(&opts);
+            }
+        })
+    };
 
     let stats = vec![
         (
@@ -256,9 +353,26 @@ pub fn home_page() -> Html {
             "w-full",
             "min-h-screen",
             "bg-[var(--bg)]",
-            "overflow-x-hidden",
-            "pb-8"
         )}>
+            <div class="page-dots">
+                <div
+                    class={if *active_page == 0 { "page-dot active" } else { "page-dot" }}
+                    onclick={let cb = on_dot_click.clone(); Callback::from(move |_: MouseEvent| cb.emit(0))}
+                />
+                <div
+                    class={if *active_page == 1 { "page-dot active" } else { "page-dot" }}
+                    onclick={let cb = on_dot_click.clone(); Callback::from(move |_: MouseEvent| cb.emit(1))}
+                />
+            </div>
+            <div
+                class="page-slider"
+                ref={slider_ref.clone()}
+                onmousedown={on_mouse_down}
+                onmousemove={on_mouse_move}
+                onmouseup={on_mouse_up}
+                onmouseleave={on_mouse_leave}
+            >
+            <div class={if *active_page == 0 { "page-slide" } else { "page-slide inactive" }}>
             <div class={classes!("w-full", "pb-6")}>
                 <section class={classes!(
                     "relative",
@@ -501,6 +615,26 @@ pub fn home_page() -> Html {
                                 }) }
                             </div>
                         </div>
+                    </div>
+                </section>
+            </div>
+            </div>
+            <div class={if *active_page == 1 { "page-slide" } else { "page-slide inactive" }}>
+            <div class={classes!("w-full", "pb-6")}>
+                <section class={classes!(
+                    "relative",
+                    "py-20",
+                    "md:py-24",
+                    "px-4",
+                    "max-[767px]:pb-16",
+                    "max-w-5xl",
+                    "mx-auto"
+                )}>
+                    <div class={classes!(
+                        "w-full",
+                        "mx-auto",
+                        "px-[clamp(1rem,4vw,2rem)]"
+                    )}>
                         // Sections 4-7: Explore Terminal
                         <div class={classes!("terminal-hero", "mt-8")}>
                             <div class="terminal-header">
@@ -722,6 +856,8 @@ pub fn home_page() -> Html {
                         </div>
                     </div>
                 </section>
+            </div>
+            </div>
             </div>
         </div>
     }
