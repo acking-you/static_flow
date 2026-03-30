@@ -5,7 +5,7 @@
 //! 2. Polls the upstream `/wham/usage` endpoint for each account to update the
 //!    cached rate-limit snapshot used by the routing layer.
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -49,6 +49,13 @@ pub(crate) fn spawn_account_refresh_task(
             }
         }
     });
+}
+
+pub(crate) async fn refresh_all_accounts_once(
+    pool: &AccountPool,
+    proxy_registry: &UpstreamProxyRegistry,
+) -> Result<()> {
+    refresh_all_accounts(pool, proxy_registry).await
 }
 
 async fn refresh_all_accounts(
@@ -115,7 +122,9 @@ async fn refresh_all_accounts(
         match fetch_account_usage(proxy_registry, &snapshot).await {
             Ok(rl) => pool.update_rate_limit(name, rl).await,
             Err(err) => {
-                tracing::debug!(account = name, "Usage poll failed: {err:#}");
+                pool.mark_usage_refresh_failure(name, format!("{err:#}"))
+                    .await;
+                tracing::warn!(account = name, "Usage poll failed: {err:#}");
             },
         }
     }
@@ -265,63 +274,6 @@ pub(crate) async fn validate_account_usage(
     auth: &CodexAuthSnapshot,
 ) -> Result<AccountRateLimitSnapshot> {
     fetch_account_usage(proxy_registry, auth).await
-}
-
-/// Refresh the cached usage snapshot for the accounts participating in one
-/// auto-routing decision so account selection sees current 5h/weekly limits.
-pub(crate) async fn refresh_routing_candidates(
-    pool: &AccountPool,
-    proxy_registry: &UpstreamProxyRegistry,
-    allowed_names: Option<&HashSet<String>>,
-) {
-    let entries = pool.all_entries().await;
-    let candidate_names = allowed_names
-        .map(|names| names.len())
-        .unwrap_or(entries.len());
-    let mut refreshed = 0usize;
-    let mut failed = 0usize;
-
-    for (name, entry) in entries {
-        if let Some(allowed_names) = allowed_names {
-            if !allowed_names.contains(&name) {
-                continue;
-            }
-        }
-
-        let snapshot = {
-            let account = entry.read().await;
-            if account.status != AccountStatus::Active {
-                tracing::debug!(
-                    account = %name,
-                    "skipping codex routing usage refresh because account is not active"
-                );
-                continue;
-            }
-            account.to_auth_snapshot()
-        };
-
-        match fetch_account_usage(proxy_registry, &snapshot).await {
-            Ok(usage) => {
-                pool.update_rate_limit(&name, usage).await;
-                refreshed += 1;
-            },
-            Err(err) => {
-                failed += 1;
-                tracing::warn!(
-                    account = %name,
-                    "failed to refresh codex routing usage snapshot: {err:#}"
-                );
-            },
-        }
-    }
-
-    tracing::info!(
-        candidate_count = candidate_names,
-        refreshed_count = refreshed,
-        failed_count = failed,
-        allowed_names = ?allowed_names,
-        "refreshed codex routing candidate usage snapshots"
-    );
 }
 
 /// Build the HTTP client used for token refresh and usage polling.

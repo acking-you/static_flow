@@ -672,6 +672,12 @@ pub struct AccountSummaryView {
     pub secondary_remaining_percent: Option<f64>,
     pub map_gpt53_codex_to_spark: bool,
     pub last_refresh: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_usage_checked_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_usage_success_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_error_message: Option<String>,
 }
 
 /// Admin response listing all managed Codex accounts.

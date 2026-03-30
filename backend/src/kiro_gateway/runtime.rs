@@ -4,7 +4,7 @@
 //! account-backed status/runtime caches that sit beneath the
 //! Anthropic-compatible HTTP handlers.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -102,10 +102,11 @@ impl KiroGatewayRuntimeState {
 /// File-backed Kiro credential manager with refresh-token support.
 ///
 /// The manager exposes CRUD helpers for the persisted auth files and guarantees
-/// that concurrent refresh attempts are serialized through `refresh_lock`.
+/// that concurrent refresh attempts are serialized per account so independent
+/// Kiro credentials can refresh in parallel.
 pub struct KiroTokenManager {
     auths_dir: PathBuf,
-    refresh_lock: Mutex<()>,
+    refresh_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,
     upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
 }
 
@@ -115,7 +116,7 @@ impl KiroTokenManager {
         let auths_dir = resolve_auths_dir();
         Ok(Self {
             auths_dir,
-            refresh_lock: Mutex::new(()),
+            refresh_locks: RwLock::new(HashMap::new()),
             upstream_proxy_registry,
         })
     }
@@ -141,6 +142,7 @@ impl KiroTokenManager {
     /// Delete one configured account.
     pub async fn delete_auth(&self, name: &str) -> Result<()> {
         delete_auth_record(&self.auths_dir, name).await?;
+        self.refresh_locks.write().await.remove(name);
         Ok(())
     }
 
@@ -215,7 +217,8 @@ impl KiroTokenManager {
             });
         }
 
-        let _guard = self.refresh_lock.lock().await;
+        let refresh_lock = self.refresh_lock_for_account(account_name).await;
+        let _guard = refresh_lock.lock().await;
         let latest = self
             .auth_by_name(account_name)
             .await?
@@ -343,6 +346,17 @@ impl KiroTokenManager {
     async fn persist_refreshed_auth(&self, auth: &KiroAuthRecord) -> Result<()> {
         save_auth_record(&self.auths_dir, auth).await?;
         Ok(())
+    }
+
+    async fn refresh_lock_for_account(&self, account_name: &str) -> Arc<Mutex<()>> {
+        if let Some(lock) = self.refresh_locks.read().await.get(account_name).cloned() {
+            return lock;
+        }
+        let mut refresh_locks = self.refresh_locks.write().await;
+        refresh_locks
+            .entry(account_name.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 }
 

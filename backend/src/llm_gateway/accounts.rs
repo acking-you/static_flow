@@ -140,12 +140,20 @@ impl AccountRateLimitSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AccountUsageRefreshHealth {
+    pub last_checked_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub error_message: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AccountSummarySnapshot {
     pub name: String,
     pub status: AccountStatus,
     pub account_id: Option<String>,
     pub rate_limits: AccountRateLimitSnapshot,
+    pub usage_refresh: AccountUsageRefreshHealth,
     pub last_refresh_ms: Option<i64>,
     pub map_gpt53_codex_to_spark: bool,
 }
@@ -157,6 +165,7 @@ pub(crate) struct AccountSummarySnapshot {
 pub(crate) struct AccountPool {
     accounts: RwLock<HashMap<String, Arc<RwLock<CodexAccount>>>>,
     rate_limits: RwLock<HashMap<String, AccountRateLimitSnapshot>>,
+    usage_refresh_health: RwLock<HashMap<String, AccountUsageRefreshHealth>>,
     last_routed_at_ms: RwLock<HashMap<String, i64>>,
     auth_file_mtimes: RwLock<HashMap<String, Option<SystemTime>>>,
     auths_dir: PathBuf,
@@ -167,6 +176,7 @@ impl AccountPool {
         Self {
             accounts: RwLock::new(HashMap::new()),
             rate_limits: RwLock::new(HashMap::new()),
+            usage_refresh_health: RwLock::new(HashMap::new()),
             last_routed_at_ms: RwLock::new(HashMap::new()),
             auth_file_mtimes: RwLock::new(HashMap::new()),
             auths_dir,
@@ -290,6 +300,7 @@ impl AccountPool {
     pub async fn remove(&self, name: &str) -> Result<bool> {
         let existed = self.accounts.write().await.remove(name).is_some();
         self.rate_limits.write().await.remove(name);
+        self.usage_refresh_health.write().await.remove(name);
         self.last_routed_at_ms.write().await.remove(name);
         self.auth_file_mtimes.write().await.remove(name);
         let path = self.auths_dir.join(format!("{name}.json"));
@@ -311,16 +322,19 @@ impl AccountPool {
     pub async fn list_summaries(&self) -> Vec<AccountSummarySnapshot> {
         let accounts = self.accounts.read().await;
         let rate_limits = self.rate_limits.read().await;
+        let usage_refresh_health = self.usage_refresh_health.read().await;
         let mut out = Vec::with_capacity(accounts.len());
         for (name, entry) in accounts.iter() {
             let account = entry.read().await;
             let rl = rate_limits.get(name).cloned().unwrap_or_default();
+            let refresh_health = usage_refresh_health.get(name).cloned().unwrap_or_default();
             let last_refresh_ms = account.last_refresh.map(|dt| dt.timestamp_millis());
             out.push(AccountSummarySnapshot {
                 name: name.clone(),
                 status: account.status,
                 account_id: account.account_id.clone(),
                 rate_limits: rl,
+                usage_refresh: refresh_health,
                 last_refresh_ms,
                 map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
             });
@@ -465,10 +479,36 @@ impl AccountPool {
 
     /// Update the cached rate-limit snapshot for an account.
     pub async fn update_rate_limit(&self, name: &str, snapshot: AccountRateLimitSnapshot) {
+        let checked_at = snapshot
+            .last_checked_at
+            .unwrap_or_else(static_flow_shared::llm_gateway_store::now_ms);
         self.rate_limits
             .write()
             .await
             .insert(name.to_string(), snapshot);
+        self.usage_refresh_health.write().await.insert(
+            name.to_string(),
+            AccountUsageRefreshHealth {
+                last_checked_at: Some(checked_at),
+                last_success_at: Some(checked_at),
+                error_message: None,
+            },
+        );
+    }
+
+    /// Record that the latest usage refresh attempt for one account failed.
+    pub async fn mark_usage_refresh_failure(&self, name: &str, error_message: impl Into<String>) {
+        let checked_at = static_flow_shared::llm_gateway_store::now_ms();
+        let error_message = error_message.into();
+        let mut usage_refresh_health = self.usage_refresh_health.write().await;
+        let previous_success_at = usage_refresh_health
+            .get(name)
+            .and_then(|entry| entry.last_success_at);
+        usage_refresh_health.insert(name.to_string(), AccountUsageRefreshHealth {
+            last_checked_at: Some(checked_at),
+            last_success_at: previous_success_at,
+            error_message: Some(error_message),
+        });
     }
 
     /// Persist updated tokens for an account back to its file.
@@ -913,6 +953,47 @@ mod tests {
             selected == "alpha" || selected == "beta",
             "should pick one of the low-quota accounts"
         );
+        let _ = std::fs::remove_dir_all(auths_dir);
+    }
+
+    #[tokio::test]
+    async fn usage_refresh_failure_preserves_last_success_until_next_success() {
+        let auths_dir = test_auths_dir("usage-refresh-health");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+
+        let first_snapshot = sample_snapshot(55.0, 80.0);
+        let first_success_at = first_snapshot.last_checked_at;
+        pool.update_rate_limit("alpha", first_snapshot).await;
+
+        pool.mark_usage_refresh_failure("alpha", "usage request returned 503")
+            .await;
+        let failed_summary = pool
+            .list_summaries()
+            .await
+            .into_iter()
+            .find(|summary| summary.name == "alpha")
+            .expect("alpha summary after failure");
+        assert!(failed_summary.usage_refresh.last_checked_at.is_some());
+        assert_eq!(failed_summary.usage_refresh.last_success_at, first_success_at);
+        assert_eq!(
+            failed_summary.usage_refresh.error_message.as_deref(),
+            Some("usage request returned 503")
+        );
+
+        let second_snapshot = sample_snapshot(44.0, 70.0);
+        let second_success_at = second_snapshot.last_checked_at;
+        pool.update_rate_limit("alpha", second_snapshot).await;
+        let recovered_summary = pool
+            .list_summaries()
+            .await
+            .into_iter()
+            .find(|summary| summary.name == "alpha")
+            .expect("alpha summary after recovery");
+        assert_eq!(recovered_summary.usage_refresh.last_success_at, second_success_at);
+        assert_eq!(recovered_summary.usage_refresh.error_message, None);
         let _ = std::fs::remove_dir_all(auths_dir);
     }
 }

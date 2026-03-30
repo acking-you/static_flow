@@ -283,6 +283,8 @@ pub struct KiroBalanceView {
     pub remaining: f64,
     pub next_reset_at: Option<i64>,
     pub subscription_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 impl KiroBalanceView {
@@ -301,6 +303,7 @@ impl KiroBalanceView {
                 .and_then(|item| item.next_date_reset.or(usage.next_date_reset))
                 .map(|value| value as i64),
             subscription_title: usage.subscription_title().map(ToString::to_string),
+            user_id: usage.user_id().map(ToString::to_string),
         }
     }
 }
@@ -314,6 +317,8 @@ pub struct KiroAccountView {
     pub name: String,
     pub auth_method: String,
     pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_user_id: Option<String>,
     pub email: Option<String>,
     pub expires_at: Option<String>,
     pub profile_arn: Option<String>,
@@ -350,6 +355,7 @@ impl KiroAccountView {
             name: auth.name.clone(),
             auth_method: auth.auth_method().to_string(),
             provider: auth.provider.clone(),
+            upstream_user_id: balance.as_ref().and_then(|value| value.user_id.clone()),
             email: auth.email.clone(),
             expires_at: auth.expires_at.clone(),
             profile_arn: auth.profile_arn.clone(),

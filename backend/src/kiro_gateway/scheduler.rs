@@ -49,6 +49,7 @@ pub(crate) struct AccountLocalThrottle {
 pub(crate) struct KiroRequestScheduler {
     states: Arc<Mutex<HashMap<String, AccountSchedulerState>>>,
     cooldowns: Arc<Mutex<HashMap<String, AccountCooldownEntry>>>,
+    last_started_at: Arc<Mutex<HashMap<String, Instant>>>,
     notify: Arc<Notify>,
 }
 
@@ -66,6 +67,7 @@ impl KiroRequestScheduler {
         Arc::new(Self {
             states: Arc::new(Mutex::new(HashMap::new())),
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            last_started_at: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(Notify::new()),
         })
     }
@@ -117,6 +119,9 @@ impl KiroRequestScheduler {
         } else {
             now + Duration::from_millis(min_start_interval_ms)
         };
+        self.last_started_at
+            .lock()
+            .insert(account_name.to_string(), now);
 
         Ok(KiroRequestLease {
             scheduler: self.clone(),
@@ -193,6 +198,10 @@ impl KiroRequestScheduler {
             .values()
             .map(|entry| entry.until.saturating_duration_since(now))
             .min()
+    }
+
+    pub(crate) fn last_started_at(&self, account_name: &str) -> Option<Instant> {
+        self.last_started_at.lock().get(account_name).copied()
     }
 
     pub(crate) fn notify_config_changed(&self) {

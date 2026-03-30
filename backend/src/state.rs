@@ -353,6 +353,14 @@ impl AppState {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
+        if let Err(err) = crate::llm_gateway::token_refresh::refresh_all_accounts_once(
+            llm_gateway.account_pool.as_ref(),
+            upstream_proxy_registry.as_ref(),
+        )
+        .await
+        {
+            tracing::warn!("Initial Codex account usage refresh failed: {err:#}");
+        }
         if let Err(err) = crate::llm_gateway::refresh_public_rate_limit_status(&llm_gateway).await {
             tracing::warn!("Initial LLM gateway rate-limit refresh failed: {err:#}");
         }

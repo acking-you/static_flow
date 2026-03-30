@@ -120,6 +120,11 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
                 },
                 Err(err) => {
                     error_count += 1;
+                    tracing::warn!(
+                        account_name = %auth.name,
+                        error = %err,
+                        "failed to refresh cached kiro status for account"
+                    );
                     error_entry(prior, checked_at, err.to_string())
                 },
             }
@@ -131,6 +136,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
         next.last_success_at = Some(checked_at);
     }
     apply_snapshot_summary(&mut next, error_count, ready_count);
+    log_duplicate_upstream_identities(&next);
 
     tracing::info!(
         account_count = next.accounts.len(),
@@ -169,7 +175,15 @@ pub(crate) async fn refresh_cached_status_for_account(
             .await
         {
             Ok(usage) => ready_entry(&usage, checked_at),
-            Err(err) => error_entry(prior, checked_at, err.to_string()),
+            Err(err) => {
+                tracing::warn!(
+                    account_name,
+                    error = %err,
+                    force_refresh,
+                    "failed to refresh cached kiro status for account"
+                );
+                error_entry(prior, checked_at, err.to_string())
+            },
         }
     };
 
@@ -192,11 +206,17 @@ pub(crate) async fn refresh_cached_status_for_account(
         .filter(|status| status_counts_as_problem(&status.cache.status))
         .count();
     apply_snapshot_summary(&mut snapshot, error_count, ready_count);
+    log_duplicate_upstream_identities(&snapshot);
     *runtime.status_cache.write().await = snapshot;
 
     tracing::info!(
         account_name,
         cache_status = %entry.cache.status,
+        upstream_user_id = entry
+            .balance
+            .as_ref()
+            .and_then(|balance| balance.user_id.as_deref())
+            .unwrap_or("unknown"),
         "updated cached kiro status for account"
     );
 
@@ -310,6 +330,34 @@ fn status_counts_as_problem(status: &str) -> bool {
     matches!(status, STATUS_ERROR | STATUS_DEGRADED | STATUS_QUOTA_EXHAUSTED)
 }
 
+fn log_duplicate_upstream_identities(snapshot: &KiroStatusCacheSnapshot) {
+    let mut grouped = HashMap::<String, Vec<String>>::new();
+    for (account_name, status) in &snapshot.accounts {
+        let Some(user_id) = status
+            .balance
+            .as_ref()
+            .and_then(|balance| balance.user_id.as_ref())
+        else {
+            continue;
+        };
+        grouped
+            .entry(user_id.clone())
+            .or_default()
+            .push(account_name.clone());
+    }
+    for (user_id, mut account_names) in grouped {
+        if account_names.len() < 2 {
+            continue;
+        }
+        account_names.sort();
+        tracing::warn!(
+            upstream_user_id = %user_id,
+            account_names = ?account_names,
+            "multiple kiro auth records resolved to the same upstream user identity"
+        );
+    }
+}
+
 fn ready_entry(
     usage: &super::wire::UsageLimitsResponse,
     checked_at: i64,
@@ -401,6 +449,7 @@ mod tests {
                 remaining: 90.0,
                 next_reset_at: Some(123),
                 subscription_title: Some("plan".to_string()),
+                user_id: Some("user-1".to_string()),
             }),
             cache: KiroCacheView {
                 status: STATUS_READY.to_string(),
@@ -433,6 +482,7 @@ mod tests {
                 remaining: 45.0,
                 next_reset_at: Some(123),
                 subscription_title: Some("plan".to_string()),
+                user_id: Some("user-1".to_string()),
             }),
             cache: KiroCacheView {
                 status: STATUS_READY.to_string(),
@@ -464,6 +514,7 @@ mod tests {
                 remaining: 0.0,
                 next_reset_at: None,
                 subscription_title: None,
+                user_id: Some("user-1".to_string()),
             }),
             cache: KiroCacheView {
                 status: STATUS_READY.to_string(),

@@ -1,11 +1,12 @@
 //! Multi-account Kiro upstream provider with retry, cooldown, and
 //! quota-exhaustion failover.
 //!
-//! [`KiroProvider`] iterates over configured accounts in balance-descending
-//! order (highest remaining quota first), skipping those that are disabled,
-//! cooling down, or quota-exhausted. Each per-account attempt retries up to
-//! 3 times (with forced token refresh on 401/403), and the outer loop sleeps
-//! through cooldown windows before giving up.
+//! [`KiroProvider`] iterates over configured accounts by readiness and
+//! fairness: the least-recently-started eligible identity is tried first, with
+//! cached remaining quota as a secondary tie-breaker. Disabled, cooling-down,
+//! or quota-exhausted accounts are skipped. Each per-account attempt retries up
+//! to 3 times (with forced token refresh on 401/403), and the outer loop
+//! sleeps through cooldown windows before giving up.
 
 use std::{
     sync::Arc,
@@ -133,13 +134,20 @@ impl KiroProvider {
             let mut saw_local_limit = false;
             let mut blocked_accounts = Vec::new();
 
-            // Iterate accounts in balance-descending order (highest remaining first).
-            for auth in balance_ordered_accounts(&auths, &snapshot) {
+            let ordered_auths = selection_ordered_accounts(
+                &auths,
+                &snapshot,
+                self.runtime.request_scheduler.as_ref(),
+            );
+            // Iterate accounts in fairness order so ready identities rotate
+            // instead of repeatedly draining the current balance leader.
+            for auth in ordered_auths {
+                let routing_identity = routing_identity_for_account(&auth, &snapshot);
                 // Skip accounts still in an upstream cooldown window.
                 if let Some(cooldown) = self
                     .runtime
                     .request_scheduler
-                    .cooldown_for_account(&auth.name)
+                    .cooldown_for_account(&routing_identity)
                 {
                     shortest_cooldown = Some(match shortest_cooldown {
                         Some(current) => current.min(cooldown.remaining),
@@ -147,13 +155,15 @@ impl KiroProvider {
                     });
                     tracing::info!(
                         account_name = %auth.name,
+                        routing_identity = %routing_identity,
                         cooldown_ms = cooldown.remaining.as_millis() as u64,
                         reason = %cooldown.reason,
                         "skipping kiro account before request because it is in upstream cooldown"
                     );
                     blocked_accounts.push(format!(
-                        "{}: upstream_cooldown wait_ms={} reason={}",
+                        "{}[{}]: upstream_cooldown wait_ms={} reason={}",
                         auth.name,
+                        routing_identity,
                         cooldown.remaining.as_millis() as u64,
                         cooldown.reason
                     ));
@@ -178,6 +188,7 @@ impl KiroProvider {
                     }
                     tracing::info!(
                     account_name = %auth.name,
+                    routing_identity = %routing_identity,
                     cache_status = cache_entry
                         .map(|status| status.cache.status.as_str())
                         .unwrap_or("unknown"),
@@ -185,8 +196,9 @@ impl KiroProvider {
                     "skipping kiro account before request"
                     );
                     blocked_accounts.push(format!(
-                        "{}: {} cache_status={} remaining={}",
+                        "{}[{}]: {} cache_status={} remaining={}",
                         auth.name,
+                        routing_identity,
                         if quota_exhausted { "cached_quota_unavailable" } else { "disabled" },
                         cache_entry
                             .map(|status| status.cache.status.as_str())
@@ -203,7 +215,7 @@ impl KiroProvider {
                 let local_min_start_interval_ms =
                     auth.effective_kiro_channel_min_start_interval_ms();
                 let channel_lease = match self.runtime.request_scheduler.try_acquire(
-                    &auth.name,
+                    &routing_identity,
                     local_max_concurrency,
                     local_min_start_interval_ms,
                     queued_at,
@@ -219,6 +231,7 @@ impl KiroProvider {
                         }
                         tracing::info!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
                             request_kind = "messages",
                             reason = throttle.reason,
                             wait_ms = throttle.wait.map(|value| value.as_millis() as u64).unwrap_or(0),
@@ -228,9 +241,10 @@ impl KiroProvider {
                             "skipping kiro account before request because it is locally throttled"
                         );
                         blocked_accounts.push(format!(
-                            "{}: {} in_flight={} max_concurrency={} min_start_interval_ms={} \
+                            "{}[{}]: {} in_flight={} max_concurrency={} min_start_interval_ms={} \
                              wait_ms={}",
                             auth.name,
+                            routing_identity,
                             throttle.reason,
                             throttle.in_flight,
                             throttle.max_concurrency,
@@ -245,6 +259,7 @@ impl KiroProvider {
                 };
                 tracing::info!(
                     account_name = %auth.name,
+                    routing_identity = %routing_identity,
                     request_kind = "messages",
                     queue_wait_ms = channel_lease.waited_ms(),
                     max_concurrency = local_max_concurrency,
@@ -258,13 +273,23 @@ impl KiroProvider {
                     Ok(result) => return Ok(result),
                     Err(ProviderAttemptError::QuotaExhausted(err)) => {
                         saw_quota_exhausted = true;
+                        let shared_accounts =
+                            accounts_for_routing_identity(&auths, &snapshot, &routing_identity);
                         tracing::warn!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
+                            shared_accounts = ?shared_accounts,
                             error = %err,
                             "kiro account quota exhausted during request; moving to next account"
                         );
-                        mark_account_quota_exhausted(&self.runtime, &auth.name, err.to_string())
+                        for account_name in shared_accounts {
+                            mark_account_quota_exhausted(
+                                &self.runtime,
+                                &account_name,
+                                err.to_string(),
+                            )
                             .await;
+                        }
                         last_error = Some(err);
                     },
                     Err(ProviderAttemptError::RateLimited {
@@ -276,12 +301,13 @@ impl KiroProvider {
                             None => cooldown,
                         });
                         self.runtime.request_scheduler.mark_account_cooldown(
-                            &auth.name,
+                            &routing_identity,
                             cooldown,
                             error.to_string(),
                         );
                         tracing::warn!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
                             error = %error,
                             cooldown_ms = cooldown.as_millis() as u64,
                             "kiro account hit upstream 5-minute credit window; moving to next account"
@@ -291,6 +317,7 @@ impl KiroProvider {
                     Err(ProviderAttemptError::RetryNext(err)) => {
                         tracing::warn!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
                             error = %err,
                             "kiro account request failed; trying next account in sequence"
                         );
@@ -366,11 +393,17 @@ impl KiroProvider {
             let mut saw_local_limit = false;
             let mut blocked_accounts = Vec::new();
 
-            for auth in balance_ordered_accounts(&auths, &snapshot) {
+            let ordered_auths = selection_ordered_accounts(
+                &auths,
+                &snapshot,
+                self.runtime.request_scheduler.as_ref(),
+            );
+            for auth in ordered_auths {
+                let routing_identity = routing_identity_for_account(&auth, &snapshot);
                 if let Some(cooldown) = self
                     .runtime
                     .request_scheduler
-                    .cooldown_for_account(&auth.name)
+                    .cooldown_for_account(&routing_identity)
                 {
                     shortest_cooldown = Some(match shortest_cooldown {
                         Some(current) => current.min(cooldown.remaining),
@@ -378,13 +411,15 @@ impl KiroProvider {
                     });
                     tracing::info!(
                         account_name = %auth.name,
+                        routing_identity = %routing_identity,
                         cooldown_ms = cooldown.remaining.as_millis() as u64,
                         reason = %cooldown.reason,
                         "skipping kiro account before mcp request because it is in upstream cooldown"
                     );
                     blocked_accounts.push(format!(
-                        "{}: upstream_cooldown wait_ms={} reason={}",
+                        "{}[{}]: upstream_cooldown wait_ms={} reason={}",
                         auth.name,
+                        routing_identity,
                         cooldown.remaining.as_millis() as u64,
                         cooldown.reason
                     ));
@@ -408,6 +443,7 @@ impl KiroProvider {
                     }
                     tracing::info!(
                     account_name = %auth.name,
+                    routing_identity = %routing_identity,
                     cache_status = cache_entry
                         .map(|status| status.cache.status.as_str())
                         .unwrap_or("unknown"),
@@ -415,8 +451,9 @@ impl KiroProvider {
                     "skipping kiro account before mcp request"
                     );
                     blocked_accounts.push(format!(
-                        "{}: {} cache_status={} remaining={}",
+                        "{}[{}]: {} cache_status={} remaining={}",
                         auth.name,
+                        routing_identity,
                         if quota_exhausted { "cached_quota_unavailable" } else { "disabled" },
                         cache_entry
                             .map(|status| status.cache.status.as_str())
@@ -433,7 +470,7 @@ impl KiroProvider {
                 let local_min_start_interval_ms =
                     auth.effective_kiro_channel_min_start_interval_ms();
                 let channel_lease = match self.runtime.request_scheduler.try_acquire(
-                    &auth.name,
+                    &routing_identity,
                     local_max_concurrency,
                     local_min_start_interval_ms,
                     queued_at,
@@ -449,6 +486,7 @@ impl KiroProvider {
                         }
                         tracing::info!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
                             request_kind = "mcp",
                             reason = throttle.reason,
                             wait_ms = throttle.wait.map(|value| value.as_millis() as u64).unwrap_or(0),
@@ -458,9 +496,10 @@ impl KiroProvider {
                             "skipping kiro account before mcp request because it is locally throttled"
                         );
                         blocked_accounts.push(format!(
-                            "{}: {} in_flight={} max_concurrency={} min_start_interval_ms={} \
+                            "{}[{}]: {} in_flight={} max_concurrency={} min_start_interval_ms={} \
                              wait_ms={}",
                             auth.name,
+                            routing_identity,
                             throttle.reason,
                             throttle.in_flight,
                             throttle.max_concurrency,
@@ -475,6 +514,7 @@ impl KiroProvider {
                 };
                 tracing::info!(
                     account_name = %auth.name,
+                    routing_identity = %routing_identity,
                     request_kind = "mcp",
                     queue_wait_ms = channel_lease.waited_ms(),
                     max_concurrency = local_max_concurrency,
@@ -488,13 +528,23 @@ impl KiroProvider {
                     Ok(result) => return Ok(result),
                     Err(ProviderAttemptError::QuotaExhausted(err)) => {
                         saw_quota_exhausted = true;
+                        let shared_accounts =
+                            accounts_for_routing_identity(&auths, &snapshot, &routing_identity);
                         tracing::warn!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
+                            shared_accounts = ?shared_accounts,
                             error = %err,
                             "kiro account quota exhausted during mcp request; moving to next account"
                         );
-                        mark_account_quota_exhausted(&self.runtime, &auth.name, err.to_string())
+                        for account_name in shared_accounts {
+                            mark_account_quota_exhausted(
+                                &self.runtime,
+                                &account_name,
+                                err.to_string(),
+                            )
                             .await;
+                        }
                         last_error = Some(err);
                     },
                     Err(ProviderAttemptError::RateLimited {
@@ -506,12 +556,13 @@ impl KiroProvider {
                             None => cooldown,
                         });
                         self.runtime.request_scheduler.mark_account_cooldown(
-                            &auth.name,
+                            &routing_identity,
                             cooldown,
                             error.to_string(),
                         );
                         tracing::warn!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
                             error = %error,
                             cooldown_ms = cooldown.as_millis() as u64,
                             "kiro account hit upstream 5-minute credit window for mcp; moving to next account"
@@ -521,6 +572,7 @@ impl KiroProvider {
                     Err(ProviderAttemptError::RetryNext(err)) => {
                         tracing::warn!(
                             account_name = %auth.name,
+                            routing_identity = %routing_identity,
                             error = %err,
                             "kiro mcp request failed for current account; trying next account in sequence"
                         );
@@ -899,15 +951,34 @@ fn build_mcp_headers(ctx: &CallContext) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-/// Order accounts by cached remaining balance (descending). Accounts without
-/// cached balance information are placed last (still eligible, just unknown
-/// priority).
-fn balance_ordered_accounts(
+/// Order accounts by readiness/fairness first, then remaining balance.
+///
+/// Accounts that have never started a request in this process are tried first.
+/// Once every identity has history, the least-recently-started identity wins so
+/// one balance leader cannot absorb long consecutive request streaks. Cached
+/// remaining balance stays as the secondary tie-breaker.
+fn selection_ordered_accounts(
     auths: &[KiroAuthRecord],
     snapshot: &KiroStatusCacheSnapshot,
+    scheduler: &super::scheduler::KiroRequestScheduler,
 ) -> Vec<KiroAuthRecord> {
     let mut sorted = auths.to_vec();
     sorted.sort_by(|a, b| {
+        let identity_a = routing_identity_for_account(a, snapshot);
+        let identity_b = routing_identity_for_account(b, snapshot);
+        let last_started_a = scheduler.last_started_at(&identity_a);
+        let last_started_b = scheduler.last_started_at(&identity_b);
+        match (last_started_a, last_started_b) {
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(left), Some(right)) => {
+                let ordering = left.cmp(&right);
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+            },
+            (None, None) => {},
+        }
         let remaining_a = snapshot
             .accounts
             .get(&a.name)
@@ -923,8 +994,33 @@ fn balance_ordered_accounts(
         remaining_b
             .partial_cmp(&remaining_a)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.name.cmp(&b.name))
     });
     sorted
+}
+
+fn routing_identity_for_account(
+    auth: &KiroAuthRecord,
+    snapshot: &KiroStatusCacheSnapshot,
+) -> String {
+    snapshot
+        .accounts
+        .get(&auth.name)
+        .and_then(|status| status.balance.as_ref())
+        .and_then(|balance| balance.user_id.clone())
+        .unwrap_or_else(|| auth.name.clone())
+}
+
+fn accounts_for_routing_identity(
+    auths: &[KiroAuthRecord],
+    snapshot: &KiroStatusCacheSnapshot,
+    routing_identity: &str,
+) -> Vec<String> {
+    auths
+        .iter()
+        .filter(|auth| routing_identity_for_account(auth, snapshot) == routing_identity)
+        .map(|auth| auth.name.clone())
+        .collect()
 }
 
 fn is_monthly_request_limit(body: &str) -> bool {
@@ -992,6 +1088,7 @@ mod tests {
                 remaining,
                 next_reset_at: None,
                 subscription_title: None,
+                user_id: None,
             }),
             cache: KiroCacheView {
                 status: "ready".to_string(),
@@ -1004,7 +1101,7 @@ mod tests {
     }
 
     #[test]
-    fn balance_ordered_sorts_by_remaining_descending() {
+    fn selection_ordered_prefers_higher_balance_without_history() {
         let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
         let (na, sa) = snapshot_with_balance("alpha", 10.0);
         let (nb, sb) = snapshot_with_balance("beta", 80.0);
@@ -1014,13 +1111,14 @@ mod tests {
             ..Default::default()
         };
 
-        let ordered = balance_ordered_accounts(&auths, &snapshot);
+        let scheduler = super::super::scheduler::KiroRequestScheduler::new();
+        let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["beta", "gamma", "alpha"]);
     }
 
     #[test]
-    fn balance_ordered_unknown_accounts_sort_last() {
+    fn selection_ordered_unknown_accounts_sort_last() {
         let auths = vec![auth("alpha"), auth("beta")];
         let (na, sa) = snapshot_with_balance("alpha", 50.0);
         let snapshot = KiroStatusCacheSnapshot {
@@ -1028,9 +1126,38 @@ mod tests {
             ..Default::default()
         };
 
-        let ordered = balance_ordered_accounts(&auths, &snapshot);
+        let scheduler = super::super::scheduler::KiroRequestScheduler::new();
+        let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn selection_ordered_prefers_least_recently_started_identity() {
+        let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
+        let (na, sa) = snapshot_with_balance("alpha", 10.0);
+        let (nb, sb) = snapshot_with_balance("beta", 90.0);
+        let (nc, sc) = snapshot_with_balance("gamma", 70.0);
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [(na, sa), (nb, sb), (nc, sc)].into_iter().collect(),
+            ..Default::default()
+        };
+        let scheduler = super::super::scheduler::KiroRequestScheduler::new();
+        let queued_at = Instant::now();
+
+        let alpha = scheduler
+            .try_acquire("alpha", 1, 0, queued_at)
+            .expect("alpha should acquire");
+        drop(alpha);
+        std::thread::sleep(Duration::from_millis(2));
+        let gamma = scheduler
+            .try_acquire("gamma", 1, 0, queued_at)
+            .expect("gamma should acquire");
+        drop(gamma);
+
+        let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
+        let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["beta", "alpha", "gamma"]);
     }
 
     #[test]
@@ -1043,6 +1170,7 @@ mod tests {
                 remaining: 0.0,
                 next_reset_at: None,
                 subscription_title: None,
+                user_id: None,
             }),
             cache: KiroCacheView {
                 status: STATUS_QUOTA_EXHAUSTED.to_string(),
@@ -1066,5 +1194,102 @@ mod tests {
     fn daily_request_limit_ignores_other_reasons() {
         let body = r#"{"message":"too many requests","reason":"OTHER_LIMIT"}"#;
         assert_eq!(daily_request_limit_cooldown(body), None);
+    }
+
+    #[test]
+    fn routing_identity_prefers_cached_upstream_user_id() {
+        let auth = auth("alias-alpha");
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [("alias-alpha".to_string(), KiroCachedAccountStatus {
+                balance: Some(KiroBalanceView {
+                    current_usage: 10.0,
+                    usage_limit: 100.0,
+                    remaining: 90.0,
+                    next_reset_at: None,
+                    subscription_title: None,
+                    user_id: Some("user-123".to_string()),
+                }),
+                cache: KiroCacheView {
+                    status: "ready".to_string(),
+                    refresh_interval_seconds: 60,
+                    last_checked_at: Some(1),
+                    last_success_at: Some(1),
+                    error_message: None,
+                },
+            })]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        assert_eq!(routing_identity_for_account(&auth, &snapshot), "user-123");
+    }
+
+    #[test]
+    fn accounts_for_routing_identity_groups_aliases_of_same_user() {
+        let auths = vec![auth("default"), auth("fhhfdss"), auth("hfdeeh")];
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [
+                ("default".to_string(), KiroCachedAccountStatus {
+                    balance: Some(KiroBalanceView {
+                        current_usage: 50.0,
+                        usage_limit: 100.0,
+                        remaining: 50.0,
+                        next_reset_at: None,
+                        subscription_title: None,
+                        user_id: Some("user-a".to_string()),
+                    }),
+                    cache: KiroCacheView {
+                        status: "ready".to_string(),
+                        refresh_interval_seconds: 60,
+                        last_checked_at: Some(1),
+                        last_success_at: Some(1),
+                        error_message: None,
+                    },
+                }),
+                ("fhhfdss".to_string(), KiroCachedAccountStatus {
+                    balance: Some(KiroBalanceView {
+                        current_usage: 10.0,
+                        usage_limit: 100.0,
+                        remaining: 90.0,
+                        next_reset_at: None,
+                        subscription_title: None,
+                        user_id: Some("user-b".to_string()),
+                    }),
+                    cache: KiroCacheView {
+                        status: "ready".to_string(),
+                        refresh_interval_seconds: 60,
+                        last_checked_at: Some(1),
+                        last_success_at: Some(1),
+                        error_message: None,
+                    },
+                }),
+                ("hfdeeh".to_string(), KiroCachedAccountStatus {
+                    balance: Some(KiroBalanceView {
+                        current_usage: 10.0,
+                        usage_limit: 100.0,
+                        remaining: 90.0,
+                        next_reset_at: None,
+                        subscription_title: None,
+                        user_id: Some("user-b".to_string()),
+                    }),
+                    cache: KiroCacheView {
+                        status: "ready".to_string(),
+                        refresh_interval_seconds: 60,
+                        last_checked_at: Some(1),
+                        last_success_at: Some(1),
+                        error_message: None,
+                    },
+                }),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        assert_eq!(accounts_for_routing_identity(&auths, &snapshot, "user-b"), vec![
+            "fhhfdss".to_string(),
+            "hfdeeh".to_string()
+        ]);
     }
 }

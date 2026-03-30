@@ -426,6 +426,8 @@ pub struct UsageLimitsResponse {
     pub subscription_info: Option<SubscriptionInfo>,
     #[serde(default)]
     pub usage_breakdown_list: Vec<UsageBreakdown>,
+    #[serde(default)]
+    pub user_info: Option<UserInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -433,6 +435,13 @@ pub struct UsageLimitsResponse {
 pub struct SubscriptionInfo {
     #[serde(default)]
     pub subscription_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInfo {
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -489,6 +498,12 @@ impl UsageLimitsResponse {
         self.subscription_info
             .as_ref()
             .and_then(|info| info.subscription_title.as_deref())
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        self.user_info
+            .as_ref()
+            .and_then(|info| info.user_id.as_deref())
     }
 
     fn primary_breakdown(&self) -> Option<&UsageBreakdown> {

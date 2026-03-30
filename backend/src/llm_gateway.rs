@@ -2437,28 +2437,60 @@ pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeSta
 
     let pool_entries = runtime.account_pool.all_entries().await;
 
-    let result: Result<(Vec<LlmGatewayRateLimitBucketView>, Option<String>)> =
-        if pool_entries.is_empty() {
-            // Legacy single-file path — one upstream request.
-            fetch_rate_limit_status_snapshot(runtime, &source_url)
-                .await
-                .map(|buckets| (buckets, None::<String>))
-        } else {
-            // Multi-account: read the already-cached per-account snapshots kept
-            // fresh by the background refresh task instead of hitting upstream.
-            let summaries = runtime.account_pool.list_summaries().await;
-            let mut all_buckets = Vec::new();
-            for summary in &summaries {
-                if summary.status.as_str() != "active" {
-                    continue;
-                }
-                for mut bucket in summary.rate_limits.buckets.clone() {
-                    bucket.account_name = Some(summary.name.clone());
-                    all_buckets.push(bucket);
-                }
+    let result: Result<(Vec<LlmGatewayRateLimitBucketView>, Option<String>)> = if pool_entries
+        .is_empty()
+    {
+        // Legacy single-file path — one upstream request.
+        fetch_rate_limit_status_snapshot(runtime, &source_url)
+            .await
+            .map(|buckets| (buckets, None::<String>))
+    } else {
+        // Multi-account: read the already-cached per-account snapshots kept
+        // fresh by the background refresh task instead of hitting upstream.
+        let summaries = runtime.account_pool.list_summaries().await;
+        let mut all_buckets = Vec::new();
+        let mut refresh_errors = Vec::new();
+        let mut active_account_count = 0usize;
+        for summary in &summaries {
+            if summary.status.as_str() != "active" {
+                continue;
             }
-            Ok((all_buckets, None))
+            active_account_count += 1;
+            if let Some(error_message) = summary.usage_refresh.error_message.as_deref() {
+                refresh_errors.push(format!(
+                    "{}: {}",
+                    summary.name,
+                    summarize_account_usage_refresh_error(error_message)
+                ));
+            }
+            for mut bucket in summary.rate_limits.buckets.clone() {
+                bucket.account_name = Some(summary.name.clone());
+                all_buckets.push(bucket);
+            }
+        }
+        let partial_error = if refresh_errors.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "codex account usage refresh degraded for {} active account(s): {}",
+                refresh_errors.len(),
+                refresh_errors.join(" | ")
+            ))
         };
+        if all_buckets.is_empty() && active_account_count > 0 {
+            Err(anyhow!(
+                "{}",
+                partial_error.unwrap_or_else(|| {
+                    format!(
+                        "codex account usage snapshots are not ready yet for {} active account(s)",
+                        active_account_count
+                    )
+                })
+            ))
+        } else {
+            Ok((all_buckets, partial_error))
+        }
+    };
 
     match result {
         Ok((buckets, partial_error)) => {
@@ -2501,6 +2533,19 @@ pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeSta
             Err(err)
         },
     }
+}
+
+fn summarize_account_usage_refresh_error(error_message: &str) -> String {
+    let compact = error_message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut out = compact.trim().to_string();
+    if out.len() > 240 {
+        out.truncate(237);
+        out.push_str("...");
+    }
+    out
 }
 
 // === Request-context middleware ===
@@ -2565,9 +2610,9 @@ pub async fn proxy_gateway_request(
         "Validated LLM gateway key and forwarding request"
     );
 
-    let refresh_route_usage = !request::is_models_path(&gateway_path);
+    let record_route_selection = !request::is_models_path(&gateway_path);
     let (auth_snapshot, selected_account_name, map_gpt53_codex_to_spark) =
-        resolve_auth_for_key(&state, &key_lease.record, refresh_route_usage).await?;
+        resolve_auth_for_key(&state, &key_lease.record, record_route_selection).await?;
 
     if request::is_models_path(&gateway_path) {
         return respond_local_models(
@@ -2678,7 +2723,7 @@ fn validate_cached_key(key: &LlmGatewayKeyRecord) -> Result<(), (StatusCode, Jso
 async fn resolve_auth_for_key(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
-    refresh_route_usage: bool,
+    record_route_selection: bool,
 ) -> Result<(CodexAuthSnapshot, Option<String>, bool), (StatusCode, Json<ErrorResponse>)> {
     let pool = &state.llm_gateway.account_pool;
     let strategy = key.route_strategy.as_deref().unwrap_or("auto");
@@ -2701,7 +2746,7 @@ async fn resolve_auth_for_key(
                         &format!("bound account `{name}` is unavailable"),
                     )
                 })?;
-            if refresh_route_usage {
+            if record_route_selection {
                 pool.record_route_selection(name).await;
             }
             tracing::info!(
@@ -2765,18 +2810,10 @@ async fn resolve_auth_for_key(
             );
 
             if let Some(filter) = auto_account_filter.as_ref() {
-                if refresh_route_usage {
-                    token_refresh::refresh_routing_candidates(
-                        pool,
-                        state.llm_gateway.upstream_proxy_registry.as_ref(),
-                        Some(filter),
-                    )
-                    .await;
-                }
                 if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
                     pool.select_best_account(Some(filter)).await
                 {
-                    if refresh_route_usage {
+                    if record_route_selection {
                         pool.record_route_selection(&name).await;
                     }
                     tracing::info!(
@@ -2808,18 +2845,10 @@ async fn resolve_auth_for_key(
                 ));
             }
 
-            if refresh_route_usage {
-                token_refresh::refresh_routing_candidates(
-                    pool,
-                    state.llm_gateway.upstream_proxy_registry.as_ref(),
-                    None,
-                )
-                .await;
-            }
             if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
                 pool.select_best_account(None).await
             {
-                if refresh_route_usage {
+                if record_route_selection {
                     pool.record_route_selection(&name).await;
                 }
                 tracing::info!(
@@ -3854,6 +3883,9 @@ pub async fn import_account(
         secondary_remaining_percent: usage.secondary_remaining_percent(),
         map_gpt53_codex_to_spark: false,
         last_refresh: Some(now_ms()),
+        last_usage_checked_at: usage.last_checked_at,
+        last_usage_success_at: usage.last_checked_at,
+        usage_error_message: None,
     }))
 }
 
@@ -3878,6 +3910,9 @@ pub async fn list_accounts(
                 .rate_limits
                 .last_checked_at
                 .or(summary.last_refresh_ms),
+            last_usage_checked_at: summary.usage_refresh.last_checked_at,
+            last_usage_success_at: summary.usage_refresh.last_success_at,
+            usage_error_message: summary.usage_refresh.error_message,
         })
         .collect();
     Ok(Json(AccountListResponse {
@@ -3944,6 +3979,9 @@ pub async fn patch_account_settings(
             .rate_limits
             .last_checked_at
             .or(summary.last_refresh_ms),
+        last_usage_checked_at: summary.usage_refresh.last_checked_at,
+        last_usage_success_at: summary.usage_refresh.last_success_at,
+        usage_error_message: summary.usage_refresh.error_message,
     }))
 }
 
