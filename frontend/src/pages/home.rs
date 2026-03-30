@@ -77,16 +77,27 @@ pub fn home_page() -> Html {
             }
             {
                 let total_music = total_music.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::fetch_songs(Some(1), Some(0), None, None, None).await {
+                        Ok(resp) => {
+                            total_music.set(resp.total);
+                        },
+                        Err(e) => {
+                            console::error_1(&format!("Failed to fetch songs total: {e}").into());
+                        },
+                    }
+                });
+            }
+            {
                 let recent_songs = recent_songs.clone();
                 let songs_loaded = songs_loaded.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    match api::fetch_songs(Some(4), Some(0), None, None, None).await {
-                        Ok(resp) => {
-                            total_music.set(resp.total);
-                            recent_songs.set(resp.songs);
+                    match api::fetch_random_recommended_songs(Some(2), &[]).await {
+                        Ok(songs) => {
+                            recent_songs.set(songs);
                         },
                         Err(e) => {
-                            console::error_1(&format!("Failed to fetch songs: {e}").into());
+                            console::error_1(&format!("Failed to fetch random songs: {e}").into());
                         },
                     }
                     songs_loaded.set(true);
@@ -96,7 +107,7 @@ pub fn home_page() -> Html {
                 let recent_articles = recent_articles.clone();
                 let articles_loaded = articles_loaded.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    match api::fetch_articles(None, None, Some(4), Some(0)).await {
+                    match api::fetch_articles(None, None, Some(2), Some(0)).await {
                         Ok(page) => {
                             recent_articles.set(page.articles);
                         },
@@ -490,11 +501,27 @@ pub fn home_page() -> Html {
                                 }) }
                             </div>
                         </div>
-                        // Section 4: Recent Articles
-                        <div class={classes!("mt-12", "w-full")}>
-                            <div class="terminal-line">
-                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                <span class="terminal-content">{ t::CMD_SHOW_RECENT_ARTICLES }</span>
+                        // Sections 4-7: Explore Terminal
+                        <div class={classes!("terminal-hero", "mt-8")}>
+                            <div class="terminal-header">
+                                <span class="terminal-dot terminal-dot-red"></span>
+                                <span class="terminal-dot terminal-dot-yellow"></span>
+                                <span class="terminal-dot terminal-dot-green"></span>
+                                <span class="terminal-title">{ "explore.sh" }</span>
+                            </div>
+
+                            // Section 4: Recent Articles
+                            <div class={classes!("flex", "items-center", "justify-between", "flex-wrap", "gap-2")}>
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                    <span class="terminal-content">{ t::CMD_SHOW_RECENT_ARTICLES }</span>
+                                </div>
+                                <Link<Route>
+                                    to={Route::LatestArticles}
+                                    classes={classes!("btn-terminal", "text-xs")}
+                                >
+                                    { t::BTN_VIEW_ALL_ARTICLES }
+                                </Link<Route>>
                             </div>
                             if *articles_loaded {
                                 <div class={classes!(
@@ -510,7 +537,7 @@ pub fn home_page() -> Html {
                                     "mt-4", "grid", "gap-4",
                                     "grid-cols-1", "md:grid-cols-2"
                                 )}>
-                                    { for (0..4).map(|_| html! {
+                                    { for (0..2).map(|_| html! {
                                         <div class={classes!(
                                             "rounded-lg", "border", "border-[var(--border)]",
                                             "bg-[var(--surface)]", "p-4", "animate-pulse"
@@ -522,28 +549,23 @@ pub fn home_page() -> Html {
                                     }) }
                                 </div>
                             }
-                            <div class={classes!("mt-4", "text-right")}>
+                            // Section 5: Recent Music
+                            <div class={classes!("flex", "items-center", "justify-between", "flex-wrap", "gap-2")} style="margin-top: 1.5rem;">
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                    <span class="terminal-content">{ t::CMD_SHOW_RECENT_MUSIC }</span>
+                                </div>
                                 <Link<Route>
-                                    to={Route::LatestArticles}
-                                    classes={classes!(
-                                        "text-sm", "text-[var(--primary)]",
-                                        "hover:underline"
-                                    )}
+                                    to={Route::MediaAudio}
+                                    classes={classes!("btn-terminal", "text-xs")}
                                 >
-                                    { t::BTN_VIEW_ALL_ARTICLES }
+                                    { t::BTN_VIEW_ALL_MUSIC }
                                 </Link<Route>>
-                            </div>
-                        </div>
-                        // Section 5: Recent Music
-                        <div class={classes!("mt-12", "w-full")}>
-                            <div class="terminal-line">
-                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                <span class="terminal-content">{ t::CMD_SHOW_RECENT_MUSIC }</span>
                             </div>
                             if *songs_loaded {
                                 <div class={classes!(
                                     "mt-4", "grid", "gap-3",
-                                    "grid-cols-2", "md:grid-cols-4"
+                                    "grid-cols-2"
                                 )}>
                                     { for recent_songs.iter().map(|song| {
                                         let has_cover = song.cover_image.as_ref().is_some_and(|c| !c.is_empty());
@@ -602,9 +624,9 @@ pub fn home_page() -> Html {
                             } else {
                                 <div class={classes!(
                                     "mt-4", "grid", "gap-3",
-                                    "grid-cols-2", "md:grid-cols-4"
+                                    "grid-cols-2"
                                 )}>
-                                    { for (0..4).map(|_| html! {
+                                    { for (0..2).map(|_| html! {
                                         <div class={classes!(
                                             "rounded-lg", "border", "border-[var(--border)]",
                                             "bg-[var(--surface)]", "overflow-hidden", "animate-pulse"
@@ -618,25 +640,12 @@ pub fn home_page() -> Html {
                                     }) }
                                 </div>
                             }
-                            <div class={classes!("mt-4", "text-right")}>
-                                <Link<Route>
-                                    to={Route::MediaAudio}
-                                    classes={classes!(
-                                        "text-sm", "text-[var(--primary)]",
-                                        "hover:underline"
-                                    )}
-                                >
-                                    { t::BTN_VIEW_ALL_MUSIC }
-                                </Link<Route>>
-                            </div>
-                        </div>
-                        // Section 6: Tech Stack Logo Strip
-                        <div class={classes!("mt-12", "w-full")}>
-                            <div class="terminal-line">
+                            // Section 6: Tech Stack
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                                 <span class="terminal-content">{ t::CMD_SHOW_TECH_STACK }</span>
                             </div>
-                            <div class={classes!("mt-4", "flex", "flex-wrap", "gap-3")}>
+                            <div class={classes!("flex", "flex-wrap", "gap-3", "mt-3", "ml-8")}>
                                 { for tech_stack.iter().map(|(logo, name, href)| html! {
                                     <a
                                         href={(*href).to_string()}
@@ -666,10 +675,9 @@ pub fn home_page() -> Html {
                                     </a>
                                 }) }
                             </div>
-                        </div>
-                        // Section 7: Social + GitHub Wrapped
-                        <div class={classes!("mt-12", "w-full")}>
-                            <div class="terminal-line">
+
+                            // Section 7: Social + GitHub Wrapped
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                                 <span class="terminal-content">{ t::CMD_SHOW_SOCIAL }</span>
                             </div>
@@ -698,11 +706,19 @@ pub fn home_page() -> Html {
                                     <span class={classes!("sr-only")}>{ common_text::BILIBILI }</span>
                                 </a>
                             </div>
+
+                            // GitHub Wrapped
                             <div class="terminal-line" style="margin-top: 1.5rem;">
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                                 <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
                             </div>
                             <GithubWrappedSelector />
+
+                            // Blinking cursor
+                            <div class="terminal-line" style="margin-top: 1.5rem;">
+                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                                <span class="terminal-cursor"></span>
+                            </div>
                         </div>
                     </div>
                 </section>
