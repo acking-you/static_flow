@@ -108,6 +108,21 @@ pub mod home {
     pub const WRAPPED_MORE_YEARS_ARIA: &str = "查看更多年份";
     pub const WRAPPED_SELECT_YEAR: &str = "选择年份";
     pub const WRAPPED_LATEST_TAG: &str = "最新";
+
+    pub const TAB_CMD: &str = "select --tab";
+    pub const TAB_NAVIGATION: &str = "导航";
+    pub const TAB_SOCIAL: &str = "社交";
+    pub const OPEN_SOURCE_INLINE: &str =
+        "你正在看的这个站本身就是开源项目哦 ╰(*°▽°*)╯ 纯 Rust 全栈 · 几乎 100% vibe coded —";
+    pub const OPEN_SOURCE_GITHUB_CTA: &str = "来 GitHub 看看这个站的源码？";
+
+    // Homepage redesign — new section titles
+    pub const CMD_SHOW_RECENT_ARTICLES: &str = "ls ./recent-articles";
+    pub const CMD_SHOW_RECENT_MUSIC: &str = "ls ./recent-music";
+    pub const CMD_SHOW_TECH_STACK: &str = "cat ./tech-stack";
+    pub const BTN_VIEW_ALL_ARTICLES: &str = "查看全部 →";
+    pub const BTN_VIEW_ALL_MUSIC: &str = "查看全部 →";
+    pub const BTN_IMAGE: &str = "图片";
 }
 
 pub mod search {
