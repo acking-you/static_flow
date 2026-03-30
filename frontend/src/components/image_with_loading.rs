@@ -1,5 +1,7 @@
 use yew::prelude::*;
 
+use crate::components::loading_spinner::{LoadingSpinner, SpinnerSize};
+
 #[derive(Properties, PartialEq, Clone)]
 pub struct ImageWithLoadingProps {
     pub src: String,
@@ -62,12 +64,13 @@ pub fn image_with_loading(props: &ImageWithLoadingProps) -> Html {
                         <div class={classes!(
                             "absolute",
                             "inset-0",
-                            "bg-gradient-to-br",
-                            "from-[var(--surface-alt)]",
-                            "to-[var(--surface)]",
-                            "animate-pulse",
+                            "flex",
+                            "items-center",
+                            "justify-center",
                             "pointer-events-none"
-                        )} />
+                        )}>
+                            <LoadingSpinner size={SpinnerSize::Small} />
+                        </div>
                     }
                 } else {
                     html! {}
