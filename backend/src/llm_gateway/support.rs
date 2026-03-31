@@ -161,7 +161,10 @@ fn normalize_required(value: String, field_name: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "This helper is kept around for future path-hardening work and targeted tests."
+)]
 fn _is_within_base_dir(base_dir: &Path, candidate: &Path) -> bool {
     candidate.starts_with(base_dir)
 }

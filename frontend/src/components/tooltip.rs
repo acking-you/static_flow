@@ -2,7 +2,11 @@ use gloo_timers::callback::Timeout;
 use web_sys::TouchEvent;
 use yew::prelude::*;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The enum keeps the full placement surface available even when some screens only use \
+              a subset of positions."
+)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TooltipPosition {
     Top,

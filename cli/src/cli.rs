@@ -349,7 +349,11 @@ pub enum ApiCommands {
 }
 
 #[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "The ingest subcommand carries option-rich payloads, and splitting it would make the \
+              CLI schema harder to read."
+)]
 pub enum InteractiveCommands {
     /// Ingest a JS-heavy external page as bilingual article + local interactive
     /// mirror.

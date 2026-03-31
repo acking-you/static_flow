@@ -5,7 +5,11 @@ use yew::prelude::*;
 use super::icons::{Icon, IconName};
 
 #[derive(Properties, PartialEq)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The audio player props keep optional callbacks available for screens that need \
+              richer playback telemetry."
+)]
 pub struct AudioPlayerProps {
     pub src: AttrValue,
     #[prop_or_default]
@@ -255,7 +259,11 @@ pub fn audio_player(props: &AudioPlayerProps) -> Html {
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Formatting is shared with alternate player layouts even when the current component \
+              path is simplified."
+)]
 fn format_time(secs: f64) -> String {
     if secs.is_nan() || secs.is_infinite() {
         return "00:00".to_string();

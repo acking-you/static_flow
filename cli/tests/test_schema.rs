@@ -1,3 +1,5 @@
+//! Integration tests for `sf_cli::schema`.
+
 #[cfg(test)]
 mod tests {
     use arrow_array::{Array, FixedSizeListArray, Int32Array, ListArray, StringArray};

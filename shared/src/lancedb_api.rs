@@ -1146,7 +1146,11 @@ impl StaticFlowDataStore {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Semantic search exposes the backend query contract directly, so grouping \
+                  parameters here would only add wrapper noise."
+    )]
     pub async fn semantic_search(
         &self,
         keyword: &str,

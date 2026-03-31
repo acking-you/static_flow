@@ -60,7 +60,11 @@ fn intercept_search_links(e: MouseEvent) {
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The props type is retained for router-driven call sites and tests even when the \
+              page currently reads query state internally."
+)]
 #[derive(Properties, Clone, PartialEq)]
 pub struct SearchPageProps {
     pub query: Option<String>,
@@ -3088,7 +3092,11 @@ struct SearchPageQuery {
     max_distance: Option<f32>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The helper builds a stable search URL from explicit query toggles, and an options \
+              struct would only obscure the mapping."
+)]
 fn build_search_href(
     mode: Option<&str>,
     keyword: &str,

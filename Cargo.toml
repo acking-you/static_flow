@@ -53,6 +53,28 @@ walkdir = "2.5"
 sha2 = "0.10"
 image = "0.25"
 
+[workspace.lints.rust]
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+empty_docs = "deny"
+tabs_in_doc_comments = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+
+[workspace.lints.rustdoc]
+bare_urls = "deny"
+broken_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+missing_crate_level_docs = "deny"
+private_intra_doc_links = "deny"
+unescaped_backticks = "deny"
+
 # Workspace 级别的编译优化配置
 [profile.release]
 opt-level = "z"   # 优化体积（WASM 重要）

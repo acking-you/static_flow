@@ -25,7 +25,12 @@ use tokio::{
 };
 
 use super::{accounts::AccountPool, types::LlmGatewayRateLimitStatusResponse};
-use crate::{state::LlmGatewayRuntimeConfig, upstream_proxy::UpstreamProxyRegistry};
+use crate::{
+    state::LlmGatewayRuntimeConfig,
+    upstream_proxy::{
+        AccountProxySelection, HttpClientProfile, ResolvedUpstreamProxy, UpstreamProxyRegistry,
+    },
+};
 
 const CLEANER_TICK_SECONDS: u64 = 1;
 const USAGE_EVENT_FLUSH_BATCH_SIZE: usize = 64;
@@ -85,23 +90,18 @@ impl LlmGatewayRuntimeState {
         })
     }
 
-    pub(crate) async fn build_upstream_client(&self) -> Result<reqwest::Client> {
-        let builder = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .pool_max_idle_per_host(32)
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(30));
-        let builder = self
-            .upstream_proxy_registry
-            .apply_provider_proxy(
+    pub(crate) async fn build_upstream_client(
+        &self,
+        auth_snapshot: &CodexAuthSnapshot,
+    ) -> Result<(reqwest::Client, ResolvedUpstreamProxy)> {
+        self.upstream_proxy_registry
+            .client_for_selection(
                 static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_CODEX,
-                builder,
+                Some(&auth_snapshot.proxy_selection),
+                codex_upstream_client_profile(),
             )
             .await
-            .context("failed to resolve codex upstream proxy")?;
-        builder
-            .build()
-            .context("failed to build llm gateway reqwest client")
+            .context("failed to resolve codex upstream proxy client")
     }
 
     /// Rebuild the in-memory usage rollups by scanning all usage events.
@@ -451,15 +451,25 @@ impl Drop for CodexKeyRequestLease {
 pub(crate) struct CodexAuthSnapshot {
     pub access_token: String,
     pub account_id: Option<String>,
+    pub proxy_selection: AccountProxySelection,
     modified_at: Option<SystemTime>,
 }
 
 impl CodexAuthSnapshot {
     /// Build a snapshot without filesystem mtime (used by the account pool).
     pub(crate) fn from_tokens(access_token: String, account_id: Option<String>) -> Self {
+        Self::from_tokens_with_proxy(access_token, account_id, AccountProxySelection::default())
+    }
+
+    pub(crate) fn from_tokens_with_proxy(
+        access_token: String,
+        account_id: Option<String>,
+        proxy_selection: AccountProxySelection,
+    ) -> Self {
         Self {
             access_token,
             account_id,
+            proxy_selection: proxy_selection.canonicalize(),
             modified_at: None,
         }
     }
@@ -539,6 +549,7 @@ impl CodexAuthSource {
                 .account_id
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            proxy_selection: AccountProxySelection::default(),
             modified_at,
         };
         *self.cached.write().await = Some(snapshot.clone());
@@ -566,6 +577,10 @@ fn codex_auth_path() -> PathBuf {
     }
     let home = env::var("HOME").unwrap_or_else(|_| "/home/ts_user".to_string());
     PathBuf::from(home).join(".codex").join("auth.json")
+}
+
+pub(crate) const fn codex_upstream_client_profile() -> HttpClientProfile {
+    HttpClientProfile::new(None, 32, 90)
 }
 
 /// Renewable in-memory cache for validated API keys.

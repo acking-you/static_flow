@@ -1,3 +1,5 @@
+//! StaticFlow command-line entrypoint.
+
 mod cli;
 mod commands;
 mod db;

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use super::runtime::CodexAuthSnapshot;
+use crate::upstream_proxy::{AccountProxyMode, AccountProxySelection};
 
 // ---------------------------------------------------------------------------
 // On-disk format (Codex auth.json compatible)
@@ -53,6 +54,26 @@ pub(crate) struct CodexAuthTokens {
 struct AccountSettingsFile {
     #[serde(default)]
     pub map_gpt53_codex_to_spark: bool,
+    #[serde(default)]
+    pub proxy_mode: AccountProxyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_config_id: Option<String>,
+}
+
+impl AccountSettingsFile {
+    fn proxy_selection(&self) -> AccountProxySelection {
+        AccountProxySelection {
+            proxy_mode: self.proxy_mode,
+            proxy_config_id: self.proxy_config_id.clone(),
+        }
+        .canonicalize()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AccountSettingsPatch {
+    pub map_gpt53_codex_to_spark: Option<bool>,
+    pub proxy_selection: Option<AccountProxySelection>,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,13 +103,18 @@ pub(crate) struct CodexAccount {
     pub refresh_token: String,
     pub id_token: String,
     pub map_gpt53_codex_to_spark: bool,
+    pub proxy_selection: AccountProxySelection,
     pub last_refresh: Option<DateTime<Utc>>,
     pub status: AccountStatus,
 }
 
 impl CodexAccount {
     pub fn to_auth_snapshot(&self) -> CodexAuthSnapshot {
-        CodexAuthSnapshot::from_tokens(self.access_token.clone(), self.account_id.clone())
+        CodexAuthSnapshot::from_tokens_with_proxy(
+            self.access_token.clone(),
+            self.account_id.clone(),
+            self.proxy_selection.clone(),
+        )
     }
 }
 
@@ -156,6 +182,7 @@ pub(crate) struct AccountSummarySnapshot {
     pub usage_refresh: AccountUsageRefreshHealth,
     pub last_refresh_ms: Option<i64>,
     pub map_gpt53_codex_to_spark: bool,
+    pub proxy_selection: AccountProxySelection,
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +210,10 @@ impl AccountPool {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Tests and diagnostics still use the configured auth directory accessor."
+    )]
     pub fn auths_dir(&self) -> &Path {
         &self.auths_dir
     }
@@ -337,6 +367,7 @@ impl AccountPool {
                 usage_refresh: refresh_health,
                 last_refresh_ms,
                 map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+                proxy_selection: account.proxy_selection.clone(),
             });
         }
         out
@@ -454,14 +485,19 @@ impl AccountPool {
         Some((account.to_auth_snapshot(), account.map_gpt53_codex_to_spark))
     }
 
-    pub async fn set_map_gpt53_codex_to_spark(&self, name: &str, enabled: bool) -> Result<bool> {
+    pub async fn update_settings(&self, name: &str, patch: AccountSettingsPatch) -> Result<bool> {
         let accounts = self.accounts.read().await;
         let Some(entry) = accounts.get(name) else {
             return Ok(false);
         };
         {
             let mut account = entry.write().await;
-            account.map_gpt53_codex_to_spark = enabled;
+            if let Some(enabled) = patch.map_gpt53_codex_to_spark {
+                account.map_gpt53_codex_to_spark = enabled;
+            }
+            if let Some(proxy_selection) = patch.proxy_selection {
+                account.proxy_selection = proxy_selection.canonicalize();
+            }
             persist_account_settings_to_file(&self.auths_dir, &account).await?;
         }
         Ok(true)
@@ -557,7 +593,11 @@ impl AccountPool {
     }
 
     /// Return whether the pool has any accounts.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "This helper remains useful in tests and diagnostics even when production code \
+                  currently uses stronger account selection paths."
+    )]
     pub async fn is_empty(&self) -> bool {
         self.accounts.read().await.is_empty()
     }
@@ -606,6 +646,7 @@ async fn load_account_from_file(path: &Path) -> Result<CodexAccount> {
         refresh_token,
         id_token,
         map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+        proxy_selection: settings.proxy_selection(),
         last_refresh: auth_file.last_refresh,
         status: AccountStatus::Active,
     })
@@ -643,7 +684,7 @@ async fn load_account_settings_from_file(auth_path: &Path) -> Result<AccountSett
 
 async fn persist_account_settings_to_file(auths_dir: &Path, account: &CodexAccount) -> Result<()> {
     let path = auths_dir.join(format!("{}.meta", account.name));
-    if !account.map_gpt53_codex_to_spark {
+    if !account.map_gpt53_codex_to_spark && account.proxy_selection.is_default() {
         if path.is_file() {
             tokio::fs::remove_file(&path)
                 .await
@@ -654,6 +695,8 @@ async fn persist_account_settings_to_file(auths_dir: &Path, account: &CodexAccou
 
     let settings = AccountSettingsFile {
         map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+        proxy_mode: account.proxy_selection.proxy_mode,
+        proxy_config_id: account.proxy_selection.proxy_config_id.clone(),
     };
     let json = serde_json::to_string_pretty(&settings)
         .context("failed to serialize account settings file")?;
@@ -779,6 +822,7 @@ mod tests {
             refresh_token: format!("{name}-refresh"),
             id_token: format!("{name}-id"),
             map_gpt53_codex_to_spark: false,
+            proxy_selection: Default::default(),
             last_refresh: None,
             status: AccountStatus::Active,
         }

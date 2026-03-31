@@ -325,6 +325,8 @@ impl MemoryProfiler {
         self.sampled_dealloc_events.store(0, Ordering::Relaxed);
         self.sampled_realloc_events.store(0, Ordering::Relaxed);
         // Encourage mimalloc to release freed profiler pages after a full reset.
+        // SAFETY: this is a leaf FFI call that only asks mimalloc to collect
+        // its internal caches after profiler-owned data structures were reset.
         unsafe {
             better_mimalloc_sys::mi_collect(true);
         }
@@ -756,6 +758,9 @@ impl ProfiledMiMalloc {
     }
 }
 
+// SAFETY: this wrapper forwards all allocation operations to the underlying
+// allocator while recording profiler metadata, and it preserves the
+// `GlobalAlloc` contract for each delegated call.
 unsafe impl GlobalAlloc for ProfiledMiMalloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = self.inner.alloc(layout);

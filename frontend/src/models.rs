@@ -2,7 +2,14 @@
 #[cfg(feature = "mock")]
 use std::collections::HashMap;
 
-#[cfg_attr(not(feature = "mock"), allow(unused_imports))]
+#[cfg_attr(
+    not(feature = "mock"),
+    allow(
+        unused_imports,
+        reason = "The non-mock build re-exports shared API models for downstream modules even \
+                  when this file does not reference every name directly."
+    )
+)]
 pub use static_flow_shared::{Article, ArticleKind, ArticleListItem};
 
 #[cfg(feature = "mock")]

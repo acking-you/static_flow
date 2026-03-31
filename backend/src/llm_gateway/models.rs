@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 use super::{
     codex_user_agent, compute_upstream_url, internal_error,
     request::{extract_header_value, extract_query_param, normalize_upstream_base_url},
-    runtime::{bearer_header, CodexAuthSnapshot, LlmGatewayRuntimeState},
+    runtime::{
+        bearer_header, codex_upstream_client_profile, CodexAuthSnapshot, LlmGatewayRuntimeState,
+    },
     types::GatewayModelDescriptor,
     DEFAULT_CODEX_CLI_VERSION, DEFAULT_UPSTREAM_BASE_URL, DEFAULT_WIRE_ORIGINATOR,
     GPT53_CODEX_MODEL_ID, GPT53_CODEX_SPARK_MODEL_ID,
@@ -100,13 +102,28 @@ async fn fetch_codex_models(
             ReqwestHeaderValue::from_str(account_id)?,
         );
     }
-    let client = gateway.build_upstream_client().await?;
-    let response = client
-        .get(url)
-        .headers(headers)
-        .send()
-        .await
-        .context("codex models upstream request failed")?;
+    let (client, resolved_proxy) = gateway.build_upstream_client(auth_snapshot).await?;
+    let response = client.get(url).headers(headers).send().await;
+    let response = match response {
+        Ok(response) => response,
+        Err(err) => {
+            let invalidated = gateway
+                .upstream_proxy_registry
+                .invalidate_client_if_connect_error(
+                    &resolved_proxy,
+                    codex_upstream_client_profile(),
+                    &err,
+                )
+                .await;
+            tracing::warn!(
+                proxy_source = %resolved_proxy.source.as_str(),
+                proxy_url = %resolved_proxy.proxy_url_label(),
+                invalidated_client = invalidated,
+                "codex models upstream request failed: {err}"
+            );
+            return Err(err).context("codex models upstream request failed");
+        },
+    };
     parse_models_response(response, "codexmanager").await
 }
 

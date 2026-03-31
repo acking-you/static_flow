@@ -4,6 +4,8 @@
 
 本地优先的动态博客系统：后端在本地运行，通过本地 Nginx + pb-mapper 对外暴露 HTTPS API；文章与图片统一写入 LanceDB，由前端直接请求云端映射端点访问。
 
+除了内容系统本身，StaticFlow 当前还内置了一套对外 `LLM Access` 能力：Codex 的 OpenAI-compatible 网关、Kiro 的 Anthropic-compatible 网关、provider 级上游代理解析、可配额度的 gateway key，以及统一的 usage 账本。实现细节见 [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md)。
+
 ## 核心理念
 
 > **"Don't build agents, build skills instead."**
@@ -38,7 +40,7 @@ static-flow/
   - HF 数据集仓库：`LB7666/my_lancedb_data`
   - 远端地址：`git@hf.co:datasets/LB7666/my_lancedb_data`
   - 本地数据目录：`/mnt/wsl/data4tb/static-flow-data/lancedb`
-  - 表：`articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`
+  - 表：`articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`, `llm_gateway_proxy_configs`, `llm_gateway_proxy_bindings`, `llm_gateway_token_requests`, `llm_gateway_account_contribution_requests`, `llm_gateway_sponsor_requests`
 - Comments DB（评论审核与 AI 运行记录）
   - HF 数据集仓库：`LB7666/static-flow-comments`
   - 远端地址：`git@hf.co:datasets/LB7666/static-flow-comments`
@@ -151,6 +153,42 @@ CI 自动构建，`STATICFLOW_API_BASE` 由 GitHub repo variables 配置。
 - 自托管 Caddy：云端 `/etc/caddy/Caddyfile`
 - GitHub Pages CI：`.github/workflows/deploy.yml`
 - 旧版 Nginx 配置：`deployment-examples/`
+
+## LLM Access / Kiro Access
+
+自托管模式下，StaticFlow 现在不只是内容站点，也会对外暴露两条公开接入面：
+
+- `/llm-access`：Codex 接入页，底层走 OpenAI-compatible 的 `/api/llm-gateway/v1`
+- `/kiro-access`：Kiro 接入页，底层走 Anthropic-compatible 的 `/api/kiro-gateway`
+
+当前实现的共性：
+
+- 两条接入线都由 StaticFlow backend 代理，不直接暴露上游真实账号
+- 上游代理解析统一走共享的 provider 级代理注册表
+- key、runtime config、proxy config、proxy binding、usage event 都统一落在 LLM gateway 存储里
+- 详细运行时实现、代理优先级、账号路由、缓存刷新和排障路径见 [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md)
+
+如果你只关心 Codex 接入，公开页会额外给出：
+
+- 已带 `/v1` 的 OpenAI-compatible Base URL
+- 可公开分发的 API key
+- 现成的 Codex provider 配置片段
+- `auth.json` 备用写法和 `curl` / Python 示例
+
+推荐的 Codex provider 配置如下：
+
+```toml
+model_provider = "staticflow"
+
+[model_providers.staticflow]
+name = "OpenAI"
+base_url = "https://your-host/api/llm-gateway/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+这个配置的目的，是让 Codex 保持在远端 `/responses` 和 `/responses/compact` 路径上工作，避免退回本地兼容路径。
 
 ## 快速开始
 

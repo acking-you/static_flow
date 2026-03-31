@@ -1,4 +1,8 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "The locale catalog intentionally contains keys that are not referenced from every \
+              build path."
+)]
 
 pub mod common {
     pub const GITHUB: &str = "GitHub";

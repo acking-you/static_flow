@@ -52,6 +52,7 @@ use crate::{
     handlers::{ensure_admin_access, generate_task_id, ErrorResponse},
     public_submit_guard::extract_client_ip,
     state::AppState,
+    upstream_proxy::parse_account_proxy_selection_patch,
 };
 
 const MIN_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
@@ -476,6 +477,11 @@ pub async fn patch_account(
     Json(request): Json<PatchKiroAccountRequest>,
 ) -> Result<Json<KiroAccountView>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
+    let proxy_selection = parse_account_proxy_selection_patch(
+        request.proxy_mode.as_deref(),
+        request.proxy_config_id.as_deref(),
+    )
+    .map_err(|err| bad_request(&err.to_string()))?;
     let mut auth = state
         .kiro_gateway
         .token_manager
@@ -501,9 +507,20 @@ pub async fn patch_account(
     {
         return Err(bad_request("kiro_channel_min_start_interval_ms is out of range"));
     }
+    if let Some(proxy_selection) = proxy_selection.as_ref() {
+        state
+            .upstream_proxy_registry
+            .resolve_proxy_for_selection(LLM_GATEWAY_PROVIDER_KIRO, Some(proxy_selection))
+            .await
+            .map_err(|err| bad_request(&format!("invalid proxy selection: {err}")))?;
+    }
 
     auth.kiro_channel_max_concurrency = Some(max_concurrency);
     auth.kiro_channel_min_start_interval_ms = Some(min_start_interval_ms);
+    if let Some(proxy_selection) = proxy_selection {
+        auth.proxy_mode = proxy_selection.proxy_mode;
+        auth.proxy_config_id = proxy_selection.proxy_config_id;
+    }
     let saved = state
         .kiro_gateway
         .token_manager
@@ -515,6 +532,8 @@ pub async fn patch_account(
         account_name = %saved.name,
         kiro_channel_max_concurrency = saved.effective_kiro_channel_max_concurrency(),
         kiro_channel_min_start_interval_ms = saved.effective_kiro_channel_min_start_interval_ms(),
+        proxy_mode = %saved.proxy_selection().proxy_mode.as_str(),
+        proxy_config_id = ?saved.proxy_selection().proxy_config_id,
         "updated Kiro account scheduler settings"
     );
     build_account_view_by_name(&state, &saved.name)
@@ -604,7 +623,16 @@ async fn build_account_views(state: &AppState) -> Vec<KiroAccountView> {
     let mut views = Vec::with_capacity(auths.len());
     for auth in auths {
         let (balance, cache) = cached_status_parts(cached.accounts.get(&auth.name));
-        views.push(KiroAccountView::from_auth(&auth, balance, cache));
+        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
+            effective_account_proxy_parts(state, &auth).await;
+        views.push(KiroAccountView::from_auth(
+            &auth,
+            effective_proxy_source,
+            effective_proxy_url,
+            effective_proxy_config_name,
+            balance,
+            cache,
+        ));
     }
     views
 }
@@ -621,7 +649,34 @@ async fn build_account_view_by_name(state: &AppState, name: &str) -> Option<Kiro
         .flatten()?;
     let cached = state.kiro_gateway.cached_status_snapshot().await;
     let (balance, cache) = cached_status_parts(cached.accounts.get(name));
-    Some(KiroAccountView::from_auth(&auth, balance, cache))
+    let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
+        effective_account_proxy_parts(state, &auth).await;
+    Some(KiroAccountView::from_auth(
+        &auth,
+        effective_proxy_source,
+        effective_proxy_url,
+        effective_proxy_config_name,
+        balance,
+        cache,
+    ))
+}
+
+async fn effective_account_proxy_parts(
+    state: &AppState,
+    auth: &KiroAuthRecord,
+) -> (String, Option<String>, Option<String>) {
+    match state
+        .upstream_proxy_registry
+        .resolve_proxy_for_selection(LLM_GATEWAY_PROVIDER_KIRO, Some(&auth.proxy_selection()))
+        .await
+    {
+        Ok(resolved) => (
+            resolved.source.as_str().to_string(),
+            resolved.proxy_url.clone(),
+            resolved.proxy_config_name.clone(),
+        ),
+        Err(err) => (format!("invalid ({err})"), None, None),
+    }
 }
 
 /// Build the unauthenticated public status list shown on the access endpoint.
@@ -761,6 +816,8 @@ fn auth_record_from_manual_request(
         subscription_title: normalize_optional_string(request.subscription_title),
         kiro_channel_max_concurrency: Some(kiro_channel_max_concurrency),
         kiro_channel_min_start_interval_ms: Some(kiro_channel_min_start_interval_ms),
+        proxy_mode: Default::default(),
+        proxy_config_id: None,
         proxy_url: None,
         proxy_username: None,
         proxy_password: None,

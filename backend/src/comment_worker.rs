@@ -121,11 +121,21 @@ struct WorkerTaskPayload<'a> {
 #[derive(Debug, Deserialize)]
 struct WorkerRunnerOutput {
     final_reply_markdown: Option<String>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Confidence is captured from worker output for future moderation tuning even \
+                  when the current backend path does not surface it."
+    )]
     confidence: Option<f32>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Source traces are retained from worker output for later debugging and auditing."
+    )]
     sources: Option<Vec<String>>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Decision notes are retained from worker output for later debugging and auditing."
+    )]
     decision_notes: Option<String>,
 }
 

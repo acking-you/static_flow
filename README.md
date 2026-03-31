@@ -6,6 +6,8 @@
 
 A local-first dynamic blog system. Run backend locally, expose secure API via local Nginx + pb-mapper, and write Markdown notes plus images into LanceDB through CLI.
 
+StaticFlow also includes a public LLM access layer on top of the content system: an OpenAI-compatible Codex gateway, an Anthropic-compatible Kiro gateway, provider-scoped upstream proxy routing, quota-managed gateway keys, and usage accounting. For the current implementation details, see [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md).
+
 ## Philosophy
 
 > **"Don't build agents, build skills instead."**
@@ -42,7 +44,7 @@ Canonical local data root:
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
   - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
   - Local path: `/mnt/wsl/data4tb/static-flow-data/lancedb`
-  - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`
+  - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`, `llm_gateway_proxy_configs`, `llm_gateway_proxy_bindings`, `llm_gateway_token_requests`, `llm_gateway_account_contribution_requests`, `llm_gateway_sponsor_requests`
 - Comments DB (comment moderation + AI run traces)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/static-flow-comments>
   - Remote: `git@hf.co:datasets/LB7666/static-flow-comments`
@@ -172,10 +174,21 @@ Reference configs:
 - GitHub Pages CI: `.github/workflows/deploy.yml`
 - Legacy Nginx configs: `deployment-examples/`
 
-## LLM Gateway / Codex Access
+## LLM Access / Kiro Access
 
-Self-hosted mode also exposes a public read-only LLM access page at `/llm-access`.
-That page publishes:
+Self-hosted mode exposes two public read-only access pages:
+
+- `/llm-access`: Codex access, backed by the OpenAI-compatible gateway at `/api/llm-gateway/v1`
+- `/kiro-access`: Kiro access, backed by the Anthropic-compatible gateway at `/api/kiro-gateway`
+
+Shared characteristics:
+
+- both gateways sit behind the StaticFlow backend instead of exposing upstream accounts directly
+- provider-level proxy routing is resolved through one shared registry
+- keys, runtime config, proxy configs, proxy bindings, and usage events are persisted in the same LLM gateway store
+- the detailed runtime architecture is documented in [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md)
+
+The Codex page additionally publishes:
 
 - an OpenAI-compatible Base URL that already includes `/v1`
 - public API keys that are explicitly marked as externally visible
@@ -185,9 +198,9 @@ That page publishes:
 Key behavior:
 
 - public access is read-only; key creation, quota changes, visibility, and TTL tuning
-  stay under `/admin/llm-gateway`
+  stay under `/admin/llm-gateway` and `/admin/kiro-gateway`
 - admin paths are blocked at the edge and not forwarded publicly
-- upstream inference currently uses the host machine's `~/.codex/auth.json`
+- upstream inference uses backend-managed real accounts rather than exposing upstream credentials
 - Codex `/fast` requests are billed at `2x` billable tokens in StaticFlow quota accounting
 
 Recommended Codex config:

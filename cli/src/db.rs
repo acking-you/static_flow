@@ -282,8 +282,7 @@ pub async fn upsert_taxonomies(table: &Table, records: &[TaxonomyRecord]) -> Res
     let deduped: Vec<_> = records.iter().filter(|r| seen.insert(&r.id)).collect();
     let deduped_refs: Vec<TaxonomyRecord> = deduped.into_iter().cloned().collect();
 
-    let batch =
-        align_batch_to_table_schema(table, build_taxonomy_batch(&deduped_refs)?).await?;
+    let batch = align_batch_to_table_schema(table, build_taxonomy_batch(&deduped_refs)?).await?;
     let schema = batch.schema();
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
 

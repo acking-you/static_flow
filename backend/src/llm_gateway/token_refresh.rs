@@ -14,7 +14,7 @@ use super::{
     accounts::{AccountPool, AccountRateLimitSnapshot, AccountStatus},
     runtime::CodexAuthSnapshot,
 };
-use crate::upstream_proxy::{standard_client_builder, UpstreamProxyRegistry};
+use crate::upstream_proxy::{HttpClientProfile, UpstreamProxyRegistry};
 
 const REFRESH_INTERVAL_SECONDS: u64 = 60;
 const TOKEN_REFRESH_AHEAD_SECONDS: i64 = 600;
@@ -159,15 +159,15 @@ async fn refresh_account_token(
     entry: &Arc<tokio::sync::RwLock<super::accounts::CodexAccount>>,
     proxy_registry: &UpstreamProxyRegistry,
 ) -> Result<()> {
-    let refresh_token = {
+    let (refresh_token, auth_snapshot) = {
         let account = entry.read().await;
         if account.refresh_token.is_empty() {
             anyhow::bail!("no refresh_token available");
         }
-        account.refresh_token.clone()
+        (account.refresh_token.clone(), account.to_auth_snapshot())
     };
 
-    let client = build_refresh_client(proxy_registry).await?;
+    let client = build_refresh_client(proxy_registry, &auth_snapshot).await?;
     let body = format!(
         "client_id={}&grant_type=refresh_token&refresh_token={}",
         urlencoding::encode(CODEX_CLIENT_ID),
@@ -216,7 +216,7 @@ async fn fetch_account_usage(
     proxy_registry: &UpstreamProxyRegistry,
     auth: &CodexAuthSnapshot,
 ) -> Result<AccountRateLimitSnapshot> {
-    let client = build_refresh_client(proxy_registry).await?;
+    let client = build_refresh_client(proxy_registry, auth).await?;
     let upstream_base = std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL")
         .ok()
         .map(|v| v.trim().trim_end_matches('/').to_string())
@@ -280,14 +280,19 @@ pub(crate) async fn validate_account_usage(
 /// Shares the same proxy configuration as the gateway upstream client.
 pub(crate) async fn build_refresh_client(
     proxy_registry: &UpstreamProxyRegistry,
+    auth: &CodexAuthSnapshot,
 ) -> Result<reqwest::Client> {
-    let builder = standard_client_builder(60, 8, 60);
-    let builder = proxy_registry
-        .apply_provider_proxy(
+    let (client, _resolved_proxy) = proxy_registry
+        .client_for_selection(
             static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_CODEX,
-            builder,
+            Some(&auth.proxy_selection),
+            codex_refresh_client_profile(),
         )
         .await
         .context("failed to resolve codex refresh proxy")?;
-    builder.build().context("failed to build refresh client")
+    Ok(client)
+}
+
+pub(crate) const fn codex_refresh_client_profile() -> HttpClientProfile {
+    HttpClientProfile::new(Some(60), 8, 60)
 }

@@ -33,33 +33,29 @@ use super::{
     },
     wire::{ConversationState, KiroRequest},
 };
-use crate::upstream_proxy::{ResolvedUpstreamProxy, UpstreamProxyRegistry};
+use crate::upstream_proxy::{HttpClientProfile, ResolvedUpstreamProxy, UpstreamProxyRegistry};
 
 const KIRO_PROVIDER_AWS_SDK_VERSION: &str = "1.0.34";
 const KIRO_LOG_BODY_PREVIEW_CHARS: usize = 8_192;
+
+pub(crate) const KIRO_API_CLIENT_PROFILE: HttpClientProfile =
+    HttpClientProfile::new(Some(720), 8, 60);
+pub(crate) const KIRO_MCP_CLIENT_PROFILE: HttpClientProfile =
+    HttpClientProfile::new(Some(120), 8, 60);
+pub(crate) const KIRO_AUX_CLIENT_PROFILE: HttpClientProfile =
+    HttpClientProfile::new(Some(60), 8, 60);
 
 /// Build a [`reqwest::Client`] configured for Kiro upstream calls together
 /// with the resolved provider-level proxy metadata used for diagnostics.
 pub async fn build_client(
     proxy_registry: &UpstreamProxyRegistry,
-    timeout_secs: u64,
+    auth: &KiroAuthRecord,
+    profile: HttpClientProfile,
 ) -> Result<(reqwest::Client, ResolvedUpstreamProxy)> {
-    let resolved = proxy_registry
-        .resolve_provider_proxy(LLM_GATEWAY_PROVIDER_KIRO)
+    proxy_registry
+        .client_for_selection(LLM_GATEWAY_PROVIDER_KIRO, Some(&auth.proxy_selection()), profile)
         .await
-        .context("failed to resolve kiro upstream proxy")?;
-    let builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(timeout_secs))
-        .pool_max_idle_per_host(8)
-        .pool_idle_timeout(Duration::from_secs(60))
-        .tcp_keepalive(Duration::from_secs(30));
-    let builder = proxy_registry
-        .apply_provider_proxy(LLM_GATEWAY_PROVIDER_KIRO, builder)
-        .await
-        .context("failed to apply kiro upstream proxy")?;
-    let client = builder.build().context("build kiro reqwest client")?;
-    Ok((client, resolved))
+        .context("failed to resolve kiro upstream proxy")
 }
 
 /// Successful upstream response together with the account that served it
@@ -681,10 +677,13 @@ impl KiroProvider {
                 profile_arn: ctx.auth.profile_arn.clone(),
             })
             .map_err(|err| ProviderAttemptError::Fatal(anyhow!("serialize kiro request: {err}")))?;
-            let (client, resolved_proxy) =
-                build_client(self.runtime.upstream_proxy_registry.as_ref(), 720)
-                    .await
-                    .map_err(ProviderAttemptError::Fatal)?;
+            let (client, resolved_proxy) = build_client(
+                self.runtime.upstream_proxy_registry.as_ref(),
+                &ctx.auth,
+                KIRO_API_CLIENT_PROFILE,
+            )
+            .await
+            .map_err(ProviderAttemptError::Fatal)?;
             let url = format!(
                 "https://q.{}.amazonaws.com/generateAssistantResponse",
                 ctx.auth.effective_api_region()
@@ -694,7 +693,7 @@ impl KiroProvider {
                 attempt,
                 force_refresh,
                 api_region = ctx.auth.effective_api_region(),
-                proxy_url = %resolved_proxy.proxy_url,
+                proxy_url = %resolved_proxy.proxy_url_label(),
                 proxy_source = ?resolved_proxy.source,
                 proxy_config_id = ?resolved_proxy.proxy_config_id,
                 proxy_config_name = ?resolved_proxy.proxy_config_name,
@@ -722,6 +721,22 @@ impl KiroProvider {
                 Ok(response) => response,
                 Err(err) => {
                     log_upstream_send_error(&log_ctx, &err);
+                    let invalidated = self
+                        .runtime
+                        .upstream_proxy_registry
+                        .invalidate_client_if_connect_error(
+                            &resolved_proxy,
+                            KIRO_API_CLIENT_PROFILE,
+                            &err,
+                        )
+                        .await;
+                    tracing::warn!(
+                        account_name = %ctx.auth.name,
+                        proxy_source = %resolved_proxy.source.as_str(),
+                        proxy_url = %resolved_proxy.proxy_url_label(),
+                        invalidated_client = invalidated,
+                        "kiro upstream client send failed: {err}"
+                    );
                     last_error = Some(anyhow!(
                         "kiro upstream transport failure for {}: {err}",
                         log_ctx.endpoint
@@ -845,17 +860,20 @@ impl KiroProvider {
                 .ensure_context_for_account(account_name, force_refresh)
                 .await
                 .map_err(ProviderAttemptError::RetryNext)?;
-            let (client, resolved_proxy) =
-                build_client(self.runtime.upstream_proxy_registry.as_ref(), 120)
-                    .await
-                    .map_err(ProviderAttemptError::Fatal)?;
+            let (client, resolved_proxy) = build_client(
+                self.runtime.upstream_proxy_registry.as_ref(),
+                &ctx.auth,
+                KIRO_MCP_CLIENT_PROFILE,
+            )
+            .await
+            .map_err(ProviderAttemptError::Fatal)?;
             let url = format!("https://q.{}.amazonaws.com/mcp", ctx.auth.effective_api_region());
             tracing::info!(
                 account_name = %ctx.auth.name,
                 attempt,
                 force_refresh,
                 api_region = ctx.auth.effective_api_region(),
-                proxy_url = %resolved_proxy.proxy_url,
+                proxy_url = %resolved_proxy.proxy_url_label(),
                 proxy_source = ?resolved_proxy.source,
                 proxy_config_id = ?resolved_proxy.proxy_config_id,
                 proxy_config_name = ?resolved_proxy.proxy_config_name,
@@ -883,6 +901,22 @@ impl KiroProvider {
                 Ok(response) => response,
                 Err(err) => {
                     log_upstream_send_error(&log_ctx, &err);
+                    let invalidated = self
+                        .runtime
+                        .upstream_proxy_registry
+                        .invalidate_client_if_connect_error(
+                            &resolved_proxy,
+                            KIRO_MCP_CLIENT_PROFILE,
+                            &err,
+                        )
+                        .await;
+                    tracing::warn!(
+                        account_name = %ctx.auth.name,
+                        proxy_source = %resolved_proxy.source.as_str(),
+                        proxy_url = %resolved_proxy.proxy_url_label(),
+                        invalidated_client = invalidated,
+                        "kiro upstream mcp client send failed: {err}"
+                    );
                     last_error = Some(anyhow!(
                         "kiro upstream transport failure for {}: {err}",
                         log_ctx.endpoint
@@ -1023,7 +1057,7 @@ fn log_upstream_send_error(log_ctx: &UpstreamRequestLogContext<'_>, err: &reqwes
         attempt = log_ctx.attempt,
         endpoint = log_ctx.endpoint,
         api_region = %log_ctx.auth.effective_api_region(),
-        proxy_url = %log_ctx.resolved_proxy.proxy_url,
+        proxy_url = %log_ctx.resolved_proxy.proxy_url_label(),
         proxy_source = ?log_ctx.resolved_proxy.source,
         proxy_config_id = ?log_ctx.resolved_proxy.proxy_config_id,
         proxy_config_name = ?log_ctx.resolved_proxy.proxy_config_name,
@@ -1060,7 +1094,7 @@ fn log_upstream_response(
                 body_len = body.len(),
                 body_preview = %body_preview,
                 api_region = %log_ctx.auth.effective_api_region(),
-                proxy_url = %log_ctx.resolved_proxy.proxy_url,
+                proxy_url = %log_ctx.resolved_proxy.proxy_url_label(),
                 proxy_source = ?log_ctx.resolved_proxy.source,
                 proxy_config_id = ?log_ctx.resolved_proxy.proxy_config_id,
                 proxy_config_name = ?log_ctx.resolved_proxy.proxy_config_name,
@@ -1081,7 +1115,7 @@ fn log_upstream_response(
                 body_len = body.len(),
                 body_preview = %body_preview,
                 api_region = %log_ctx.auth.effective_api_region(),
-                proxy_url = %log_ctx.resolved_proxy.proxy_url,
+                proxy_url = %log_ctx.resolved_proxy.proxy_url_label(),
                 proxy_source = ?log_ctx.resolved_proxy.source,
                 proxy_config_id = ?log_ctx.resolved_proxy.proxy_config_id,
                 proxy_config_name = ?log_ctx.resolved_proxy.proxy_config_name,

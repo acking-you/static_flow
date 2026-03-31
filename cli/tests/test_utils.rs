@@ -1,3 +1,5 @@
+//! Integration tests for `sf_cli::utils`.
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;

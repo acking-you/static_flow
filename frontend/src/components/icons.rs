@@ -2,7 +2,10 @@ use yew::prelude::*;
 
 /// Lucide Icons - 清晰的线性 icon 系统
 /// SVG 路径来自 https://lucide.dev
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The icon catalog intentionally contains variants not used on every page."
+)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IconName {
     // Navigation

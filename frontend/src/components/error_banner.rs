@@ -3,7 +3,11 @@ use yew_hooks::prelude::use_timeout;
 
 use crate::i18n::current::error_banner as t;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Some call sites rely on the defaulted props only and do not populate every field \
+              explicitly."
+)]
 #[derive(Properties, PartialEq)]
 pub struct ErrorBannerProps {
     pub message: String,

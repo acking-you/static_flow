@@ -13,6 +13,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::Proxy;
+use serde::{Deserialize, Serialize};
 use static_flow_shared::llm_gateway_store::{
     now_ms, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayStore,
     LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
@@ -25,6 +26,116 @@ use crate::kiro_gateway::auth_file::{
 };
 
 pub const DEFAULT_UPSTREAM_PROXY_URL: &str = "http://127.0.0.1:11111";
+
+/// Account-level proxy override mode stored alongside Codex/Kiro account
+/// settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountProxyMode {
+    /// Reuse the existing provider-level binding or env fallback.
+    #[default]
+    Inherit,
+    /// Bypass the shared upstream proxy and connect directly.
+    Direct,
+    /// Pin this account to one reusable shared proxy config.
+    Fixed,
+}
+
+impl AccountProxyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Direct => "direct",
+            Self::Fixed => "fixed",
+        }
+    }
+}
+
+/// Account-level proxy selection persisted on Codex/Kiro account records.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AccountProxySelection {
+    #[serde(default)]
+    pub proxy_mode: AccountProxyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_config_id: Option<String>,
+}
+
+impl AccountProxySelection {
+    pub fn canonicalize(mut self) -> Self {
+        self.proxy_config_id = self
+            .proxy_config_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if self.proxy_mode != AccountProxyMode::Fixed {
+            self.proxy_config_id = None;
+        }
+        self
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.proxy_mode == AccountProxyMode::Inherit && self.proxy_config_id.is_none()
+    }
+}
+
+/// Normalized reqwest client profile used as the cache key for pooled clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HttpClientProfile {
+    pub timeout_secs: Option<u64>,
+    pub pool_max_idle_per_host: usize,
+    pub pool_idle_timeout_secs: u64,
+}
+
+impl HttpClientProfile {
+    pub const fn new(
+        timeout_secs: Option<u64>,
+        pool_max_idle_per_host: usize,
+        pool_idle_timeout_secs: u64,
+    ) -> Self {
+        Self {
+            timeout_secs,
+            pool_max_idle_per_host,
+            pool_idle_timeout_secs,
+        }
+    }
+
+    fn client_builder(self) -> reqwest::ClientBuilder {
+        let builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .pool_max_idle_per_host(self.pool_max_idle_per_host)
+            .pool_idle_timeout(Duration::from_secs(self.pool_idle_timeout_secs))
+            .tcp_keepalive(Duration::from_secs(30));
+        if let Some(timeout_secs) = self.timeout_secs {
+            builder.timeout(Duration::from_secs(timeout_secs))
+        } else {
+            builder
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ClientCacheKey {
+    proxy_url: Option<String>,
+    proxy_username: Option<String>,
+    proxy_password: Option<String>,
+    timeout_secs: Option<u64>,
+    pool_max_idle_per_host: usize,
+    pool_idle_timeout_secs: u64,
+}
+
+impl ClientCacheKey {
+    fn new(resolved: &ResolvedUpstreamProxy, profile: HttpClientProfile) -> Self {
+        Self {
+            proxy_url: resolved.proxy_url.clone(),
+            proxy_username: resolved.proxy_username.clone(),
+            proxy_password: resolved.proxy_password.clone(),
+            timeout_secs: profile.timeout_secs,
+            pool_max_idle_per_host: profile.pool_max_idle_per_host,
+            pool_idle_timeout_secs: profile.pool_idle_timeout_secs,
+        }
+    }
+}
 
 /// Cached snapshot of all persisted proxy configs and provider bindings.
 #[derive(Debug, Clone, Default)]
@@ -41,7 +152,7 @@ struct UpstreamProxySnapshot {
 #[derive(Debug, Clone)]
 pub struct ResolvedUpstreamProxy {
     pub source: ResolvedUpstreamProxySource,
-    pub proxy_url: String,
+    pub proxy_url: Option<String>,
     pub proxy_username: Option<String>,
     pub proxy_password: Option<String>,
     pub proxy_config_id: Option<String>,
@@ -49,11 +160,30 @@ pub struct ResolvedUpstreamProxy {
     pub binding_updated_at: Option<i64>,
 }
 
+impl ResolvedUpstreamProxy {
+    pub fn proxy_url_label(&self) -> &str {
+        self.proxy_url.as_deref().unwrap_or("direct")
+    }
+}
+
 /// Where a resolved upstream proxy setting came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedUpstreamProxySource {
     Binding,
     EnvFallback,
+    AccountBinding,
+    Direct,
+}
+
+impl ResolvedUpstreamProxySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Binding => "binding",
+            Self::EnvFallback => "env_fallback",
+            Self::AccountBinding => "account_binding",
+            Self::Direct => "direct",
+        }
+    }
 }
 
 /// In-memory registry that serves provider-scoped upstream proxy resolution.
@@ -65,6 +195,7 @@ pub enum ResolvedUpstreamProxySource {
 pub struct UpstreamProxyRegistry {
     store: Arc<LlmGatewayStore>,
     snapshot: Arc<RwLock<UpstreamProxySnapshot>>,
+    clients: Arc<RwLock<HashMap<ClientCacheKey, reqwest::Client>>>,
 }
 
 /// Result of migrating legacy per-account Kiro proxy settings into the shared
@@ -83,6 +214,7 @@ impl UpstreamProxyRegistry {
         let registry = Self {
             store,
             snapshot: Arc::new(RwLock::new(UpstreamProxySnapshot::default())),
+            clients: Arc::new(RwLock::new(HashMap::new())),
         };
         registry.refresh().await?;
         Ok(registry)
@@ -103,6 +235,7 @@ impl UpstreamProxyRegistry {
                 .collect(),
         };
         *self.snapshot.write().await = snapshot;
+        self.clients.write().await.clear();
         Ok(())
     }
 
@@ -118,59 +251,80 @@ impl UpstreamProxyRegistry {
         &self,
         provider_type: &str,
     ) -> Result<ResolvedUpstreamProxy> {
-        let snapshot = self.snapshot.read().await;
-        if let Some(binding) = snapshot.bindings_by_provider.get(provider_type) {
-            let config = snapshot
-                .configs_by_id
-                .get(&binding.proxy_config_id)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "proxy binding for provider `{provider_type}` points to missing config \
-                         `{}`",
-                        binding.proxy_config_id
-                    )
-                })?;
-            if config.status != LLM_GATEWAY_KEY_STATUS_ACTIVE {
-                bail!(
-                    "proxy binding for provider `{provider_type}` points to disabled config `{}`",
-                    config.name
-                );
-            }
-            validate_proxy_url(&config.proxy_url)?;
-            return Ok(ResolvedUpstreamProxy {
-                source: ResolvedUpstreamProxySource::Binding,
-                proxy_url: config.proxy_url.clone(),
-                proxy_username: config.proxy_username.clone(),
-                proxy_password: config.proxy_password.clone(),
-                proxy_config_id: Some(config.id.clone()),
-                proxy_config_name: Some(config.name.clone()),
-                binding_updated_at: Some(binding.updated_at),
-            });
-        }
-
-        let proxy_url = env_fallback_proxy_url(provider_type)
-            .ok_or_else(|| anyhow!("no upstream proxy available for provider `{provider_type}`"))?;
-        validate_proxy_url(&proxy_url)?;
-        Ok(ResolvedUpstreamProxy {
-            source: ResolvedUpstreamProxySource::EnvFallback,
-            proxy_url,
-            proxy_username: None,
-            proxy_password: None,
-            proxy_config_id: None,
-            proxy_config_name: None,
-            binding_updated_at: None,
-        })
+        self.resolve_proxy_for_selection(provider_type, None).await
     }
 
-    /// Apply the resolved provider proxy to a `reqwest::ClientBuilder`.
-    pub async fn apply_provider_proxy(
+    /// Resolve the effective upstream proxy for one account, falling back to
+    /// the provider-level setting when the account inherits.
+    pub async fn resolve_proxy_for_selection(
         &self,
         provider_type: &str,
-        builder: reqwest::ClientBuilder,
-    ) -> Result<reqwest::ClientBuilder> {
-        let resolved = self.resolve_provider_proxy(provider_type).await?;
-        Ok(builder.proxy(build_proxy(&resolved)?))
+        selection: Option<&AccountProxySelection>,
+    ) -> Result<ResolvedUpstreamProxy> {
+        let normalized = selection.cloned().unwrap_or_default().canonicalize();
+        let snapshot = self.snapshot.read().await;
+        Self::resolve_proxy_with_snapshot(&snapshot, provider_type, &normalized)
+    }
+
+    /// Return a pooled reqwest client for the resolved provider/account proxy
+    /// combination. `reqwest::Client` is internally reference-counted, so hot
+    /// paths only clone the cached handle instead of rebuilding connector state
+    /// and connection pools on every request.
+    pub async fn client_for_selection(
+        &self,
+        provider_type: &str,
+        selection: Option<&AccountProxySelection>,
+        profile: HttpClientProfile,
+    ) -> Result<(reqwest::Client, ResolvedUpstreamProxy)> {
+        let resolved = self
+            .resolve_proxy_for_selection(provider_type, selection)
+            .await?;
+        let cache_key = ClientCacheKey::new(&resolved, profile);
+        if let Some(client) = self.clients.read().await.get(&cache_key).cloned() {
+            return Ok((client, resolved));
+        }
+
+        let mut clients = self.clients.write().await;
+        if let Some(client) = clients.get(&cache_key).cloned() {
+            return Ok((client, resolved));
+        }
+
+        let builder = apply_resolved_proxy(profile.client_builder(), &resolved)?;
+        let client = builder
+            .build()
+            .context("failed to build cached upstream reqwest client")?;
+        clients.insert(cache_key, client.clone());
+        Ok((client, resolved))
+    }
+
+    /// Drop one cached client instance. The next request will rebuild it with
+    /// a fresh connector/pool.
+    pub async fn invalidate_client(
+        &self,
+        resolved: &ResolvedUpstreamProxy,
+        profile: HttpClientProfile,
+    ) -> bool {
+        self.clients
+            .write()
+            .await
+            .remove(&ClientCacheKey::new(resolved, profile))
+            .is_some()
+    }
+
+    /// Rebuild the cached client only when reqwest reports a connect-level
+    /// transport failure. Hyper/reqwest already retries stale pooled sockets by
+    /// opening fresh connections, so normal HTTP failures should not evict the
+    /// whole client.
+    pub async fn invalidate_client_if_connect_error(
+        &self,
+        resolved: &ResolvedUpstreamProxy,
+        profile: HttpClientProfile,
+        err: &reqwest::Error,
+    ) -> bool {
+        if !err.is_connect() {
+            return false;
+        }
+        self.invalidate_client(resolved, profile).await
     }
 
     /// Import legacy proxy credentials embedded in Kiro account JSON files into
@@ -249,6 +403,8 @@ impl UpstreamProxyRegistry {
 
             accounts.sort_by_cached_key(|auth| auth.name.to_ascii_lowercase());
             for mut auth in accounts {
+                auth.proxy_mode = AccountProxyMode::Fixed;
+                auth.proxy_config_id = Some(config.id.clone());
                 auth.proxy_url = None;
                 auth.proxy_username = None;
                 auth.proxy_password = None;
@@ -272,18 +428,129 @@ impl UpstreamProxyRegistry {
             migrated_account_names,
         })
     }
+
+    fn resolve_proxy_with_snapshot(
+        snapshot: &UpstreamProxySnapshot,
+        provider_type: &str,
+        selection: &AccountProxySelection,
+    ) -> Result<ResolvedUpstreamProxy> {
+        match selection.proxy_mode {
+            AccountProxyMode::Direct => Ok(ResolvedUpstreamProxy {
+                source: ResolvedUpstreamProxySource::Direct,
+                proxy_url: None,
+                proxy_username: None,
+                proxy_password: None,
+                proxy_config_id: None,
+                proxy_config_name: None,
+                binding_updated_at: None,
+            }),
+            AccountProxyMode::Fixed => {
+                let proxy_config_id = selection.proxy_config_id.as_deref().ok_or_else(|| {
+                    anyhow!("proxy_config_id is required when proxy_mode=`fixed`")
+                })?;
+                let config = snapshot
+                    .configs_by_id
+                    .get(proxy_config_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "account proxy selection for provider `{provider_type}` points to \
+                             missing config `{proxy_config_id}`"
+                        )
+                    })?;
+                if config.status != LLM_GATEWAY_KEY_STATUS_ACTIVE {
+                    bail!(
+                        "account proxy selection for provider `{provider_type}` points to \
+                         disabled config `{}`",
+                        config.name
+                    );
+                }
+                validate_proxy_url(&config.proxy_url)?;
+                Ok(ResolvedUpstreamProxy {
+                    source: ResolvedUpstreamProxySource::AccountBinding,
+                    proxy_url: Some(config.proxy_url.clone()),
+                    proxy_username: config.proxy_username.clone(),
+                    proxy_password: config.proxy_password.clone(),
+                    proxy_config_id: Some(config.id.clone()),
+                    proxy_config_name: Some(config.name.clone()),
+                    binding_updated_at: None,
+                })
+            },
+            AccountProxyMode::Inherit => {
+                if let Some(binding) = snapshot.bindings_by_provider.get(provider_type) {
+                    let config = snapshot
+                        .configs_by_id
+                        .get(&binding.proxy_config_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "proxy binding for provider `{provider_type}` points to missing \
+                                 config `{}`",
+                                binding.proxy_config_id
+                            )
+                        })?;
+                    if config.status != LLM_GATEWAY_KEY_STATUS_ACTIVE {
+                        bail!(
+                            "proxy binding for provider `{provider_type}` points to disabled \
+                             config `{}`",
+                            config.name
+                        );
+                    }
+                    validate_proxy_url(&config.proxy_url)?;
+                    return Ok(ResolvedUpstreamProxy {
+                        source: ResolvedUpstreamProxySource::Binding,
+                        proxy_url: Some(config.proxy_url.clone()),
+                        proxy_username: config.proxy_username.clone(),
+                        proxy_password: config.proxy_password.clone(),
+                        proxy_config_id: Some(config.id.clone()),
+                        proxy_config_name: Some(config.name.clone()),
+                        binding_updated_at: Some(binding.updated_at),
+                    });
+                }
+
+                let proxy_url = env_fallback_proxy_url(provider_type).ok_or_else(|| {
+                    anyhow!("no upstream proxy available for provider `{provider_type}`")
+                })?;
+                validate_proxy_url(&proxy_url)?;
+                Ok(ResolvedUpstreamProxy {
+                    source: ResolvedUpstreamProxySource::EnvFallback,
+                    proxy_url: Some(proxy_url),
+                    proxy_username: None,
+                    proxy_password: None,
+                    proxy_config_id: None,
+                    proxy_config_name: None,
+                    binding_updated_at: None,
+                })
+            },
+        }
+    }
 }
 
 /// Build a `reqwest` proxy instance from an already-resolved proxy record.
 pub fn build_proxy(resolved: &ResolvedUpstreamProxy) -> Result<Proxy> {
-    let proxy = Proxy::all(&resolved.proxy_url)
-        .with_context(|| format!("failed to build upstream proxy `{}`", resolved.proxy_url))?;
+    let proxy_url = resolved
+        .proxy_url
+        .as_deref()
+        .ok_or_else(|| anyhow!("direct upstream transport does not use reqwest::Proxy"))?;
+    let proxy = Proxy::all(proxy_url)
+        .with_context(|| format!("failed to build upstream proxy `{proxy_url}`"))?;
     Ok(match resolved.proxy_username.as_deref() {
         Some(username) => {
             proxy.basic_auth(username, resolved.proxy_password.as_deref().unwrap_or(""))
         },
         None => proxy,
     })
+}
+
+pub fn apply_resolved_proxy(
+    builder: reqwest::ClientBuilder,
+    resolved: &ResolvedUpstreamProxy,
+) -> Result<reqwest::ClientBuilder> {
+    if resolved.proxy_url.is_some() {
+        Ok(builder.proxy(build_proxy(resolved)?))
+    } else {
+        Ok(builder)
+    }
 }
 
 /// Validate that a proxy URL is syntactically acceptable to `reqwest`.
@@ -328,17 +595,142 @@ fn env_fallback_proxy_url(provider_type: &str) -> Option<String> {
     }
 }
 
-/// Standard HTTP client baseline shared by proxy health checks and refresh
-/// clients before provider-specific proxy settings are applied.
-pub fn standard_client_builder(
-    timeout_secs: u64,
-    pool_max_idle_per_host: usize,
-    pool_idle_timeout_secs: u64,
-) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(timeout_secs))
-        .pool_max_idle_per_host(pool_max_idle_per_host)
-        .pool_idle_timeout(Duration::from_secs(pool_idle_timeout_secs))
-        .tcp_keepalive(Duration::from_secs(30))
+pub fn parse_account_proxy_selection_patch(
+    proxy_mode: Option<&str>,
+    proxy_config_id: Option<&str>,
+) -> Result<Option<AccountProxySelection>> {
+    if proxy_mode.is_none() && proxy_config_id.is_none() {
+        return Ok(None);
+    }
+    let proxy_mode = parse_account_proxy_mode(
+        proxy_mode.ok_or_else(|| anyhow!("proxy_mode is required when updating proxy settings"))?,
+    )?;
+    let selection = AccountProxySelection {
+        proxy_mode,
+        proxy_config_id: proxy_config_id.map(str::to_string),
+    }
+    .canonicalize();
+    if selection.proxy_mode == AccountProxyMode::Fixed && selection.proxy_config_id.is_none() {
+        bail!("proxy_config_id is required when proxy_mode=`fixed`");
+    }
+    Ok(Some(selection))
+}
+
+pub fn parse_account_proxy_mode(raw: &str) -> Result<AccountProxyMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "inherit" => Ok(AccountProxyMode::Inherit),
+        "direct" => Ok(AccountProxyMode::Direct),
+        "fixed" => Ok(AccountProxyMode::Fixed),
+        other => bail!("unsupported proxy_mode `{other}`"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_CODEX;
+
+    use super::*;
+
+    fn sample_config(id: &str, name: &str, proxy_url: &str) -> LlmGatewayProxyConfigRecord {
+        LlmGatewayProxyConfigRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            proxy_url: proxy_url.to_string(),
+            proxy_username: None,
+            proxy_password: None,
+            status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn sample_binding(provider_type: &str, proxy_config_id: &str) -> LlmGatewayProxyBindingRecord {
+        LlmGatewayProxyBindingRecord {
+            provider_type: provider_type.to_string(),
+            proxy_config_id: proxy_config_id.to_string(),
+            updated_at: 123,
+        }
+    }
+
+    #[test]
+    fn resolve_proxy_inherit_uses_provider_binding() {
+        let mut snapshot = UpstreamProxySnapshot::default();
+        snapshot.configs_by_id.insert(
+            "proxy-a".to_string(),
+            sample_config("proxy-a", "alpha", "http://127.0.0.1:9001"),
+        );
+        snapshot.bindings_by_provider.insert(
+            LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            sample_binding(LLM_GATEWAY_PROVIDER_CODEX, "proxy-a"),
+        );
+
+        let resolved = UpstreamProxyRegistry::resolve_proxy_with_snapshot(
+            &snapshot,
+            LLM_GATEWAY_PROVIDER_CODEX,
+            &AccountProxySelection::default(),
+        )
+        .expect("resolve inherited provider binding");
+
+        assert_eq!(resolved.source, ResolvedUpstreamProxySource::Binding);
+        assert_eq!(resolved.proxy_url.as_deref(), Some("http://127.0.0.1:9001"));
+        assert_eq!(resolved.proxy_config_id.as_deref(), Some("proxy-a"));
+    }
+
+    #[test]
+    fn resolve_proxy_direct_bypasses_provider_binding() {
+        let mut snapshot = UpstreamProxySnapshot::default();
+        snapshot.configs_by_id.insert(
+            "proxy-a".to_string(),
+            sample_config("proxy-a", "alpha", "http://127.0.0.1:9001"),
+        );
+        snapshot.bindings_by_provider.insert(
+            LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            sample_binding(LLM_GATEWAY_PROVIDER_CODEX, "proxy-a"),
+        );
+
+        let resolved = UpstreamProxyRegistry::resolve_proxy_with_snapshot(
+            &snapshot,
+            LLM_GATEWAY_PROVIDER_CODEX,
+            &AccountProxySelection {
+                proxy_mode: AccountProxyMode::Direct,
+                proxy_config_id: None,
+            },
+        )
+        .expect("resolve direct account override");
+
+        assert_eq!(resolved.source, ResolvedUpstreamProxySource::Direct);
+        assert_eq!(resolved.proxy_url, None);
+        assert_eq!(resolved.proxy_config_id, None);
+    }
+
+    #[test]
+    fn resolve_proxy_fixed_uses_account_override() {
+        let mut snapshot = UpstreamProxySnapshot::default();
+        snapshot.configs_by_id.insert(
+            "proxy-a".to_string(),
+            sample_config("proxy-a", "alpha", "http://127.0.0.1:9001"),
+        );
+        snapshot.configs_by_id.insert(
+            "proxy-b".to_string(),
+            sample_config("proxy-b", "beta", "http://127.0.0.1:9002"),
+        );
+        snapshot.bindings_by_provider.insert(
+            LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            sample_binding(LLM_GATEWAY_PROVIDER_CODEX, "proxy-a"),
+        );
+
+        let resolved = UpstreamProxyRegistry::resolve_proxy_with_snapshot(
+            &snapshot,
+            LLM_GATEWAY_PROVIDER_CODEX,
+            &AccountProxySelection {
+                proxy_mode: AccountProxyMode::Fixed,
+                proxy_config_id: Some("proxy-b".to_string()),
+            },
+        )
+        .expect("resolve fixed account proxy");
+
+        assert_eq!(resolved.source, ResolvedUpstreamProxySource::AccountBinding);
+        assert_eq!(resolved.proxy_url.as_deref(), Some("http://127.0.0.1:9002"));
+        assert_eq!(resolved.proxy_config_id.as_deref(), Some("proxy-b"));
+    }
 }

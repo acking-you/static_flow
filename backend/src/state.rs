@@ -781,6 +781,9 @@ fn spawn_table_compactor(
             );
 
             if total_compacted > 0 {
+                // SAFETY: forcing a mimalloc collection is an FFI call with no
+                // borrowed Rust references involved, and it only touches the
+                // allocator's own global state.
                 unsafe {
                     better_mimalloc_sys::mi_collect(true);
                 }

@@ -119,7 +119,10 @@ pub struct ArticleViewTrendResponse {
 
 #[cfg(not(feature = "mock"))]
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The backend returns pagination metadata that some callers intentionally ignore."
+)]
 struct ArticleListResponse {
     articles: Vec<ArticleListItem>,
     total: usize,
@@ -136,7 +139,11 @@ struct ArticleListResponse {
 pub struct ArticlePage {
     pub articles: Vec<ArticleListItem>,
     pub total: usize,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Some UI paths only need the article list and total count, but retaining \
+                  has_more keeps the DTO aligned with backend pagination."
+    )]
     pub has_more: bool,
 }
 
@@ -568,7 +575,11 @@ pub struct SearchResult {
 }
 
 #[cfg(not(feature = "mock"))]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The client currently consumes only the result list, but the backend response still \
+              carries metadata useful for diagnostics."
+)]
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     results: Vec<SearchResult>,
@@ -592,7 +603,11 @@ pub struct ImagePage {
 }
 
 #[cfg(not(feature = "mock"))]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The client often collapses image pagination to the fields needed by the current \
+              screen."
+)]
 #[derive(Debug, Deserialize)]
 struct ImageListResponse {
     images: Vec<ImageInfo>,
@@ -606,7 +621,11 @@ struct ImageListResponse {
 }
 
 #[cfg(not(feature = "mock"))]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The client often collapses image pagination to the fields needed by the current \
+              screen."
+)]
 #[derive(Debug, Deserialize)]
 struct ImageSearchResponse {
     images: Vec<ImageInfo>,
@@ -621,7 +640,11 @@ struct ImageSearchResponse {
 }
 
 #[cfg(not(feature = "mock"))]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The client often collapses image pagination to the fields needed by the current \
+              screen."
+)]
 #[derive(Debug, Deserialize)]
 struct ImageTextSearchResponse {
     images: Vec<ImageInfo>,
@@ -682,7 +705,11 @@ pub async fn search_articles(
 ///
 /// When `enhanced_highlight` is true, backend will run semantic snippet
 /// reranking to improve highlight precision at extra latency cost.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "This function mirrors the backend search query shape, so bundling it into an extra \
+              options struct would only add call-site churn."
+)]
 pub async fn semantic_search_articles(
     keyword: &str,
     enhanced_highlight: bool,
@@ -792,7 +819,11 @@ pub async fn fetch_related_articles(id: &str) -> Result<Vec<ArticleListItem>, St
 }
 
 /// Fetch all images for image-to-image search.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Some pages use paginated image APIs directly, but keeping the convenience wrapper \
+              avoids duplicating trivial call sites."
+)]
 pub async fn fetch_images() -> Result<Vec<ImageInfo>, String> {
     let page = fetch_images_page(None, None).await?;
     Ok(page.images)
@@ -895,7 +926,11 @@ pub async fn fetch_random_images_page(limit: Option<usize>) -> Result<ImagePage,
 }
 
 /// Search images by an existing image id.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Some pages use paginated image APIs directly, but keeping the convenience wrapper \
+              avoids duplicating trivial call sites."
+)]
 pub async fn search_images_by_id(
     image_id: &str,
     limit: Option<usize>,
@@ -972,7 +1007,11 @@ pub async fn search_images_by_id_page(
 }
 
 /// Search images with text query (text-to-image).
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Some pages use paginated image APIs directly, but keeping the convenience wrapper \
+              avoids duplicating trivial call sites."
+)]
 pub async fn search_images_by_text(
     keyword: &str,
     limit: Option<usize>,
@@ -2867,7 +2906,11 @@ struct NextSongApiResponse {
 #[derive(Debug, Deserialize)]
 struct MusicCommentListApiResponse {
     comments: Vec<MusicCommentItem>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "The music comments UI currently renders the returned slice only, but total \
+                  remains part of the stable backend payload."
+    )]
     total: usize,
 }
 
@@ -5953,6 +5996,11 @@ pub struct AccountSummaryView {
     pub primary_remaining_percent: Option<f64>,
     pub secondary_remaining_percent: Option<f64>,
     pub map_gpt53_codex_to_spark: bool,
+    pub proxy_mode: String,
+    pub proxy_config_id: Option<String>,
+    pub effective_proxy_source: String,
+    pub effective_proxy_url: Option<String>,
+    pub effective_proxy_config_name: Option<String>,
     pub last_refresh: Option<i64>,
 }
 
@@ -6006,6 +6054,11 @@ pub async fn import_admin_llm_gateway_account(
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
             map_gpt53_codex_to_spark: false,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "binding".to_string(),
+            effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
+            effective_proxy_config_name: None,
             last_refresh: None,
         })
     }
@@ -6063,9 +6116,16 @@ pub async fn delete_admin_llm_gateway_account(name: &str) -> Result<(), String> 
     }
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct PatchAdminLlmGatewayAccountInput {
+    pub map_gpt53_codex_to_spark: Option<bool>,
+    pub proxy_mode: Option<String>,
+    pub proxy_config_id: Option<String>,
+}
+
 pub async fn patch_admin_llm_gateway_account(
     name: &str,
-    map_gpt53_codex_to_spark: bool,
+    input: &PatchAdminLlmGatewayAccountInput,
 ) -> Result<AccountSummaryView, String> {
     #[cfg(feature = "mock")]
     {
@@ -6076,7 +6136,15 @@ pub async fn patch_admin_llm_gateway_account(
             plan_type: Some("Pro".to_string()),
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
-            map_gpt53_codex_to_spark,
+            map_gpt53_codex_to_spark: input.map_gpt53_codex_to_spark.unwrap_or(false),
+            proxy_mode: input
+                .proxy_mode
+                .clone()
+                .unwrap_or_else(|| "inherit".to_string()),
+            proxy_config_id: input.proxy_config_id.clone(),
+            effective_proxy_source: "binding".to_string(),
+            effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
+            effective_proxy_config_name: None,
             last_refresh: None,
         })
     }
@@ -6086,9 +6154,7 @@ pub async fn patch_admin_llm_gateway_account(
         let url =
             format!("{}/admin/llm-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
         let response = api_patch(&url)
-            .json(&serde_json::json!({
-                "map_gpt53_codex_to_spark": map_gpt53_codex_to_spark,
-            }))
+            .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await
@@ -6189,6 +6255,11 @@ pub struct KiroAccountView {
     pub machine_id: Option<String>,
     pub kiro_channel_max_concurrency: u64,
     pub kiro_channel_min_start_interval_ms: u64,
+    pub proxy_mode: String,
+    pub proxy_config_id: Option<String>,
+    pub effective_proxy_source: String,
+    pub effective_proxy_url: Option<String>,
+    pub effective_proxy_config_name: Option<String>,
     pub proxy_url: Option<String>,
     pub balance: Option<KiroBalanceView>,
     pub cache: KiroCacheView,
@@ -6220,6 +6291,8 @@ pub struct CreateManualKiroAccountInput {
 pub struct PatchKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    pub proxy_mode: Option<String>,
+    pub proxy_config_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

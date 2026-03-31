@@ -12,12 +12,13 @@ use crate::{
     api::{
         create_admin_kiro_key, create_admin_kiro_manual_account, delete_admin_kiro_account,
         delete_admin_kiro_key, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
-        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings, fetch_kiro_models,
-        import_admin_kiro_account, patch_admin_kiro_account, patch_admin_kiro_key,
-        refresh_admin_kiro_account_balance, AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView,
-        AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
-        CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView, KiroModelView,
-        PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
+        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings,
+        fetch_admin_llm_gateway_proxy_configs, fetch_kiro_models, import_admin_kiro_account,
+        patch_admin_kiro_account, patch_admin_kiro_key, refresh_admin_kiro_account_balance,
+        AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
+        AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateManualKiroAccountInput,
+        KiroAccountView, KiroBalanceView, KiroModelView, PatchAdminLlmGatewayKeyRequest,
+        PatchKiroAccountInput,
     },
     pages::llm_access_shared::{
         format_float2, format_ms, format_number_i64, format_number_u64, format_reset_hint,
@@ -111,9 +112,22 @@ fn format_cache_summary(account: &KiroAccountView) -> String {
     }
 }
 
+fn kiro_account_proxy_select_value(account: &KiroAccountView) -> String {
+    match account.proxy_mode.as_str() {
+        "direct" => "direct".to_string(),
+        "fixed" => account
+            .proxy_config_id
+            .as_deref()
+            .map(|id| format!("fixed:{id}"))
+            .unwrap_or_else(|| "inherit".to_string()),
+        _ => "inherit".to_string(),
+    }
+}
+
 #[derive(Properties, PartialEq)]
 struct KiroAccountCardProps {
     account: KiroAccountView,
+    proxy_configs: Vec<AdminUpstreamProxyConfigView>,
     on_reload: Callback<()>,
     flash: UseStateHandle<Option<String>>,
     notify: Callback<(String, bool)>,
@@ -125,6 +139,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
     let expanded = use_state(|| false);
     let scheduler_max = use_state(|| props.account.kiro_channel_max_concurrency.to_string());
     let scheduler_min = use_state(|| props.account.kiro_channel_min_start_interval_ms.to_string());
+    let selected_proxy = use_state(|| kiro_account_proxy_select_value(&props.account));
     let feedback = use_state(|| None::<String>);
     let busy = use_state(|| false);
 
@@ -132,9 +147,11 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let account = props.account.clone();
         let scheduler_max = scheduler_max.clone();
         let scheduler_min = scheduler_min.clone();
+        let selected_proxy = selected_proxy.clone();
         use_effect_with(props.account.clone(), move |_| {
             scheduler_max.set(account.kiro_channel_max_concurrency.to_string());
             scheduler_min.set(account.kiro_channel_min_start_interval_ms.to_string());
+            selected_proxy.set(kiro_account_proxy_select_value(&account));
             || ()
         });
     }
@@ -222,6 +239,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let account_name = props.account.name.clone();
         let scheduler_max = scheduler_max.clone();
         let scheduler_min = scheduler_min.clone();
+        let selected_proxy = selected_proxy.clone();
         let flash = props.flash.clone();
         let notify = props.notify.clone();
         let error = props.error.clone();
@@ -232,6 +250,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
             let account_name = account_name.clone();
             let scheduler_max = scheduler_max.clone();
             let scheduler_min = scheduler_min.clone();
+            let selected_proxy = selected_proxy.clone();
             let flash = flash.clone();
             let notify = notify.clone();
             let error = error.clone();
@@ -259,15 +278,24 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                 };
                 busy.set(true);
                 error.set(None);
+                let (proxy_mode, proxy_config_id) = if *selected_proxy == "direct" {
+                    (Some("direct".to_string()), None)
+                } else if let Some(proxy_config_id) = (*selected_proxy).strip_prefix("fixed:") {
+                    (Some("fixed".to_string()), Some(proxy_config_id.to_string()))
+                } else {
+                    (Some("inherit".to_string()), None)
+                };
                 match patch_admin_kiro_account(&account_name, &PatchKiroAccountInput {
                     kiro_channel_max_concurrency: Some(parsed_max),
                     kiro_channel_min_start_interval_ms: Some(parsed_min),
+                    proxy_mode,
+                    proxy_config_id,
                 })
                 .await
                 {
                     Ok(_) => {
-                        feedback.set(Some("Scheduler saved.".to_string()));
-                        let message = format!("Updated scheduler settings for `{account_name}`.");
+                        feedback.set(Some("Account settings saved.".to_string()));
+                        let message = format!("Updated account settings for `{account_name}`.");
                         flash.set(Some(message.clone()));
                         notify.emit((message, false));
                         on_reload.emit(());
@@ -276,7 +304,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                         error.set(Some(err.clone()));
                         notify.emit((
                             format!(
-                                "Failed to update scheduler settings for `{account_name}`.\n{err}"
+                                "Failed to update account settings for `{account_name}`.\n{err}"
                             ),
                             true,
                         ));
@@ -316,6 +344,10 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         .clone()
         .unwrap_or_else(|| "-".to_string());
     let proxy_url = account.proxy_url.clone().unwrap_or_else(|| "-".to_string());
+    let effective_proxy_url = account
+        .effective_proxy_url
+        .clone()
+        .unwrap_or_else(|| "direct".to_string());
     let source = account.source.clone().unwrap_or_else(|| "-".to_string());
     let source_db_path = account
         .source_db_path
@@ -401,6 +433,8 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                             <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "region: " }</dt><dd class={classes!("inline", "font-mono")}>{ region }</dd></div>
                             <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "auth_region: " }</dt><dd class={classes!("inline", "font-mono")}>{ auth_region }</dd></div>
                             <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "api_region: " }</dt><dd class={classes!("inline", "font-mono")}>{ api_region }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "effective_proxy: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ format!("{} · {}", account.effective_proxy_source, effective_proxy_url) }</dd></div>
+                            <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "effective_proxy_config: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ account.effective_proxy_config_name.clone().unwrap_or_else(|| "-".to_string()) }</dd></div>
                             <div><dt class={classes!("inline", "text-[var(--muted)]")}>{ "legacy_proxy_url: " }</dt><dd class={classes!("inline", "font-mono", "break-all")}>{ proxy_url }</dd></div>
                         </dl>
                     </div>
@@ -414,8 +448,8 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     </div>
                 </div>
                 <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
-                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Scheduler" }</div>
-                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-2")}>
+                    <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Scheduler / Proxy" }</div>
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-3")}>
                         <label class={classes!("text-sm")}>
                             <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Max Concurrency" }</div>
                             <input
@@ -444,13 +478,38 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                                 }}
                             />
                         </label>
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Proxy Mode" }</div>
+                            <select
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
+                                value={(*selected_proxy).clone()}
+                                onchange={{
+                                    let selected_proxy = selected_proxy.clone();
+                                    Callback::from(move |event: Event| {
+                                        let input: HtmlSelectElement = event.target_unchecked_into();
+                                        selected_proxy.set(input.value());
+                                    })
+                                }}
+                            >
+                                <option value="inherit" selected={*selected_proxy == "inherit"}>{ "Inherit Provider Proxy" }</option>
+                                <option value="direct" selected={*selected_proxy == "direct"}>{ "Direct / No Proxy" }</option>
+                                { for props.proxy_configs.iter().map(|proxy_config| {
+                                    let option_value = format!("fixed:{}", proxy_config.id);
+                                    html! {
+                                        <option value={option_value.clone()} selected={*selected_proxy == option_value}>
+                                            { format!("Fixed · {} · {}", proxy_config.name, proxy_config.proxy_url) }
+                                        </option>
+                                    }
+                                }) }
+                            </select>
+                        </label>
                     </div>
                     <div class={classes!("mt-3", "flex", "items-center", "gap-3", "flex-wrap")}>
                         <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save_scheduler} disabled={*busy}>
-                            { if *busy { "Saving..." } else { "Save Scheduler" } }
+                            { if *busy { "Saving..." } else { "Save Account Settings" } }
                         </button>
                         <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                            { "本地调度会优先切到下一个账号，只有所有账号都被本地限流或上游 cooldown 卡住时才统一等待。" }
+                            { "并发、起步间隔和账号级 proxy 选择一起保存。未单独指定时，这个账号默认继承 Kiro provider 级代理绑定。" }
                         </span>
                     </div>
                 </div>
@@ -898,6 +957,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_loading = use_state(|| false);
     let usage_error = use_state(|| None::<String>);
+    let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
@@ -986,6 +1046,7 @@ pub fn admin_kiro_gateway_page() -> Html {
         let accounts = accounts.clone();
         let keys = keys.clone();
         let kiro_models = kiro_models.clone();
+        let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
         let loading = loading.clone();
         let error = error.clone();
@@ -993,34 +1054,51 @@ pub fn admin_kiro_gateway_page() -> Html {
             let accounts = accounts.clone();
             let keys = keys.clone();
             let kiro_models = kiro_models.clone();
+            let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
             let loading = loading.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 loading.set(true);
                 error.set(None);
-                let (accounts_result, keys_result, models_result, proxy_bindings_result) = futures::join!(
+                let (
+                    accounts_result,
+                    keys_result,
+                    models_result,
+                    proxy_configs_result,
+                    proxy_bindings_result,
+                ) = futures::join!(
                     fetch_admin_kiro_accounts(),
                     fetch_admin_kiro_keys(),
                     fetch_kiro_models(),
+                    fetch_admin_llm_gateway_proxy_configs(),
                     fetch_admin_llm_gateway_proxy_bindings(),
                 );
-                match (accounts_result, keys_result, models_result, proxy_bindings_result) {
+                match (
+                    accounts_result,
+                    keys_result,
+                    models_result,
+                    proxy_configs_result,
+                    proxy_bindings_result,
+                ) {
                     (
                         Ok(accounts_resp),
                         Ok(keys_resp),
                         Ok(models_resp),
+                        Ok(proxy_configs_resp),
                         Ok(proxy_bindings_resp),
                     ) => {
                         accounts.set(accounts_resp.accounts);
                         keys.set(keys_resp.keys);
                         kiro_models.set(models_resp.data);
+                        proxy_configs.set(proxy_configs_resp.proxy_configs);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
                     },
-                    (Err(err), _, _, _)
-                    | (_, Err(err), _, _)
-                    | (_, _, Err(err), _)
-                    | (_, _, _, Err(err)) => {
+                    (Err(err), _, _, _, _)
+                    | (_, Err(err), _, _, _)
+                    | (_, _, Err(err), _, _)
+                    | (_, _, _, Err(err), _)
+                    | (_, _, _, _, Err(err)) => {
                         error.set(Some(err));
                     },
                 }
@@ -1344,7 +1422,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     }
                                 </div>
                                 <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
-                                    { "Kiro 运行时只读这里的 provider 级代理绑定；账号 JSON 中遗留的 proxy 字段不会再参与请求路由。" }
+                                    { "这里是 Kiro 的默认 provider 级代理。账号没有单独指定时继承它；账号改成 direct/fixed 之后，会覆盖这里的默认值。" }
                                 </p>
                             </div>
                         }
@@ -1528,6 +1606,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     <KiroAccountCard
                                         key={account.name.clone()}
                                         account={account.clone()}
+                                        proxy_configs={(*proxy_configs).clone()}
                                         on_reload={on_reload.clone()}
                                         flash={flash.clone()}
                                         notify={notify.clone()}

@@ -96,12 +96,23 @@ struct WishWorkerPayload<'a> {
 
 #[derive(Debug)]
 struct RunnerProcessOutput {
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Worker runner diagnostics are kept for debugging failed subprocess executions."
+    )]
     success: bool,
     exit_code: Option<i32>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Stdout is preserved for failure analysis even when the happy path does not read \
+                  it."
+    )]
     stdout: String,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Stderr is preserved for failure analysis even when the happy path does not read \
+                  it."
+    )]
     stderr: String,
     result_file_path: PathBuf,
 }

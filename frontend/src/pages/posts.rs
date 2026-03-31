@@ -588,12 +588,20 @@ pub fn posts_page() -> Html {
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "These render helpers are exercised by alternate timeline layouts and tests, even \
+              when a specific build path does not call them."
+)]
 pub(crate) fn render_timeline(grouped_by_year: &[(i32, Vec<ArticleListItem>)]) -> Html {
     render_timeline_with_state(grouped_by_year, None, None)
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "These render helpers are exercised by alternate timeline layouts and tests, even \
+              when a specific build path does not call them."
+)]
 pub(crate) fn render_expandable_timeline(
     grouped_by_year: &[(i32, Vec<ArticleListItem>)],
     expanded_years: &HashMap<i32, bool>,
@@ -602,7 +610,10 @@ pub(crate) fn render_expandable_timeline(
     render_timeline_with_state(grouped_by_year, Some(expanded_years), Some(toggle_year))
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "The shared rendering implementation is retained for alternate timeline layouts."
+)]
 fn render_timeline_with_state(
     grouped_by_year: &[(i32, Vec<ArticleListItem>)],
     expanded_years: Option<&HashMap<i32, bool>>,

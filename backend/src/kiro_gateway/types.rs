@@ -343,6 +343,11 @@ pub struct KiroAccountView {
     pub machine_id: Option<String>,
     pub kiro_channel_max_concurrency: u64,
     pub kiro_channel_min_start_interval_ms: u64,
+    pub proxy_mode: String,
+    pub proxy_config_id: Option<String>,
+    pub effective_proxy_source: String,
+    pub effective_proxy_url: Option<String>,
+    pub effective_proxy_config_name: Option<String>,
     pub proxy_url: Option<String>,
     pub balance: Option<KiroBalanceView>,
     pub cache: KiroCacheView,
@@ -353,6 +358,9 @@ impl KiroAccountView {
     /// latest cached balance probe.
     pub fn from_auth(
         auth: &KiroAuthRecord,
+        effective_proxy_source: String,
+        effective_proxy_url: Option<String>,
+        effective_proxy_config_name: Option<String>,
         balance: Option<KiroBalanceView>,
         cache: KiroCacheView,
     ) -> Self {
@@ -380,6 +388,11 @@ impl KiroAccountView {
             machine_id: auth.machine_id.clone(),
             kiro_channel_max_concurrency: auth.effective_kiro_channel_max_concurrency(),
             kiro_channel_min_start_interval_ms: auth.effective_kiro_channel_min_start_interval_ms(),
+            proxy_mode: auth.proxy_selection().proxy_mode.as_str().to_string(),
+            proxy_config_id: auth.proxy_selection().proxy_config_id,
+            effective_proxy_source,
+            effective_proxy_url,
+            effective_proxy_config_name,
             proxy_url: auth.proxy_url.clone(),
             balance,
             cache,
@@ -454,4 +467,8 @@ pub struct PatchKiroAccountRequest {
     pub kiro_channel_max_concurrency: Option<u64>,
     #[serde(default)]
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub proxy_mode: Option<String>,
+    #[serde(default)]
+    pub proxy_config_id: Option<String>,
 }

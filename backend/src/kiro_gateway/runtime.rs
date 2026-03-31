@@ -18,7 +18,7 @@ use super::{
         DEFAULT_KIRO_VERSION, DEFAULT_NODE_VERSION, DEFAULT_SYSTEM_VERSION,
     },
     local_import,
-    provider::build_client,
+    provider::{build_client, KIRO_AUX_CLIENT_PROFILE},
     scheduler::KiroRequestScheduler,
     status_cache::KiroStatusCacheSnapshot,
     wire::{
@@ -297,7 +297,9 @@ impl KiroTokenManager {
         } else {
             format!("https://{host}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST")
         };
-        let (client, _) = build_client(self.upstream_proxy_registry.as_ref(), 60).await?;
+        let (client, _) =
+            build_client(self.upstream_proxy_registry.as_ref(), &auth, KIRO_AUX_CLIENT_PROFILE)
+                .await?;
         let machine_id = super::machine_id::generate_from_auth(&auth)
             .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
         let (amz_user_agent, user_agent) = usage_request_user_agents(&machine_id);
@@ -413,7 +415,7 @@ async fn refresh_social(
     let region = auth.effective_auth_region();
     let url = format!("https://prod.{region}.auth.desktop.kiro.dev/refreshToken");
     let host = format!("prod.{region}.auth.desktop.kiro.dev");
-    let (client, _) = build_client(proxy_registry, 60).await?;
+    let (client, _) = build_client(proxy_registry, auth, KIRO_AUX_CLIENT_PROFILE).await?;
     let machine_id = super::machine_id::generate_from_auth(auth)
         .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
     let response = client
@@ -466,7 +468,7 @@ async fn refresh_idc(
         .clone()
         .ok_or_else(|| anyhow!("missing kiro clientSecret"))?;
     let region = auth.effective_auth_region();
-    let (client, _) = build_client(proxy_registry, 60).await?;
+    let (client, _) = build_client(proxy_registry, auth, KIRO_AUX_CLIENT_PROFILE).await?;
     let response = client
         .post(format!("https://oidc.{region}.amazonaws.com/token"))
         .header("content-type", "application/json")

@@ -673,6 +673,11 @@ pub struct AccountSummaryView {
     pub primary_remaining_percent: Option<f64>,
     pub secondary_remaining_percent: Option<f64>,
     pub map_gpt53_codex_to_spark: bool,
+    pub proxy_mode: String,
+    pub proxy_config_id: Option<String>,
+    pub effective_proxy_source: String,
+    pub effective_proxy_url: Option<String>,
+    pub effective_proxy_config_name: Option<String>,
     pub last_refresh: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_usage_checked_at: Option<i64>,
@@ -691,6 +696,8 @@ pub struct AccountListResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PatchAccountSettingsRequest {
+    pub proxy_mode: Option<String>,
+    pub proxy_config_id: Option<String>,
     pub map_gpt53_codex_to_spark: Option<bool>,
 }
 

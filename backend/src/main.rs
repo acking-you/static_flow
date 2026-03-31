@@ -1,3 +1,5 @@
+//! StaticFlow backend server binary.
+
 mod article_request_worker;
 mod behavior_analytics;
 mod comment_worker;

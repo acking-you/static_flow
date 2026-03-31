@@ -16,6 +16,8 @@ use static_flow_shared::llm_gateway_store::{
     DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
 };
 
+use crate::upstream_proxy::{AccountProxyMode, AccountProxySelection};
+
 /// Default AWS region used for Kiro authentication and API calls when none is
 /// configured.
 pub const DEFAULT_KIRO_REGION: &str = "us-east-1";
@@ -90,6 +92,13 @@ pub struct KiroAuthRecord {
     /// in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    /// Account-level proxy override mode. Defaults to inheriting the Kiro
+    /// provider binding.
+    #[serde(default)]
+    pub proxy_mode: AccountProxyMode,
+    /// Shared proxy-config id used when `proxy_mode` is `"fixed"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_config_id: Option<String>,
     /// HTTP(S) proxy URL for outbound API requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
@@ -138,6 +147,8 @@ impl KiroAuthRecord {
         if self.region.as_deref().is_none_or(str::is_empty) {
             self.region = Some(DEFAULT_KIRO_REGION.to_string());
         }
+        self.proxy_mode = self.proxy_selection().proxy_mode;
+        self.proxy_config_id = self.proxy_selection().proxy_config_id;
         self
     }
 
@@ -201,6 +212,14 @@ impl KiroAuthRecord {
     pub fn effective_kiro_channel_min_start_interval_ms(&self) -> u64 {
         self.kiro_channel_min_start_interval_ms
             .unwrap_or(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS)
+    }
+
+    pub fn proxy_selection(&self) -> AccountProxySelection {
+        AccountProxySelection {
+            proxy_mode: self.proxy_mode,
+            proxy_config_id: self.proxy_config_id.clone(),
+        }
+        .canonicalize()
     }
 }
 

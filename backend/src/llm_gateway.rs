@@ -49,12 +49,8 @@ use static_flow_shared::llm_gateway_store::{
 };
 
 pub use self::runtime::LlmGatewayRuntimeState;
-pub(crate) use self::{
-    accounts::{resolve_auths_dir, AccountPool},
-    support::{load_support_asset, load_support_config, render_payment_email_markdown},
-    token_refresh::spawn_account_refresh_task,
-};
 use self::{
+    accounts::AccountSettingsPatch,
     models::{append_client_version_query, respond_local_models},
     request::{
         apply_gpt53_codex_spark_mapping, ensure_supported_gateway_path, external_origin,
@@ -68,8 +64,8 @@ use self::{
         rewrite_json_response_model_alias, SseUsageCollector,
     },
     runtime::{
-        bearer_header, gateway_auth_cache_ttl, CachedKeyLease, CodexAuthSnapshot,
-        CodexKeyRequestLease, CodexKeyRequestLimitRejection,
+        bearer_header, codex_upstream_client_profile, gateway_auth_cache_ttl, CachedKeyLease,
+        CodexAuthSnapshot, CodexKeyRequestLease, CodexKeyRequestLimitRejection,
     },
     types::{
         AccountListResponse, AccountSummaryView, AdminLegacyKiroProxyMigrationResponse,
@@ -99,6 +95,11 @@ use self::{
         UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
     },
 };
+pub(crate) use self::{
+    accounts::{resolve_auths_dir, AccountPool},
+    support::{load_support_asset, load_support_config, render_payment_email_markdown},
+    token_refresh::spawn_account_refresh_task,
+};
 use crate::{
     email::{
         build_llm_access_url, build_llm_gateway_base_url, normalize_frontend_page_url_input,
@@ -110,7 +111,9 @@ use crate::{
         extract_client_ip,
     },
     state::{AppState, LlmGatewayRuntimeConfig},
-    upstream_proxy::{validate_proxy_url, ResolvedUpstreamProxySource},
+    upstream_proxy::{
+        parse_account_proxy_selection_patch, validate_proxy_url, ResolvedUpstreamProxy,
+    },
 };
 
 const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
@@ -1159,14 +1162,10 @@ async fn load_proxy_binding_views(state: &AppState) -> Result<Vec<AdminUpstreamP
         {
             Ok(resolved) => views.push(AdminUpstreamProxyBindingView {
                 provider_type: provider_type.to_string(),
-                effective_source: match resolved.source {
-                    ResolvedUpstreamProxySource::Binding => "binding",
-                    ResolvedUpstreamProxySource::EnvFallback => "env_fallback",
-                }
-                .to_string(),
+                effective_source: resolved.source.as_str().to_string(),
                 bound_proxy_config_id: binding.map(|value| value.proxy_config_id.clone()),
                 effective_proxy_config_name: resolved.proxy_config_name.clone(),
-                effective_proxy_url: Some(resolved.proxy_url.clone()),
+                effective_proxy_url: resolved.proxy_url.clone(),
                 effective_proxy_username: resolved.proxy_username.clone(),
                 effective_proxy_password: resolved.proxy_password.clone(),
                 binding_updated_at: resolved.binding_updated_at,
@@ -2199,6 +2198,7 @@ pub async fn approve_and_issue_account_contribution_request(
             refresh_token: contribution_request.refresh_token.clone(),
             id_token: contribution_request.id_token.clone(),
             map_gpt53_codex_to_spark: false,
+            proxy_selection: Default::default(),
             last_refresh: Some(chrono::Utc::now()),
             status: accounts::AccountStatus::Active,
         };
@@ -2659,9 +2659,15 @@ pub async fn proxy_gateway_request(
     .await?;
     let prepared = apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark)?;
 
-    let response = send_upstream_with_retry(&state, &prepared, &parts.headers, &auth_snapshot)
-        .await
-        .map_err(|err| internal_error("Failed to proxy llm gateway request", err))?;
+    let response = send_upstream_with_retry(
+        &state,
+        &prepared,
+        &parts.headers,
+        &auth_snapshot,
+        selected_account_name.as_deref(),
+    )
+    .await
+    .map_err(|err| internal_error("Failed to proxy llm gateway request", err))?;
 
     forward_upstream_response(
         state,
@@ -2900,8 +2906,11 @@ async fn send_upstream_with_retry(
     prepared: &PreparedGatewayRequest,
     incoming_headers: &HeaderMap,
     auth_snapshot: &CodexAuthSnapshot,
+    selected_account_name: Option<&str>,
 ) -> Result<reqwest::Response> {
-    let first = send_upstream(state, prepared, incoming_headers, auth_snapshot).await?;
+    let first =
+        send_upstream(state, prepared, incoming_headers, auth_snapshot, selected_account_name)
+            .await?;
     if first.status() != StatusCode::UNAUTHORIZED {
         return Ok(first);
     }
@@ -2911,8 +2920,8 @@ async fn send_upstream_with_retry(
         "Upstream returned 401, forcing Codex auth reload"
     );
 
-    let refreshed = state.llm_gateway.auth_source.force_reload().await?;
-    send_upstream(state, prepared, incoming_headers, &refreshed).await
+    let refreshed = reload_codex_auth_snapshot(state, selected_account_name).await?;
+    send_upstream(state, prepared, incoming_headers, &refreshed, selected_account_name).await
 }
 
 /// Build the exact upstream HTTP request to the Codex backend.
@@ -2921,6 +2930,7 @@ async fn send_upstream(
     prepared: &PreparedGatewayRequest,
     incoming_headers: &HeaderMap,
     auth_snapshot: &CodexAuthSnapshot,
+    selected_account_name: Option<&str>,
 ) -> Result<reqwest::Response> {
     // Upstream headers are rebuilt from scratch instead of forwarding the
     // inbound request wholesale. This keeps reverse-proxy routing headers such
@@ -3052,9 +3062,9 @@ async fn send_upstream(
         "Sending LLM gateway request upstream"
     );
 
-    let client = state
+    let (client, resolved_proxy) = state
         .llm_gateway
-        .build_upstream_client()
+        .build_upstream_client(auth_snapshot)
         .await
         .context("failed to build codex upstream client")?;
     let mut request_builder = client
@@ -3064,10 +3074,45 @@ async fn send_upstream(
         request_builder = request_builder.body(prepared.request_body.clone());
     }
 
-    request_builder
-        .send()
-        .await
-        .context("upstream request failed")
+    match request_builder.send().await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            let invalidated = state
+                .upstream_proxy_registry
+                .invalidate_client_if_connect_error(
+                    &resolved_proxy,
+                    codex_upstream_client_profile(),
+                    &err,
+                )
+                .await;
+            tracing::warn!(
+                account_name = selected_account_name.unwrap_or("legacy"),
+                proxy_source = %resolved_proxy.source.as_str(),
+                proxy_url = %resolved_proxy.proxy_url_label(),
+                invalidated_client = invalidated,
+                "codex upstream request failed: {err}"
+            );
+            Err(err).context("upstream request failed")
+        },
+    }
+}
+
+async fn reload_codex_auth_snapshot(
+    state: &AppState,
+    selected_account_name: Option<&str>,
+) -> Result<CodexAuthSnapshot> {
+    if let Some(account_name) = selected_account_name {
+        if let Some((snapshot, _map_gpt53_codex_to_spark)) = state
+            .llm_gateway
+            .account_pool
+            .get_account(account_name)
+            .await
+        {
+            return Ok(snapshot);
+        }
+        anyhow::bail!("selected Codex account `{account_name}` is unavailable after retry");
+    }
+    state.llm_gateway.auth_source.force_reload().await
 }
 
 // === Downstream response adaptation ===
@@ -3461,7 +3506,7 @@ async fn send_rate_limit_status_request(
     source_url: &str,
     auth_snapshot: &CodexAuthSnapshot,
 ) -> Result<UsageStatusPayload> {
-    let client = runtime.build_upstream_client().await?;
+    let (client, _) = runtime.build_upstream_client(auth_snapshot).await?;
     let mut request = client
         .get(source_url)
         .header(reqwest::header::USER_AGENT, codex_user_agent())
@@ -3867,6 +3912,7 @@ pub async fn import_account(
         refresh_token,
         id_token,
         map_gpt53_codex_to_spark: false,
+        proxy_selection: Default::default(),
         last_refresh: Some(chrono::Utc::now()),
         status: accounts::AccountStatus::Active,
     };
@@ -3877,25 +3923,15 @@ pub async fn import_account(
 
     tracing::info!(account = name, "Imported Codex account into gateway pool");
 
-    Ok(Json(AccountSummaryView {
-        name,
-        status: "active".to_string(),
-        account_id: request
-            .tokens
-            .account_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string),
-        plan_type: usage.primary_plan_type(),
-        primary_remaining_percent: usage.primary_remaining_percent(),
-        secondary_remaining_percent: usage.secondary_remaining_percent(),
-        map_gpt53_codex_to_spark: false,
-        last_refresh: Some(now_ms()),
-        last_usage_checked_at: usage.last_checked_at,
-        last_usage_success_at: usage.last_checked_at,
-        usage_error_message: None,
-    }))
+    let summary = state
+        .llm_gateway
+        .account_pool
+        .list_summaries()
+        .await
+        .into_iter()
+        .find(|summary| summary.name == name)
+        .ok_or_else(|| not_found("account not found after import"))?;
+    Ok(Json(build_codex_account_summary_view(&state, summary).await))
 }
 
 /// List all managed Codex accounts in the pool.
@@ -3905,25 +3941,10 @@ pub async fn list_accounts(
 ) -> Result<Json<AccountListResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let summaries = state.llm_gateway.account_pool.list_summaries().await;
-    let accounts = summaries
-        .into_iter()
-        .map(|summary| AccountSummaryView {
-            name: summary.name,
-            status: summary.status.as_str().to_string(),
-            account_id: summary.account_id,
-            plan_type: summary.rate_limits.primary_plan_type(),
-            primary_remaining_percent: summary.rate_limits.primary_remaining_percent(),
-            secondary_remaining_percent: summary.rate_limits.secondary_remaining_percent(),
-            map_gpt53_codex_to_spark: summary.map_gpt53_codex_to_spark,
-            last_refresh: summary
-                .rate_limits
-                .last_checked_at
-                .or(summary.last_refresh_ms),
-            last_usage_checked_at: summary.usage_refresh.last_checked_at,
-            last_usage_success_at: summary.usage_refresh.last_success_at,
-            usage_error_message: summary.usage_refresh.error_message,
-        })
-        .collect();
+    let mut accounts = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        accounts.push(build_codex_account_summary_view(&state, summary).await);
+    }
     Ok(Json(AccountListResponse {
         accounts,
         generated_at: now_ms(),
@@ -3938,23 +3959,40 @@ pub async fn patch_account_settings(
 ) -> Result<Json<AccountSummaryView>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let name = accounts::validate_account_name(&name).map_err(|err| bad_request(&err))?;
-    let Some(enabled) = request.map_gpt53_codex_to_spark else {
-        return Err(bad_request("map_gpt53_codex_to_spark is required"));
-    };
+    let proxy_selection = parse_account_proxy_selection_patch(
+        request.proxy_mode.as_deref(),
+        request.proxy_config_id.as_deref(),
+    )
+    .map_err(|err| bad_request(&err.to_string()))?;
+    if request.map_gpt53_codex_to_spark.is_none() && proxy_selection.is_none() {
+        return Err(bad_request(
+            "at least one of map_gpt53_codex_to_spark or proxy_mode must be provided",
+        ));
+    }
+    if let Some(proxy_selection) = proxy_selection.as_ref() {
+        state
+            .upstream_proxy_registry
+            .resolve_proxy_for_selection(LLM_GATEWAY_PROVIDER_CODEX, Some(proxy_selection))
+            .await
+            .map_err(|err| bad_request(&format!("invalid proxy selection: {err}")))?;
+    }
 
     let summaries = state.llm_gateway.account_pool.list_summaries().await;
     let current = summaries
         .iter()
         .find(|summary| summary.name == name)
         .ok_or_else(|| not_found("account not found"))?;
-    if enabled && !current.rate_limits.is_gpt_pro() {
+    if request.map_gpt53_codex_to_spark == Some(true) && !current.rate_limits.is_gpt_pro() {
         return Err(bad_request("Spark mapping is only available for accounts with plan_type=Pro"));
     }
 
     let updated = state
         .llm_gateway
         .account_pool
-        .set_map_gpt53_codex_to_spark(&name, enabled)
+        .update_settings(&name, AccountSettingsPatch {
+            map_gpt53_codex_to_spark: request.map_gpt53_codex_to_spark,
+            proxy_selection,
+        })
         .await
         .map_err(|err| internal_error("Failed to update account settings", err))?;
     if !updated {
@@ -3973,10 +4011,53 @@ pub async fn patch_account_settings(
     tracing::info!(
         account = summary.name,
         map_gpt53_codex_to_spark = summary.map_gpt53_codex_to_spark,
+        proxy_mode = %summary.proxy_selection.proxy_mode.as_str(),
+        proxy_config_id = ?summary.proxy_selection.proxy_config_id,
         "Updated Codex account settings"
     );
 
-    Ok(Json(AccountSummaryView {
+    Ok(Json(build_codex_account_summary_view(&state, summary).await))
+}
+
+async fn build_codex_account_summary_view(
+    state: &AppState,
+    summary: accounts::AccountSummarySnapshot,
+) -> AccountSummaryView {
+    match state
+        .upstream_proxy_registry
+        .resolve_proxy_for_selection(LLM_GATEWAY_PROVIDER_CODEX, Some(&summary.proxy_selection))
+        .await
+    {
+        Ok(resolved_proxy) => {
+            account_summary_view_from_summary(summary, Some(&resolved_proxy), None)
+        },
+        Err(err) => account_summary_view_from_summary(summary, None, Some(err.to_string())),
+    }
+}
+
+fn account_summary_view_from_summary(
+    summary: accounts::AccountSummarySnapshot,
+    resolved_proxy: Option<&ResolvedUpstreamProxy>,
+    invalid_proxy_message: Option<String>,
+) -> AccountSummaryView {
+    let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
+        if let Some(resolved_proxy) = resolved_proxy {
+            (
+                resolved_proxy.source.as_str().to_string(),
+                resolved_proxy.proxy_url.clone(),
+                resolved_proxy.proxy_config_name.clone(),
+            )
+        } else {
+            (
+                format!(
+                    "invalid ({})",
+                    invalid_proxy_message.unwrap_or_else(|| "unknown".to_string())
+                ),
+                None,
+                None,
+            )
+        };
+    AccountSummaryView {
         name: summary.name,
         status: summary.status.as_str().to_string(),
         account_id: summary.account_id,
@@ -3984,6 +4065,11 @@ pub async fn patch_account_settings(
         primary_remaining_percent: summary.rate_limits.primary_remaining_percent(),
         secondary_remaining_percent: summary.rate_limits.secondary_remaining_percent(),
         map_gpt53_codex_to_spark: summary.map_gpt53_codex_to_spark,
+        proxy_mode: summary.proxy_selection.proxy_mode.as_str().to_string(),
+        proxy_config_id: summary.proxy_selection.proxy_config_id,
+        effective_proxy_source,
+        effective_proxy_url,
+        effective_proxy_config_name,
         last_refresh: summary
             .rate_limits
             .last_checked_at
@@ -3991,7 +4077,7 @@ pub async fn patch_account_settings(
         last_usage_checked_at: summary.usage_refresh.last_checked_at,
         last_usage_success_at: summary.usage_refresh.last_success_at,
         usage_error_message: summary.usage_refresh.error_message,
-    }))
+    }
 }
 
 /// Remove a Codex account from the pool and delete its auth file.

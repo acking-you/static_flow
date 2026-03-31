@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
 use js_sys::Date;
@@ -33,7 +33,8 @@ use crate::{
         AdminUpstreamProxyBindingView, AdminUpstreamProxyCheckResponse,
         AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView,
         CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
-        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
+        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
+        PatchAdminUpstreamProxyConfigInput,
     },
     components::pagination::Pagination,
     pages::llm_access_shared::{format_number_i64, format_number_u64, MaskedSecretCode},
@@ -123,6 +124,18 @@ fn format_ms(ts_ms: i64) -> String {
         d.get_minutes(),
         d.get_seconds(),
     )
+}
+
+fn account_proxy_select_value(account: &AccountSummaryView) -> String {
+    match account.proxy_mode.as_str() {
+        "direct" => "direct".to_string(),
+        "fixed" => account
+            .proxy_config_id
+            .as_deref()
+            .map(|id| format!("fixed:{id}"))
+            .unwrap_or_else(|| "inherit".to_string()),
+        _ => "inherit".to_string(),
+    }
 }
 
 fn format_latency_ms(latency_ms: i32) -> String {
@@ -1311,6 +1324,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let import_account_id = use_state(String::new);
     let importing = use_state(|| false);
     let account_action_inflight = use_state(HashSet::<String>::new);
+    let account_proxy_inputs = use_state(BTreeMap::<String, String>::new);
     let show_import_form = use_state(|| false);
     let active_tab = use_state(|| TAB_OVERVIEW.to_string());
     let on_tab_click = {
@@ -1491,6 +1505,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_page = usage_page.clone();
         let usage_key_filter = usage_key_filter.clone();
         let accounts = accounts.clone();
+        let account_proxy_inputs = account_proxy_inputs.clone();
         let reload_usage = reload_usage.clone();
         Callback::from(move |_| {
             let config = config.clone();
@@ -1506,6 +1521,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_page = usage_page.clone();
             let usage_key_filter = usage_key_filter.clone();
             let accounts = accounts.clone();
+            let account_proxy_inputs = account_proxy_inputs.clone();
             let reload_usage = reload_usage.clone();
             loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
@@ -1580,7 +1596,15 @@ pub fn admin_llm_gateway_page() -> Html {
                         kiro_proxy_binding_input.set(kiro_bound);
                         usage_key_filter.set(effective_key_filter);
                         if let Some(acc_resp) = accounts_resp {
+                            let next_proxy_inputs = acc_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (account.name.clone(), account_proxy_select_value(account))
+                                })
+                                .collect::<BTreeMap<_, _>>();
                             accounts.set(acc_resp.accounts);
+                            account_proxy_inputs.set(next_proxy_inputs);
                         }
                         load_error.set(None);
                         reload_usage.emit((Some(current_page), Some(usage_filter_for_reload)));
@@ -2357,7 +2381,16 @@ pub fn admin_llm_gateway_page() -> Html {
                 inflight.insert(account_name.clone());
                 account_action_inflight.set(inflight);
 
-                match patch_admin_llm_gateway_account(&account_name, enabled).await {
+                match patch_admin_llm_gateway_account(
+                    &account_name,
+                    &PatchAdminLlmGatewayAccountInput {
+                        map_gpt53_codex_to_spark: Some(enabled),
+                        proxy_mode: None,
+                        proxy_config_id: None,
+                    },
+                )
+                .await
+                {
                     Ok(updated) => {
                         let mut items = (*accounts).clone();
                         if let Some(item) = items.iter_mut().find(|item| item.name == updated.name)
@@ -2365,6 +2398,67 @@ pub fn admin_llm_gateway_page() -> Html {
                             *item = updated;
                         }
                         accounts.set(items);
+                        load_error.set(None);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+
+                let mut inflight = (*account_action_inflight).clone();
+                inflight.remove(&account_name);
+                account_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_save_account_proxy = {
+        let account_action_inflight = account_action_inflight.clone();
+        let account_proxy_inputs = account_proxy_inputs.clone();
+        let accounts = accounts.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |account_name: String| {
+            let account_action_inflight = account_action_inflight.clone();
+            let account_proxy_inputs = account_proxy_inputs.clone();
+            let accounts = accounts.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let selection = (*account_proxy_inputs)
+                    .get(&account_name)
+                    .cloned()
+                    .unwrap_or_else(|| "inherit".to_string());
+                let (proxy_mode, proxy_config_id) = if selection == "direct" {
+                    (Some("direct".to_string()), None)
+                } else if let Some(proxy_config_id) = selection.strip_prefix("fixed:") {
+                    (Some("fixed".to_string()), Some(proxy_config_id.to_string()))
+                } else {
+                    (Some("inherit".to_string()), None)
+                };
+
+                let mut inflight = (*account_action_inflight).clone();
+                inflight.insert(account_name.clone());
+                account_action_inflight.set(inflight);
+
+                match patch_admin_llm_gateway_account(
+                    &account_name,
+                    &PatchAdminLlmGatewayAccountInput {
+                        map_gpt53_codex_to_spark: None,
+                        proxy_mode,
+                        proxy_config_id,
+                    },
+                )
+                .await
+                {
+                    Ok(updated) => {
+                        let mut items = (*accounts).clone();
+                        if let Some(item) = items.iter_mut().find(|item| item.name == updated.name)
+                        {
+                            *item = updated.clone();
+                        }
+                        accounts.set(items);
+
+                        let mut next_inputs = (*account_proxy_inputs).clone();
+                        next_inputs
+                            .insert(updated.name.clone(), account_proxy_select_value(&updated));
+                        account_proxy_inputs.set(next_inputs);
                         load_error.set(None);
                     },
                     Err(err) => load_error.set(Some(err)),
@@ -3099,7 +3193,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 <div>
                                     <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Legacy Kiro Proxy Migration" }</h3>
                                     <p class={classes!("mt-2", "mb-0", "text-xs", "text-[var(--muted)]")}>
-                                        { "扫描 ~/.static-flow/auths/kiro/*.json 中遗留的账号级代理字段，导入为共享代理配置，并从账号文件中清掉这些旧字段。" }
+                                        { "扫描 ~/.static-flow/auths/kiro/*.json 中遗留的账号级代理字段，导入为共享代理配置，把对应账号切到 fixed 选择，并清掉旧字段。" }
                                     </p>
                                 </div>
                                 <button class={classes!("btn-terminal")} onclick={on_import_legacy_kiro_proxy} disabled={*migrating_legacy_kiro_proxy}>
@@ -3364,14 +3458,26 @@ pub fn admin_llm_gateway_page() -> Html {
                             { for accounts.iter().map(|acc| {
                                 let acc_name_for_toggle = acc.name.clone();
                                 let acc_name_for_delete = acc.name.clone();
+                                let acc_name_for_proxy_change = acc.name.clone();
+                                let acc_name_for_proxy_save = acc.name.clone();
                                 let acc_name = acc.name.clone();
                                 let acc_status = acc.status.clone();
                                 let acc_plan_type = acc.plan_type.clone();
                                 let acc_account_id = acc.account_id.clone();
                                 let spark_mapping_enabled = acc.map_gpt53_codex_to_spark;
+                                let selected_proxy_value = (*account_proxy_inputs)
+                                    .get(&acc_name)
+                                    .cloned()
+                                    .unwrap_or_else(|| account_proxy_select_value(acc));
+                                let effective_proxy_line = format!(
+                                    "{} · {}",
+                                    acc.effective_proxy_source,
+                                    acc.effective_proxy_url.clone().unwrap_or_else(|| "direct".to_string())
+                                );
                                 let on_delete = on_delete_account.clone();
                                 let on_toggle_account_spark_mapping =
                                     on_toggle_account_spark_mapping.clone();
+                                let on_save_account_proxy = on_save_account_proxy.clone();
                                 let primary_pct = acc.primary_remaining_percent
                                     .map(|v| format!("{:.0}%", v))
                                     .unwrap_or_else(|| "-".to_string());
@@ -3386,20 +3492,64 @@ pub fn admin_llm_gateway_page() -> Html {
                                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "px-4", "py-3", "flex-wrap")}>
                                         <div class={classes!("flex", "items-center", "gap-3")}>
                                             <div class={key_status_badge(&acc_status)}>{ acc_status.clone() }</div>
-                                            <span class={classes!("font-bold")}>{ acc_name.clone() }</span>
-                                            if let Some(ref plan_type) = acc_plan_type {
-                                                <span class={classes!("rounded-full", "bg-sky-500/12", "px-2.5", "py-1", "text-xs", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
-                                                    { plan_type.clone() }
-                                                </span>
-                                            }
-                                            if let Some(ref aid) = acc_account_id {
-                                                <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ aid.clone() }</span>
-                                            }
+                                            <div>
+                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                    <span class={classes!("font-bold")}>{ acc_name.clone() }</span>
+                                                    if let Some(ref plan_type) = acc_plan_type {
+                                                        <span class={classes!("rounded-full", "bg-sky-500/12", "px-2.5", "py-1", "text-xs", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
+                                                            { plan_type.clone() }
+                                                        </span>
+                                                    }
+                                                    if let Some(ref aid) = acc_account_id {
+                                                        <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ aid.clone() }</span>
+                                                    }
+                                                </div>
+                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                    { effective_proxy_line.clone() }
+                                                    if let Some(proxy_name) = acc.effective_proxy_config_name.as_deref() {
+                                                        { format!(" · {}", proxy_name) }
+                                                    }
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div class={classes!("flex", "items-center", "gap-3")}>
+                                        <div class={classes!("flex", "items-center", "gap-3", "flex-wrap", "justify-end")}>
                                             <span class={classes!("text-xs", "text-[var(--muted)]")}>
                                                 { format!("5h {} / wk {}", primary_pct, secondary_pct) }
                                             </span>
+                                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                <select
+                                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-xs")}
+                                                    value={selected_proxy_value.clone()}
+                                                    onchange={{
+                                                        let account_proxy_inputs = account_proxy_inputs.clone();
+                                                        Callback::from(move |event: Event| {
+                                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                                let mut next = (*account_proxy_inputs).clone();
+                                                                next.insert(acc_name_for_proxy_change.clone(), target.value());
+                                                                account_proxy_inputs.set(next);
+                                                            }
+                                                        })
+                                                    }}
+                                                >
+                                                    <option value="inherit" selected={selected_proxy_value == "inherit"}>{ "继承 Provider Proxy" }</option>
+                                                    <option value="direct" selected={selected_proxy_value == "direct"}>{ "Direct / 不走代理" }</option>
+                                                    { for proxy_configs.iter().map(|proxy_config| {
+                                                        let option_value = format!("fixed:{}", proxy_config.id);
+                                                        html! {
+                                                            <option value={option_value.clone()} selected={selected_proxy_value == option_value}>
+                                                                { format!("固定到 {} · {}", proxy_config.name, proxy_config.proxy_url) }
+                                                            </option>
+                                                        }
+                                                    }) }
+                                                </select>
+                                                <button
+                                                    class={classes!("btn-terminal")}
+                                                    onclick={Callback::from(move |_| on_save_account_proxy.emit(acc_name_for_proxy_save.clone()))}
+                                                    disabled={spark_toggle_inflight}
+                                                >
+                                                    { if spark_toggle_inflight { "保存中..." } else { "保存代理" } }
+                                                </button>
+                                            </div>
                                             if show_spark_toggle {
                                                 <button
                                                     class={classes!(

@@ -8,7 +8,11 @@ use crate::{
     router::Route,
 };
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Some pages instantiate the card without navigation, but the reusable props keep \
+              route support available."
+)]
 #[derive(Properties, PartialEq, Clone)]
 pub struct StatsCardProps {
     pub icon: IconName,

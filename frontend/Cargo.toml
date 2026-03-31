@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 # 使用 workspace 级别的依赖版本
 yew = { workspace = true }
