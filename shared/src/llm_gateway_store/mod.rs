@@ -95,7 +95,7 @@ impl LlmGatewayStore {
             db,
         };
         store.keys_table().await?;
-        store.usage_events_table().await?;
+        store.ensure_usage_events_table_ready().await?;
         store.runtime_config_table().await?;
         store.proxy_configs_table().await?;
         store.proxy_bindings_table().await?;
@@ -115,8 +115,16 @@ impl LlmGatewayStore {
         ensure_keys_table(&self.db).await
     }
 
-    async fn usage_events_table(&self) -> Result<Table> {
+    async fn ensure_usage_events_table_ready(&self) -> Result<Table> {
         ensure_usage_events_table(&self.db).await
+    }
+
+    async fn usage_events_table(&self) -> Result<Table> {
+        self.db
+            .open_table(LLM_GATEWAY_USAGE_EVENTS_TABLE)
+            .execute()
+            .await
+            .context("failed to open llm gateway usage-events table")
     }
 
     async fn runtime_config_table(&self) -> Result<Table> {
@@ -1583,6 +1591,96 @@ mod tests {
             .expect("rollup row for key after missing event");
         assert_eq!(updated.credit_total, 0.125);
         assert_eq!(updated.credit_missing_events, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn connect_creates_usage_events_provider_type_index_and_provider_filters_work() {
+        let dir = temp_store_dir("usage-provider-type-index");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let table = store
+            .connection()
+            .open_table(LLM_GATEWAY_USAGE_EVENTS_TABLE)
+            .execute()
+            .await
+            .expect("open usage events table");
+        let indexes = table
+            .list_indices()
+            .await
+            .expect("list usage table indices");
+        assert!(indexes
+            .iter()
+            .any(|index| { index.columns.len() == 1 && index.columns[0] == "provider_type" }));
+
+        let key = sample_key_record("test-key-provider-filter", "Provider Filter Key");
+        store.create_key(&key).await.expect("create key");
+
+        let now = now_ms();
+        let base_event = LlmGatewayUsageEventRecord {
+            id: "evt-provider-base".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 12,
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 0,
+            output_tokens: 5,
+            billable_tokens: 15,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            created_at: now,
+        };
+        store
+            .append_usage_event(&base_event)
+            .await
+            .expect("append kiro usage event");
+        store
+            .append_usage_event(&LlmGatewayUsageEventRecord {
+                id: "evt-provider-codex".to_string(),
+                provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+                created_at: now + 1,
+                ..base_event.clone()
+            })
+            .await
+            .expect("append codex usage event");
+
+        assert_eq!(
+            store
+                .count_usage_events_for_provider(None, Some(LLM_GATEWAY_PROVIDER_KIRO))
+                .await
+                .expect("count kiro events"),
+            1
+        );
+        assert_eq!(
+            store
+                .count_usage_events_for_provider(None, Some(LLM_GATEWAY_PROVIDER_CODEX))
+                .await
+                .expect("count codex events"),
+            1
+        );
+        assert_eq!(
+            store
+                .query_usage_events(None, Some(LLM_GATEWAY_PROVIDER_KIRO), Some(10), Some(0))
+                .await
+                .expect("query kiro events")
+                .len(),
+            1
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -270,6 +270,7 @@ pub async fn ensure_usage_events_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "last_message_content").await?;
     ensure_scalar_index(&table, "id").await?;
     ensure_scalar_index(&table, "key_id").await?;
+    ensure_scalar_index(&table, "provider_type").await?;
     ensure_scalar_index(&table, "created_at").await?;
     Ok(table)
 }

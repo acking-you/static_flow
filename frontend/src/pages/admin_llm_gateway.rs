@@ -1238,6 +1238,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_total = use_state(|| 0_usize);
     let usage_page = use_state(|| 1_usize);
     let usage_loading = use_state(|| false);
+    let usage_error = use_state(|| None::<String>);
     let usage_key_filter = use_state(String::new);
     let token_requests = use_state(Vec::<AdminLlmGatewayTokenRequestView>::new);
     let token_request_total = use_state(|| 0_usize);
@@ -1324,18 +1325,19 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_total = usage_total.clone();
         let usage_page = usage_page.clone();
         let usage_loading = usage_loading.clone();
+        let usage_error = usage_error.clone();
         let usage_key_filter = usage_key_filter.clone();
-        let load_error = load_error.clone();
         Callback::from(move |(requested_page, override_key_id): (Option<usize>, Option<String>)| {
             let usage_events = usage_events.clone();
             let usage_total = usage_total.clone();
             let usage_page = usage_page.clone();
             let usage_loading = usage_loading.clone();
+            let usage_error = usage_error.clone();
             let usage_key_filter = usage_key_filter.clone();
-            let load_error = load_error.clone();
             let page = requested_page.unwrap_or(*usage_page).max(1);
             let selected_key_id = override_key_id.unwrap_or_else(|| (*usage_key_filter).clone());
             usage_loading.set(true);
+            usage_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 let query = AdminLlmGatewayUsageEventsQuery {
                     key_id: (!selected_key_id.is_empty()).then_some(selected_key_id),
@@ -1347,9 +1349,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         usage_total.set(resp.total);
                         usage_events.set(resp.events);
                         usage_page.set(page);
-                        load_error.set(None);
                     },
-                    Err(err) => load_error.set(Some(err)),
+                    Err(err) => usage_error.set(Some(err)),
                 }
                 usage_loading.set(false);
             });
@@ -1487,11 +1488,10 @@ pub fn admin_llm_gateway_page() -> Html {
         let max_request_body_input = max_request_body_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
-        let usage_events = usage_events.clone();
-        let usage_total = usage_total.clone();
         let usage_page = usage_page.clone();
         let usage_key_filter = usage_key_filter.clone();
         let accounts = accounts.clone();
+        let reload_usage = reload_usage.clone();
         Callback::from(move |_| {
             let config = config.clone();
             let keys = keys.clone();
@@ -1503,20 +1503,32 @@ pub fn admin_llm_gateway_page() -> Html {
             let max_request_body_input = max_request_body_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
-            let usage_events = usage_events.clone();
-            let usage_total = usage_total.clone();
             let usage_page = usage_page.clone();
             let usage_key_filter = usage_key_filter.clone();
             let accounts = accounts.clone();
+            let reload_usage = reload_usage.clone();
             loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let current_key_filter = (*usage_key_filter).clone();
                 let current_page = (*usage_page).max(1);
                 let result = async {
-                    let cfg = fetch_admin_llm_gateway_config().await?;
-                    let keys_resp = fetch_admin_llm_gateway_keys().await?;
-                    let proxy_configs_resp = fetch_admin_llm_gateway_proxy_configs().await?;
-                    let proxy_bindings_resp = fetch_admin_llm_gateway_proxy_bindings().await?;
+                    let (
+                        cfg_result,
+                        keys_result,
+                        proxy_configs_result,
+                        proxy_bindings_result,
+                        accounts_result,
+                    ) = futures::join!(
+                        fetch_admin_llm_gateway_config(),
+                        fetch_admin_llm_gateway_keys(),
+                        fetch_admin_llm_gateway_proxy_configs(),
+                        fetch_admin_llm_gateway_proxy_bindings(),
+                        fetch_admin_llm_gateway_accounts(),
+                    );
+                    let cfg = cfg_result?;
+                    let keys_resp = keys_result?;
+                    let proxy_configs_resp = proxy_configs_result?;
+                    let proxy_bindings_resp = proxy_bindings_result?;
                     let effective_key_filter = if current_key_filter.is_empty()
                         || keys_resp
                             .keys
@@ -1527,22 +1539,13 @@ pub fn admin_llm_gateway_page() -> Html {
                     } else {
                         String::new()
                     };
-                    let usage_query = AdminLlmGatewayUsageEventsQuery {
-                        key_id: (!effective_key_filter.is_empty())
-                            .then_some(effective_key_filter.clone()),
-                        limit: Some(USAGE_PAGE_SIZE),
-                        offset: Some((current_page - 1) * USAGE_PAGE_SIZE),
-                    };
-                    let usage_resp = fetch_admin_llm_gateway_usage_events(&usage_query).await?;
-                    let accounts_resp = fetch_admin_llm_gateway_accounts().await.ok();
                     Ok::<_, String>((
                         cfg,
                         keys_resp.keys,
                         proxy_configs_resp.proxy_configs,
                         proxy_bindings_resp.bindings,
                         effective_key_filter,
-                        usage_resp,
-                        accounts_resp,
+                        accounts_result.ok(),
                     ))
                 }
                 .await;
@@ -1554,9 +1557,9 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_config_items,
                         proxy_binding_items,
                         effective_key_filter,
-                        usage_resp,
                         accounts_resp,
                     )) => {
+                        let usage_filter_for_reload = effective_key_filter.clone();
                         ttl_input.set(cfg.auth_cache_ttl_seconds.to_string());
                         max_request_body_input.set(cfg.max_request_body_bytes.to_string());
                         config.set(Some(cfg));
@@ -1576,12 +1579,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         codex_proxy_binding_input.set(codex_bound);
                         kiro_proxy_binding_input.set(kiro_bound);
                         usage_key_filter.set(effective_key_filter);
-                        usage_total.set(usage_resp.total);
-                        usage_events.set(usage_resp.events);
                         if let Some(acc_resp) = accounts_resp {
                             accounts.set(acc_resp.accounts);
                         }
                         load_error.set(None);
+                        reload_usage.emit((Some(current_page), Some(usage_filter_for_reload)));
                     },
                     Err(err) => load_error.set(Some(err)),
                 }
@@ -3495,6 +3497,11 @@ pub fn admin_llm_gateway_page() -> Html {
                             <span>{ "加载中" }</span>
                         </div>
                     }
+                    if let Some(err) = (*usage_error).clone() {
+                        <div class={classes!("mt-3", "rounded-lg", "border", "border-red-400/35", "bg-red-500/8", "px-4", "py-3", "text-sm", "text-red-700", "dark:text-red-200")}>
+                            { err }
+                        </div>
+                    }
 
                     <div class={classes!("mt-3", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div class={classes!("text-xs", "text-[var(--muted)]")}>
@@ -3562,7 +3569,7 @@ pub fn admin_llm_gateway_page() -> Html {
                             </tr>
                         </thead>
                             <tbody>
-                                if usage_events.is_empty() && !*loading && !*usage_loading {
+                                if usage_events.is_empty() && !*loading && !*usage_loading && (*usage_error).is_none() {
                                     <tr class={classes!("border-t", "border-[var(--border)]")}>
                                         <td colspan="12" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
                                     </tr>

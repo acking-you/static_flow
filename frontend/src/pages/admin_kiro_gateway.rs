@@ -896,6 +896,8 @@ pub fn admin_kiro_gateway_page() -> Html {
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
     let kiro_models = use_state(Vec::<KiroModelView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
+    let usage_loading = use_state(|| false);
+    let usage_error = use_state(|| None::<String>);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
@@ -954,11 +956,36 @@ pub fn admin_kiro_gateway_page() -> Html {
     let new_key_name = use_state(|| "kiro-private".to_string());
     let new_key_quota = use_state(|| "1000000".to_string());
 
+    let reload_usage = {
+        let usage_events = usage_events.clone();
+        let usage_loading = usage_loading.clone();
+        let usage_error = usage_error.clone();
+        Callback::from(move |_| {
+            let usage_events = usage_events.clone();
+            let usage_loading = usage_loading.clone();
+            let usage_error = usage_error.clone();
+            usage_loading.set(true);
+            usage_error.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_admin_kiro_usage_events(&AdminLlmGatewayUsageEventsQuery {
+                    key_id: None,
+                    limit: Some(5),
+                    offset: Some(0),
+                })
+                .await
+                {
+                    Ok(usage_resp) => usage_events.set(usage_resp.events),
+                    Err(err) => usage_error.set(Some(err)),
+                }
+                usage_loading.set(false);
+            });
+        })
+    };
+
     {
         let accounts = accounts.clone();
         let keys = keys.clone();
         let kiro_models = kiro_models.clone();
-        let usage_events = usage_events.clone();
         let proxy_bindings = proxy_bindings.clone();
         let loading = loading.clone();
         let error = error.clone();
@@ -966,54 +993,47 @@ pub fn admin_kiro_gateway_page() -> Html {
             let accounts = accounts.clone();
             let keys = keys.clone();
             let kiro_models = kiro_models.clone();
-            let usage_events = usage_events.clone();
             let proxy_bindings = proxy_bindings.clone();
             let loading = loading.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 loading.set(true);
                 error.set(None);
-                let accounts_result = fetch_admin_kiro_accounts().await;
-                let keys_result = fetch_admin_kiro_keys().await;
-                let models_result = fetch_kiro_models().await;
-                let proxy_bindings_result = fetch_admin_llm_gateway_proxy_bindings().await;
-                let usage_result =
-                    fetch_admin_kiro_usage_events(&AdminLlmGatewayUsageEventsQuery {
-                        key_id: None,
-                        limit: Some(5),
-                        offset: Some(0),
-                    })
-                    .await;
-                match (
-                    accounts_result,
-                    keys_result,
-                    models_result,
-                    proxy_bindings_result,
-                    usage_result,
-                ) {
+                let (accounts_result, keys_result, models_result, proxy_bindings_result) = futures::join!(
+                    fetch_admin_kiro_accounts(),
+                    fetch_admin_kiro_keys(),
+                    fetch_kiro_models(),
+                    fetch_admin_llm_gateway_proxy_bindings(),
+                );
+                match (accounts_result, keys_result, models_result, proxy_bindings_result) {
                     (
                         Ok(accounts_resp),
                         Ok(keys_resp),
                         Ok(models_resp),
                         Ok(proxy_bindings_resp),
-                        Ok(usage_resp),
                     ) => {
                         accounts.set(accounts_resp.accounts);
                         keys.set(keys_resp.keys);
                         kiro_models.set(models_resp.data);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
-                        usage_events.set(usage_resp.events);
                     },
-                    (Err(err), _, _, _, _)
-                    | (_, Err(err), _, _, _)
-                    | (_, _, Err(err), _, _)
-                    | (_, _, _, Err(err), _)
-                    | (_, _, _, _, Err(err)) => {
+                    (Err(err), _, _, _)
+                    | (_, Err(err), _, _)
+                    | (_, _, Err(err), _)
+                    | (_, _, _, Err(err)) => {
                         error.set(Some(err));
                     },
                 }
                 loading.set(false);
             });
+            || ()
+        });
+    }
+
+    {
+        let reload_usage = reload_usage.clone();
+        use_effect_with(*refresh_tick, move |_| {
+            reload_usage.emit(());
             || ()
         });
     }
@@ -1614,7 +1634,16 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { "查看完整记录" }
                     </Link<Route>>
                 </div>
-                if (*usage_events).is_empty() {
+                if *usage_loading {
+                    <div class={classes!("mt-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                        <i class={classes!("fas", "fa-spinner", "animate-spin")} />
+                        <span>{ "加载中" }</span>
+                    </div>
+                } else if let Some(err) = (*usage_error).clone() {
+                    <div class={classes!("mt-3", "rounded-lg", "bg-red-500/10", "px-3", "py-2", "text-sm", "text-red-700", "dark:text-red-200")}>
+                        { err }
+                    </div>
+                } else if (*usage_events).is_empty() {
                     <div class={classes!("mt-3", "font-mono", "text-sm", "text-[var(--muted)]")}>{ "暂无记录" }</div>
                 } else {
                     <div class={classes!("mt-3", "space-y-2")}>
