@@ -11,6 +11,16 @@ use crate::{
     router::Route,
 };
 
+const CLAUDE_CODE_ENV_HINTS: [(&str, &str); 4] = [
+    ("DISABLE_TELEMETRY=1", "禁用 Datadog + 1P 事件 + 反馈调查"),
+    (
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        "禁用所有非必要网络（遥测 + 更新 + GrowthBook）",
+    ),
+    ("CLAUDE_CODE_USE_BEDROCK=1", "使用 AWS Bedrock（自动禁用所有分析）"),
+    ("CLAUDE_CODE_USE_VERTEX=1", "使用 GCP Vertex（自动禁用所有分析）"),
+];
+
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
     if (navigator.clipboard) {
@@ -342,6 +352,25 @@ pub fn kiro_access_page() -> Html {
                         </p>
                     </li>
                 </ul>
+            </section>
+
+            // ── Optional Env Flags ──
+            <section class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <h2 class={classes!("m-0", "font-mono", "text-sm", "font-bold", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>
+                    { "Optional Claude Code Env Flags" }
+                </h2>
+                <div class={classes!("mt-3", "space-y-3")}>
+                    { for CLAUDE_CODE_ENV_HINTS.iter().map(|(key, description)| html! {
+                        <article class={classes!("rounded-lg", "bg-[var(--surface-alt)]", "p-3")}>
+                            <code class={classes!("block", "break-all", "font-mono", "text-xs", "text-[var(--text)]")}>
+                                { *key }
+                            </code>
+                            <p class={classes!("mt-1", "mb-0", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                { *description }
+                            </p>
+                        </article>
+                    }) }
+                </div>
             </section>
 
             // Fixed bottom-right toast
