@@ -713,12 +713,21 @@ impl MusicDataStore {
             .execute()
             .await
             .context("failed to connect music LanceDB")?;
-        Ok(Self {
+        let store = Self {
             db,
-        })
+        };
+        store.bootstrap_tables().await?;
+        Ok(store)
     }
 
-    async fn songs_table(&self) -> Result<Table> {
+    async fn bootstrap_tables(&self) -> Result<()> {
+        self.bootstrap_songs_table().await?;
+        self.bootstrap_plays_table().await?;
+        self.bootstrap_comments_table().await?;
+        Ok(())
+    }
+
+    async fn bootstrap_songs_table(&self) -> Result<()> {
         let table = ensure_table(&self.db, SONGS_TABLE, songs_schema(), &[
             ("new_table_data_storage_version", "2.2"),
             ("new_table_enable_stable_row_ids", "true"),
@@ -786,23 +795,45 @@ impl MusicDataStore {
                 tracing::info!("BTree index on songs.id created successfully");
             }
         }
-        Ok(table)
+        Ok(())
     }
 
-    async fn plays_table(&self) -> Result<Table> {
+    async fn bootstrap_plays_table(&self) -> Result<()> {
         ensure_table(&self.db, MUSIC_PLAYS_TABLE, music_plays_schema(), &[
             ("new_table_enable_stable_row_ids", "true"),
             ("new_table_enable_v2_manifest_paths", "true"),
         ])
-        .await
+        .await?;
+        Ok(())
     }
 
-    async fn comments_table(&self) -> Result<Table> {
+    async fn bootstrap_comments_table(&self) -> Result<()> {
         ensure_table(&self.db, MUSIC_COMMENTS_TABLE, music_comments_schema(), &[
             ("new_table_enable_stable_row_ids", "true"),
             ("new_table_enable_v2_manifest_paths", "true"),
         ])
-        .await
+        .await?;
+        Ok(())
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open music table {table_name}"))
+    }
+
+    async fn songs_table(&self) -> Result<Table> {
+        self.open_table(SONGS_TABLE).await
+    }
+
+    async fn plays_table(&self) -> Result<Table> {
+        self.open_table(MUSIC_PLAYS_TABLE).await
+    }
+
+    async fn comments_table(&self) -> Result<Table> {
+        self.open_table(MUSIC_COMMENTS_TABLE).await
     }
 
     // -- Song CRUD --

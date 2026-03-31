@@ -123,9 +123,7 @@ impl InteractivePageStore {
         let store = Self {
             db,
         };
-        store.pages_table().await?;
-        store.page_locales_table().await?;
-        store.assets_table().await?;
+        store.bootstrap_tables().await?;
         Ok(store)
     }
 
@@ -133,7 +131,14 @@ impl InteractivePageStore {
         &self.db
     }
 
-    async fn pages_table(&self) -> Result<Table> {
+    async fn bootstrap_tables(&self) -> Result<()> {
+        self.bootstrap_pages_table().await?;
+        self.bootstrap_page_locales_table().await?;
+        self.bootstrap_assets_table().await?;
+        Ok(())
+    }
+
+    async fn bootstrap_pages_table(&self) -> Result<()> {
         let table = ensure_table(&self.db, INTERACTIVE_PAGES_TABLE, interactive_pages_schema(), &[
             ("new_table_enable_stable_row_ids", "true"),
             ("new_table_enable_v2_manifest_paths", "true"),
@@ -154,19 +159,20 @@ impl InteractivePageStore {
                 .await
                 .context("failed to add content_sha256 to interactive_pages")?;
         }
-        Ok(table)
+        Ok(())
     }
 
-    async fn assets_table(&self) -> Result<Table> {
+    async fn bootstrap_assets_table(&self) -> Result<()> {
         ensure_table(&self.db, INTERACTIVE_ASSETS_TABLE, interactive_assets_schema(), &[
             ("new_table_data_storage_version", "2.2"),
             ("new_table_enable_stable_row_ids", "true"),
             ("new_table_enable_v2_manifest_paths", "true"),
         ])
-        .await
+        .await?;
+        Ok(())
     }
 
-    async fn page_locales_table(&self) -> Result<Table> {
+    async fn bootstrap_page_locales_table(&self) -> Result<()> {
         ensure_table(
             &self.db,
             INTERACTIVE_PAGE_LOCALES_TABLE,
@@ -176,7 +182,28 @@ impl InteractivePageStore {
                 ("new_table_enable_v2_manifest_paths", "true"),
             ],
         )
-        .await
+        .await?;
+        Ok(())
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open interactive table `{table_name}`"))
+    }
+
+    async fn pages_table(&self) -> Result<Table> {
+        self.open_table(INTERACTIVE_PAGES_TABLE).await
+    }
+
+    async fn assets_table(&self) -> Result<Table> {
+        self.open_table(INTERACTIVE_ASSETS_TABLE).await
+    }
+
+    async fn page_locales_table(&self) -> Result<Table> {
+        self.open_table(INTERACTIVE_PAGE_LOCALES_TABLE).await
     }
 
     pub async fn upsert_page(&self, record: &InteractivePageRecord) -> Result<()> {

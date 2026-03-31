@@ -65,7 +65,7 @@ pub const MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 86_400;
 pub const DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 2;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10_000;
-pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 2;
+pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 8_760;
 
@@ -301,11 +301,13 @@ impl AppState {
             loaded_accounts,
             "initialized codex account pool"
         );
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let llm_gateway = Arc::new(LlmGatewayRuntimeState::new(
             llm_gateway_store.clone(),
             llm_gateway_runtime_config.clone(),
             account_pool.clone(),
             upstream_proxy_registry.clone(),
+            shutdown_rx.clone(),
         )?);
         llm_gateway.rebuild_usage_rollups().await?;
         let kiro_gateway = Arc::new(
@@ -349,8 +351,6 @@ impl AppState {
             admin_token_configured = admin_access.token.is_some(),
             "resolved admin access configuration"
         );
-
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
         if let Err(err) = crate::llm_gateway::token_refresh::refresh_all_accounts_once(
@@ -680,22 +680,24 @@ fn spawn_table_compactor(
                 if let Some(err) = r.error {
                     total_failed += 1;
                     tracing::warn!(
-                        "compactor content/{} action={} compacted={} small_fragments={} \
+                        "compactor content/{} action={} compacted={} pruned={} small_fragments={} \
                          elapsed_ms={} error={}",
                         r.table,
                         r.action.as_str(),
                         r.compacted,
+                        r.pruned,
                         r.small_fragments,
                         r.elapsed_ms,
                         err
                     );
                 } else {
                     tracing::info!(
-                        "compactor content/{} action={} compacted={} small_fragments={} \
+                        "compactor content/{} action={} compacted={} pruned={} small_fragments={} \
                          elapsed_ms={}",
                         r.table,
                         r.action.as_str(),
                         r.compacted,
+                        r.pruned,
                         r.small_fragments,
                         r.elapsed_ms
                     );
@@ -740,22 +742,24 @@ fn spawn_table_compactor(
                     if let Some(err) = r.error {
                         total_failed += 1;
                         tracing::warn!(
-                            "compactor {db_label}/{} action={} compacted={} small_fragments={} \
-                             elapsed_ms={} error={}",
+                            "compactor {db_label}/{} action={} compacted={} pruned={} \
+                             small_fragments={} elapsed_ms={} error={}",
                             r.table,
                             r.action.as_str(),
                             r.compacted,
+                            r.pruned,
                             r.small_fragments,
                             r.elapsed_ms,
                             err
                         );
                     } else {
                         tracing::info!(
-                            "compactor {db_label}/{} action={} compacted={} small_fragments={} \
-                             elapsed_ms={}",
+                            "compactor {db_label}/{} action={} compacted={} pruned={} \
+                             small_fragments={} elapsed_ms={}",
                             r.table,
                             r.action.as_str(),
                             r.compacted,
+                            r.pruned,
                             r.small_fragments,
                             r.elapsed_ms
                         );

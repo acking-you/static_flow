@@ -128,15 +128,24 @@ impl ArticleRequestStore {
             .execute()
             .await
             .context("failed to connect article-request LanceDB")?;
-        Ok(Self {
+        let store = Self {
             db,
             requests_table: "article_requests".to_string(),
             ai_runs_table: "article_request_ai_runs".to_string(),
             ai_chunks_table: "article_request_ai_run_chunks".to_string(),
-        })
+        };
+        store.bootstrap_tables().await?;
+        Ok(store)
     }
 
-    async fn requests_table(&self) -> Result<Table> {
+    async fn bootstrap_tables(&self) -> Result<()> {
+        self.bootstrap_requests_table().await?;
+        self.bootstrap_ai_runs_table().await?;
+        self.bootstrap_ai_chunks_table().await?;
+        Ok(())
+    }
+
+    async fn bootstrap_requests_table(&self) -> Result<()> {
         let table = ensure_table(&self.db, &self.requests_table, request_schema()).await?;
         let schema = table.schema().await.ok();
         if schema
@@ -151,13 +160,35 @@ impl ArticleRequestStore {
                 .await
                 .ok();
         }
-        Ok(table)
+        Ok(())
+    }
+
+    async fn bootstrap_ai_runs_table(&self) -> Result<()> {
+        ensure_table(&self.db, &self.ai_runs_table, request_ai_runs_schema()).await?;
+        Ok(())
+    }
+
+    async fn bootstrap_ai_chunks_table(&self) -> Result<()> {
+        ensure_table(&self.db, &self.ai_chunks_table, request_ai_chunks_schema()).await?;
+        Ok(())
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open article-request table {table_name}"))
+    }
+
+    async fn requests_table(&self) -> Result<Table> {
+        self.open_table(&self.requests_table).await
     }
     async fn ai_runs_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.ai_runs_table, request_ai_runs_schema()).await
+        self.open_table(&self.ai_runs_table).await
     }
     async fn ai_chunks_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.ai_chunks_table, request_ai_chunks_schema()).await
+        self.open_table(&self.ai_chunks_table).await
     }
 
     pub async fn create_request(
@@ -940,5 +971,100 @@ fn nullable_ts(arr: &TimestampMillisecondArray, i: usize) -> Option<i64> {
         None
     } else {
         Some(arr.value(i))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use anyhow::{Context, Result};
+    use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    use lancedb::connect;
+
+    use super::ArticleRequestStore;
+    use crate::article_request_store::NewArticleRequestInput;
+
+    #[tokio::test]
+    async fn create_request_works_after_legacy_schema_migration() -> Result<()> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("failed to get system time")?
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("sf-article-request-migration-{unique}"));
+        tokio::fs::create_dir_all(&db_path)
+            .await
+            .with_context(|| format!("failed to create {}", db_path.display()))?;
+        let db_uri = db_path.display().to_string();
+
+        let db = connect(&db_uri)
+            .execute()
+            .await
+            .context("failed to connect temp lancedb")?;
+        let schema = legacy_request_schema();
+        let batch = RecordBatch::new_empty(schema.clone());
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        db.create_table("article_requests", Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .execute()
+            .await
+            .context("failed to create legacy article_requests table")?;
+
+        let store = ArticleRequestStore::connect(&db_uri).await?;
+        let created = store
+            .create_request(NewArticleRequestInput {
+                request_id: "ar-test-legacy-migration".to_string(),
+                article_url: "https://example.com/post".to_string(),
+                title_hint: Some("Article".to_string()),
+                request_message: "Please repost".to_string(),
+                nickname: "Nick".to_string(),
+                requester_email: Some("user@example.com".to_string()),
+                frontend_page_url: Some("https://example.com/requests".to_string()),
+                fingerprint: "fp-1".to_string(),
+                client_ip: "127.0.0.1".to_string(),
+                ip_region: "Local".to_string(),
+                parent_request_id: Some("parent-1".to_string()),
+            })
+            .await
+            .context("create_request should succeed after migration")?;
+
+        assert_eq!(created.attempt_count, 0);
+        assert_eq!(created.parent_request_id.as_deref(), Some("parent-1"));
+
+        let stored = store
+            .get_request("ar-test-legacy-migration")
+            .await?
+            .context("new request must exist")?;
+        assert_eq!(stored.status, "pending");
+        assert_eq!(stored.parent_request_id.as_deref(), Some("parent-1"));
+
+        let _ = tokio::fs::remove_dir_all(&db_path).await;
+        Ok(())
+    }
+
+    fn legacy_request_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("request_id", DataType::Utf8, false),
+            Field::new("article_url", DataType::Utf8, false),
+            Field::new("title_hint", DataType::Utf8, true),
+            Field::new("request_message", DataType::Utf8, false),
+            Field::new("nickname", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+            Field::new("fingerprint", DataType::Utf8, false),
+            Field::new("client_ip", DataType::Utf8, false),
+            Field::new("ip_region", DataType::Utf8, false),
+            Field::new("admin_note", DataType::Utf8, true),
+            Field::new("failure_reason", DataType::Utf8, true),
+            Field::new("ingested_article_id", DataType::Utf8, true),
+            Field::new("attempt_count", DataType::Int32, false),
+            Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new("ai_reply", DataType::Utf8, true),
+            Field::new("requester_email", DataType::Utf8, true),
+            Field::new("frontend_page_url", DataType::Utf8, true),
+        ]))
     }
 }

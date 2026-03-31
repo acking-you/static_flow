@@ -265,7 +265,7 @@ impl StaticFlowDataStore {
             .await
             .context("failed to connect to LanceDB")?;
 
-        Ok(Self {
+        let store = Self {
             db,
             articles_table: "articles".to_string(),
             images_table: "images".to_string(),
@@ -274,7 +274,9 @@ impl StaticFlowDataStore {
             api_behavior_table: "api_behavior_events".to_string(),
             article_views_gate: Arc::new(RwLock::new(())),
             api_behavior_gate: Arc::new(RwLock::new(())),
-        })
+        };
+        store.bootstrap_tables().await?;
+        Ok(store)
     }
 
     pub async fn articles_table(&self) -> Result<Table> {
@@ -300,14 +302,20 @@ impl StaticFlowDataStore {
         }
     }
 
-    async fn article_views_table(&self) -> Result<Table> {
+    async fn bootstrap_tables(&self) -> Result<()> {
+        self.bootstrap_article_views_table().await?;
+        self.bootstrap_api_behavior_table().await?;
+        Ok(())
+    }
+
+    async fn bootstrap_article_views_table(&self) -> Result<()> {
         match self
             .db
             .open_table(&self.article_views_table)
             .execute()
             .await
         {
-            Ok(table) => Ok(table),
+            Ok(_) => Ok(()),
             Err(_) => {
                 let schema = article_view_schema();
                 let batch = RecordBatch::new_empty(schema.clone());
@@ -322,20 +330,16 @@ impl StaticFlowDataStore {
                     .execute()
                     .await
                     .context("failed to create article_views table")?;
-                self.db
-                    .open_table(&self.article_views_table)
-                    .execute()
-                    .await
-                    .context("failed to open article_views table")
+                Ok(())
             },
         }
     }
 
-    async fn api_behavior_table(&self) -> Result<Table> {
+    async fn bootstrap_api_behavior_table(&self) -> Result<()> {
         match self.db.open_table(&self.api_behavior_table).execute().await {
             Ok(table) => {
                 repair_api_behavior_frag_reuse_if_needed(&table).await?;
-                Ok(table)
+                Ok(())
             },
             Err(_) => {
                 let schema = api_behavior_schema();
@@ -358,9 +362,25 @@ impl StaticFlowDataStore {
                     .await
                     .context("failed to open api_behavior_events table")?;
                 repair_api_behavior_frag_reuse_if_needed(&table).await?;
-                Ok(table)
+                Ok(())
             },
         }
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open table `{table_name}`"))
+    }
+
+    async fn article_views_table(&self) -> Result<Table> {
+        self.open_table(&self.article_views_table).await
+    }
+
+    async fn api_behavior_table(&self) -> Result<Table> {
+        self.open_table(&self.api_behavior_table).await
     }
 
     pub async fn append_api_behavior_event(&self, input: NewApiBehaviorEventInput) -> Result<()> {
@@ -619,6 +639,7 @@ impl StaticFlowDataStore {
                     action: CompactAction::CompactFailed,
                     elapsed_ms: 0,
                     compacted: false,
+                    pruned: false,
                     error: Some(format!("table lock failed: {err:#}")),
                 }
             },
@@ -656,6 +677,7 @@ impl StaticFlowDataStore {
                     action: CompactAction::CompactFailed,
                     elapsed_ms: 0,
                     compacted: false,
+                    pruned: false,
                     error: Some(format!("table lock failed: {err:#}")),
                 }
             },
@@ -3166,6 +3188,7 @@ fn skipped_compact_result(table: &str) -> CompactResult {
         action: CompactAction::SkippedByConfig,
         elapsed_ms: 0,
         compacted: false,
+        pruned: false,
         error: None,
     }
 }
@@ -3177,6 +3200,7 @@ fn disabled_compact_result(table: &str) -> CompactResult {
         action: CompactAction::CompactionDisabled,
         elapsed_ms: 0,
         compacted: false,
+        pruned: false,
         error: None,
     }
 }
@@ -3188,6 +3212,7 @@ fn open_failed_compact_result(table: &str, err: anyhow::Error) -> CompactResult 
         action: CompactAction::OpenFailed,
         elapsed_ms: 0,
         compacted: false,
+        pruned: false,
         error: Some(format!("open failed: {err:#}")),
     }
 }
@@ -3721,6 +3746,28 @@ mod tests {
     fn content_compaction_tables_include_api_behavior_events() {
         assert!(CONTENT_TABLE_NAMES.contains(&"api_behavior_events"));
         assert!(CONTENT_COMPACTION_TABLE_NAMES.contains(&"api_behavior_events"));
+    }
+
+    #[tokio::test]
+    async fn connect_bootstraps_aux_tables() {
+        let dir = temp_db_dir();
+        fs::create_dir_all(&dir).expect("create temp db dir");
+        let uri = dir.to_string_lossy().to_string();
+
+        let store = StaticFlowDataStore::connect(&uri)
+            .await
+            .expect("connect temp db");
+
+        store
+            .article_views_table()
+            .await
+            .expect("article_views table should exist after connect");
+        store
+            .api_behavior_table()
+            .await
+            .expect("api_behavior_events table should exist after connect");
+
+        fs::remove_dir_all(&dir).expect("cleanup temp db dir");
     }
 
     #[test]

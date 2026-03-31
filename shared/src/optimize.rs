@@ -27,7 +27,7 @@ impl Default for CompactConfig {
         Self {
             enabled: true,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
-            prune_older_than_hours: 2,
+            prune_older_than_hours: 1,
             skip_tables: HashSet::new(),
         }
     }
@@ -68,6 +68,7 @@ pub struct CompactResult {
     pub action: CompactAction,
     pub elapsed_ms: u128,
     pub compacted: bool,
+    pub pruned: bool,
     pub error: Option<String>,
 }
 
@@ -100,7 +101,8 @@ pub async fn prune_table_versions(
     Ok(())
 }
 
-/// Scan tables, compact only those exceeding the fragment threshold.
+/// Scan tables, compact those exceeding the fragment threshold, and prune old
+/// versions on every enabled maintenance pass.
 pub async fn scan_and_compact_tables(
     db: &Connection,
     table_names: &[&str],
@@ -115,6 +117,7 @@ pub async fn scan_and_compact_tables(
                 action: CompactAction::SkippedByConfig,
                 elapsed_ms: 0,
                 compacted: false,
+                pruned: false,
                 error: None,
             });
             continue;
@@ -129,17 +132,19 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
     let finalize = |action: CompactAction,
                     small_fragments: usize,
                     compacted: bool,
+                    pruned: bool,
                     error: Option<String>| CompactResult {
         table: name.to_string(),
         small_fragments,
         action,
         elapsed_ms: started.elapsed().as_millis(),
         compacted,
+        pruned,
         error,
     };
 
     if !config.enabled {
-        return finalize(CompactAction::CompactionDisabled, 0, false, None);
+        return finalize(CompactAction::CompactionDisabled, 0, false, false, None);
     }
 
     let table = match db.open_table(name).execute().await {
@@ -148,6 +153,7 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
             return finalize(
                 CompactAction::OpenFailed,
                 0,
+                false,
                 false,
                 Some(format!("open failed: {err:#}")),
             )
@@ -164,17 +170,19 @@ pub async fn check_opened_table_and_compact(
     let finalize = |action: CompactAction,
                     small_fragments: usize,
                     compacted: bool,
+                    pruned: bool,
                     error: Option<String>| CompactResult {
         table: table.name().to_string(),
         small_fragments,
         action,
         elapsed_ms: started.elapsed().as_millis(),
         compacted,
+        pruned,
         error,
     };
 
     if !config.enabled {
-        return finalize(CompactAction::CompactionDisabled, 0, false, None);
+        return finalize(CompactAction::CompactionDisabled, 0, false, false, None);
     }
 
     let small = match count_small_fragments(table).await {
@@ -184,25 +192,32 @@ pub async fn check_opened_table_and_compact(
                 CompactAction::StatsFailed,
                 0,
                 false,
+                false,
                 Some(format!("fragment scan failed: {err}")),
             )
         },
     };
     if small < config.fragment_threshold {
-        return finalize(CompactAction::SkippedBelowThreshold, small, false, None);
+        return match prune_table_versions(table, config.prune_older_than_hours, false, false).await
+        {
+            Ok(()) => finalize(CompactAction::SkippedBelowThreshold, small, false, true, None),
+            Err(err) => {
+                finalize(CompactAction::SkippedBelowThreshold, small, false, false, Some(err))
+            },
+        };
     }
 
     let action = match compact_table_with_fallback(table).await {
         Ok(action) => action,
-        Err(err) => return finalize(CompactAction::CompactFailed, small, false, Some(err)),
+        Err(err) => return finalize(CompactAction::CompactFailed, small, false, false, Some(err)),
     };
 
     if let Err(err) = prune_table_versions(table, config.prune_older_than_hours, false, false).await
     {
-        return finalize(CompactAction::CompactedPruneFailed, small, true, Some(err));
+        return finalize(CompactAction::CompactedPruneFailed, small, true, false, Some(err));
     }
 
-    finalize(action, small, true, None)
+    finalize(action, small, true, true, None)
 }
 
 enum OptimizePath {
@@ -302,6 +317,7 @@ async fn table_uses_stable_row_ids(table: &Table) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         path::PathBuf,
         sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
@@ -311,7 +327,10 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use lancedb::connect;
 
-    use super::{count_small_fragments, is_offset_overflow_error, CompactAction};
+    use super::{
+        check_opened_table_and_compact, count_small_fragments, is_offset_overflow_error,
+        CompactAction, CompactConfig,
+    };
 
     #[derive(Debug)]
     struct MockErr(&'static str);
@@ -384,6 +403,70 @@ mod tests {
             .await
             .expect("count small fragments");
         assert_eq!(small, 3);
+
+        std::fs::remove_dir_all(&dir).expect("cleanup temp db dir");
+    }
+
+    #[tokio::test]
+    async fn prune_runs_even_when_compaction_is_skipped_below_threshold() {
+        let dir = temp_db_dir();
+        std::fs::create_dir_all(&dir).expect("create temp db dir");
+        let uri = dir.to_string_lossy().to_string();
+        let db = connect(&uri).execute().await.expect("connect temp db");
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]));
+
+        for chunk in [[1_i32, 2], [3, 4], [5, 6]] {
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(
+                chunk.to_vec(),
+            ))])
+            .expect("batch");
+            let reader: Box<dyn RecordBatchReader + Send> =
+                Box::new(RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone()));
+            if db.open_table("versions").execute().await.is_ok() {
+                let table = db
+                    .open_table("versions")
+                    .execute()
+                    .await
+                    .expect("open table");
+                table.add(reader).execute().await.expect("append rows");
+            } else {
+                db.create_table("versions", reader)
+                    .execute()
+                    .await
+                    .expect("create table");
+            }
+        }
+
+        let table = db
+            .open_table("versions")
+            .execute()
+            .await
+            .expect("open versions table");
+        let version_count_before = table
+            .list_versions()
+            .await
+            .expect("list versions before prune")
+            .len();
+        assert!(version_count_before > 1);
+
+        let result = check_opened_table_and_compact(&table, &CompactConfig {
+            enabled: true,
+            fragment_threshold: usize::MAX,
+            prune_older_than_hours: 0,
+            skip_tables: HashSet::new(),
+        })
+        .await;
+        assert_eq!(result.action, CompactAction::SkippedBelowThreshold);
+        assert!(!result.compacted);
+        assert!(result.pruned);
+        assert!(result.error.is_none());
+
+        let version_count_after = table
+            .list_versions()
+            .await
+            .expect("list versions after prune")
+            .len();
+        assert_eq!(version_count_after, 1);
 
         std::fs::remove_dir_all(&dir).expect("cleanup temp db dir");
     }

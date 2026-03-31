@@ -234,34 +234,53 @@ impl CommentDataStore {
             .await
             .context("failed to connect comments LanceDB")?;
 
-        Ok(Self {
+        let store = Self {
             db,
             tasks_table: "comment_tasks".to_string(),
             published_table: "comment_published".to_string(),
             audit_table: "comment_audit_logs".to_string(),
             ai_runs_table: "comment_ai_runs".to_string(),
             ai_chunks_table: "comment_ai_run_chunks".to_string(),
-        })
+        };
+        store.bootstrap_tables().await?;
+        Ok(store)
+    }
+
+    async fn bootstrap_tables(&self) -> Result<()> {
+        ensure_table(&self.db, &self.tasks_table, comment_task_schema()).await?;
+        ensure_table(&self.db, &self.published_table, comment_published_schema()).await?;
+        ensure_table(&self.db, &self.audit_table, comment_audit_schema()).await?;
+        ensure_table(&self.db, &self.ai_runs_table, comment_ai_runs_schema()).await?;
+        ensure_table(&self.db, &self.ai_chunks_table, comment_ai_chunks_schema()).await?;
+        Ok(())
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open comments table {table_name}"))
     }
 
     async fn tasks_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.tasks_table, comment_task_schema()).await
+        self.open_table(&self.tasks_table).await
     }
 
     async fn published_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.published_table, comment_published_schema()).await
+        self.open_table(&self.published_table).await
     }
 
     async fn audit_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.audit_table, comment_audit_schema()).await
+        self.open_table(&self.audit_table).await
     }
 
     async fn ai_runs_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.ai_runs_table, comment_ai_runs_schema()).await
+        self.open_table(&self.ai_runs_table).await
     }
 
     async fn ai_chunks_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.ai_chunks_table, comment_ai_chunks_schema()).await
+        self.open_table(&self.ai_chunks_table).await
     }
 
     pub async fn create_comment_task(

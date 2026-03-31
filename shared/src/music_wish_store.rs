@@ -126,15 +126,24 @@ impl MusicWishStore {
             .execute()
             .await
             .context("failed to connect music-wish LanceDB")?;
-        Ok(Self {
+        let store = Self {
             db,
             wishes_table: "music_wishes".to_string(),
             ai_runs_table: "music_wish_ai_runs".to_string(),
             ai_chunks_table: "music_wish_ai_run_chunks".to_string(),
-        })
+        };
+        store.bootstrap_tables().await?;
+        Ok(store)
     }
 
-    async fn wishes_table(&self) -> Result<Table> {
+    async fn bootstrap_tables(&self) -> Result<()> {
+        self.bootstrap_wishes_table().await?;
+        self.bootstrap_ai_runs_table().await?;
+        self.bootstrap_ai_chunks_table().await?;
+        Ok(())
+    }
+
+    async fn bootstrap_wishes_table(&self) -> Result<()> {
         let table = ensure_table(&self.db, &self.wishes_table, wish_schema()).await?;
         // auto-migrate: add newly introduced nullable columns if missing
         let schema = table.schema().await.ok();
@@ -174,13 +183,35 @@ impl MusicWishStore {
                 .await
                 .ok();
         }
-        Ok(table)
+        Ok(())
+    }
+
+    async fn bootstrap_ai_runs_table(&self) -> Result<()> {
+        ensure_table(&self.db, &self.ai_runs_table, wish_ai_runs_schema()).await?;
+        Ok(())
+    }
+
+    async fn bootstrap_ai_chunks_table(&self) -> Result<()> {
+        ensure_table(&self.db, &self.ai_chunks_table, wish_ai_chunks_schema()).await?;
+        Ok(())
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open music-wish table {table_name}"))
+    }
+
+    async fn wishes_table(&self) -> Result<Table> {
+        self.open_table(&self.wishes_table).await
     }
     async fn ai_runs_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.ai_runs_table, wish_ai_runs_schema()).await
+        self.open_table(&self.ai_runs_table).await
     }
     async fn ai_chunks_table(&self) -> Result<Table> {
-        ensure_table(&self.db, &self.ai_chunks_table, wish_ai_chunks_schema()).await
+        self.open_table(&self.ai_chunks_table).await
     }
 
     pub async fn create_wish(&self, input: NewMusicWishInput) -> Result<MusicWishRecord> {

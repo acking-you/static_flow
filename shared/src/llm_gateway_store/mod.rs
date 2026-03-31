@@ -94,14 +94,7 @@ impl LlmGatewayStore {
         let store = Self {
             db,
         };
-        store.keys_table().await?;
-        store.usage_events_table().await?;
-        store.runtime_config_table().await?;
-        store.proxy_configs_table().await?;
-        store.proxy_bindings_table().await?;
-        store.token_requests_table().await?;
-        store.account_contribution_requests_table().await?;
-        store.sponsor_requests_table().await?;
+        store.bootstrap_tables().await?;
         store.ensure_default_runtime_config().await?;
         Ok(store)
     }
@@ -111,36 +104,57 @@ impl LlmGatewayStore {
         &self.db
     }
 
+    async fn bootstrap_tables(&self) -> Result<()> {
+        ensure_keys_table(&self.db).await?;
+        ensure_usage_events_table(&self.db).await?;
+        ensure_runtime_config_table(&self.db).await?;
+        ensure_proxy_configs_table(&self.db).await?;
+        ensure_proxy_bindings_table(&self.db).await?;
+        ensure_token_requests_table(&self.db).await?;
+        ensure_account_contribution_requests_table(&self.db).await?;
+        ensure_sponsor_requests_table(&self.db).await?;
+        Ok(())
+    }
+
+    async fn open_table(&self, table_name: &str) -> Result<Table> {
+        self.db
+            .open_table(table_name)
+            .execute()
+            .await
+            .with_context(|| format!("failed to open llm gateway table `{table_name}`"))
+    }
+
     async fn keys_table(&self) -> Result<Table> {
-        ensure_keys_table(&self.db).await
+        self.open_table(LLM_GATEWAY_KEYS_TABLE).await
     }
 
     async fn usage_events_table(&self) -> Result<Table> {
-        ensure_usage_events_table(&self.db).await
+        self.open_table(LLM_GATEWAY_USAGE_EVENTS_TABLE).await
     }
 
     async fn runtime_config_table(&self) -> Result<Table> {
-        ensure_runtime_config_table(&self.db).await
+        self.open_table(LLM_GATEWAY_RUNTIME_CONFIG_TABLE).await
     }
 
     async fn proxy_configs_table(&self) -> Result<Table> {
-        ensure_proxy_configs_table(&self.db).await
+        self.open_table(LLM_GATEWAY_PROXY_CONFIGS_TABLE).await
     }
 
     async fn proxy_bindings_table(&self) -> Result<Table> {
-        ensure_proxy_bindings_table(&self.db).await
+        self.open_table(LLM_GATEWAY_PROXY_BINDINGS_TABLE).await
     }
 
     async fn token_requests_table(&self) -> Result<Table> {
-        ensure_token_requests_table(&self.db).await
+        self.open_table(LLM_GATEWAY_TOKEN_REQUESTS_TABLE).await
     }
 
     async fn account_contribution_requests_table(&self) -> Result<Table> {
-        ensure_account_contribution_requests_table(&self.db).await
+        self.open_table(LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE)
+            .await
     }
 
     async fn sponsor_requests_table(&self) -> Result<Table> {
-        ensure_sponsor_requests_table(&self.db).await
+        self.open_table(LLM_GATEWAY_SPONSOR_REQUESTS_TABLE).await
     }
 
     async fn ensure_default_runtime_config(&self) -> Result<()> {
@@ -739,20 +753,28 @@ impl LlmGatewayStore {
         Ok(rows)
     }
 
-    /// Append a single usage event row to the events table (append-only).
+    /// Append one or more usage event rows to the events table (append-only).
     /// Does not update the key record; callers maintain usage totals
     /// via in-memory rollups.
-    pub async fn append_usage_event(&self, record: &LlmGatewayUsageEventRecord) -> Result<()> {
+    pub async fn append_usage_events(&self, records: &[LlmGatewayUsageEventRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
         let table = self.usage_events_table().await?;
-        let batch = build_usage_events_batch(std::slice::from_ref(record))?;
+        let batch = build_usage_events_batch(records)?;
         let schema = batch.schema();
         let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
         table
             .add(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .execute()
             .await
-            .context("failed to append llm gateway usage event")?;
+            .context("failed to append llm gateway usage events")?;
         Ok(())
+    }
+
+    /// Append a single usage event row to the events table (append-only).
+    pub async fn append_usage_event(&self, record: &LlmGatewayUsageEventRecord) -> Result<()> {
+        self.append_usage_events(std::slice::from_ref(record)).await
     }
 
     pub async fn list_usage_events(
