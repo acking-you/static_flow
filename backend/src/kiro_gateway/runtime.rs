@@ -28,6 +28,9 @@ use super::{
 use crate::{state::LlmGatewayRuntimeConfig, upstream_proxy::UpstreamProxyRegistry};
 
 const REFRESH_EARLY_MINUTES: i64 = 10;
+const KIRO_USAGE_AWS_SDK_VERSION: &str = "1.0.0";
+const KIRO_IDC_AWS_SDK_VERSION: &str = "3.980.0";
+const KIRO_IDC_AMZ_SDK_REQUEST: &str = "attempt=1; max=4";
 
 /// Holds the authenticated identity and resolved access token for a single Kiro
 /// API call.
@@ -297,13 +300,7 @@ impl KiroTokenManager {
         let (client, _) = build_client(self.upstream_proxy_registry.as_ref(), 60).await?;
         let machine_id = super::machine_id::generate_from_auth(&auth)
             .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
-        let user_agent = format!(
-            "aws-sdk-js/1.0.0 ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
-             md/nodejs#{DEFAULT_NODE_VERSION} api/codewhispererruntime#1.0.0 m/N,E \
-             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-        );
-        let amz_user_agent =
-            format!("aws-sdk-js/1.0.0 KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}");
+        let (amz_user_agent, user_agent) = usage_request_user_agents(&machine_id);
         let response = client
             .get(url)
             .header("x-amz-user-agent", amz_user_agent)
@@ -423,7 +420,7 @@ async fn refresh_social(
         .post(url)
         .header("accept", "application/json, text/plain, */*")
         .header("content-type", "application/json")
-        .header("user-agent", format!("KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"))
+        .header("user-agent", social_refresh_user_agent(&machine_id))
         .header("accept-encoding", "gzip, compress, deflate, br")
         .header("host", host)
         .header("connection", "close")
@@ -474,14 +471,12 @@ async fn refresh_idc(
         .post(format!("https://oidc.{region}.amazonaws.com/token"))
         .header("content-type", "application/json")
         .header("host", format!("oidc.{region}.amazonaws.com"))
-        .header("connection", "keep-alive")
-        .header(
-            "x-amz-user-agent",
-            "aws-sdk-js/3.738.0 ua/2.1 os/other lang/js md/browser#unknown_unknown \
-             api/sso-oidc#3.738.0 m/E KiroIDE",
-        )
+        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+        .header("amz-sdk-request", KIRO_IDC_AMZ_SDK_REQUEST)
+        .header("connection", "close")
+        .header("x-amz-user-agent", idc_refresh_amz_user_agent())
         .header("accept", "*/*")
-        .header("user-agent", "node")
+        .header("user-agent", idc_refresh_user_agent())
         .json(&IdcRefreshRequest {
             client_id,
             client_secret,
@@ -515,6 +510,35 @@ fn derive_refreshed_expires_at(
         return Some((Utc::now() + Duration::seconds(expires_in)).to_rfc3339());
     }
     access_token.and_then(jwt_exp_to_rfc3339)
+}
+
+fn social_refresh_user_agent(machine_id: &str) -> String {
+    format!("KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}")
+}
+
+fn usage_request_user_agents(machine_id: &str) -> (String, String) {
+    (
+        format!(
+            "aws-sdk-js/{KIRO_USAGE_AWS_SDK_VERSION} KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
+        ),
+        format!(
+            "aws-sdk-js/{KIRO_USAGE_AWS_SDK_VERSION} ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
+             md/nodejs#{DEFAULT_NODE_VERSION} \
+             api/codewhispererruntime#{KIRO_USAGE_AWS_SDK_VERSION} m/N,E \
+             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
+        ),
+    )
+}
+
+fn idc_refresh_amz_user_agent() -> &'static str {
+    "aws-sdk-js/3.980.0 KiroIDE"
+}
+
+fn idc_refresh_user_agent() -> String {
+    format!(
+        "aws-sdk-js/{KIRO_IDC_AWS_SDK_VERSION} ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
+         md/nodejs#{DEFAULT_NODE_VERSION} api/sso-oidc#{KIRO_IDC_AWS_SDK_VERSION} m/E KiroIDE"
+    )
 }
 
 fn jwt_exp_to_rfc3339(token: &str) -> Option<String> {
@@ -569,5 +593,32 @@ mod tests {
             ..KiroAuthRecord::default()
         };
         assert!(!needs_refresh(&auth));
+    }
+
+    #[test]
+    fn usage_request_user_agents_follow_latest_kiro_signature() {
+        let (amz_user_agent, user_agent) = usage_request_user_agents(&"a".repeat(64));
+
+        assert_eq!(
+            amz_user_agent,
+            format!("aws-sdk-js/1.0.0 KiroIDE-{DEFAULT_KIRO_VERSION}-{}", "a".repeat(64))
+        );
+        assert!(user_agent.contains(&format!(
+            "aws-sdk-js/1.0.0 ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
+             md/nodejs#{DEFAULT_NODE_VERSION}"
+        )));
+        assert!(user_agent.contains("api/codewhispererruntime#1.0.0"));
+    }
+
+    #[test]
+    fn idc_refresh_user_agent_uses_latest_upstream_version() {
+        assert_eq!(idc_refresh_amz_user_agent(), "aws-sdk-js/3.980.0 KiroIDE");
+        let user_agent = idc_refresh_user_agent();
+        assert!(user_agent.contains(&format!(
+            "aws-sdk-js/3.980.0 ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
+             md/nodejs#{DEFAULT_NODE_VERSION}"
+        )));
+        assert!(user_agent.contains("api/sso-oidc#3.980.0"));
+        assert_eq!(KIRO_IDC_AMZ_SDK_REQUEST, "attempt=1; max=4");
     }
 }

@@ -21,13 +21,13 @@ use static_flow_shared::llm_gateway_store::{
 pub const DEFAULT_KIRO_REGION: &str = "us-east-1";
 
 /// Default Kiro client version string sent in request headers.
-pub const DEFAULT_KIRO_VERSION: &str = "0.10.0";
+pub const DEFAULT_KIRO_VERSION: &str = "0.11.107";
 
 /// Default system/OS version string sent in request headers.
 pub const DEFAULT_SYSTEM_VERSION: &str = "darwin#24.6.0";
 
 /// Default Node.js version string sent in request headers.
-pub const DEFAULT_NODE_VERSION: &str = "22.21.1";
+pub const DEFAULT_NODE_VERSION: &str = "22.22.0";
 
 /// A single Kiro authentication credential record, persisted as JSON on disk.
 ///

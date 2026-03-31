@@ -14,7 +14,10 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::{
+    header::{HeaderMap, HeaderValue},
+    StatusCode,
+};
 use static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_KIRO;
 
 use super::{
@@ -31,6 +34,9 @@ use super::{
     wire::{ConversationState, KiroRequest},
 };
 use crate::upstream_proxy::{ResolvedUpstreamProxy, UpstreamProxyRegistry};
+
+const KIRO_PROVIDER_AWS_SDK_VERSION: &str = "1.0.34";
+const KIRO_LOG_BODY_PREVIEW_CHARS: usize = 8_192;
 
 /// Build a [`reqwest::Client`] configured for Kiro upstream calls together
 /// with the resolved provider-level proxy metadata used for diagnostics.
@@ -76,6 +82,22 @@ enum ProviderAttemptError {
     /// Upstream 5-minute credit window hit (HTTP 429); apply cooldown then move
     /// on.
     RateLimited { error: anyhow::Error, cooldown: Duration },
+}
+
+#[derive(Clone, Copy)]
+enum UpstreamLogLevel {
+    Warn,
+    Error,
+}
+
+struct UpstreamRequestLogContext<'a> {
+    auth: &'a KiroAuthRecord,
+    resolved_proxy: &'a ResolvedUpstreamProxy,
+    endpoint: &'a str,
+    attempt: usize,
+    force_refresh: bool,
+    queue_wait_ms: u64,
+    request_body_len: usize,
 }
 
 /// Multi-account upstream provider that routes requests through the
@@ -645,7 +667,9 @@ impl KiroProvider {
     ) -> Result<ProviderCallResult, ProviderAttemptError> {
         let mut force_refresh = false;
         let mut last_error: Option<anyhow::Error> = None;
+        let queue_wait_ms = channel_lease.waited_ms();
         for attempt in 0..3 {
+            let attempt = attempt + 1;
             let ctx = self
                 .runtime
                 .token_manager
@@ -667,17 +691,27 @@ impl KiroProvider {
             );
             tracing::info!(
                 account_name = %ctx.auth.name,
-                attempt = attempt + 1,
+                attempt,
                 force_refresh,
                 api_region = ctx.auth.effective_api_region(),
                 proxy_url = %resolved_proxy.proxy_url,
                 proxy_source = ?resolved_proxy.source,
                 proxy_config_id = ?resolved_proxy.proxy_config_id,
+                proxy_config_name = ?resolved_proxy.proxy_config_name,
                 request_body_len = request_body.len(),
                 has_profile_arn = ctx.auth.profile_arn.is_some(),
-                queue_wait_ms = channel_lease.waited_ms(),
+                queue_wait_ms,
                 "calling kiro upstream generateAssistantResponse"
             );
+            let log_ctx = UpstreamRequestLogContext {
+                auth: &ctx.auth,
+                resolved_proxy: &resolved_proxy,
+                endpoint: "/generateAssistantResponse",
+                attempt,
+                force_refresh,
+                queue_wait_ms,
+                request_body_len: request_body.len(),
+            };
             let response = client
                 .post(url)
                 .headers(build_headers(&ctx).map_err(ProviderAttemptError::Fatal)?)
@@ -687,16 +721,21 @@ impl KiroProvider {
             let response = match response {
                 Ok(response) => response,
                 Err(err) => {
-                    last_error = Some(err.into());
+                    log_upstream_send_error(&log_ctx, &err);
+                    last_error = Some(anyhow!(
+                        "kiro upstream transport failure for {}: {err}",
+                        log_ctx.endpoint
+                    ));
                     continue;
                 },
             };
             if response.status().is_success() {
                 tracing::info!(
                     account_name = %ctx.auth.name,
-                    attempt = attempt + 1,
+                    attempt,
                     status = %response.status(),
-                    queue_wait_ms = channel_lease.waited_ms(),
+                    endpoint = log_ctx.endpoint,
+                    queue_wait_ms,
                     "kiro upstream request succeeded"
                 );
                 return Ok(ProviderCallResult {
@@ -707,37 +746,61 @@ impl KiroProvider {
             }
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::warn!(
-                account_name = %ctx.auth.name,
-                attempt = attempt + 1,
-                status = %status,
-                body_len = body.len(),
-                force_refresh,
-                queue_wait_ms = channel_lease.waited_ms(),
-                "kiro upstream request returned non-success status"
-            );
-            if status.as_u16() == 400 {
-                return Err(ProviderAttemptError::Fatal(anyhow!(
-                    "kiro upstream rejected request: {status} {body}"
-                )));
-            }
             if status.as_u16() == 402 && is_monthly_request_limit(&body) {
+                log_upstream_response(
+                    &log_ctx,
+                    status,
+                    &body,
+                    UpstreamLogLevel::Warn,
+                    "kiro upstream request returned quota-exhausted response",
+                    None,
+                );
                 return Err(ProviderAttemptError::QuotaExhausted(anyhow!(
                     "kiro account quota exhausted: {status} {body}"
                 )));
             }
             if status.as_u16() == 429 {
                 if let Some(cooldown) = daily_request_limit_cooldown(&body) {
+                    log_upstream_response(
+                        &log_ctx,
+                        status,
+                        &body,
+                        UpstreamLogLevel::Warn,
+                        "kiro upstream request hit 5-minute credit-window limit",
+                        Some(cooldown),
+                    );
                     return Err(ProviderAttemptError::RateLimited {
                         error: anyhow!("kiro upstream rate limit reached: {status} {body}"),
                         cooldown,
                     });
                 }
             }
+            let response_message = match status.as_u16() {
+                400 => "kiro upstream request returned fatal client error",
+                401 | 403 => "kiro upstream request returned auth failure",
+                408 | 429 => "kiro upstream request returned transient retryable status",
+                _ if status.is_server_error() => {
+                    "kiro upstream request returned upstream server error"
+                },
+                _ => "kiro upstream request returned fatal non-success status",
+            };
+            log_upstream_response(
+                &log_ctx,
+                status,
+                &body,
+                UpstreamLogLevel::Error,
+                response_message,
+                None,
+            );
+            if status.as_u16() == 400 {
+                return Err(ProviderAttemptError::Fatal(anyhow!(
+                    "kiro upstream rejected request: {status} {body}"
+                )));
+            }
             if matches!(status.as_u16(), 401 | 403) && !force_refresh {
                 tracing::info!(
                     account_name = %ctx.auth.name,
-                    attempt = attempt + 1,
+                    attempt,
                     status = %status,
                     "kiro upstream auth failed; forcing token refresh before retry"
                 );
@@ -773,7 +836,9 @@ impl KiroProvider {
     ) -> Result<ProviderCallResult, ProviderAttemptError> {
         let mut force_refresh = false;
         let mut last_error: Option<anyhow::Error> = None;
+        let queue_wait_ms = channel_lease.waited_ms();
         for attempt in 0..3 {
+            let attempt = attempt + 1;
             let ctx = self
                 .runtime
                 .token_manager
@@ -787,16 +852,27 @@ impl KiroProvider {
             let url = format!("https://q.{}.amazonaws.com/mcp", ctx.auth.effective_api_region());
             tracing::info!(
                 account_name = %ctx.auth.name,
-                attempt = attempt + 1,
+                attempt,
                 force_refresh,
                 api_region = ctx.auth.effective_api_region(),
                 proxy_url = %resolved_proxy.proxy_url,
                 proxy_source = ?resolved_proxy.source,
                 proxy_config_id = ?resolved_proxy.proxy_config_id,
+                proxy_config_name = ?resolved_proxy.proxy_config_name,
                 request_body_len = request_body.len(),
-                queue_wait_ms = channel_lease.waited_ms(),
+                has_profile_arn = ctx.auth.profile_arn.is_some(),
+                queue_wait_ms,
                 "calling kiro upstream mcp"
             );
+            let log_ctx = UpstreamRequestLogContext {
+                auth: &ctx.auth,
+                resolved_proxy: &resolved_proxy,
+                endpoint: "/mcp",
+                attempt,
+                force_refresh,
+                queue_wait_ms,
+                request_body_len: request_body.len(),
+            };
             let response = client
                 .post(url)
                 .headers(build_mcp_headers(&ctx).map_err(ProviderAttemptError::Fatal)?)
@@ -806,16 +882,21 @@ impl KiroProvider {
             let response = match response {
                 Ok(response) => response,
                 Err(err) => {
-                    last_error = Some(err.into());
+                    log_upstream_send_error(&log_ctx, &err);
+                    last_error = Some(anyhow!(
+                        "kiro upstream transport failure for {}: {err}",
+                        log_ctx.endpoint
+                    ));
                     continue;
                 },
             };
             if response.status().is_success() {
                 tracing::info!(
                     account_name = %ctx.auth.name,
-                    attempt = attempt + 1,
+                    attempt,
                     status = %response.status(),
-                    queue_wait_ms = channel_lease.waited_ms(),
+                    endpoint = log_ctx.endpoint,
+                    queue_wait_ms,
                     "kiro upstream mcp request succeeded"
                 );
                 return Ok(ProviderCallResult {
@@ -826,37 +907,61 @@ impl KiroProvider {
             }
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::warn!(
-                account_name = %ctx.auth.name,
-                attempt = attempt + 1,
-                status = %status,
-                body_len = body.len(),
-                force_refresh,
-                queue_wait_ms = channel_lease.waited_ms(),
-                "kiro upstream mcp request returned non-success status"
-            );
-            if status.as_u16() == 400 {
-                return Err(ProviderAttemptError::Fatal(anyhow!(
-                    "kiro upstream mcp rejected request: {status} {body}"
-                )));
-            }
             if status.as_u16() == 402 && is_monthly_request_limit(&body) {
+                log_upstream_response(
+                    &log_ctx,
+                    status,
+                    &body,
+                    UpstreamLogLevel::Warn,
+                    "kiro upstream mcp request returned quota-exhausted response",
+                    None,
+                );
                 return Err(ProviderAttemptError::QuotaExhausted(anyhow!(
                     "kiro account quota exhausted for mcp request: {status} {body}"
                 )));
             }
             if status.as_u16() == 429 {
                 if let Some(cooldown) = daily_request_limit_cooldown(&body) {
+                    log_upstream_response(
+                        &log_ctx,
+                        status,
+                        &body,
+                        UpstreamLogLevel::Warn,
+                        "kiro upstream mcp request hit 5-minute credit-window limit",
+                        Some(cooldown),
+                    );
                     return Err(ProviderAttemptError::RateLimited {
                         error: anyhow!("kiro upstream mcp rate limit reached: {status} {body}"),
                         cooldown,
                     });
                 }
             }
+            let response_message = match status.as_u16() {
+                400 => "kiro upstream mcp request returned fatal client error",
+                401 | 403 => "kiro upstream mcp request returned auth failure",
+                408 | 429 => "kiro upstream mcp request returned transient retryable status",
+                _ if status.is_server_error() => {
+                    "kiro upstream mcp request returned upstream server error"
+                },
+                _ => "kiro upstream mcp request returned fatal non-success status",
+            };
+            log_upstream_response(
+                &log_ctx,
+                status,
+                &body,
+                UpstreamLogLevel::Error,
+                response_message,
+                None,
+            );
+            if status.as_u16() == 400 {
+                return Err(ProviderAttemptError::Fatal(anyhow!(
+                    "kiro upstream mcp rejected request: {status} {body}"
+                )));
+            }
             if matches!(status.as_u16(), 401 | 403) && !force_refresh {
                 tracing::info!(
                     account_name = %ctx.auth.name,
-                    attempt = attempt + 1,
+                    attempt,
                     status = %status,
                     "kiro upstream mcp auth failed; forcing token refresh before retry"
                 );
@@ -885,15 +990,116 @@ impl KiroProvider {
     }
 }
 
+fn provider_user_agents(machine_id: &str) -> (String, String) {
+    (
+        format!(
+            "aws-sdk-js/{KIRO_PROVIDER_AWS_SDK_VERSION} \
+             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
+        ),
+        format!(
+            "aws-sdk-js/{KIRO_PROVIDER_AWS_SDK_VERSION} ua/2.1 os/{DEFAULT_SYSTEM_VERSION} \
+             lang/js md/nodejs#{DEFAULT_NODE_VERSION} \
+             api/codewhispererstreaming#{KIRO_PROVIDER_AWS_SDK_VERSION} m/E \
+             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
+        ),
+    )
+}
+
+fn summarize_logged_body(body: &str) -> String {
+    let total_chars = body.chars().count();
+    if total_chars <= KIRO_LOG_BODY_PREVIEW_CHARS {
+        return body.to_string();
+    }
+    let preview = body
+        .chars()
+        .take(KIRO_LOG_BODY_PREVIEW_CHARS)
+        .collect::<String>();
+    format!("{preview}...[truncated,total_chars={total_chars}]")
+}
+
+fn log_upstream_send_error(log_ctx: &UpstreamRequestLogContext<'_>, err: &reqwest::Error) {
+    tracing::error!(
+        account_name = %log_ctx.auth.name,
+        attempt = log_ctx.attempt,
+        endpoint = log_ctx.endpoint,
+        api_region = %log_ctx.auth.effective_api_region(),
+        proxy_url = %log_ctx.resolved_proxy.proxy_url,
+        proxy_source = ?log_ctx.resolved_proxy.source,
+        proxy_config_id = ?log_ctx.resolved_proxy.proxy_config_id,
+        proxy_config_name = ?log_ctx.resolved_proxy.proxy_config_name,
+        force_refresh = log_ctx.force_refresh,
+        queue_wait_ms = log_ctx.queue_wait_ms,
+        request_body_len = log_ctx.request_body_len,
+        has_profile_arn = log_ctx.auth.profile_arn.is_some(),
+        is_timeout = err.is_timeout(),
+        is_connect = err.is_connect(),
+        is_request = err.is_request(),
+        upstream_url = ?err.url(),
+        error = %err,
+        "kiro upstream transport request failed"
+    );
+}
+
+fn log_upstream_response(
+    log_ctx: &UpstreamRequestLogContext<'_>,
+    status: StatusCode,
+    body: &str,
+    level: UpstreamLogLevel,
+    message: &str,
+    cooldown: Option<Duration>,
+) {
+    let body_preview = summarize_logged_body(body);
+    let cooldown_ms = cooldown.map(|value| value.as_millis() as u64);
+    match level {
+        UpstreamLogLevel::Warn => {
+            tracing::warn!(
+                account_name = %log_ctx.auth.name,
+                attempt = log_ctx.attempt,
+                endpoint = log_ctx.endpoint,
+                status = %status,
+                body_len = body.len(),
+                body_preview = %body_preview,
+                api_region = %log_ctx.auth.effective_api_region(),
+                proxy_url = %log_ctx.resolved_proxy.proxy_url,
+                proxy_source = ?log_ctx.resolved_proxy.source,
+                proxy_config_id = ?log_ctx.resolved_proxy.proxy_config_id,
+                proxy_config_name = ?log_ctx.resolved_proxy.proxy_config_name,
+                force_refresh = log_ctx.force_refresh,
+                queue_wait_ms = log_ctx.queue_wait_ms,
+                request_body_len = log_ctx.request_body_len,
+                has_profile_arn = log_ctx.auth.profile_arn.is_some(),
+                cooldown_ms,
+                "{message}"
+            );
+        },
+        UpstreamLogLevel::Error => {
+            tracing::error!(
+                account_name = %log_ctx.auth.name,
+                attempt = log_ctx.attempt,
+                endpoint = log_ctx.endpoint,
+                status = %status,
+                body_len = body.len(),
+                body_preview = %body_preview,
+                api_region = %log_ctx.auth.effective_api_region(),
+                proxy_url = %log_ctx.resolved_proxy.proxy_url,
+                proxy_source = ?log_ctx.resolved_proxy.source,
+                proxy_config_id = ?log_ctx.resolved_proxy.proxy_config_id,
+                proxy_config_name = ?log_ctx.resolved_proxy.proxy_config_name,
+                force_refresh = log_ctx.force_refresh,
+                queue_wait_ms = log_ctx.queue_wait_ms,
+                request_body_len = log_ctx.request_body_len,
+                has_profile_arn = log_ctx.auth.profile_arn.is_some(),
+                cooldown_ms,
+                "{message}"
+            );
+        },
+    }
+}
+
 fn build_headers(ctx: &CallContext) -> Result<HeaderMap> {
     let machine_id = machine_id::generate_from_auth(&ctx.auth)
         .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
-    let x_amz_user_agent = format!("aws-sdk-js/1.0.27 KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}");
-    let user_agent = format!(
-        "aws-sdk-js/1.0.27 ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
-         md/nodejs#{DEFAULT_NODE_VERSION} api/codewhispererstreaming#1.0.27 m/E \
-         KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-    );
+    let (x_amz_user_agent, user_agent) = provider_user_agents(&machine_id);
     let host = format!("q.{}.amazonaws.com", ctx.auth.effective_api_region());
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -922,12 +1128,7 @@ fn build_headers(ctx: &CallContext) -> Result<HeaderMap> {
 fn build_mcp_headers(ctx: &CallContext) -> Result<HeaderMap> {
     let machine_id = machine_id::generate_from_auth(&ctx.auth)
         .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
-    let x_amz_user_agent = format!("aws-sdk-js/1.0.27 KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}");
-    let user_agent = format!(
-        "aws-sdk-js/1.0.27 ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
-         md/nodejs#{DEFAULT_NODE_VERSION} api/codewhispererstreaming#1.0.27 m/E \
-         KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-    );
+    let (x_amz_user_agent, user_agent) = provider_user_agents(&machine_id);
     let host = format!("q.{}.amazonaws.com", ctx.auth.effective_api_region());
     let mut headers = HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -947,6 +1148,17 @@ fn build_mcp_headers(ctx: &CallContext) -> Result<HeaderMap> {
         "authorization",
         HeaderValue::from_str(&format!("Bearer {}", ctx.token)).context("invalid auth header")?,
     );
+    if let Some(profile_arn) = ctx
+        .auth
+        .profile_arn
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        headers.insert(
+            "x-amzn-kiro-profile-arn",
+            HeaderValue::from_str(profile_arn).context("invalid profile arn header")?,
+        );
+    }
     headers.insert("connection", HeaderValue::from_static("close"));
     Ok(headers)
 }
@@ -1075,6 +1287,19 @@ mod tests {
         KiroAuthRecord {
             name: name.to_string(),
             ..KiroAuthRecord::default()
+        }
+    }
+
+    fn call_context(profile_arn: Option<&str>) -> CallContext {
+        CallContext {
+            auth: KiroAuthRecord {
+                name: "alpha".to_string(),
+                machine_id: Some("a".repeat(64)),
+                profile_arn: profile_arn.map(str::to_string),
+                api_region: Some("us-west-2".to_string()),
+                ..KiroAuthRecord::default()
+            },
+            token: "token".to_string(),
         }
     }
 
@@ -1291,5 +1516,53 @@ mod tests {
             "fhhfdss".to_string(),
             "hfdeeh".to_string()
         ]);
+    }
+
+    #[test]
+    fn build_headers_use_latest_provider_signature() {
+        let headers = build_headers(&call_context(None)).expect("provider headers");
+        let expected_amz_user_agent = format!(
+            "aws-sdk-js/{KIRO_PROVIDER_AWS_SDK_VERSION} KiroIDE-{DEFAULT_KIRO_VERSION}-{}",
+            "a".repeat(64)
+        );
+        assert_eq!(
+            headers
+                .get("x-amz-user-agent")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_amz_user_agent.as_str())
+        );
+        let user_agent = headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok())
+            .expect("user-agent");
+        assert!(user_agent.contains(&format!(
+            "aws-sdk-js/{KIRO_PROVIDER_AWS_SDK_VERSION} ua/2.1 os/{DEFAULT_SYSTEM_VERSION} \
+             lang/js md/nodejs#{DEFAULT_NODE_VERSION}"
+        )));
+        assert!(user_agent
+            .contains(&format!("api/codewhispererstreaming#{KIRO_PROVIDER_AWS_SDK_VERSION}")));
+    }
+
+    #[test]
+    fn build_mcp_headers_include_profile_arn_when_present() {
+        let headers = build_mcp_headers(&call_context(Some("arn:aws:kiro:::profile/test")))
+            .expect("mcp headers");
+        assert_eq!(
+            headers
+                .get("x-amzn-kiro-profile-arn")
+                .and_then(|value| value.to_str().ok()),
+            Some("arn:aws:kiro:::profile/test")
+        );
+    }
+
+    #[test]
+    fn summarize_logged_body_truncates_large_payloads() {
+        let input = "x".repeat(KIRO_LOG_BODY_PREVIEW_CHARS + 32);
+        let summary = summarize_logged_body(&input);
+
+        assert!(summary.starts_with(&"x".repeat(KIRO_LOG_BODY_PREVIEW_CHARS)));
+        assert!(summary
+            .contains(&format!("[truncated,total_chars={}]", KIRO_LOG_BODY_PREVIEW_CHARS + 32)));
+        assert!(summary.len() < input.len() + 64);
     }
 }
