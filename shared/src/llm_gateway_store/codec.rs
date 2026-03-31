@@ -3,7 +3,7 @@
 //! These helpers keep LanceDB serialization in one place so schema changes are
 //! reflected consistently across table writes, reads, and migrations.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use arrow_array::{
@@ -59,6 +59,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut route_strategy = StringBuilder::new();
     let mut fixed_account_name = StringBuilder::new();
     let mut auto_account_names_json = StringBuilder::new();
+    let mut model_name_map_json = StringBuilder::new();
     let mut request_max_concurrency = UInt64Builder::new();
     let mut request_min_start_interval_ms = UInt64Builder::new();
 
@@ -86,6 +87,10 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         append_optional_str(
             &mut auto_account_names_json,
             serialize_string_vec_json(record.auto_account_names.as_deref())?.as_deref(),
+        );
+        append_optional_str(
+            &mut model_name_map_json,
+            serialize_string_map_json(record.model_name_map.as_ref())?.as_deref(),
         );
         append_optional_u64(&mut request_max_concurrency, record.request_max_concurrency);
         append_optional_u64(
@@ -116,6 +121,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(route_strategy.finish()),
         Arc::new(fixed_account_name.finish()),
         Arc::new(auto_account_names_json.finish()),
+        Arc::new(model_name_map_json.finish()),
         Arc::new(request_max_concurrency.finish()),
         Arc::new(request_min_start_interval_ms.finish()),
     ])
@@ -544,6 +550,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let auto_account_names_json = batch
             .column_by_name("auto_account_names_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let model_name_map_json = batch
+            .column_by_name("model_name_map_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let request_max_concurrency = batch
             .column_by_name("request_max_concurrency")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
@@ -591,6 +600,11 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                         .and_then(|col| value_string_opt(col, idx))
                         .as_deref(),
                 )?,
+                model_name_map: parse_string_map_json_opt(
+                    model_name_map_json
+                        .and_then(|col| value_string_opt(col, idx))
+                        .as_deref(),
+                )?,
                 request_max_concurrency: request_max_concurrency
                     .and_then(|column| value_u64_opt(column, idx)),
                 request_min_start_interval_ms: request_min_start_interval_ms
@@ -610,11 +624,29 @@ fn serialize_string_vec_json(value: Option<&[String]>) -> Result<Option<String>>
     }
 }
 
+fn serialize_string_map_json(value: Option<&BTreeMap<String, String>>) -> Result<Option<String>> {
+    match value {
+        Some(items) if !items.is_empty() => serde_json::to_string(items)
+            .map(Some)
+            .context("failed to serialize llm gateway model name map"),
+        _ => Ok(None),
+    }
+}
+
 fn parse_string_vec_json_opt(value: Option<&str>) -> Result<Option<Vec<String>>> {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(raw) => serde_json::from_str::<Vec<String>>(raw)
             .map(Some)
             .with_context(|| format!("failed to parse llm gateway auto account names JSON: {raw}")),
+        None => Ok(None),
+    }
+}
+
+fn parse_string_map_json_opt(value: Option<&str>) -> Result<Option<BTreeMap<String, String>>> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => serde_json::from_str::<BTreeMap<String, String>>(raw)
+            .map(Some)
+            .with_context(|| format!("failed to parse llm gateway model name map JSON: {raw}")),
         None => Ok(None),
     }
 }

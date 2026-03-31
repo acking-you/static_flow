@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::{Request, RequestBuilder};
 use js_sys::Date;
@@ -4212,6 +4214,7 @@ pub struct AdminLlmGatewayKeyView {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    pub model_name_map: Option<BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
 }
@@ -5489,6 +5492,7 @@ pub async fn create_admin_llm_gateway_key(
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            model_name_map: None,
             request_max_concurrency,
             request_min_start_interval_ms,
         })
@@ -5530,6 +5534,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub route_strategy: Option<&'a str>,
     pub fixed_account_name: Option<&'a str>,
     pub auto_account_names: Option<&'a [String]>,
+    pub model_name_map: Option<&'a BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub request_max_concurrency_unlimited: bool,
@@ -5551,6 +5556,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.route_strategy,
             request.fixed_account_name,
             request.auto_account_names,
+            request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.request_max_concurrency_unlimited,
@@ -5609,6 +5615,11 @@ pub async fn patch_admin_llm_gateway_key(
                         .collect(),
                 ),
             );
+        }
+        if let Some(model_name_map) = request.model_name_map {
+            let value = serde_json::to_value(model_name_map)
+                .map_err(|e| format!("Serialize error: {:?}", e))?;
+            body.insert("model_name_map".to_string(), value);
         }
         if let Some(request_max_concurrency) = request.request_max_concurrency {
             body.insert(
@@ -6119,6 +6130,26 @@ pub struct KiroPublicStatusView {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
+pub struct KiroModelView {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub owned_by: String,
+    pub display_name: String,
+    #[serde(rename = "type")]
+    pub model_type: String,
+    pub max_tokens: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroModelsResponse {
+    pub object: String,
+    pub data: Vec<KiroModelView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct KiroAccessResponse {
     pub base_url: String,
     pub gateway_path: String,
@@ -6247,6 +6278,54 @@ pub async fn fetch_kiro_access() -> Result<KiroAccessResponse, String> {
     }
 }
 
+pub async fn fetch_kiro_models() -> Result<KiroModelsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(KiroModelsResponse {
+            object: "list".to_string(),
+            data: vec![
+                KiroModelView {
+                    id: "claude-sonnet-4-6".to_string(),
+                    object: "model".to_string(),
+                    created: 1_770_314_400,
+                    owned_by: "anthropic".to_string(),
+                    display_name: "Claude Sonnet 4.6".to_string(),
+                    model_type: "chat".to_string(),
+                    max_tokens: 32_000,
+                },
+                KiroModelView {
+                    id: "claude-haiku-4-5-20251001".to_string(),
+                    object: "model".to_string(),
+                    created: 1_727_740_800,
+                    owned_by: "anthropic".to_string(),
+                    display_name: "Claude Haiku 4.5".to_string(),
+                    model_type: "chat".to_string(),
+                    max_tokens: 32_000,
+                },
+            ],
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/kiro-gateway/v1/models", API_BASE);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -6302,6 +6381,7 @@ pub async fn create_admin_kiro_key(
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
         })
@@ -6345,6 +6425,7 @@ pub async fn patch_admin_kiro_key(
             request.route_strategy,
             request.fixed_account_name,
             request.auto_account_names,
+            request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.request_max_concurrency_unlimited,
@@ -6380,6 +6461,11 @@ pub async fn patch_admin_kiro_key(
                 "quota_billable_limit".to_string(),
                 serde_json::Value::Number(quota_billable_limit.into()),
             );
+        }
+        if let Some(model_name_map) = request.model_name_map {
+            let value = serde_json::to_value(model_name_map)
+                .map_err(|e| format!("Serialize error: {:?}", e))?;
+            body.insert("model_name_map".to_string(), value);
         }
         let response = api_patch(&url)
             .json(&serde_json::Value::Object(body))

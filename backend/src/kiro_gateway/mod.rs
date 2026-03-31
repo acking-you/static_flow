@@ -15,7 +15,7 @@ mod wire;
 
 pub mod anthropic;
 
-use std::time::Instant;
+use std::{collections::BTreeMap, time::Instant};
 
 use axum::{
     extract::{Path, Query, State},
@@ -34,6 +34,7 @@ use static_flow_shared::llm_gateway_store::{
 pub(crate) use status_cache::{refresh_cached_status, spawn_status_refresher};
 
 use self::{
+    anthropic::supported_model_ids,
     auth_file::KiroAuthRecord,
     status_cache::{
         refresh_cached_status_for_account, remove_cached_status_for_account,
@@ -57,6 +58,7 @@ const MIN_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 const MAX_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 16;
 const MIN_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 const MAX_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 60_000;
+type KiroAdminResult<T> = Result<T, (StatusCode, Json<ErrorResponse>)>;
 
 /// Per-request context captured at authentication time and carried through
 /// the proxy pipeline until the usage event is persisted.
@@ -248,6 +250,7 @@ pub async fn create_admin_key(
         route_strategy: None,
         fixed_account_name: None,
         auto_account_names: None,
+        model_name_map: None,
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
     };
@@ -282,6 +285,9 @@ pub async fn patch_admin_key(
     }
     if let Some(limit) = request.quota_billable_limit {
         key.quota_billable_limit = limit;
+    }
+    if let Some(model_name_map) = request.model_name_map {
+        key.model_name_map = normalize_model_name_map(model_name_map)?;
     }
     key.public_visible = false;
     key.updated_at = now_ms();
@@ -828,6 +834,30 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn normalize_model_name_map(
+    raw: BTreeMap<String, String>,
+) -> KiroAdminResult<Option<BTreeMap<String, String>>> {
+    let supported = supported_model_ids();
+    let mut normalized = BTreeMap::new();
+    for (source_model, target_model) in raw {
+        let source_model = source_model.trim().to_string();
+        let target_model = target_model.trim().to_string();
+        if source_model.is_empty() || target_model.is_empty() {
+            return Err(bad_request("model_name_map entries must not be empty"));
+        }
+        if !supported.iter().any(|candidate| candidate == &source_model) {
+            return Err(bad_request("model_name_map contains unsupported source model"));
+        }
+        if !supported.iter().any(|candidate| candidate == &target_model) {
+            return Err(bad_request("model_name_map contains unsupported target model"));
+        }
+        if source_model != target_model {
+            normalized.insert(source_model, target_model);
+        }
+    }
+    Ok((!normalized.is_empty()).then_some(normalized))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -903,4 +933,38 @@ fn external_origin(headers: &HeaderMap) -> Option<String> {
         .filter(|value| !value.is_empty())
         .unwrap_or("http");
     Some(format!("{scheme}://{host}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::normalize_model_name_map;
+
+    #[test]
+    fn normalize_model_name_map_drops_identity_entries() {
+        let normalized = normalize_model_name_map(BTreeMap::from([
+            ("claude-haiku-4-5-20251001".to_string(), "claude-haiku-4-5-20251001".to_string()),
+            ("claude-haiku-4-5-20251001-thinking".to_string(), "claude-sonnet-4-6".to_string()),
+        ]))
+        .expect("normalize should succeed");
+
+        assert_eq!(
+            normalized,
+            Some(BTreeMap::from([(
+                "claude-haiku-4-5-20251001-thinking".to_string(),
+                "claude-sonnet-4-6".to_string(),
+            )]))
+        );
+    }
+
+    #[test]
+    fn normalize_model_name_map_rejects_unknown_models() {
+        let result = normalize_model_name_map(BTreeMap::from([(
+            "claude-unknown".to_string(),
+            "claude-sonnet-4-6".to_string(),
+        )]));
+
+        assert!(result.is_err());
+    }
 }

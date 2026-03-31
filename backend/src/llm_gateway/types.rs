@@ -123,6 +123,7 @@ pub struct AdminLlmGatewayKeyView {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    pub model_name_map: Option<BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
 }
@@ -541,6 +542,7 @@ pub struct PatchLlmGatewayKeyRequest {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    pub model_name_map: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub request_max_concurrency: Option<u64>,
     #[serde(default)]
@@ -731,6 +733,7 @@ impl From<&LlmGatewayKeyRecord> for AdminLlmGatewayKeyView {
             route_strategy: value.route_strategy.clone(),
             fixed_account_name: value.fixed_account_name.clone(),
             auto_account_names: value.auto_account_names.clone(),
+            model_name_map: value.model_name_map.clone(),
             request_max_concurrency: value.request_max_concurrency,
             request_min_start_interval_ms: value.request_min_start_interval_ms,
         }

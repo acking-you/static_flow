@@ -634,6 +634,7 @@ mod tests {
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
         }

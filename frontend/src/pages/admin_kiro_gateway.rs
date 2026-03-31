@@ -1,5 +1,7 @@
 //! Admin UI for managing Kiro accounts, keys, usage, and proxy bindings.
 
+use std::collections::BTreeMap;
+
 use gloo_timers::callback::Timeout;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
@@ -10,11 +12,11 @@ use crate::{
     api::{
         create_admin_kiro_key, create_admin_kiro_manual_account, delete_admin_kiro_account,
         delete_admin_kiro_key, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
-        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings,
+        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings, fetch_kiro_models,
         import_admin_kiro_account, patch_admin_kiro_account, patch_admin_kiro_key,
         refresh_admin_kiro_account_balance, AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView,
         AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
-        CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView,
+        CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView, KiroModelView,
         PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
     },
     pages::llm_access_shared::{
@@ -464,6 +466,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
 #[derive(Properties, PartialEq)]
 struct KiroKeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
+    available_models: Vec<KiroModelView>,
     on_reload: Callback<()>,
     on_copy: Callback<(String, String)>,
     on_flash: Callback<(String, bool)>,
@@ -474,6 +477,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let name = use_state(|| props.key_item.name.clone());
     let quota = use_state(|| props.key_item.quota_billable_limit.to_string());
     let status = use_state(|| props.key_item.status.clone());
+    let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
@@ -482,10 +486,12 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
+        let model_name_map = model_name_map.clone();
         use_effect_with(props.key_item.clone(), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
             status.set(key_item.status.clone());
+            model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             || ()
         });
     }
@@ -496,6 +502,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
+        let model_name_map = model_name_map.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -506,6 +513,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
             let status_value = (*status).clone();
+            let model_name_map_value = (*model_name_map).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -530,6 +538,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     route_strategy: None,
                     fixed_account_name: None,
                     auto_account_names: None,
+                    model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                     request_max_concurrency_unlimited: false,
@@ -558,6 +567,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let key_name = props.key_item.name.clone();
         let name = name.clone();
         let quota = quota.clone();
+        let model_name_map = model_name_map.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -567,6 +577,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let key_name = key_name.clone();
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
+            let model_name_map_value = (*model_name_map).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -591,6 +602,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     route_strategy: None,
                     fixed_account_name: None,
                     auto_account_names: None,
+                    model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                     request_max_concurrency_unlimited: false,
@@ -652,11 +664,25 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         })
     };
 
+    let on_reset_model_map = {
+        let model_name_map = model_name_map.clone();
+        Callback::from(move |_| model_name_map.set(BTreeMap::new()))
+    };
+
     let key_ratio = kiro_key_usage_ratio(
         props.key_item.remaining_billable,
         props.key_item.quota_billable_limit,
     );
     let key_pct = (key_ratio * 100.0).round() as i32;
+    let mapping_overrides_preview = if (*model_name_map).is_empty() {
+        "identity map".to_string()
+    } else {
+        (*model_name_map)
+            .iter()
+            .map(|(source, target)| format!("{source} -> {target}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
 
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
@@ -772,6 +798,69 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     </span>
                     <span>{ "Kiro key 不会在公开页面暴露。" }</span>
                 </div>
+                <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Model Mapping" }</div>
+                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                { "默认是 source -> source；这里只保存覆盖项。你可以把 Haiku 改写到 Sonnet 或 Opus。" }
+                            </div>
+                        </div>
+                        <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_reset_model_map}>
+                            { "Reset To Identity" }
+                        </button>
+                    </div>
+                    if props.available_models.is_empty() {
+                        <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ "当前没有加载到可用模型目录。" }</div>
+                    } else {
+                        <div class={classes!("mt-3", "space-y-2")}>
+                            { for props.available_models.iter().map(|source_model| {
+                                let source_id = source_model.id.clone();
+                                let current_target = (*model_name_map)
+                                    .get(&source_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| source_id.clone());
+                                let model_name_map = model_name_map.clone();
+                                let target_models = props.available_models.clone();
+                                html! {
+                                    <div class={classes!("grid", "gap-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-3", "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]")}>
+                                        <div>
+                                            <div class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>{ source_model.display_name.clone() }</div>
+                                            <div class={classes!("mt-1", "font-mono", "text-[11px]", "break-all", "text-[var(--muted)]")}>{ source_model.id.clone() }</div>
+                                        </div>
+                                        <label class={classes!("text-sm")}>
+                                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Map To" }</div>
+                                            <select
+                                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                                                value={current_target}
+                                                onchange={Callback::from(move |event: Event| {
+                                                    let input: HtmlSelectElement = event.target_unchecked_into();
+                                                    let selected = input.value();
+                                                    let mut next = (*model_name_map).clone();
+                                                    if selected == source_id {
+                                                        next.remove(&source_id);
+                                                    } else {
+                                                        next.insert(source_id.clone(), selected);
+                                                    }
+                                                    model_name_map.set(next);
+                                                })}
+                                            >
+                                                { for target_models.iter().map(|target_model| html! {
+                                                    <option value={target_model.id.clone()}>
+                                                        { format!("{} · {}", target_model.display_name, target_model.id) }
+                                                    </option>
+                                                }) }
+                                            </select>
+                                        </label>
+                                    </div>
+                                }
+                            }) }
+                        </div>
+                        <div class={classes!("mt-3", "font-mono", "text-[11px]", "text-[var(--muted)]", "break-words")}>
+                            { format!("overrides: {}", mapping_overrides_preview) }
+                        </div>
+                    }
+                </div>
             </div>
 
             <div class={classes!("mt-4", "flex", "items-center", "gap-2", "flex-wrap")}>
@@ -805,6 +894,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
 pub fn admin_kiro_gateway_page() -> Html {
     let accounts = use_state(Vec::<KiroAccountView>::new);
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
+    let kiro_models = use_state(Vec::<KiroModelView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let loading = use_state(|| true);
@@ -867,6 +957,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     {
         let accounts = accounts.clone();
         let keys = keys.clone();
+        let kiro_models = kiro_models.clone();
         let usage_events = usage_events.clone();
         let proxy_bindings = proxy_bindings.clone();
         let loading = loading.clone();
@@ -874,6 +965,7 @@ pub fn admin_kiro_gateway_page() -> Html {
         use_effect_with(*refresh_tick, move |_| {
             let accounts = accounts.clone();
             let keys = keys.clone();
+            let kiro_models = kiro_models.clone();
             let usage_events = usage_events.clone();
             let proxy_bindings = proxy_bindings.clone();
             let loading = loading.clone();
@@ -883,6 +975,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 error.set(None);
                 let accounts_result = fetch_admin_kiro_accounts().await;
                 let keys_result = fetch_admin_kiro_keys().await;
+                let models_result = fetch_kiro_models().await;
                 let proxy_bindings_result = fetch_admin_llm_gateway_proxy_bindings().await;
                 let usage_result =
                     fetch_admin_kiro_usage_events(&AdminLlmGatewayUsageEventsQuery {
@@ -891,17 +984,31 @@ pub fn admin_kiro_gateway_page() -> Html {
                         offset: Some(0),
                     })
                     .await;
-                match (accounts_result, keys_result, proxy_bindings_result, usage_result) {
-                    (Ok(accounts_resp), Ok(keys_resp), Ok(proxy_bindings_resp), Ok(usage_resp)) => {
+                match (
+                    accounts_result,
+                    keys_result,
+                    models_result,
+                    proxy_bindings_result,
+                    usage_result,
+                ) {
+                    (
+                        Ok(accounts_resp),
+                        Ok(keys_resp),
+                        Ok(models_resp),
+                        Ok(proxy_bindings_resp),
+                        Ok(usage_resp),
+                    ) => {
                         accounts.set(accounts_resp.accounts);
                         keys.set(keys_resp.keys);
+                        kiro_models.set(models_resp.data);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
                         usage_events.set(usage_resp.events);
                     },
-                    (Err(err), _, _, _)
-                    | (_, Err(err), _, _)
-                    | (_, _, Err(err), _)
-                    | (_, _, _, Err(err)) => {
+                    (Err(err), _, _, _, _)
+                    | (_, Err(err), _, _, _)
+                    | (_, _, Err(err), _, _)
+                    | (_, _, _, Err(err), _)
+                    | (_, _, _, _, Err(err)) => {
                         error.set(Some(err));
                     },
                 }
@@ -1485,6 +1592,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     <KiroKeyEditorCard
                                         key={key_item.id.clone()}
                                         key_item={key_item.clone()}
+                                        available_models={(*kiro_models).clone()}
                                         on_reload={on_reload.clone()}
                                         on_copy={on_copy.clone()}
                                         on_flash={notify.clone()}

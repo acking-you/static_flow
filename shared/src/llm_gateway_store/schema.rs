@@ -53,6 +53,7 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("route_strategy", DataType::Utf8, true),
         Field::new("fixed_account_name", DataType::Utf8, true),
         Field::new("auto_account_names_json", DataType::Utf8, true),
+        Field::new("model_name_map_json", DataType::Utf8, true),
         Field::new("request_max_concurrency", DataType::UInt64, true),
         Field::new("request_min_start_interval_ms", DataType::UInt64, true),
     ]))
@@ -235,6 +236,7 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "route_strategy").await?;
     ensure_nullable_utf8_column(&table, "fixed_account_name").await?;
     ensure_nullable_utf8_column(&table, "auto_account_names_json").await?;
+    ensure_nullable_utf8_column(&table, "model_name_map_json").await?;
     ensure_nullable_u64_column(&table, "request_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "request_min_start_interval_ms").await?;
     ensure_scalar_index(&table, "id").await?;
@@ -567,7 +569,7 @@ async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
 }
 
 /// Ordered projection used when reading key rows back from LanceDB.
-pub fn key_columns() -> [&'static str; 23] {
+pub fn key_columns() -> [&'static str; 24] {
     [
         "id",
         "name",
@@ -590,6 +592,7 @@ pub fn key_columns() -> [&'static str; 23] {
         "route_strategy",
         "fixed_account_name",
         "auto_account_names_json",
+        "model_name_map_json",
         "request_max_concurrency",
         "request_min_start_interval_ms",
     ]

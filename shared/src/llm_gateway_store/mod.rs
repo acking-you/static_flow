@@ -1386,7 +1386,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, sync::Arc};
+    use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
 
     use arrow_array::{
         builder::{
@@ -1428,6 +1428,7 @@ mod tests {
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
         }
@@ -1453,6 +1454,10 @@ mod tests {
 
         let mut updated = loaded.clone();
         updated.status = LLM_GATEWAY_KEY_STATUS_DISABLED.to_string();
+        updated.model_name_map = Some(BTreeMap::from([(
+            "claude-haiku-4-5-20251001".to_string(),
+            "claude-sonnet-4-6".to_string(),
+        )]));
         updated.request_max_concurrency = Some(2);
         updated.request_min_start_interval_ms = Some(1_250);
         updated.updated_at = now_ms();
@@ -1464,6 +1469,7 @@ mod tests {
             .expect("load updated key")
             .expect("updated key exists");
         assert_eq!(reloaded.status, LLM_GATEWAY_KEY_STATUS_DISABLED);
+        assert_eq!(reloaded.model_name_map, updated.model_name_map);
         assert_eq!(reloaded.request_max_concurrency, Some(2));
         assert_eq!(reloaded.request_min_start_interval_ms, Some(1_250));
 
@@ -1478,11 +1484,16 @@ mod tests {
             .expect("connect llm gateway store");
 
         let mut record = sample_key_record("test-key-clear", "Clearable Key");
+        record.model_name_map = Some(BTreeMap::from([(
+            "claude-haiku-4-5-20251001".to_string(),
+            "claude-sonnet-4-6".to_string(),
+        )]));
         record.request_max_concurrency = Some(3);
         record.request_min_start_interval_ms = Some(1_500);
         store.create_key(&record).await.expect("create key");
 
         let mut updated = record.clone();
+        updated.model_name_map = None;
         updated.request_max_concurrency = None;
         updated.request_min_start_interval_ms = None;
         updated.updated_at = now_ms();
@@ -1493,6 +1504,7 @@ mod tests {
             .await
             .expect("load replaced key")
             .expect("replaced key exists");
+        assert_eq!(reloaded.model_name_map, None);
         assert_eq!(reloaded.request_max_concurrency, None);
         assert_eq!(reloaded.request_min_start_interval_ms, None);
 

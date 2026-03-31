@@ -3,6 +3,8 @@
 //! These structs back both the public `/api/kiro-gateway/*` endpoints and the
 //! private `/admin/kiro-gateway/*` management API.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayUsageEventRecord};
 
@@ -146,6 +148,10 @@ pub struct AdminKiroKeyView {
     pub fixed_account_name: Option<String>,
     /// Candidate account names when `route_strategy` is `"auto"`.
     pub auto_account_names: Option<Vec<String>>,
+    /// Optional per-key rewrite map from requested public model name to the
+    /// actual model name forwarded upstream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name_map: Option<BTreeMap<String, String>>,
 }
 
 impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
@@ -170,6 +176,7 @@ impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
             route_strategy: value.route_strategy.clone(),
             fixed_account_name: value.fixed_account_name.clone(),
             auto_account_names: value.auto_account_names.clone(),
+            model_name_map: value.model_name_map.clone(),
         }
     }
 }
@@ -273,6 +280,8 @@ pub struct PatchKiroKeyRequest {
     pub status: Option<String>,
     #[serde(default)]
     pub quota_billable_limit: Option<u64>,
+    #[serde(default)]
+    pub model_name_map: Option<BTreeMap<String, String>>,
 }
 
 /// Normalized account-balance snapshot derived from Kiro `getUsageLimits`.

@@ -532,6 +532,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     route_strategy: Some(&route_strategy_value),
                     fixed_account_name: Some(&fixed_account_name_value),
                     auto_account_names: Some(auto_account_names_value.as_slice()),
+                    model_name_map: None,
                     request_max_concurrency: request_max_concurrency_value,
                     request_min_start_interval_ms: request_min_start_interval_ms_value,
                     request_max_concurrency_unlimited: request_max_concurrency_value.is_none(),

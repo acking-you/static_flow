@@ -610,6 +610,7 @@ pub async fn create_admin_key(
         route_strategy: None,
         fixed_account_name: None,
         auto_account_names: None,
+        model_name_map: None,
         request_max_concurrency: request.request_max_concurrency,
         request_min_start_interval_ms: request.request_min_start_interval_ms,
     })
@@ -633,6 +634,7 @@ struct ManagedKeyCreateInput {
     route_strategy: Option<String>,
     fixed_account_name: Option<String>,
     auto_account_names: Option<Vec<String>>,
+    model_name_map: Option<std::collections::BTreeMap<String, String>>,
     request_max_concurrency: Option<u64>,
     request_min_start_interval_ms: Option<u64>,
 }
@@ -666,6 +668,7 @@ async fn create_managed_key_record(
         route_strategy: input.route_strategy,
         fixed_account_name: input.fixed_account_name,
         auto_account_names: input.auto_account_names,
+        model_name_map: input.model_name_map,
         request_max_concurrency: input.request_max_concurrency,
         request_min_start_interval_ms: input.request_min_start_interval_ms,
     };
@@ -724,6 +727,9 @@ pub async fn patch_admin_key(
     if let Some(account_names) = request.auto_account_names {
         key.auto_account_names = normalize_auto_account_names_input(Some(account_names))
             .map_err(|err| bad_request_with_detail("invalid auto_account_names", err))?;
+    }
+    if let Some(model_name_map) = request.model_name_map {
+        key.model_name_map = Some(model_name_map);
     }
     if request.request_max_concurrency_unlimited {
         key.request_max_concurrency = None;
@@ -1891,6 +1897,7 @@ pub async fn approve_and_issue_token_request(
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
         })
@@ -2222,6 +2229,7 @@ pub async fn approve_and_issue_account_contribution_request(
                     route_strategy: Some("fixed".to_string()),
                     fixed_account_name: Some(imported_account_name.clone()),
                     auto_account_names: None,
+                    model_name_map: None,
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                 })
@@ -2237,6 +2245,7 @@ pub async fn approve_and_issue_account_contribution_request(
             route_strategy: Some("fixed".to_string()),
             fixed_account_name: Some(imported_account_name.clone()),
             auto_account_names: None,
+            model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
         })

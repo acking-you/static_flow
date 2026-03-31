@@ -46,6 +46,19 @@ use self::{
 };
 use crate::{kiro_gateway::wire::Event, state::AppState};
 
+const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
+    ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
+    ("claude-sonnet-4-5-20250929-thinking", "Claude Sonnet 4.5 (Thinking)", 1727568000),
+    ("claude-opus-4-5-20251101", "Claude Opus 4.5", 1730419200),
+    ("claude-opus-4-5-20251101-thinking", "Claude Opus 4.5 (Thinking)", 1730419200),
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6", 1770314400),
+    ("claude-sonnet-4-6-thinking", "Claude Sonnet 4.6 (Thinking)", 1770314400),
+    ("claude-opus-4-6", "Claude Opus 4.6", 1770314400),
+    ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", 1770314400),
+    ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 1727740800),
+    ("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
+];
+
 // Bundles the state needed to persist usage after a streaming response
 // completes.
 struct UsagePersistContext {
@@ -98,25 +111,24 @@ pub(super) fn map_provider_error(err: Error) -> Response {
 
 /// Returns the list of available models for the `/v1/models` endpoint.
 pub async fn get_models() -> impl IntoResponse {
-    Json(ModelsResponse {
+    Json(supported_models_response())
+}
+
+pub(crate) fn supported_model_ids() -> Vec<String> {
+    SUPPORTED_MODEL_CATALOG
+        .iter()
+        .map(|(id, _, _)| (*id).to_string())
+        .collect()
+}
+
+fn supported_models_response() -> ModelsResponse {
+    ModelsResponse {
         object: "list".to_string(),
-        data: vec![
-            model("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
-            model(
-                "claude-sonnet-4-5-20250929-thinking",
-                "Claude Sonnet 4.5 (Thinking)",
-                1727568000,
-            ),
-            model("claude-opus-4-5-20251101", "Claude Opus 4.5", 1730419200),
-            model("claude-opus-4-5-20251101-thinking", "Claude Opus 4.5 (Thinking)", 1730419200),
-            model("claude-sonnet-4-6", "Claude Sonnet 4.6", 1770314400),
-            model("claude-sonnet-4-6-thinking", "Claude Sonnet 4.6 (Thinking)", 1770314400),
-            model("claude-opus-4-6", "Claude Opus 4.6", 1770314400),
-            model("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", 1770314400),
-            model("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 1727740800),
-            model("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
-        ],
-    })
+        data: SUPPORTED_MODEL_CATALOG
+            .iter()
+            .map(|(id, display_name, created)| model(id, display_name, *created))
+            .collect(),
+    }
 }
 
 /// Estimates token count for the given request payload.
@@ -166,6 +178,16 @@ async fn handle_messages(
         Ok(value) => value,
         Err(err) => return err.into_response(),
     };
+    let requested_model = payload.model.clone();
+    if let Some((source_model, target_model)) = apply_key_model_mapping(&key_record, payload) {
+        tracing::info!(
+            key_id = %key_record.id,
+            key_name = %key_record.name,
+            requested_model = %source_model,
+            effective_model = %target_model,
+            "applied kiro key model mapping before request conversion"
+        );
+    }
     let public_path = if buffered_for_cc { "/cc/v1/messages" } else { "/v1/messages" };
     event_context.request_url.push_str(public_path);
     event_context.model = Some(payload.model.clone());
@@ -187,7 +209,9 @@ async fn handle_messages(
         .map(|tools| tools.iter().filter(|tool| tool.is_web_search()).count())
         .unwrap_or(0);
     tracing::info!(
-        model = %payload.model,
+        requested_model = %requested_model,
+        effective_model = %payload.model,
+        model_mapping_applied = requested_model != payload.model,
         stream = payload.stream,
         buffered_for_cc,
         route = if pure_web_search { "mcp_web_search" } else { "assistant_generate" },
@@ -718,6 +742,23 @@ fn model(id: &str, display_name: &str, created: i64) -> Model {
     }
 }
 
+fn apply_key_model_mapping(
+    key_record: &LlmGatewayKeyRecord,
+    payload: &mut MessagesRequest,
+) -> Option<(String, String)> {
+    let target_model = key_record
+        .model_name_map
+        .as_ref()
+        .and_then(|map| map.get(&payload.model))
+        .cloned()?;
+    if target_model == payload.model {
+        return None;
+    }
+    let source_model = payload.model.clone();
+    payload.model = target_model.clone();
+    Some((source_model, target_model))
+}
+
 /// If the model name contains "-thinking", auto-inject thinking configuration.
 /// Opus 4.6 gets adaptive/high; all others get enabled with 20K budget.
 fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
@@ -759,6 +800,65 @@ mod tests {
             output_config: None,
             metadata: None,
         }
+    }
+
+    fn sample_key(model_name_map: Option<Vec<(&str, &str)>>) -> LlmGatewayKeyRecord {
+        LlmGatewayKeyRecord {
+            id: "test-key".to_string(),
+            name: "test".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 1_000,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: model_name_map.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(source, target)| (source.to_string(), target.to_string()))
+                    .collect()
+            }),
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        }
+    }
+
+    #[test]
+    fn key_model_mapping_rewrites_requested_model_before_conversion() {
+        let key = sample_key(Some(vec![("claude-haiku-4-5-20251001", "claude-sonnet-4-6")]));
+        let mut payload = base_request("claude-haiku-4-5-20251001");
+
+        let applied = apply_key_model_mapping(&key, &mut payload);
+
+        assert_eq!(
+            applied,
+            Some(("claude-haiku-4-5-20251001".to_string(), "claude-sonnet-4-6".to_string()))
+        );
+        assert_eq!(payload.model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn key_model_mapping_keeps_identity_when_no_override_exists() {
+        let key = sample_key(None);
+        let mut payload = base_request("claude-haiku-4-5-20251001");
+
+        let applied = apply_key_model_mapping(&key, &mut payload);
+
+        assert!(applied.is_none());
+        assert_eq!(payload.model, "claude-haiku-4-5-20251001");
     }
 
     #[test]

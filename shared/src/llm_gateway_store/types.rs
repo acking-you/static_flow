@@ -4,6 +4,8 @@
 //! closely and are shared by backend admin handlers, runtime accounting, and
 //! migration code.
 
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +93,12 @@ pub struct LlmGatewayKeyRecord {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    /// Optional per-key model rewrite map.
+    ///
+    /// When present, a request asking for model `key` is rewritten to model
+    /// `value` before the provider-specific adapter runs. Identity entries are
+    /// intentionally omitted from storage.
+    pub model_name_map: Option<BTreeMap<String, String>>,
     /// Optional per-key cap on concurrent in-flight Codex gateway requests.
     ///
     /// `None` means unlimited.
