@@ -4,8 +4,9 @@
 //! tool schema normalization, conversation history building (with consecutive
 //! same-role message merging), and tool-result pairing validation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::types::{ContentBlock, MessagesRequest};
@@ -115,6 +116,7 @@ pub fn get_context_window_size(model: &str) -> i32 {
 #[derive(Debug)]
 pub struct ConversionResult {
     pub conversation_state: ConversationState,
+    pub tool_name_map: HashMap<String, String>,
 }
 
 /// Errors that can occur during Anthropic-to-Kiro request conversion.
@@ -136,17 +138,29 @@ impl std::fmt::Display for ConversionError {
 impl std::error::Error for ConversionError {}
 
 // Extracts a UUID session ID from the Anthropic `user_id` metadata field.
-// Expected format: `..._session_<uuid>...`
+// Supports either a JSON payload containing `session_id` or the legacy
+// `..._session_<uuid>...` string format.
 fn extract_session_id(user_id: &str) -> Option<String> {
-    let pos = user_id.find("session_")?;
-    let session_part = &user_id[pos + 8..];
-    if session_part.len() >= 36 {
-        let uuid_str = &session_part[..36];
-        if uuid_str.chars().filter(|ch| *ch == '-').count() == 4 {
-            return Some(uuid_str.to_string());
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(user_id) {
+        if let Some(session_id) = value.get("session_id").and_then(|value| value.as_str()) {
+            if is_valid_uuid(session_id) {
+                return Some(session_id.to_string());
+            }
         }
     }
-    None
+
+    let pos = user_id.find("session_")?;
+    let session_part = &user_id[pos + 8..];
+    if session_part.len() < 36 {
+        return None;
+    }
+
+    let uuid = &session_part[..36];
+    is_valid_uuid(uuid).then(|| uuid.to_string())
+}
+
+fn is_valid_uuid(value: &str) -> bool {
+    value.len() == 36 && value.chars().filter(|ch| *ch == '-').count() == 4
 }
 
 // Collects unique tool names from assistant messages in history, used to
@@ -183,6 +197,31 @@ fn create_placeholder_tool(name: &str) -> Tool {
             })),
         },
     }
+}
+
+const TOOL_NAME_MAX_LEN: usize = 63;
+
+fn shorten_tool_name(name: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(name.as_bytes());
+    let hash_hex = format!("{:x}", hasher.finalize());
+    let hash_suffix = &hash_hex[..8];
+    let prefix_max = TOOL_NAME_MAX_LEN - 1 - 8;
+    let prefix = match name.char_indices().nth(prefix_max) {
+        Some((idx, _)) => &name[..idx],
+        None => name,
+    };
+    format!("{prefix}_{hash_suffix}")
+}
+
+fn map_tool_name(name: &str, tool_name_map: &mut HashMap<String, String>) -> String {
+    if name.len() <= TOOL_NAME_MAX_LEN {
+        return name.to_string();
+    }
+
+    let short = shorten_tool_name(name);
+    tool_name_map.insert(short.clone(), name.to_string());
+    short
 }
 
 /// Converts an Anthropic `MessagesRequest` into a Kiro `ConversationState`.
@@ -224,8 +263,9 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     let agent_continuation_id = Uuid::new_v4().to_string();
     let last_message = messages.last().ok_or(ConversionError::EmptyMessages)?;
     let (text_content, images, tool_results) = process_message_content(&last_message.content)?;
-    let mut tools = convert_tools(&req.tools);
-    let mut history = build_history(req, messages, &model_id)?;
+    let mut tool_name_map = HashMap::new();
+    let mut tools = convert_tools(&req.tools, &mut tool_name_map);
+    let mut history = build_history(req, messages, &model_id, &mut tool_name_map)?;
     let (validated_tool_results, orphaned_tool_use_ids) =
         validate_tool_pairing(&history, &tool_results);
     remove_orphaned_tool_uses(&mut history, &orphaned_tool_use_ids);
@@ -264,6 +304,7 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
             .with_chat_trigger_type("MANUAL")
             .with_current_message(CurrentMessage::new(user_input))
             .with_history(history),
+        tool_name_map,
     })
 }
 
@@ -406,7 +447,10 @@ fn remove_orphaned_tool_uses(history: &mut [Message], orphaned_ids: &HashSet<Str
 // Converts Anthropic tool definitions to Kiro wire Tool specs.
 // Appends chunked-write policy suffixes to Write/Edit tool descriptions
 // and truncates descriptions to 10K chars.
-fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
+fn convert_tools(
+    tools: &Option<Vec<super::types::Tool>>,
+    tool_name_map: &mut HashMap<String, String>,
+) -> Vec<Tool> {
     let Some(tools) = tools else {
         return Vec::new();
     };
@@ -429,7 +473,7 @@ fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
             };
             Tool {
                 tool_specification: ToolSpecification {
-                    name: tool.name.clone(),
+                    name: map_tool_name(&tool.name, tool_name_map),
                     description,
                     input_schema: InputSchema::from_json(normalize_json_schema(serde_json::json!(
                         tool.input_schema
@@ -477,6 +521,7 @@ fn build_history(
     req: &MessagesRequest,
     messages: &[super::types::Message],
     model_id: &str,
+    tool_name_map: &mut HashMap<String, String>,
 ) -> Result<Vec<Message>, ConversionError> {
     let mut history = Vec::new();
     let thinking_prefix = generate_thinking_prefix(req);
@@ -517,7 +562,10 @@ fn build_history(
     for message in messages.iter().take(history_end_index) {
         if message.role == "user" {
             if !assistant_buffer.is_empty() {
-                history.push(Message::Assistant(merge_assistant_messages(&assistant_buffer)?));
+                history.push(Message::Assistant(merge_assistant_messages(
+                    &assistant_buffer,
+                    tool_name_map,
+                )?));
                 assistant_buffer.clear();
             }
             user_buffer.push(message);
@@ -531,7 +579,8 @@ fn build_history(
     }
 
     if !assistant_buffer.is_empty() {
-        history.push(Message::Assistant(merge_assistant_messages(&assistant_buffer)?));
+        history
+            .push(Message::Assistant(merge_assistant_messages(&assistant_buffer, tool_name_map)?));
     }
     // If history ends with buffered user messages but no following assistant
     // turn, append a synthetic "OK" assistant reply so the history alternates.
@@ -575,6 +624,7 @@ fn merge_user_messages(
 
 fn convert_assistant_message(
     message: &super::types::Message,
+    tool_name_map: &mut HashMap<String, String>,
 ) -> Result<HistoryAssistantMessage, ConversionError> {
     let mut thinking_content = String::new();
     let mut text_content = String::new();
@@ -597,7 +647,8 @@ fn convert_assistant_message(
                         },
                         "tool_use" => {
                             if let (Some(id), Some(name)) = (block.id, block.name) {
-                                tool_uses.push(ToolUseEntry::new(id, name).with_input(
+                                let mapped_name = map_tool_name(&name, tool_name_map);
+                                tool_uses.push(ToolUseEntry::new(id, mapped_name).with_input(
                                     block.input.unwrap_or_else(|| serde_json::json!({})),
                                 ));
                             }
@@ -633,14 +684,15 @@ fn convert_assistant_message(
 
 fn merge_assistant_messages(
     messages: &[&super::types::Message],
+    tool_name_map: &mut HashMap<String, String>,
 ) -> Result<HistoryAssistantMessage, ConversionError> {
     if messages.len() == 1 {
-        return convert_assistant_message(messages[0]);
+        return convert_assistant_message(messages[0], tool_name_map);
     }
     let mut tool_uses = Vec::new();
     let mut content_parts = Vec::new();
     for message in messages {
-        let converted = convert_assistant_message(message)?;
+        let converted = convert_assistant_message(message, tool_name_map)?;
         let assistant_message = converted.assistant_response_message;
         if !assistant_message.content.trim().is_empty() {
             content_parts.push(assistant_message.content);
@@ -700,8 +752,26 @@ mod tests {
             extract_session_id("user_x_account__session_8bb5523b-ec7c-4540-a9ca-beb6d79f1552"),
             Some("8bb5523b-ec7c-4540-a9ca-beb6d79f1552".to_string())
         );
+        assert_eq!(
+            extract_session_id(
+                r#"{"device_id":"dev","account_uuid":"acct","session_id":"a0662283-7fd3-4399-a7eb-52b9a717ae88"}"#
+            ),
+            Some("a0662283-7fd3-4399-a7eb-52b9a717ae88".to_string())
+        );
+        assert_eq!(extract_session_id(r#"{"session_id":"invalid-uuid"}"#), None);
         assert_eq!(extract_session_id("user_without_session"), None);
         assert_eq!(extract_session_id("user_x__session_invalid-uuid"), None);
+    }
+
+    #[test]
+    fn shorten_tool_name_is_deterministic_and_bounded() {
+        let long_name =
+            "tool_with_a_name_far_beyond_the_supported_sixty_three_character_limit_for_kiro";
+        let short1 = shorten_tool_name(long_name);
+        let short2 = shorten_tool_name(long_name);
+
+        assert_eq!(short1, short2);
+        assert!(short1.len() <= TOOL_NAME_MAX_LEN);
     }
 
     #[test]
@@ -735,6 +805,26 @@ mod tests {
         assert_eq!(
             result.conversation_state.conversation_id,
             "a0662283-7fd3-4399-a7eb-52b9a717ae88"
+        );
+    }
+
+    #[test]
+    fn convert_request_uses_json_session_metadata_as_conversation_id() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.metadata = Some(Metadata {
+            user_id: Some(
+                r#"{"device_id":"dev","account_uuid":"acct","session_id":"c4dd850d-929f-48d1-9282-f0cfefeec16e"}"#
+                    .to_string(),
+            ),
+        });
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        assert_eq!(
+            result.conversation_state.conversation_id,
+            "c4dd850d-929f-48d1-9282-f0cfefeec16e"
         );
     }
 
@@ -817,6 +907,65 @@ mod tests {
     }
 
     #[test]
+    fn convert_request_maps_long_tool_names_in_tools_and_history() {
+        let long_name =
+            "tool_name_that_is_far_too_long_for_kiro_and_must_be_shortened_consistently_12345";
+        let mut req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Use the tool"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {"type": "tool_use", "id": "tool-1", "name": long_name, "input": {"path": "/tmp/test.txt"}}
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}
+                ]),
+            },
+        ]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: long_name.to_string(),
+            description: "Long tool".to_string(),
+            input_schema: HashMap::new(),
+            max_uses: None,
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        assert_eq!(result.tool_name_map.len(), 1);
+        let (short_name, original_name) = result.tool_name_map.iter().next().unwrap();
+        assert_eq!(original_name, long_name);
+        assert!(short_name.len() <= TOOL_NAME_MAX_LEN);
+
+        let tools = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools;
+        assert!(tools
+            .iter()
+            .any(|tool| tool.tool_specification.name == *short_name));
+
+        let history_tool_name = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => message
+                .assistant_response_message
+                .tool_uses
+                .as_ref()
+                .and_then(|tool_uses| tool_uses.first())
+                .map(|entry| entry.name.as_str())
+                .expect("history tool use should exist"),
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert_eq!(history_tool_name, short_name);
+    }
+
+    #[test]
     fn convert_request_injects_enabled_thinking_budget_prefix() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
@@ -890,7 +1039,8 @@ mod tests {
             ]),
         };
 
-        let result = convert_assistant_message(&message).expect("conversion should succeed");
+        let result = convert_assistant_message(&message, &mut HashMap::new())
+            .expect("conversion should succeed");
         assert_eq!(result.assistant_response_message.content, " ");
         let tool_uses = result
             .assistant_response_message
@@ -918,7 +1068,8 @@ mod tests {
             ]),
         };
 
-        let result = merge_assistant_messages(&[&first, &second]).expect("merge should succeed");
+        let result = merge_assistant_messages(&[&first, &second], &mut HashMap::new())
+            .expect("merge should succeed");
         let content = &result.assistant_response_message.content;
         assert!(content.contains("<thinking>"));
         assert!(content.contains("Let me read that file."));

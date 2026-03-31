@@ -58,6 +58,7 @@ const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
     ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 1727740800),
     ("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
 ];
+const KIRO_UPSTREAM_LOG_PREVIEW_CHARS: usize = 8_192;
 
 // Bundles the state needed to persist usage after a streaming response
 // completes.
@@ -65,6 +66,121 @@ struct UsagePersistContext {
     state: AppState,
     key_record: LlmGatewayKeyRecord,
     event_context: KiroEventContext,
+}
+
+#[derive(Clone)]
+struct KiroUpstreamLogContext {
+    key_id: String,
+    key_name: String,
+    account_name: String,
+    model: String,
+    buffered_for_cc: bool,
+}
+
+impl KiroUpstreamLogContext {
+    fn new(
+        key_record: &LlmGatewayKeyRecord,
+        account_name: Option<&str>,
+        model: &str,
+        buffered_for_cc: bool,
+    ) -> Self {
+        Self {
+            key_id: key_record.id.clone(),
+            key_name: key_record.name.clone(),
+            account_name: account_name.unwrap_or("unknown").to_string(),
+            model: model.to_string(),
+            buffered_for_cc,
+        }
+    }
+}
+
+fn summarize_log_text(text: &str) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= KIRO_UPSTREAM_LOG_PREVIEW_CHARS {
+        return text.to_string();
+    }
+    let preview = text
+        .chars()
+        .take(KIRO_UPSTREAM_LOG_PREVIEW_CHARS)
+        .collect::<String>();
+    format!("{preview}...[truncated,total_chars={total_chars}]")
+}
+
+fn log_kiro_upstream_event(log_ctx: &KiroUpstreamLogContext, stream_kind: &str, event: &Event) {
+    match event {
+        Event::Error {
+            error_code,
+            error_message,
+        } => {
+            tracing::error!(
+                key_id = %log_ctx.key_id,
+                key_name = %log_ctx.key_name,
+                account_name = %log_ctx.account_name,
+                model = %log_ctx.model,
+                buffered_for_cc = log_ctx.buffered_for_cc,
+                stream_kind,
+                error_code = %error_code,
+                message_len = error_message.len(),
+                message_preview = %summarize_log_text(error_message),
+                "kiro upstream emitted error event"
+            );
+        },
+        Event::Exception {
+            exception_type,
+            message,
+        } => {
+            tracing::error!(
+                key_id = %log_ctx.key_id,
+                key_name = %log_ctx.key_name,
+                account_name = %log_ctx.account_name,
+                model = %log_ctx.model,
+                buffered_for_cc = log_ctx.buffered_for_cc,
+                stream_kind,
+                exception_type = %exception_type,
+                message_len = message.len(),
+                message_preview = %summarize_log_text(message),
+                "kiro upstream emitted exception event"
+            );
+        },
+        _ => {},
+    }
+}
+
+fn log_kiro_event_parse_error(
+    log_ctx: &KiroUpstreamLogContext,
+    stream_kind: &str,
+    err: &impl std::fmt::Display,
+) {
+    tracing::error!(
+        key_id = %log_ctx.key_id,
+        key_name = %log_ctx.key_name,
+        account_name = %log_ctx.account_name,
+        model = %log_ctx.model,
+        buffered_for_cc = log_ctx.buffered_for_cc,
+        stream_kind,
+        error = %err,
+        "failed to decode kiro upstream event"
+    );
+}
+
+fn log_kiro_stream_read_error(
+    log_ctx: &KiroUpstreamLogContext,
+    stream_kind: &str,
+    err: &reqwest::Error,
+) {
+    tracing::error!(
+        key_id = %log_ctx.key_id,
+        key_name = %log_ctx.key_name,
+        account_name = %log_ctx.account_name,
+        model = %log_ctx.model,
+        buffered_for_cc = log_ctx.buffered_for_cc,
+        stream_kind,
+        is_timeout = err.is_timeout(),
+        is_connect = err.is_connect(),
+        upstream_url = ?err.url(),
+        error = %err,
+        "failed to read kiro upstream event stream"
+    );
 }
 
 /// Maps a Kiro provider error into an appropriate HTTP error response.
@@ -256,6 +372,7 @@ async fn handle_messages(
         },
     };
     let conversation_state = conversion.conversation_state;
+    let tool_name_map = conversion.tool_name_map;
     let thinking_enabled = payload
         .thinking
         .as_ref()
@@ -280,6 +397,7 @@ async fn handle_messages(
                 &payload.model,
                 input_tokens,
                 thinking_enabled,
+                tool_name_map,
             )
             .await;
         }
@@ -293,6 +411,7 @@ async fn handle_messages(
             &payload.model,
             input_tokens,
             thinking_enabled,
+            tool_name_map,
         )
         .await;
     }
@@ -309,6 +428,7 @@ async fn handle_messages(
         response.response,
         &payload.model,
         input_tokens,
+        tool_name_map,
     )
     .await
 }
@@ -322,11 +442,19 @@ async fn handle_stream_request(
     model: &str,
     input_tokens: i32,
     thinking_enabled: bool,
+    tool_name_map: std::collections::HashMap<String, String>,
 ) -> Response {
     let (done_tx, done_rx) = oneshot::channel::<KiroUsageSummary>();
+    let log_ctx = KiroUpstreamLogContext::new(
+        &usage_ctx.key_record,
+        usage_ctx.event_context.account_name.as_deref(),
+        model,
+        false,
+    );
     let stream = create_sse_stream(
         response,
-        StreamContext::new_with_thinking(model, input_tokens, thinking_enabled),
+        StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, tool_name_map),
+        log_ctx,
         done_tx,
     );
     tokio::spawn(async move {
@@ -362,11 +490,19 @@ async fn handle_stream_request_buffered(
     model: &str,
     estimated_input_tokens: i32,
     thinking_enabled: bool,
+    tool_name_map: std::collections::HashMap<String, String>,
 ) -> Response {
     let (done_tx, done_rx) = oneshot::channel::<KiroUsageSummary>();
+    let log_ctx = KiroUpstreamLogContext::new(
+        &usage_ctx.key_record,
+        usage_ctx.event_context.account_name.as_deref(),
+        model,
+        true,
+    );
     let stream = create_buffered_sse_stream(
         response,
-        BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled),
+        BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map),
+        log_ctx,
         done_tx,
     );
     tokio::spawn(async move {
@@ -403,11 +539,19 @@ async fn handle_non_stream_request(
     response: reqwest::Response,
     model: &str,
     input_tokens: i32,
+    tool_name_map: std::collections::HashMap<String, String>,
 ) -> Response {
+    let log_ctx = KiroUpstreamLogContext::new(
+        &key_record,
+        event_context.account_name.as_deref(),
+        model,
+        false,
+    );
     tracing::info!(model, input_tokens, "starting kiro non-stream upstream request");
     let body = match response.bytes().await {
         Ok(body) => body,
         Err(err) => {
+            log_kiro_stream_read_error(&log_ctx, "non_stream_body", &err);
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse::new(
@@ -442,10 +586,14 @@ async fn handle_non_stream_request(
                         } else {
                             serde_json::from_str(buffer).unwrap_or_else(|_| serde_json::json!({}))
                         };
+                        let original_name = tool_name_map
+                            .get(&event.name)
+                            .cloned()
+                            .unwrap_or_else(|| event.name.clone());
                         tool_uses.push(serde_json::json!({
                             "type":"tool_use",
                             "id":event.tool_use_id,
-                            "name":event.name,
+                            "name":original_name,
                             "input":input
                         }));
                     }
@@ -465,24 +613,27 @@ async fn handle_non_stream_request(
                         credit_usage_observed = true;
                     }
                 },
-                Ok(Event::Error {
-                    error_code,
-                    error_message,
-                }) => {
-                    tracing::warn!("received kiro error event: {error_code} - {error_message}");
+                Ok(
+                    ref event @ Event::Error {
+                        ..
+                    },
+                ) => {
+                    log_kiro_upstream_event(&log_ctx, "non_stream", event);
                 },
-                Ok(Event::Exception {
-                    exception_type,
-                    message,
-                }) => {
+                Ok(
+                    ref event @ Event::Exception {
+                        ref exception_type, ..
+                    },
+                ) => {
                     if exception_type == "ContentLengthExceededException" {
                         stop_reason = "max_tokens".to_string();
                     }
-                    tracing::warn!("received kiro exception event: {exception_type} - {message}");
+                    log_kiro_upstream_event(&log_ctx, "non_stream", event);
                 },
-                _ => {},
+                Ok(Event::Unknown {}) => {},
+                Err(err) => log_kiro_event_parse_error(&log_ctx, "non_stream_frame", &err),
             },
-            Err(err) => tracing::warn!("failed to decode kiro event frame: {err}"),
+            Err(err) => log_kiro_event_parse_error(&log_ctx, "non_stream_decoder", &err),
         }
     }
 
@@ -576,6 +727,7 @@ fn extract_last_message_content(payload: &MessagesRequest) -> Option<String> {
 fn create_sse_stream(
     response: reqwest::Response,
     mut ctx: StreamContext,
+    log_ctx: KiroUpstreamLogContext,
     done_tx: oneshot::Sender<KiroUsageSummary>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
@@ -606,19 +758,25 @@ fn create_sse_stream(
                             let _ = decoder.feed(&chunk);
                             for result in decoder.decode_iter() {
                                 match result {
-                                    Ok(frame) => {
-                                        if let Ok(event) = Event::from_frame(frame) {
+                                    Ok(frame) => match Event::from_frame(frame) {
+                                        Ok(event) => {
+                                            log_kiro_upstream_event(&log_ctx, "stream", &event);
                                             for sse_event in ctx.process_kiro_event(&event) {
                                                 yield Ok(Bytes::from(sse_event.to_sse_string()));
                                             }
-                                        }
-                                    }
-                                    Err(err) => tracing::warn!("failed to decode kiro event: {err}"),
+                                        },
+                                        Err(err) => {
+                                            log_kiro_event_parse_error(&log_ctx, "stream_frame", &err);
+                                        },
+                                    },
+                                    Err(err) => {
+                                        log_kiro_event_parse_error(&log_ctx, "stream_decoder", &err);
+                                    },
                                 }
                             }
                         }
                         Some(Err(err)) => {
-                            tracing::warn!("failed to read kiro event stream: {err}");
+                            log_kiro_stream_read_error(&log_ctx, "stream", &err);
                             break;
                         }
                         None => break,
@@ -657,6 +815,7 @@ fn create_sse_stream(
 fn create_buffered_sse_stream(
     response: reqwest::Response,
     mut ctx: BufferedStreamContext,
+    log_ctx: KiroUpstreamLogContext,
     done_tx: oneshot::Sender<KiroUsageSummary>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
@@ -684,17 +843,31 @@ fn create_buffered_sse_stream(
                             let _ = decoder.feed(&chunk);
                             for result in decoder.decode_iter() {
                                 match result {
-                                    Ok(frame) => {
-                                        if let Ok(event) = Event::from_frame(frame) {
+                                    Ok(frame) => match Event::from_frame(frame) {
+                                        Ok(event) => {
+                                            log_kiro_upstream_event(&log_ctx, "buffered_stream", &event);
                                             ctx.process_and_buffer(&event);
-                                        }
-                                    }
-                                    Err(err) => tracing::warn!("failed to decode buffered kiro event: {err}"),
+                                        },
+                                        Err(err) => {
+                                            log_kiro_event_parse_error(
+                                                &log_ctx,
+                                                "buffered_stream_frame",
+                                                &err,
+                                            );
+                                        },
+                                    },
+                                    Err(err) => {
+                                        log_kiro_event_parse_error(
+                                            &log_ctx,
+                                            "buffered_stream_decoder",
+                                            &err,
+                                        );
+                                    },
                                 }
                             }
                         }
                         Some(Err(err)) => {
-                            tracing::warn!("failed to read buffered kiro stream: {err}");
+                            log_kiro_stream_read_error(&log_ctx, "buffered_stream", &err);
                             break;
                         }
                         None => break,

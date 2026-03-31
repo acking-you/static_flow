@@ -25,7 +25,7 @@ PORT="${PORT:-39080}"
 SITE_BASE_URL="${SITE_BASE_URL:-https://ackingliu.top}"
 FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$ROOT_DIR/frontend/dist}"
 DAEMON="false"
-LOG_FILE="${LOG_FILE:-/tmp/staticflow-backend.log}"
+LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-backend.log}"
 
 log() { echo "[selfhosted] $*"; }
 fail() { echo "[selfhosted][ERROR] $*" >&2; exit 1; }
@@ -49,7 +49,7 @@ Environment variables (all optional):
   MUSIC_DB_PATH        Music DB override
   SITE_BASE_URL        Public URL (default: https://ackingliu.top)
   FRONTEND_DIST_DIR    Frontend dist path (default: ./frontend/dist)
-  LOG_FILE             Daemon log path (default: /tmp/staticflow-backend.log)
+  LOG_FILE             Runtime log path (default: ./tmp/staticflow-backend.log)
   ADMIN_TOKEN          If set, allows remote admin access with this token
   ADMIN_LOCAL_ONLY     Default true; set to false to disable IP check
 
@@ -77,6 +77,12 @@ while [[ $# -gt 0 ]]; do
     *)           fail "Unknown option: $1 (use --help)" ;;
   esac
 done
+
+mkdir -p "$ROOT_DIR/tmp" "$(dirname "$LOG_FILE")"
+if [[ "$DAEMON" != "true" ]]; then
+  : > "$LOG_FILE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve binary
@@ -121,7 +127,7 @@ fi
 # ---------------------------------------------------------------------------
 BACKEND_BIN_PATH="$(resolve_backend_bin)"
 [[ -d "$DB_PATH" ]] || fail "Content DB not found: $DB_PATH"
-mkdir -p "$COMMENTS_DB_PATH" "$MUSIC_DB_PATH"
+mkdir -p "$COMMENTS_DB_PATH" "$MUSIC_DB_PATH" "$ROOT_DIR/tmp" "$(dirname "$LOG_FILE")"
 
 if [[ ! -f "$FRONTEND_DIST_DIR/index.html" ]]; then
   log "Warning: $FRONTEND_DIST_DIR/index.html not found — SEO pages will use fallback HTML"
@@ -169,6 +175,7 @@ export COMMENT_AI_RESULT_DIR
 export COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS
 
 if [[ "$DAEMON" == "true" ]]; then
+  : > "$LOG_FILE"
   nohup "$BACKEND_BIN_PATH" > "$LOG_FILE" 2>&1 &
   local_pid=$!
   log "Started in background (pid=$local_pid, log=$LOG_FILE)"
@@ -180,6 +187,6 @@ if [[ "$DAEMON" == "true" ]]; then
     fail "Backend exited immediately. Check $LOG_FILE"
   fi
 else
-  log "Starting in foreground (Ctrl+C to stop)..."
+  log "Starting in foreground (Ctrl+C to stop, log=$LOG_FILE)..."
   exec "$BACKEND_BIN_PATH"
 fi

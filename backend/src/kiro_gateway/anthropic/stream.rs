@@ -239,6 +239,7 @@ pub struct StreamContext {
     pub credit_usage: f64,
     pub credit_usage_observed: bool,
     pub tool_block_indices: HashMap<String, i32>,
+    pub tool_name_map: HashMap<String, String>,
     pub thinking_enabled: bool,
     pub thinking_buffer: String,
     pub in_thinking_block: bool,
@@ -253,6 +254,7 @@ impl StreamContext {
         model: impl Into<String>,
         input_tokens: i32,
         thinking_enabled: bool,
+        tool_name_map: HashMap<String, String>,
     ) -> Self {
         Self {
             state_manager: SseStateManager::new(),
@@ -264,6 +266,7 @@ impl StreamContext {
             credit_usage: 0.0,
             credit_usage_observed: false,
             tool_block_indices: HashMap::new(),
+            tool_name_map,
             thinking_enabled,
             thinking_buffer: String::new(),
             in_thinking_block: false,
@@ -356,12 +359,9 @@ impl StreamContext {
                 Vec::new()
             },
             Event::Error {
-                error_code,
-                error_message,
-            } => {
-                tracing::warn!("received kiro error event: {error_code} - {error_message}");
-                Vec::new()
-            },
+                error_code: _,
+                error_message: _,
+            } => Vec::new(),
             Event::Exception {
                 exception_type,
                 message,
@@ -369,7 +369,7 @@ impl StreamContext {
                 if exception_type == "ContentLengthExceededException" {
                     self.state_manager.set_stop_reason("max_tokens");
                 }
-                tracing::warn!("received kiro exception event: {exception_type} - {message}");
+                let _ = message;
                 Vec::new()
             },
             _ => Vec::new(),
@@ -570,11 +570,16 @@ impl StreamContext {
                 .insert(tool_use.tool_use_id.clone(), index);
             index
         };
+        let original_name = self
+            .tool_name_map
+            .get(&tool_use.name)
+            .cloned()
+            .unwrap_or_else(|| tool_use.name.clone());
 
         events.extend(self.state_manager.handle_content_block_start(
             block_index,
             "tool_use",
-            json!({"type":"content_block_start","index":block_index,"content_block":{"type":"tool_use","id":tool_use.tool_use_id,"name":tool_use.name,"input":{}}}),
+            json!({"type":"content_block_start","index":block_index,"content_block":{"type":"tool_use","id":tool_use.tool_use_id,"name":original_name,"input":{}}}),
         ));
         if !tool_use.input.is_empty() {
             self.output_tokens += (tool_use.input.len() as i32 + 3) / 4;
@@ -678,12 +683,14 @@ impl BufferedStreamContext {
         model: impl Into<String>,
         estimated_input_tokens: i32,
         thinking_enabled: bool,
+        tool_name_map: HashMap<String, String>,
     ) -> Self {
         Self {
             inner: StreamContext::new_with_thinking(
                 model,
                 estimated_input_tokens,
                 thinking_enabled,
+                tool_name_map,
             ),
             event_buffer: Vec::new(),
             estimated_input_tokens,
@@ -902,7 +909,7 @@ mod tests {
 
     #[test]
     fn text_delta_after_tool_use_restarts_text_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false, HashMap::new());
         let initial_events = ctx.generate_initial_events();
         assert!(initial_events.iter().any(|event| {
             event.event == "content_block_start" && event.data["content_block"]["type"] == "text"
@@ -943,7 +950,7 @@ mod tests {
 
     #[test]
     fn tool_use_flushes_buffered_text_before_tool_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
         let _ = ctx.generate_initial_events();
 
         let first = ctx.process_assistant_response("有修");
@@ -998,7 +1005,7 @@ mod tests {
 
     #[test]
     fn tool_use_after_thinking_closes_block_and_filters_end_tag() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>abc</thinking>");
@@ -1034,7 +1041,7 @@ mod tests {
 
     #[test]
     fn thinking_strips_leading_newline_across_chunks() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>");
@@ -1048,7 +1055,7 @@ mod tests {
 
     #[test]
     fn thinking_only_sets_max_tokens_stop_reason_and_pads_text() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>\nabc</thinking>");
@@ -1068,7 +1075,7 @@ mod tests {
 
     #[test]
     fn thinking_with_tool_use_keeps_tool_use_stop_reason() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>\nabc</thinking>");
@@ -1089,7 +1096,7 @@ mod tests {
 
     #[test]
     fn buffered_stream_context_rewrites_message_start_input_tokens() {
-        let mut ctx = BufferedStreamContext::new("claude-sonnet-4-6", 123, false);
+        let mut ctx = BufferedStreamContext::new("claude-sonnet-4-6", 123, false, HashMap::new());
         ctx.process_and_buffer(&Event::ContextUsage(ContextUsageEvent {
             context_usage_percentage: 12.5,
         }));
@@ -1107,7 +1114,7 @@ mod tests {
 
     #[test]
     fn message_start_includes_explicit_zero_cache_usage_fields() {
-        let ctx = StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false);
+        let ctx = StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new());
         let event = ctx.create_message_start_event();
         assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(0));
         assert_eq!(event["message"]["usage"]["cache_read_input_tokens"], serde_json::json!(0));
@@ -1115,7 +1122,8 @@ mod tests {
 
     #[test]
     fn metering_event_accumulates_credit_usage() {
-        let mut ctx = StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false);
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new());
         let _ = ctx.process_kiro_event(&Event::Metering(MeteringEvent {
             unit: Some("credit".to_string()),
             _unit_plural: Some("credits".to_string()),
@@ -1127,5 +1135,35 @@ mod tests {
             usage: Some(0.25),
         }));
         assert_eq!(ctx.final_credit_usage(), (Some(0.375), false));
+    }
+
+    #[test]
+    fn tool_use_restores_original_name_from_mapping() {
+        let mut tool_name_map = HashMap::new();
+        tool_name_map.insert(
+            "short_tool_name".to_string(),
+            "tool_name_that_is_much_longer_than_the_kiro_limit_and_should_be_restored".to_string(),
+        );
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false, tool_name_map);
+        let _ = ctx.generate_initial_events();
+
+        let events = ctx.process_tool_use(&ToolUseEvent {
+            name: "short_tool_name".to_string(),
+            tool_use_id: "tool_1".to_string(),
+            input: "{}".to_string(),
+            stop: false,
+        });
+
+        let tool_start = events
+            .iter()
+            .find(|event| {
+                event.event == "content_block_start"
+                    && event.data["content_block"]["type"] == "tool_use"
+            })
+            .expect("tool_use content block should exist");
+        assert_eq!(
+            tool_start.data["content_block"]["name"],
+            "tool_name_that_is_much_longer_than_the_kiro_limit_and_should_be_restored"
+        );
     }
 }
