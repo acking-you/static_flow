@@ -281,6 +281,12 @@ pub struct PatchKiroKeyRequest {
     #[serde(default)]
     pub quota_billable_limit: Option<u64>,
     #[serde(default)]
+    pub route_strategy: Option<String>,
+    #[serde(default)]
+    pub fixed_account_name: Option<String>,
+    #[serde(default)]
+    pub auto_account_names: Option<Vec<String>>,
+    #[serde(default)]
     pub model_name_map: Option<BTreeMap<String, String>>,
 }
 

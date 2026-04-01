@@ -15,7 +15,10 @@ mod wire;
 
 pub mod anthropic;
 
-use std::{collections::BTreeMap, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
 
 use axum::{
     extract::{Path, Query, State},
@@ -286,6 +289,30 @@ pub async fn patch_admin_key(
     }
     if let Some(limit) = request.quota_billable_limit {
         key.quota_billable_limit = limit;
+    }
+    if request.route_strategy.is_some()
+        || request.fixed_account_name.is_some()
+        || request.auto_account_names.is_some()
+    {
+        let existing_account_names = state
+            .kiro_gateway
+            .token_manager
+            .list_auths()
+            .await
+            .map_err(|err| internal_error("Failed to load Kiro accounts", err))?
+            .into_iter()
+            .map(|auth| auth.name)
+            .collect::<BTreeSet<_>>();
+        let (route_strategy, fixed_account_name, auto_account_names) = normalize_key_route_config(
+            request.route_strategy.as_deref(),
+            request.fixed_account_name.as_deref(),
+            request.auto_account_names,
+            &existing_account_names,
+        )
+        .map_err(|err| bad_request(&err.to_string()))?;
+        key.route_strategy = route_strategy;
+        key.fixed_account_name = fixed_account_name;
+        key.auto_account_names = auto_account_names;
     }
     if let Some(model_name_map) = request.model_name_map {
         key.model_name_map = normalize_model_name_map(model_name_map)?;
@@ -876,6 +903,95 @@ fn normalize_name(raw: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)
     Ok(value.to_string())
 }
 
+fn normalize_route_strategy_input(value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(trimmed) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    match trimmed {
+        "auto" | "fixed" => Ok(Some(trimmed.to_string())),
+        _ => anyhow::bail!("route_strategy must be `auto` or `fixed`"),
+    }
+}
+
+fn normalize_optional_account_name_input(value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(trimmed) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    crate::llm_gateway::accounts::validate_account_name(trimmed)
+        .map(Some)
+        .map_err(anyhow::Error::msg)
+}
+
+type NormalizedKiroKeyRouteConfig = (Option<String>, Option<String>, Option<Vec<String>>);
+
+fn normalize_auto_account_names_input(
+    value: Option<Vec<String>>,
+) -> anyhow::Result<Option<Vec<String>>> {
+    let Some(values) = value else {
+        return Ok(None);
+    };
+
+    let mut names = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            crate::llm_gateway::accounts::validate_account_name(&value).map_err(anyhow::Error::msg)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(names))
+}
+
+fn normalize_key_route_config(
+    route_strategy: Option<&str>,
+    fixed_account_name: Option<&str>,
+    auto_account_names: Option<Vec<String>>,
+    existing_account_names: &BTreeSet<String>,
+) -> anyhow::Result<NormalizedKiroKeyRouteConfig> {
+    let route_strategy = normalize_route_strategy_input(route_strategy)?;
+    let fixed_account_name = normalize_optional_account_name_input(fixed_account_name)?;
+    let auto_account_names = normalize_auto_account_names_input(auto_account_names)?;
+
+    match route_strategy.as_deref().unwrap_or("auto") {
+        "fixed" => {
+            let fixed_account_name = fixed_account_name.ok_or_else(|| {
+                anyhow::anyhow!("fixed route_strategy requires fixed_account_name")
+            })?;
+            if !existing_account_names.contains(&fixed_account_name) {
+                anyhow::bail!("unknown account `{fixed_account_name}`");
+            }
+            Ok((Some("fixed".to_string()), Some(fixed_account_name), None))
+        },
+        "auto" => {
+            let filtered_auto_account_names = auto_account_names.map(|names| {
+                names
+                    .into_iter()
+                    .filter(|name| existing_account_names.contains(name))
+                    .collect::<Vec<_>>()
+            });
+            if filtered_auto_account_names
+                .as_ref()
+                .is_some_and(|names| names.is_empty())
+            {
+                anyhow::bail!("none of the configured auto accounts exist anymore");
+            }
+            Ok((
+                Some("auto".to_string()),
+                None,
+                filtered_auto_account_names.filter(|names| !names.is_empty()),
+            ))
+        },
+        _ => anyhow::bail!("route_strategy must be `auto` or `fixed`"),
+    }
+}
+
 fn normalize_status(raw: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     match raw.trim() {
         LLM_GATEWAY_KEY_STATUS_ACTIVE | LLM_GATEWAY_KEY_STATUS_DISABLED => {
@@ -994,9 +1110,9 @@ fn external_origin(headers: &HeaderMap) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    use super::normalize_model_name_map;
+    use super::{normalize_key_route_config, normalize_model_name_map};
 
     #[test]
     fn normalize_model_name_map_drops_identity_entries() {
@@ -1023,5 +1139,67 @@ mod tests {
         )]));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn normalize_key_route_config_keeps_auto_without_subset_as_full_pool() {
+        let existing = BTreeSet::from(["alpha".to_string(), "beta".to_string()]);
+
+        let normalized = normalize_key_route_config(Some("auto"), None, Some(vec![]), &existing)
+            .expect("normalize should succeed");
+
+        assert_eq!(normalized, (Some("auto".to_string()), None, None));
+    }
+
+    #[test]
+    fn normalize_key_route_config_requires_fixed_account_name() {
+        let existing = BTreeSet::from(["alpha".to_string()]);
+
+        let err = normalize_key_route_config(Some("fixed"), None, None, &existing)
+            .expect_err("fixed without account should fail");
+
+        assert!(err
+            .to_string()
+            .contains("fixed route_strategy requires fixed_account_name"));
+    }
+
+    #[test]
+    fn normalize_key_route_config_filters_unknown_auto_accounts() {
+        let existing = BTreeSet::from(["alpha".to_string(), "beta".to_string()]);
+
+        let normalized = normalize_key_route_config(
+            Some("auto"),
+            None,
+            Some(vec![
+                "beta".to_string(),
+                "missing".to_string(),
+                "alpha".to_string(),
+                "beta".to_string(),
+            ]),
+            &existing,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(
+            normalized,
+            (Some("auto".to_string()), None, Some(vec!["alpha".to_string(), "beta".to_string()]),)
+        );
+    }
+
+    #[test]
+    fn normalize_key_route_config_rejects_auto_subset_when_all_accounts_are_unknown() {
+        let existing = BTreeSet::from(["alpha".to_string()]);
+
+        let err = normalize_key_route_config(
+            Some("auto"),
+            None,
+            Some(vec!["missing".to_string()]),
+            &existing,
+        )
+        .expect_err("unknown subset should fail");
+
+        assert!(err
+            .to_string()
+            .contains("none of the configured auto accounts exist anymore"));
     }
 }
