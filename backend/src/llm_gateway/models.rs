@@ -103,7 +103,7 @@ async fn fetch_codex_models(
         );
     }
     let (client, resolved_proxy) = gateway.build_upstream_client(auth_snapshot).await?;
-    let response = client.get(url).headers(headers).send().await;
+    let response = client.get(&url).headers(headers).send().await;
     let response = match response {
         Ok(response) => response,
         Err(err) => {
@@ -124,7 +124,17 @@ async fn fetch_codex_models(
             return Err(err).context("codex models upstream request failed");
         },
     };
-    parse_models_response(response, "codexmanager").await
+    match parse_models_response(response, "codexmanager").await {
+        Ok(parsed) => Ok(parsed),
+        Err(err) => {
+            tracing::error!(
+                upstream_url = %url,
+                error = %err,
+                "codex public models request failed while parsing upstream response"
+            );
+            Err(err)
+        },
+    }
 }
 
 /// Parse the upstream models response and return normalized descriptors plus

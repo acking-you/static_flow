@@ -2729,7 +2729,7 @@ pub async fn proxy_gateway_request(
             .max_request_body_bytes,
     )
     .map_err(|err| internal_error("Invalid llm gateway max request body size", err))?;
-    let prepared = normalize_gateway_request(
+    let prepared = match normalize_gateway_request(
         &gateway_path,
         &query,
         parts.method,
@@ -2737,7 +2737,20 @@ pub async fn proxy_gateway_request(
         body,
         max_request_body_bytes,
     )
-    .await?;
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            tracing::error!(
+                key_id = %key_lease.record.id,
+                key_name = %key_lease.record.name,
+                gateway_path,
+                error = %err.1.0.error,
+                "rejected malformed codex public request before upstream call"
+            );
+            return Err(err);
+        },
+    };
     let prepared = apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark)?;
 
     let response = send_upstream_with_retry(
@@ -3433,6 +3446,22 @@ async fn forward_upstream_response(
         .bytes()
         .await
         .map_err(|err| internal_error("Failed to read llm gateway upstream response", err))?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body_bytes);
+        tracing::error!(
+            key_id = %key_lease.record.id,
+            key_name = %key_lease.record.name,
+            account_name = selected_account_name.as_deref().unwrap_or("legacy"),
+            original_path = %prepared.original_path,
+            upstream_path = %prepared.upstream_path,
+            status = status.as_u16(),
+            content_type = %content_type,
+            model = prepared.model.as_deref().unwrap_or("unknown"),
+            body_len = body_bytes.len(),
+            body_preview = %summarize_upstream_error_body(&body_text),
+            "codex public request returned non-success upstream response"
+        );
+    }
     let usage = if status.is_success() {
         extract_usage_from_bytes(&body_bytes).unwrap_or(UsageBreakdown {
             usage_missing: true,

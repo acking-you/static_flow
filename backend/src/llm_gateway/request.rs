@@ -980,6 +980,13 @@ fn append_assistant_content_to_responses_input(
     Ok(())
 }
 
+fn chat_message_bad_request(
+    index: usize,
+    message: impl AsRef<str>,
+) -> (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>) {
+    bad_request(&format!("chat.completions message {index}: {}", message.as_ref()))
+}
+
 /// Adapt an OpenAI chat/completions request into the upstream responses format.
 fn adapt_openai_chat_completions_request(
     obj: &Map<String, Value>,
@@ -994,46 +1001,80 @@ fn adapt_openai_chat_completions_request(
     let mut instructions_parts = Vec::new();
     let mut input_items = Vec::<Value>::new();
 
-    for message in source_messages {
+    for (index, message) in source_messages.iter().enumerate() {
         let Some(message_obj) = message.as_object() else {
-            continue;
+            return Err(chat_message_bad_request(index, "must be an object"));
         };
         let Some(role) = message_obj.get("role").and_then(Value::as_str) else {
-            continue;
+            return Err(chat_message_bad_request(index, "is missing role"));
         };
         let Some(normalized_role) = normalize_openai_role_for_responses(role) else {
-            continue;
+            return Err(chat_message_bad_request(index, format!("has unsupported role `{role}`")));
         };
         match normalized_role {
             "system" => {
-                if let Some(content) = message_obj.get("content") {
-                    let text = extract_openai_message_content_text(content);
-                    if !text.trim().is_empty() {
-                        instructions_parts.push(text);
-                    }
+                let Some(content) = message_obj.get("content") else {
+                    return Err(chat_message_bad_request(index, "is missing content"));
+                };
+                if !matches!(content, Value::String(_) | Value::Array(_)) {
+                    return Err(chat_message_bad_request(
+                        index,
+                        "content must be a string or array",
+                    ));
                 }
+                let text = extract_openai_message_content_text(content);
+                if text.trim().is_empty() {
+                    return Err(chat_message_bad_request(index, "content is empty or unsupported"));
+                }
+                instructions_parts.push(text);
             },
             "user" => {
-                if let Some(content) = message_obj.get("content") {
-                    let content_items = convert_user_message_content_to_responses_items(content);
-                    if !content_items.is_empty() {
-                        input_items.push(json!({
-                            "type": "message",
-                            "role": "user",
-                            "content": content_items
-                        }));
-                    }
+                let Some(content) = message_obj.get("content") else {
+                    return Err(chat_message_bad_request(index, "is missing content"));
+                };
+                if !matches!(content, Value::String(_) | Value::Array(_)) {
+                    return Err(chat_message_bad_request(
+                        index,
+                        "content must be a string or array",
+                    ));
                 }
+                let content_items = convert_user_message_content_to_responses_items(content);
+                if content_items.is_empty() {
+                    return Err(chat_message_bad_request(index, "content is empty or unsupported"));
+                }
+                input_items.push(json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": content_items
+                }));
             },
             "assistant" => {
+                let mut emitted_content = false;
                 if let Some(content) = message_obj.get("content") {
+                    if !matches!(
+                        content,
+                        Value::String(_) | Value::Array(_) | Value::Object(_) | Value::Null
+                    ) {
+                        return Err(chat_message_bad_request(
+                            index,
+                            "content has unsupported shape",
+                        ));
+                    }
+                    let prior_len = input_items.len();
                     append_assistant_content_to_responses_input(&mut input_items, content)
                         .map_err(|err| bad_request_with_detail("Invalid assistant content", err))?;
+                    emitted_content = input_items.len() > prior_len;
                 }
-                if let Some(tool_calls) = message_obj.get("tool_calls").and_then(Value::as_array) {
+                let mut emitted_tool_call = false;
+                if let Some(raw_tool_calls) = message_obj.get("tool_calls") {
+                    let Some(tool_calls) = raw_tool_calls.as_array() else {
+                        return Err(chat_message_bad_request(index, "tool_calls must be an array"));
+                    };
                     for (index, tool_call) in tool_calls.iter().enumerate() {
                         let Some(tool_obj) = tool_call.as_object() else {
-                            continue;
+                            return Err(bad_request(&format!(
+                                "chat.completions assistant tool_call {index} must be an object"
+                            )));
                         };
                         let call_id = tool_obj
                             .get("id")
@@ -1047,7 +1088,10 @@ fn adapt_openai_chat_completions_request(
                             .map(str::trim)
                             .filter(|value| !value.is_empty())
                         else {
-                            continue;
+                            return Err(bad_request(&format!(
+                                "chat.completions assistant tool_call {index} is missing \
+                                 function.name"
+                            )));
                         };
                         let function_name =
                             shorten_openai_tool_name_with_map(function_name, &tool_name_map);
@@ -1069,7 +1113,11 @@ fn adapt_openai_chat_completions_request(
                             "name": function_name,
                             "arguments": arguments
                         }));
+                        emitted_tool_call = true;
                     }
+                }
+                if !emitted_content && !emitted_tool_call {
+                    return Err(chat_message_bad_request(index, "content is empty or unsupported"));
                 }
             },
             "tool" => {
@@ -1451,5 +1499,52 @@ pub(crate) fn normalize_status(
     match trimmed {
         LLM_GATEWAY_KEY_STATUS_ACTIVE | LLM_GATEWAY_KEY_STATUS_DISABLED => Ok(trimmed.to_string()),
         _ => Err(bad_request("status must be `active` or `disabled`")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    use super::adapt_openai_chat_completions_request;
+
+    #[test]
+    fn adapt_openai_chat_completions_request_rejects_message_without_role() {
+        let obj = json!({
+            "model": "gpt-5.3-codex",
+            "messages": [
+                {
+                    "content": "hello"
+                }
+            ]
+        });
+
+        let err = adapt_openai_chat_completions_request(obj.as_object().unwrap())
+            .expect_err("request without message role should be rejected");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1 .0.error.contains("role"));
+    }
+
+    #[test]
+    fn adapt_openai_chat_completions_request_rejects_user_message_without_supported_content() {
+        let obj = json!({
+            "model": "gpt-5.3-codex",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let err = adapt_openai_chat_completions_request(obj.as_object().unwrap())
+            .expect_err("user message without supported content should be rejected");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1 .0.error.contains("content"));
     }
 }

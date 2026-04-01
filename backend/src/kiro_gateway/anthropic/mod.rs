@@ -187,42 +187,38 @@ fn log_kiro_stream_read_error(
 /// Recognizes context-length, input-length, and quota-exhaustion errors.
 pub(super) fn map_provider_error(err: Error) -> Response {
     let err_text = err.to_string();
-    if err_text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
-        return (
+    let (status, error_type, message) = if err_text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
+        (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
-                "invalid_request_error",
-                "Context window is full. Reduce conversation history, system prompt, or tools.",
-            )),
+            "invalid_request_error",
+            "Context window is full. Reduce conversation history, system prompt, or tools."
+                .to_string(),
         )
-            .into_response();
-    }
-    if err_text.contains("Input is too long") {
-        return (
+    } else if err_text.contains("Input is too long") {
+        (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
-                "invalid_request_error",
-                "Input is too long. Reduce the size of your messages.",
-            )),
+            "invalid_request_error",
+            "Input is too long. Reduce the size of your messages.".to_string(),
         )
-            .into_response();
-    }
-    if err_text.contains("quota exhausted") {
-        return (
+    } else if err_text.contains("quota exhausted") {
+        (
             StatusCode::PAYMENT_REQUIRED,
-            Json(ErrorResponse::new(
-                "rate_limit_error",
-                "All configured Kiro accounts are out of quota. Wait for reset or refresh another \
-                 account.",
-            )),
+            "rate_limit_error",
+            "All configured Kiro accounts are out of quota. Wait for reset or refresh another \
+             account."
+                .to_string(),
         )
-            .into_response();
-    }
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(ErrorResponse::new("api_error", format!("Kiro upstream request failed: {err_text}"))),
-    )
-        .into_response()
+    } else {
+        (StatusCode::BAD_GATEWAY, "api_error", format!("Kiro upstream request failed: {err_text}"))
+    };
+    tracing::error!(
+        status = status.as_u16(),
+        error_type,
+        error = %err,
+        response_message = %message,
+        "kiro public request failed while calling upstream"
+    );
+    (status, Json(ErrorResponse::new(error_type, message))).into_response()
 }
 
 /// Returns the list of available models for the `/v1/models` endpoint.
@@ -360,10 +356,22 @@ async fn handle_messages(
     let conversion = match convert_request(payload) {
         Ok(result) => result,
         Err(err) => {
-            let message = match err {
+            let message = match &err {
                 ConversionError::UnsupportedModel(model) => format!("Unsupported model: {model}"),
                 ConversionError::EmptyMessages => "messages are empty".to_string(),
+                ConversionError::InvalidRequest(message) => message.clone(),
             };
+            tracing::error!(
+                key_id = %key_record.id,
+                key_name = %key_record.name,
+                route = public_path,
+                requested_model = %requested_model,
+                effective_model = %payload.model,
+                stream = payload.stream,
+                buffered_for_cc,
+                error = %message,
+                "rejected malformed kiro public request before upstream call"
+            );
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::new("invalid_request_error", message)),
