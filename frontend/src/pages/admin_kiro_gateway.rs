@@ -170,6 +170,20 @@ fn kiro_key_route_summary(
     }
 }
 
+fn build_kiro_route_patch_fields(
+    route_strategy: &str,
+    fixed_account_name: &str,
+    auto_account_names: &[String],
+) -> (String, String, Vec<String>) {
+    if route_strategy == "fixed" {
+        return ("fixed".to_string(), fixed_account_name.trim().to_string(), Vec::new());
+    }
+    if auto_account_names.is_empty() {
+        return (String::new(), String::new(), Vec::new());
+    }
+    ("auto".to_string(), String::new(), auto_account_names.to_vec())
+}
+
 #[derive(Properties, PartialEq)]
 struct KiroAccountCardProps {
     account: KiroAccountView,
@@ -621,7 +635,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
         let available_account_names = available_account_names.clone();
-        use_effect_with((props.key_item.clone(), available_account_names.clone()), move |_| {
+        use_effect_with(props.key_item.clone(), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
             status.set(key_item.status.clone());
@@ -640,6 +654,22 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 &available_account_names,
             ));
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
+            || ()
+        });
+    }
+
+    {
+        let fixed_account_name = fixed_account_name.clone();
+        let auto_account_names = auto_account_names.clone();
+        use_effect_with(available_account_names.clone(), move |available_account_names| {
+            fixed_account_name.set(sanitize_kiro_fixed_account_name(
+                Some((*fixed_account_name).as_str()),
+                available_account_names,
+            ));
+            auto_account_names.set(sanitize_kiro_auto_account_names(
+                (*auto_account_names).as_slice(),
+                available_account_names,
+            ));
             || ()
         });
     }
@@ -667,6 +697,12 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let route_strategy_value = (*route_strategy).clone();
             let fixed_account_name_value = (*fixed_account_name).clone();
             let auto_account_names_value = (*auto_account_names).clone();
+            let (route_strategy_payload, fixed_account_name_payload, auto_account_names_payload) =
+                build_kiro_route_patch_fields(
+                    &route_strategy_value,
+                    &fixed_account_name_value,
+                    auto_account_names_value.as_slice(),
+                );
             let model_name_map_value = (*model_name_map).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
@@ -689,9 +725,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     status: Some(status_value.trim()),
                     public_visible: None,
                     quota_billable_limit: Some(parsed_quota),
-                    route_strategy: Some(route_strategy_value.trim()),
-                    fixed_account_name: Some(fixed_account_name_value.trim()),
-                    auto_account_names: Some(auto_account_names_value.as_slice()),
+                    route_strategy: Some(route_strategy_payload.as_str()),
+                    fixed_account_name: Some(fixed_account_name_payload.as_str()),
+                    auto_account_names: Some(auto_account_names_payload.as_slice()),
                     model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
@@ -737,6 +773,12 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let route_strategy_value = (*route_strategy).clone();
             let fixed_account_name_value = (*fixed_account_name).clone();
             let auto_account_names_value = (*auto_account_names).clone();
+            let (route_strategy_payload, fixed_account_name_payload, auto_account_names_payload) =
+                build_kiro_route_patch_fields(
+                    &route_strategy_value,
+                    &fixed_account_name_value,
+                    auto_account_names_value.as_slice(),
+                );
             let model_name_map_value = (*model_name_map).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
@@ -759,9 +801,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     status: Some("disabled"),
                     public_visible: None,
                     quota_billable_limit: Some(parsed_quota),
-                    route_strategy: Some(route_strategy_value.trim()),
-                    fixed_account_name: Some(fixed_account_name_value.trim()),
-                    auto_account_names: Some(auto_account_names_value.as_slice()),
+                    route_strategy: Some(route_strategy_payload.as_str()),
+                    fixed_account_name: Some(fixed_account_name_payload.as_str()),
+                    auto_account_names: Some(auto_account_names_payload.as_slice()),
                     model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
@@ -2035,7 +2077,8 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        kiro_key_route_summary, sanitize_kiro_auto_account_names, sanitize_kiro_fixed_account_name,
+        build_kiro_route_patch_fields, kiro_key_route_summary, sanitize_kiro_auto_account_names,
+        sanitize_kiro_fixed_account_name,
     };
 
     #[test]
@@ -2066,5 +2109,14 @@ mod tests {
     fn kiro_key_route_summary_uses_full_pool_text_when_subset_is_empty() {
         let summary = kiro_key_route_summary("auto", "", &[]);
         assert!(summary.contains("全账号池自动择优"));
+    }
+
+    #[test]
+    fn build_kiro_route_patch_fields_uses_default_route_when_auto_subset_is_empty() {
+        let (strategy, fixed_account_name, auto_account_names) =
+            build_kiro_route_patch_fields("auto", "alpha", &[]);
+        assert!(strategy.is_empty());
+        assert!(fixed_account_name.is_empty());
+        assert!(auto_account_names.is_empty());
     }
 }
