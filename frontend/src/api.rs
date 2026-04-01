@@ -4190,6 +4190,74 @@ pub struct LlmGatewayAccessResponse {
     pub generated_at: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct PublicLlmGatewayUsageLookupRequest {
+    pub api_key: String,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct PublicLlmGatewayUsageKeyView {
+    pub name: String,
+    pub provider_type: String,
+    pub quota_billable_limit: u64,
+    pub usage_input_uncached_tokens: u64,
+    pub usage_input_cached_tokens: u64,
+    pub usage_output_tokens: u64,
+    pub usage_billable_tokens: u64,
+    pub usage_credit_total: f64,
+    pub usage_credit_missing_events: u64,
+    pub remaining_billable: i64,
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct PublicLlmGatewayUsageEventView {
+    pub id: String,
+    pub key_name: String,
+    pub account_name: Option<String>,
+    pub request_method: String,
+    pub request_url: String,
+    pub latency_ms: i32,
+    pub endpoint: String,
+    pub model: Option<String>,
+    pub status_code: i32,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct PublicLlmGatewayUsageChartPointView {
+    pub bucket_start_ms: i64,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct PublicLlmGatewayUsageLookupResponse {
+    pub key: PublicLlmGatewayUsageKeyView,
+    pub chart_points: Vec<PublicLlmGatewayUsageChartPointView>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub events: Vec<PublicLlmGatewayUsageEventView>,
+    pub generated_at: i64,
+}
+
 /// One public usage window from the cached Codex limit snapshot.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LlmGatewayRateLimitWindowView {
@@ -4652,6 +4720,105 @@ pub async fn fetch_llm_gateway_access() -> Result<LlmGatewayAccessResponse, Stri
         let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_public_llm_gateway_usage(
+    request: &PublicLlmGatewayUsageLookupRequest,
+) -> Result<PublicLlmGatewayUsageLookupResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(PublicLlmGatewayUsageLookupResponse {
+            key: PublicLlmGatewayUsageKeyView {
+                name: "mock-public-key".to_string(),
+                provider_type: "codex".to_string(),
+                quota_billable_limit: 10_000,
+                usage_input_uncached_tokens: 2_500,
+                usage_input_cached_tokens: 800,
+                usage_output_tokens: 1_700,
+                usage_billable_tokens: 4_200,
+                usage_credit_total: 0.0,
+                usage_credit_missing_events: 0,
+                remaining_billable: 5_800,
+                last_used_at: Some(1_775_000_000_000),
+            },
+            chart_points: (0..24)
+                .map(|index| PublicLlmGatewayUsageChartPointView {
+                    bucket_start_ms: 1_775_000_000_000 - ((23 - index) as i64 * 3_600_000),
+                    tokens: if index % 4 == 0 { 480 } else { 120 + (index as u64 * 13) },
+                })
+                .collect(),
+            total: 2,
+            offset: request.offset.unwrap_or(0),
+            limit: request.limit.unwrap_or(50),
+            has_more: false,
+            events: vec![
+                PublicLlmGatewayUsageEventView {
+                    id: "mock-usage-2".to_string(),
+                    key_name: "mock-public-key".to_string(),
+                    account_name: Some("default".to_string()),
+                    request_method: "POST".to_string(),
+                    request_url: "/api/llm-gateway/v1/responses".to_string(),
+                    latency_ms: 842,
+                    endpoint: "/responses".to_string(),
+                    model: Some("gpt-5.3-codex".to_string()),
+                    status_code: 200,
+                    input_uncached_tokens: 420,
+                    input_cached_tokens: 0,
+                    output_tokens: 156,
+                    billable_tokens: 576,
+                    usage_missing: false,
+                    credit_usage: None,
+                    credit_usage_missing: false,
+                    client_ip: "203.0.113.8".to_string(),
+                    ip_region: "US".to_string(),
+                    created_at: 1_775_000_000_000,
+                },
+                PublicLlmGatewayUsageEventView {
+                    id: "mock-usage-1".to_string(),
+                    key_name: "mock-public-key".to_string(),
+                    account_name: Some("backup".to_string()),
+                    request_method: "POST".to_string(),
+                    request_url: "/api/llm-gateway/v1/responses".to_string(),
+                    latency_ms: 1_204,
+                    endpoint: "/responses".to_string(),
+                    model: Some("gpt-5.3-codex".to_string()),
+                    status_code: 200,
+                    input_uncached_tokens: 310,
+                    input_cached_tokens: 64,
+                    output_tokens: 208,
+                    billable_tokens: 518,
+                    usage_missing: false,
+                    credit_usage: None,
+                    credit_usage_missing: false,
+                    client_ip: "203.0.113.8".to_string(),
+                    ip_region: "US".to_string(),
+                    created_at: 1_774_996_400_000,
+                },
+            ],
+            generated_at: 1_775_000_000_000,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/public-usage/query", API_BASE);
+        let response = api_post(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .json(request)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;

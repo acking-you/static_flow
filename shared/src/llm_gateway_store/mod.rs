@@ -835,6 +835,35 @@ impl LlmGatewayStore {
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Result<Vec<LlmGatewayUsageEventRecord>> {
+        self.query_usage_events_filtered(key_id, provider_type, None, limit, offset)
+            .await
+    }
+
+    /// Queries a raw slice of usage events with an optional lower bound on
+    /// `created_at`.
+    ///
+    /// This is used by public and admin read paths that need a bounded time
+    /// window without scanning the full immutable event history into memory.
+    pub async fn query_usage_events_since(
+        &self,
+        key_id: Option<&str>,
+        provider_type: Option<&str>,
+        created_at_gte: Option<i64>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<LlmGatewayUsageEventRecord>> {
+        self.query_usage_events_filtered(key_id, provider_type, created_at_gte, limit, offset)
+            .await
+    }
+
+    async fn query_usage_events_filtered(
+        &self,
+        key_id: Option<&str>,
+        provider_type: Option<&str>,
+        created_at_gte: Option<i64>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<LlmGatewayUsageEventRecord>> {
         let table = self.usage_events_table().await?;
         let mut query = table
             .query()
@@ -848,6 +877,9 @@ impl LlmGatewayStore {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(|value| format!("provider_type = '{}'", escape_literal(value))),
+            created_at_gte.map(|value| {
+                format!("created_at >= arrow_cast({value}, 'Timestamp(Millisecond, None)')")
+            }),
         ]) {
             query = query.only_if(filter);
         }
@@ -860,6 +892,7 @@ impl LlmGatewayStore {
         tracing::debug!(
             key_id = key_id.unwrap_or("all"),
             provider_type = provider_type.unwrap_or("all"),
+            created_at_gte = created_at_gte.unwrap_or_default(),
             limit = limit.unwrap_or_default(),
             offset = offset.unwrap_or_default(),
             "Querying LLM gateway usage events"
@@ -1695,6 +1728,71 @@ mod tests {
                 .len(),
             1
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn query_usage_events_since_filters_by_created_at_lower_bound() {
+        let dir = temp_store_dir("usage-created-at-lower-bound");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let key = sample_key_record("test-key-created-at", "Created At Key");
+        store.create_key(&key).await.expect("create key");
+
+        let now = now_ms();
+        let base_event = LlmGatewayUsageEventRecord {
+            id: "evt-created-at-1".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 25,
+            endpoint: "/responses".to_string(),
+            model: Some("gpt-5.3-codex".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 3,
+            output_tokens: 5,
+            billable_tokens: 15,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            created_at: now - 10_000,
+        };
+        store
+            .append_usage_event(&base_event)
+            .await
+            .expect("append older event");
+        store
+            .append_usage_event(&LlmGatewayUsageEventRecord {
+                id: "evt-created-at-2".to_string(),
+                created_at: now - 1_000,
+                ..base_event.clone()
+            })
+            .await
+            .expect("append newer event");
+
+        let filtered = store
+            .query_usage_events_since(
+                Some(&key.id),
+                Some(LLM_GATEWAY_PROVIDER_CODEX),
+                Some(now - 5_000),
+                None,
+                None,
+            )
+            .await
+            .expect("query filtered events");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "evt-created-at-2");
 
         let _ = fs::remove_dir_all(&dir);
     }

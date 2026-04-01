@@ -92,6 +92,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/llm-gateway/status", get(llm_gateway::get_public_rate_limit_status))
         .route(
+            "/api/llm-gateway/public-usage/query",
+            post(llm_gateway::lookup_public_usage),
+        )
+        .route(
             "/api/llm-gateway/support-config",
             get(llm_gateway::get_public_support_config),
         )

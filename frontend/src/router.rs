@@ -105,6 +105,13 @@ pub enum Route {
     LlmAccess,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/llm-access/usage")]
+    LlmAccessUsage,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/llm-access/usage")]
+    LlmAccessUsage,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/kiro-access")]
     KiroAccess,
     #[cfg(feature = "mock")]
@@ -227,6 +234,7 @@ fn switch(route: Route) -> Html {
         Route::Search => html! { <pages::search::SearchPage /> },
         Route::LlmAccessGuide => html! { <pages::llm_access_guide::LlmAccessGuidePage /> },
         Route::LlmAccess => html! { <pages::llm_access::LlmAccessPage /> },
+        Route::LlmAccessUsage => html! { <pages::llm_access_usage::LlmAccessUsagePage /> },
         Route::KiroAccess => html! { <pages::kiro_access::KiroAccessPage /> },
         Route::Admin => html! { <pages::admin::AdminPage /> },
         Route::AdminLlmGateway => html! { <pages::admin_llm_gateway::AdminLlmGatewayPage /> },

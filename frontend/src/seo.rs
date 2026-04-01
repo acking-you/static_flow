@@ -286,6 +286,7 @@ fn route_path_for(route: &Route) -> String {
         Route::Search => config::route_path("/search"),
         Route::LlmAccessGuide => config::route_path("/llm-access/help"),
         Route::LlmAccess => config::route_path("/llm-access"),
+        Route::LlmAccessUsage => config::route_path("/llm-access/usage"),
         Route::KiroAccess => config::route_path("/kiro-access"),
         Route::Admin => config::route_path("/admin"),
         Route::AdminLlmGateway => config::route_path("/admin/llm-gateway"),
@@ -575,6 +576,18 @@ pub fn apply_route_seo(route: Option<&Route>) {
             apply_common_seo(
                 "LLM Access · StaticFlow",
                 "查看当前公开可用的免费 API key 与 /v1 接入入口",
+                &canonical_url,
+                "website",
+                "index,follow",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::LlmAccessUsage => {
+            apply_common_seo(
+                "LLM Usage Lookup · StaticFlow",
+                "通过公开 gateway key 查询总额度、最近 24 小时 token 趋势与分页 usage 日志。",
                 &canonical_url,
                 "website",
                 "index,follow",

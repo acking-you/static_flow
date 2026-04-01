@@ -17,6 +17,7 @@ pub mod latest_articles;
 pub mod llm_access;
 pub mod llm_access_guide;
 pub(crate) mod llm_access_shared;
+pub mod llm_access_usage;
 pub mod music_library;
 pub mod music_player;
 pub mod not_found;

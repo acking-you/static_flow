@@ -18,5 +18,6 @@ pub mod stats_card;
 pub mod synced_lyrics;
 pub mod theme_toggle;
 pub mod toc_button;
+pub mod token_usage_trend_chart;
 pub mod tooltip;
 pub mod view_trend_chart;

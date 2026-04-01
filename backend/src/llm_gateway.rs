@@ -88,7 +88,9 @@ use self::{
         PatchAdminUpstreamProxyConfigRequest, PatchLlmGatewayKeyRequest, PreparedGatewayRequest,
         PublicLlmGatewayAccountContributionView, PublicLlmGatewayAccountContributionsResponse,
         PublicLlmGatewaySponsorView, PublicLlmGatewaySponsorsResponse,
-        SubmitLlmGatewayAccountContributionRequest,
+        PublicLlmGatewayUsageChartPointView, PublicLlmGatewayUsageEventView,
+        PublicLlmGatewayUsageKeyView, PublicLlmGatewayUsageLookupRequest,
+        PublicLlmGatewayUsageLookupResponse, SubmitLlmGatewayAccountContributionRequest,
         SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewaySponsorRequest,
         SubmitLlmGatewaySponsorRequestResponse, SubmitLlmGatewayTokenRequest,
         SubmitLlmGatewayTokenRequestResponse, UpdateAdminUpstreamProxyBindingRequest,
@@ -140,6 +142,10 @@ const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
 const MAX_PUBLIC_SPONSOR_MESSAGE_CHARS: usize = 4000;
 const MAX_PUBLIC_SPONSOR_DISPLAY_NAME_CHARS: usize = 80;
 const MAX_PUBLIC_SPONSORS: usize = 36;
+const PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT: usize = 50;
+const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 200;
+const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
+const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
 pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
@@ -917,6 +923,85 @@ pub async fn list_admin_usage_events(
             .collect(),
         generated_at: now_ms(),
     }))
+}
+
+pub async fn lookup_public_usage(
+    State(state): State<AppState>,
+    Json(request): Json<PublicLlmGatewayUsageLookupRequest>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let presented_key = request.api_key.trim();
+    if presented_key.is_empty() {
+        return Err(bad_request("api_key is required"));
+    }
+
+    let key_hash = sha256_hex(presented_key.as_bytes());
+    let key = state
+        .llm_gateway_store
+        .get_key_by_hash(&key_hash)
+        .await
+        .map_err(|err| internal_error("Failed to look up public gateway key", err))?
+        .ok_or_else(public_usage_lookup_not_found)?;
+    let effective_key = state.llm_gateway.overlay_key_usage(&key).await;
+    validate_public_usage_lookup_key(&effective_key)?;
+
+    let offset = request.offset.unwrap_or(0);
+    let limit = request
+        .limit
+        .unwrap_or(PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT)
+        .clamp(1, PUBLIC_USAGE_LOOKUP_MAX_LIMIT);
+    let total = state
+        .llm_gateway_store
+        .count_usage_events(Some(&effective_key.id))
+        .await
+        .map_err(|err| internal_error("Failed to count public gateway usage events", err))?;
+
+    let now_ms = now_ms();
+    let chart_start_ms = public_usage_chart_window_start(now_ms);
+    let chart_events = state
+        .llm_gateway_store
+        .query_usage_events_since(Some(&effective_key.id), None, Some(chart_start_ms), None, None)
+        .await
+        .map_err(|err| internal_error("Failed to query public gateway usage chart events", err))?;
+
+    let (events, has_more) = if total == 0 || offset >= total {
+        (Vec::new(), false)
+    } else {
+        let fetch_count = (total - offset).min(limit);
+        let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
+        let mut events = state
+            .llm_gateway_store
+            .query_usage_events(
+                Some(&effective_key.id),
+                None,
+                Some(fetch_count),
+                Some(reverse_offset),
+            )
+            .await
+            .map_err(|err| internal_error("Failed to query public gateway usage events", err))?;
+        events.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        let has_more = offset.saturating_add(events.len()) < total;
+        (events, has_more)
+    };
+
+    let payload = PublicLlmGatewayUsageLookupResponse {
+        key: PublicLlmGatewayUsageKeyView::from(&effective_key),
+        chart_points: build_public_usage_chart_points(&chart_events, now_ms),
+        total,
+        offset,
+        limit,
+        has_more,
+        events: events
+            .iter()
+            .map(PublicLlmGatewayUsageEventView::from)
+            .collect(),
+        generated_at: now_ms,
+    };
+
+    json_no_store_response(
+        &payload,
+        "Failed to encode public gateway usage lookup response",
+        "Failed to build public gateway usage lookup response",
+    )
 }
 
 /// Accept a public token wish from `/llm-access`; actual key creation only
@@ -3766,6 +3851,78 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
+fn validate_public_usage_lookup_key(
+    key: &LlmGatewayKeyRecord,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if key.status != LLM_GATEWAY_KEY_STATUS_ACTIVE || !key.public_visible {
+        return Err(public_usage_lookup_not_found());
+    }
+    Ok(())
+}
+
+fn public_usage_lookup_not_found() -> (StatusCode, Json<ErrorResponse>) {
+    not_found("queryable key not found")
+}
+
+fn public_usage_chart_window_start(now_ms: i64) -> i64 {
+    let aligned_now =
+        now_ms.div_euclid(PUBLIC_USAGE_LOOKUP_BUCKET_MS) * PUBLIC_USAGE_LOOKUP_BUCKET_MS;
+    aligned_now.saturating_sub(
+        (PUBLIC_USAGE_LOOKUP_CHART_BUCKETS.saturating_sub(1) as i64)
+            .saturating_mul(PUBLIC_USAGE_LOOKUP_BUCKET_MS),
+    )
+}
+
+fn build_public_usage_chart_points(
+    events: &[LlmGatewayUsageEventRecord],
+    now_ms: i64,
+) -> Vec<PublicLlmGatewayUsageChartPointView> {
+    let start_ms = public_usage_chart_window_start(now_ms);
+    let mut buckets = vec![0_u64; PUBLIC_USAGE_LOOKUP_CHART_BUCKETS];
+
+    for event in events {
+        if event.created_at < start_ms {
+            continue;
+        }
+        let bucket_index = event
+            .created_at
+            .saturating_sub(start_ms)
+            .div_euclid(PUBLIC_USAGE_LOOKUP_BUCKET_MS);
+        if let Ok(bucket_index) = usize::try_from(bucket_index) {
+            if bucket_index < PUBLIC_USAGE_LOOKUP_CHART_BUCKETS {
+                buckets[bucket_index] = buckets[bucket_index]
+                    .saturating_add(event.input_uncached_tokens)
+                    .saturating_add(event.output_tokens);
+            }
+        }
+    }
+
+    buckets
+        .into_iter()
+        .enumerate()
+        .map(|(index, tokens)| PublicLlmGatewayUsageChartPointView {
+            bucket_start_ms: start_ms
+                .saturating_add((index as i64).saturating_mul(PUBLIC_USAGE_LOOKUP_BUCKET_MS)),
+            tokens,
+        })
+        .collect()
+}
+
+fn json_no_store_response<T: serde::Serialize>(
+    payload: &T,
+    encode_error_message: &str,
+    build_error_message: &str,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let body =
+        serde_json::to_vec(payload).map_err(|err| internal_error(encode_error_message, err))?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .map_err(|err| internal_error(build_error_message, err))
+}
+
 /// Build a standardized 400 error payload.
 fn bad_request(message: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -4158,4 +4315,127 @@ pub async fn remove_account(
     }
     tracing::info!(account = name, "Removed Codex account from gateway pool");
     Ok(Json(json!({ "deleted": true, "name": name })))
+}
+
+#[cfg(test)]
+mod tests {
+    use static_flow_shared::llm_gateway_store::{
+        now_ms, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+    };
+
+    use super::*;
+
+    fn sample_public_lookup_key() -> LlmGatewayKeyRecord {
+        let now = now_ms();
+        LlmGatewayKeyRecord {
+            id: "key-public-lookup".to_string(),
+            name: "Public Lookup Key".to_string(),
+            secret: "sfk_example".to_string(),
+            key_hash: "hash".to_string(),
+            status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            protocol_family: LLM_GATEWAY_PROTOCOL_OPENAI.to_string(),
+            public_visible: true,
+            quota_billable_limit: 10_000,
+            usage_input_uncached_tokens: 1_000,
+            usage_input_cached_tokens: 500,
+            usage_output_tokens: 700,
+            usage_billable_tokens: 1_700,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: Some(now),
+            created_at: now,
+            updated_at: now,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        }
+    }
+
+    fn sample_usage_event(id: &str, created_at: i64) -> LlmGatewayUsageEventRecord {
+        LlmGatewayUsageEventRecord {
+            id: id.to_string(),
+            key_id: "key-public-lookup".to_string(),
+            key_name: "Public Lookup Key".to_string(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 120,
+            endpoint: "/responses".to_string(),
+            model: Some("gpt-5.3-codex".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 0,
+            input_cached_tokens: 0,
+            output_tokens: 0,
+            billable_tokens: 0,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("secret".to_string()),
+            created_at,
+        }
+    }
+
+    #[test]
+    fn build_public_usage_chart_points_uses_uncached_input_and_output_only() {
+        let now_ms = 1_710_004_500_000;
+        let start_ms = public_usage_chart_window_start(now_ms);
+
+        let mut first_bucket = sample_usage_event("evt-1", start_ms + 10_000);
+        first_bucket.input_uncached_tokens = 100;
+        first_bucket.input_cached_tokens = 999;
+        first_bucket.output_tokens = 40;
+        first_bucket.billable_tokens = 1_139;
+
+        let mut last_bucket = sample_usage_event(
+            "evt-2",
+            start_ms
+                + ((PUBLIC_USAGE_LOOKUP_CHART_BUCKETS - 1) as i64 * PUBLIC_USAGE_LOOKUP_BUCKET_MS)
+                + 30_000,
+        );
+        last_bucket.input_uncached_tokens = 25;
+        last_bucket.input_cached_tokens = 500;
+        last_bucket.output_tokens = 5;
+        last_bucket.billable_tokens = 530;
+
+        let mut ignored_old = sample_usage_event("evt-3", start_ms - 1);
+        ignored_old.input_uncached_tokens = 10_000;
+        ignored_old.output_tokens = 10_000;
+
+        let points =
+            build_public_usage_chart_points(&[first_bucket, last_bucket, ignored_old], now_ms);
+
+        assert_eq!(points.len(), PUBLIC_USAGE_LOOKUP_CHART_BUCKETS);
+        assert_eq!(points[0].bucket_start_ms, start_ms);
+        assert_eq!(points[0].tokens, 140);
+        assert_eq!(points[1].tokens, 0);
+        assert_eq!(points[PUBLIC_USAGE_LOOKUP_CHART_BUCKETS - 1].tokens, 30);
+    }
+
+    #[test]
+    fn validate_public_usage_lookup_key_rejects_non_public_or_disabled_keys() {
+        let active_public = sample_public_lookup_key();
+        assert!(validate_public_usage_lookup_key(&active_public).is_ok());
+
+        let mut disabled = active_public.clone();
+        disabled.status = LLM_GATEWAY_KEY_STATUS_DISABLED.to_string();
+        let disabled_err = validate_public_usage_lookup_key(&disabled)
+            .expect_err("disabled keys must not be queryable");
+        assert_eq!(disabled_err.0, StatusCode::NOT_FOUND);
+        assert_eq!(disabled_err.1.error, "queryable key not found");
+
+        let mut hidden = active_public;
+        hidden.public_visible = false;
+        let hidden_err = validate_public_usage_lookup_key(&hidden)
+            .expect_err("hidden keys must not be queryable");
+        assert_eq!(hidden_err.0, StatusCode::NOT_FOUND);
+        assert_eq!(hidden_err.1.error, "queryable key not found");
+    }
 }

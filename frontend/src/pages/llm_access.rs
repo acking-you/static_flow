@@ -1123,6 +1123,10 @@ pub fn llm_access_page() -> Html {
                                         <i class="fas fa-book"></i>
                                         { "接入帮助" }
                                     </Link<Route>>
+                                    <Link<Route> to={Route::LlmAccessUsage} classes={classes!("btn-terminal")}>
+                                        <i class="fas fa-chart-line"></i>
+                                        { "Key 查询" }
+                                    </Link<Route>>
                                     <Link<Route> to={Route::KiroAccess} classes={classes!("btn-terminal")}>
                                         <i class="fas fa-bolt"></i>
                                         { "Kiro" }
@@ -1144,6 +1148,21 @@ pub fn llm_access_page() -> Html {
                             <Link<Route> to={Route::ArticleDetail { id: REMOTE_COMPACT_ARTICLE_ID.to_string() }} classes={classes!("underline", "text-[var(--primary)]")}>
                                 { "深潜文章" }
                             </Link<Route>>
+                        </div>
+
+                        <div class={classes!("mt-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div>
+                                    <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-[0.12em]", "text-[var(--muted)]")}>{ "Key Usage Lookup" }</div>
+                                    <p class={classes!("mt-2", "mb-0", "text-sm", "leading-7", "text-[var(--muted)]")}>
+                                        { "如果你想查询某个公开 key 自己的总额度、最近 24 小时 token 用量和完整 usage 日志，可以直接进入独立查询页。" }
+                                    </p>
+                                </div>
+                                <Link<Route> to={Route::LlmAccessUsage} classes={classes!("btn-terminal", "btn-terminal-primary")}>
+                                    <i class="fas fa-arrow-up-right-from-square"></i>
+                                    { "打开查询页" }
+                                </Link<Route>>
+                            </div>
                         </div>
 
                         // Open source promotion
