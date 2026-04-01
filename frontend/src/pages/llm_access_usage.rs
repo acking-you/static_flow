@@ -153,7 +153,7 @@ pub fn llm_access_usage_page() -> Html {
                             </span>
                         </div>
                         <p class={classes!("mt-3", "mb-0", "max-w-3xl", "text-sm", "leading-7", "text-[var(--muted)]")}>
-                            { "输入你的公开 gateway key 后，可以查看该 key 的总额度、分页 usage 日志，以及最近 24 小时 token 用量趋势。" }
+                            { "输入你的 gateway key 后，可以查看该 key 的总额度、分页 usage 日志，以及最近 24 小时 token 用量趋势。" }
                         </p>
                     </div>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>

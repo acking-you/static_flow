@@ -587,7 +587,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         Route::LlmAccessUsage => {
             apply_common_seo(
                 "LLM Usage Lookup · StaticFlow",
-                "通过公开 gateway key 查询总额度、最近 24 小时 token 趋势与分页 usage 日志。",
+                "通过 gateway key 查询总额度、最近 24 小时 token 趋势与分页 usage 日志。",
                 &canonical_url,
                 "website",
                 "index,follow",

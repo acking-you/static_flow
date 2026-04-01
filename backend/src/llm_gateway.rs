@@ -3854,7 +3854,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn validate_public_usage_lookup_key(
     key: &LlmGatewayKeyRecord,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if key.status != LLM_GATEWAY_KEY_STATUS_ACTIVE || !key.public_visible {
+    if key.status != LLM_GATEWAY_KEY_STATUS_ACTIVE {
         return Err(public_usage_lookup_not_found());
     }
     Ok(())
@@ -4420,7 +4420,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_public_usage_lookup_key_rejects_non_public_or_disabled_keys() {
+    fn validate_public_usage_lookup_key_allows_private_active_keys() {
         let active_public = sample_public_lookup_key();
         assert!(validate_public_usage_lookup_key(&active_public).is_ok());
 
@@ -4433,9 +4433,9 @@ mod tests {
 
         let mut hidden = active_public;
         hidden.public_visible = false;
-        let hidden_err = validate_public_usage_lookup_key(&hidden)
-            .expect_err("hidden keys must not be queryable");
-        assert_eq!(hidden_err.0, StatusCode::NOT_FOUND);
-        assert_eq!(hidden_err.1.error, "queryable key not found");
+        assert!(
+            validate_public_usage_lookup_key(&hidden).is_ok(),
+            "private active keys should still be queryable by secret"
+        );
     }
 }
