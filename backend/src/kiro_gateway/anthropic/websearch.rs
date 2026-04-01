@@ -313,6 +313,8 @@ fn should_propagate_mcp_error(err: &anyhow::Error) -> bool {
         || err_text.contains("Missing API key")
         || err_text.contains("fixed route account ")
         || err_text.contains("no configured auto accounts are available")
+        || err_text.contains("fixed route_strategy requires fixed_account_name")
+        || err_text.contains("unsupported route strategy")
 }
 
 fn estimate_output_tokens(summary: &str) -> i32 {
@@ -638,6 +640,18 @@ mod tests {
     #[test]
     fn websearch_route_related_auto_subset_error_should_be_propagated() {
         let err = anyhow::anyhow!("no configured auto accounts are available");
+        assert!(should_propagate_mcp_error(&err));
+    }
+
+    #[test]
+    fn websearch_route_strategy_requires_fixed_account_error_should_be_propagated() {
+        let err = anyhow::anyhow!("fixed route_strategy requires fixed_account_name");
+        assert!(should_propagate_mcp_error(&err));
+    }
+
+    #[test]
+    fn websearch_unsupported_route_strategy_error_should_be_propagated() {
+        let err = anyhow::anyhow!("unsupported route strategy `none`");
         assert!(should_propagate_mcp_error(&err));
     }
 
