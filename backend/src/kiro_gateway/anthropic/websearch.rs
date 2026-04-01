@@ -311,6 +311,8 @@ fn should_propagate_mcp_error(err: &anyhow::Error) -> bool {
     err_text.contains("quota exhausted")
         || err_text.contains("no kiro account available")
         || err_text.contains("Missing API key")
+        || err_text.contains("fixed route account ")
+        || err_text.contains("no configured auto accounts are available")
 }
 
 fn estimate_output_tokens(summary: &str) -> i32 {
@@ -625,5 +627,23 @@ mod tests {
             }]),
         );
         assert_eq!(extract_search_query(&req).as_deref(), Some("static flow kiro"));
+    }
+
+    #[test]
+    fn websearch_route_related_fixed_error_should_be_propagated() {
+        let err = anyhow::anyhow!("fixed route account `alpha` is not available");
+        assert!(should_propagate_mcp_error(&err));
+    }
+
+    #[test]
+    fn websearch_route_related_auto_subset_error_should_be_propagated() {
+        let err = anyhow::anyhow!("no configured auto accounts are available");
+        assert!(should_propagate_mcp_error(&err));
+    }
+
+    #[test]
+    fn websearch_non_route_error_should_fallback() {
+        let err = anyhow::anyhow!("MCP error: -1 - temporary endpoint issue");
+        assert!(!should_propagate_mcp_error(&err));
     }
 }
