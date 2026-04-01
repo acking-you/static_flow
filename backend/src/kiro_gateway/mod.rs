@@ -959,8 +959,8 @@ fn normalize_key_route_config(
     let fixed_account_name = normalize_optional_account_name_input(fixed_account_name)?;
     let auto_account_names = normalize_auto_account_names_input(auto_account_names)?;
 
-    match route_strategy.as_deref().unwrap_or("auto") {
-        "fixed" => {
+    match route_strategy.as_deref() {
+        Some("fixed") => {
             let fixed_account_name = fixed_account_name.ok_or_else(|| {
                 anyhow::anyhow!("fixed route_strategy requires fixed_account_name")
             })?;
@@ -969,7 +969,7 @@ fn normalize_key_route_config(
             }
             Ok((Some("fixed".to_string()), Some(fixed_account_name), None))
         },
-        "auto" => {
+        Some("auto") => {
             let filtered_auto_account_names = auto_account_names.map(|names| {
                 names
                     .into_iter()
@@ -984,6 +984,25 @@ fn normalize_key_route_config(
             }
             Ok((
                 Some("auto".to_string()),
+                None,
+                filtered_auto_account_names.filter(|names| !names.is_empty()),
+            ))
+        },
+        None => {
+            let filtered_auto_account_names = auto_account_names.map(|names| {
+                names
+                    .into_iter()
+                    .filter(|name| existing_account_names.contains(name))
+                    .collect::<Vec<_>>()
+            });
+            if filtered_auto_account_names
+                .as_ref()
+                .is_some_and(|names| names.is_empty())
+            {
+                anyhow::bail!("none of the configured auto accounts exist anymore");
+            }
+            Ok((
+                None,
                 None,
                 filtered_auto_account_names.filter(|names| !names.is_empty()),
             ))
@@ -1201,5 +1220,15 @@ mod tests {
         assert!(err
             .to_string()
             .contains("none of the configured auto accounts exist anymore"));
+    }
+
+    #[test]
+    fn normalize_key_route_config_empty_strategy_normalizes_to_none() {
+        let existing = BTreeSet::from(["alpha".to_string()]);
+
+        let normalized = normalize_key_route_config(Some(""), None, None, &existing)
+            .expect("normalize should succeed");
+
+        assert_eq!(normalized, (None, None, None));
     }
 }
