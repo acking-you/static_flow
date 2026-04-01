@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use reqwest::header::HeaderValue as ReqwestHeaderValue;
 use serde::Deserialize;
 use static_flow_shared::llm_gateway_store::{
@@ -20,7 +20,7 @@ use static_flow_shared::llm_gateway_store::{
     LlmGatewayUsageEventRecord,
 };
 use tokio::{
-    sync::{mpsc, watch, RwLock},
+    sync::{mpsc, watch, RwLock as AsyncRwLock},
     time::MissedTickBehavior,
 };
 
@@ -41,13 +41,13 @@ const USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 2;
 #[derive(Clone)]
 pub struct LlmGatewayRuntimeState {
     pub(crate) store: Arc<LlmGatewayStore>,
-    pub(crate) runtime_config: Arc<tokio::sync::RwLock<LlmGatewayRuntimeConfig>>,
+    pub(crate) runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
     pub(crate) auth_source: Arc<CodexAuthSource>,
     pub(crate) account_pool: Arc<AccountPool>,
     pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     pub(crate) key_cache: Arc<LlmGatewayKeyCache>,
     pub(crate) request_scheduler: Arc<LlmGatewayKeyRequestScheduler>,
-    pub(crate) rate_limit_status: Arc<tokio::sync::RwLock<LlmGatewayRateLimitStatusResponse>>,
+    pub(crate) rate_limit_status: Arc<RwLock<LlmGatewayRateLimitStatusResponse>>,
     /// In-memory per-key usage rollups aggregated from usage events.
     /// Rebuilt on startup and incrementally updated on each new event.
     pub(crate) usage_rollups: Arc<RwLock<HashMap<String, LlmGatewayKeyUsageRollupRecord>>>,
@@ -58,7 +58,7 @@ impl LlmGatewayRuntimeState {
     /// Construct the shared runtime state used by all LLM gateway requests.
     pub fn new(
         store: Arc<LlmGatewayStore>,
-        runtime_config: Arc<tokio::sync::RwLock<LlmGatewayRuntimeConfig>>,
+        runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
         account_pool: Arc<AccountPool>,
         upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
         shutdown_rx: watch::Receiver<bool>,
@@ -74,17 +74,15 @@ impl LlmGatewayRuntimeState {
             upstream_proxy_registry,
             key_cache: Arc::new(LlmGatewayKeyCache::new()),
             request_scheduler: Arc::new(LlmGatewayKeyRequestScheduler::new()),
-            rate_limit_status: Arc::new(tokio::sync::RwLock::new(
-                LlmGatewayRateLimitStatusResponse {
-                    status: "loading".to_string(),
-                    refresh_interval_seconds: 60,
-                    last_checked_at: None,
-                    last_success_at: None,
-                    source_url: String::new(),
-                    error_message: None,
-                    buckets: Vec::new(),
-                },
-            )),
+            rate_limit_status: Arc::new(RwLock::new(LlmGatewayRateLimitStatusResponse {
+                status: "loading".to_string(),
+                refresh_interval_seconds: 60,
+                last_checked_at: None,
+                last_success_at: None,
+                source_url: String::new(),
+                error_message: None,
+                buckets: Vec::new(),
+            })),
             usage_rollups: Arc::new(RwLock::new(HashMap::new())),
             usage_event_tx,
         })
@@ -117,7 +115,7 @@ impl LlmGatewayRuntimeState {
             .into_iter()
             .map(|row| (row.key_id.clone(), row))
             .collect::<HashMap<_, _>>();
-        *self.usage_rollups.write().await = rollups;
+        *self.usage_rollups.write() = rollups;
         tracing::info!(key_count, "rebuilt in-memory llm gateway usage rollups from usage events");
         Ok(())
     }
@@ -125,7 +123,7 @@ impl LlmGatewayRuntimeState {
     /// Return a copy of `key` with `usage_*` fields replaced by the
     /// in-memory rollup totals.
     pub(crate) async fn overlay_key_usage(&self, key: &LlmGatewayKeyRecord) -> LlmGatewayKeyRecord {
-        let rollups = self.usage_rollups.read().await;
+        let rollups = self.usage_rollups.read();
         apply_usage_rollup(key, rollups.get(&key.id))
     }
 
@@ -134,7 +132,7 @@ impl LlmGatewayRuntimeState {
         &self,
         keys: &[LlmGatewayKeyRecord],
     ) -> Vec<LlmGatewayKeyRecord> {
-        let rollups = self.usage_rollups.read().await;
+        let rollups = self.usage_rollups.read();
         keys.iter()
             .map(|key| apply_usage_rollup(key, rollups.get(&key.id)))
             .collect()
@@ -153,7 +151,7 @@ impl LlmGatewayRuntimeState {
             .await
             .context("failed to enqueue llm gateway usage event")?;
         let updated = {
-            let mut rollups = self.usage_rollups.write().await;
+            let mut rollups = self.usage_rollups.write();
             let rollup = rollups.entry(event.key_id.clone()).or_insert_with(|| {
                 LlmGatewayKeyUsageRollupRecord {
                     key_id: event.key_id.clone(),
@@ -494,7 +492,7 @@ struct CodexAuthTokens {
 /// File-backed auth source with mtime-based hot reload.
 pub(crate) struct CodexAuthSource {
     path: PathBuf,
-    cached: tokio::sync::RwLock<Option<CodexAuthSnapshot>>,
+    cached: AsyncRwLock<Option<CodexAuthSnapshot>>,
 }
 
 impl CodexAuthSource {
@@ -502,7 +500,7 @@ impl CodexAuthSource {
     pub(crate) fn new() -> Self {
         Self {
             path: codex_auth_path(),
-            cached: tokio::sync::RwLock::new(None),
+            cached: AsyncRwLock::new(None),
         }
     }
 
@@ -721,7 +719,7 @@ impl Ord for ExpiringLease {
 
 /// Read the live auth-cache TTL from the shared gateway runtime state.
 pub(crate) async fn gateway_auth_cache_ttl(gateway: &LlmGatewayRuntimeState) -> u64 {
-    gateway.runtime_config.read().await.auth_cache_ttl_seconds
+    gateway.runtime_config.read().auth_cache_ttl_seconds
 }
 
 /// Build a reqwest bearer Authorization header value.

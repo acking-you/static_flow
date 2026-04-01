@@ -5988,6 +5988,7 @@ pub async fn fetch_admin_llm_gateway_usage_events(
 // === Account pool management ===
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
 pub struct AccountSummaryView {
     pub name: String,
     pub status: String,
@@ -6002,9 +6003,36 @@ pub struct AccountSummaryView {
     pub effective_proxy_url: Option<String>,
     pub effective_proxy_config_name: Option<String>,
     pub last_refresh: Option<i64>,
+    pub last_usage_checked_at: Option<i64>,
+    pub last_usage_success_at: Option<i64>,
+    pub usage_error_message: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+impl Default for AccountSummaryView {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            status: String::new(),
+            account_id: None,
+            plan_type: None,
+            primary_remaining_percent: None,
+            secondary_remaining_percent: None,
+            map_gpt53_codex_to_spark: false,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "binding".to_string(),
+            effective_proxy_url: None,
+            effective_proxy_config_name: None,
+            last_refresh: None,
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct AccountListResponse {
     pub accounts: Vec<AccountSummaryView>,
     pub generated_at: i64,
@@ -6060,6 +6088,9 @@ pub async fn import_admin_llm_gateway_account(
             effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
             effective_proxy_config_name: None,
             last_refresh: None,
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
         })
     }
 
@@ -6146,6 +6177,9 @@ pub async fn patch_admin_llm_gateway_account(
             effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
             effective_proxy_config_name: None,
             last_refresh: None,
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
         })
     }
 
@@ -6156,6 +6190,51 @@ pub async fn patch_admin_llm_gateway_account(
         let response = api_patch(&url)
             .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn refresh_admin_llm_gateway_account(name: &str) -> Result<AccountSummaryView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AccountSummaryView {
+            name: name.to_string(),
+            status: "active".to_string(),
+            account_id: None,
+            plan_type: Some("Pro".to_string()),
+            primary_remaining_percent: Some(100.0),
+            secondary_remaining_percent: Some(100.0),
+            map_gpt53_codex_to_spark: false,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "binding".to_string(),
+            effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
+            effective_proxy_config_name: None,
+            last_refresh: None,
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/accounts/{}/refresh",
+            admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_post(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;

@@ -12,13 +12,13 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use parking_lot::RwLock;
 use reqwest::Proxy;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::llm_gateway_store::{
     now_ms, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayStore,
     LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
 };
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::kiro_gateway::auth_file::{
@@ -234,8 +234,8 @@ impl UpstreamProxyRegistry {
                 .map(|record| (record.provider_type.clone(), record))
                 .collect(),
         };
-        *self.snapshot.write().await = snapshot;
-        self.clients.write().await.clear();
+        *self.snapshot.write() = snapshot;
+        self.clients.write().clear();
         Ok(())
     }
 
@@ -262,7 +262,7 @@ impl UpstreamProxyRegistry {
         selection: Option<&AccountProxySelection>,
     ) -> Result<ResolvedUpstreamProxy> {
         let normalized = selection.cloned().unwrap_or_default().canonicalize();
-        let snapshot = self.snapshot.read().await;
+        let snapshot = self.snapshot.read();
         Self::resolve_proxy_with_snapshot(&snapshot, provider_type, &normalized)
     }
 
@@ -280,11 +280,11 @@ impl UpstreamProxyRegistry {
             .resolve_proxy_for_selection(provider_type, selection)
             .await?;
         let cache_key = ClientCacheKey::new(&resolved, profile);
-        if let Some(client) = self.clients.read().await.get(&cache_key).cloned() {
+        if let Some(client) = self.clients.read().get(&cache_key).cloned() {
             return Ok((client, resolved));
         }
 
-        let mut clients = self.clients.write().await;
+        let mut clients = self.clients.write();
         if let Some(client) = clients.get(&cache_key).cloned() {
             return Ok((client, resolved));
         }
@@ -306,7 +306,6 @@ impl UpstreamProxyRegistry {
     ) -> bool {
         self.clients
             .write()
-            .await
             .remove(&ClientCacheKey::new(resolved, profile))
             .is_some()
     }

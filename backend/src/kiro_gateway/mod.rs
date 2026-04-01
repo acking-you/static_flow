@@ -183,15 +183,16 @@ pub async fn get_public_access(
     let base_url = external_origin(&headers)
         .map(|origin| format!("{origin}{gateway_path}"))
         .unwrap_or_else(|| gateway_path.clone());
+    let auth_cache_ttl_seconds = state
+        .llm_gateway_runtime_config
+        .read()
+        .auth_cache_ttl_seconds;
+    let accounts = build_public_statuses(&state).await;
     Ok(Json(KiroAccessResponse {
         base_url,
         gateway_path,
-        auth_cache_ttl_seconds: state
-            .llm_gateway_runtime_config
-            .read()
-            .await
-            .auth_cache_ttl_seconds,
-        accounts: build_public_statuses(&state).await,
+        auth_cache_ttl_seconds,
+        accounts,
         generated_at: now_ms(),
     }))
 }
@@ -213,7 +214,6 @@ pub async fn list_admin_keys(
         auth_cache_ttl_seconds: state
             .llm_gateway_runtime_config
             .read()
-            .await
             .auth_cache_ttl_seconds,
         generated_at: now_ms(),
     }))

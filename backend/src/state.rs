@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Result;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{
     article_request_store::{self, ArticleRequestStore},
@@ -23,7 +24,7 @@ use static_flow_shared::{
     music_wish_store::{self, MusicWishStore},
     optimize::{scan_and_compact_tables, CompactConfig},
 };
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     article_request_worker::{self, ArticleRequestWorkerConfig},
@@ -233,6 +234,7 @@ pub struct AppState {
     pub(crate) email_notifier: Option<Arc<EmailNotifier>>,
     pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
     pub(crate) shutdown_tx: watch::Sender<bool>,
+    pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) index_html_template: Arc<String>,
 }
 
@@ -391,6 +393,7 @@ impl AppState {
             compaction_runtime_config.clone(),
             shutdown_rx,
         );
+        let app_shutdown_rx = shutdown_tx.subscribe();
         tracing::info!("application state initialized successfully");
 
         Ok(Self {
@@ -427,6 +430,7 @@ impl AppState {
             email_notifier,
             behavior_event_tx,
             shutdown_tx,
+            shutdown_rx: app_shutdown_rx,
             index_html_template: Arc::new(index_html_template),
         })
     }
@@ -642,7 +646,7 @@ fn spawn_table_compactor(
             _ = tokio::time::sleep(Duration::from_secs(60)) => {}
         }
 
-        let startup_config = compaction_runtime_config.read().await.clone();
+        let startup_config = compaction_runtime_config.read().clone();
         tracing::info!(
             "table compactor started (enabled={}, scan_interval={}s, threshold={}, \
              prune_older_than_hours={})",
@@ -654,7 +658,7 @@ fn spawn_table_compactor(
 
         loop {
             let started = Instant::now();
-            let runtime = compaction_runtime_config.read().await.clone();
+            let runtime = compaction_runtime_config.read().clone();
             let config = CompactConfig {
                 enabled: runtime.enabled,
                 fragment_threshold: runtime.fragment_threshold,

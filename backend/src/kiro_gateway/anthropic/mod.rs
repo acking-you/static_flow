@@ -18,7 +18,7 @@ use axum::{
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use tokio::{
-    sync::oneshot,
+    sync::{oneshot, watch},
     time::{interval, Duration},
 };
 
@@ -456,6 +456,7 @@ async fn handle_stream_request(
         StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, tool_name_map),
         log_ctx,
         done_tx,
+        usage_ctx.state.shutdown_rx.clone(),
     );
     tokio::spawn(async move {
         if let Ok(summary) = done_rx.await {
@@ -504,6 +505,7 @@ async fn handle_stream_request_buffered(
         BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map),
         log_ctx,
         done_tx,
+        usage_ctx.state.shutdown_rx.clone(),
     );
     tokio::spawn(async move {
         if let Ok(summary) = done_rx.await {
@@ -729,6 +731,7 @@ fn create_sse_stream(
     mut ctx: StreamContext,
     log_ctx: KiroUpstreamLogContext,
     done_tx: oneshot::Sender<KiroUsageSummary>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
         tracing::info!(
@@ -749,6 +752,15 @@ fn create_sse_stream(
         loop {
             tokio::select! {
                 biased;
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!(
+                            model = %ctx.model,
+                            "stopping kiro streaming response because backend is shutting down"
+                        );
+                        break;
+                    }
+                }
                 _ = ping_interval.tick() => {
                     yield Ok(Bytes::from("event: ping\ndata: {\"type\":\"ping\"}\n\n"));
                 }
@@ -817,6 +829,7 @@ fn create_buffered_sse_stream(
     mut ctx: BufferedStreamContext,
     log_ctx: KiroUpstreamLogContext,
     done_tx: oneshot::Sender<KiroUsageSummary>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
         tracing::info!(
@@ -834,6 +847,15 @@ fn create_buffered_sse_stream(
         loop {
             tokio::select! {
                 biased;
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!(
+                            model = %ctx.model(),
+                            "stopping kiro buffered streaming response because backend is shutting down"
+                        );
+                        break;
+                    }
+                }
                 _ = ping_interval.tick() => {
                     yield Ok(Bytes::from("event: ping\ndata: {\"type\":\"ping\"}\n\n"));
                 }

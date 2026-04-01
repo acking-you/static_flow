@@ -16,6 +16,7 @@ use axum::{
         Json, Response,
     },
 };
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use static_flow_shared::{
@@ -1267,7 +1268,7 @@ pub async fn track_article_view(
 ) -> Result<Json<ArticleViewTrackResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_article_exists(&state, &id).await?;
 
-    let config = state.view_analytics_config.read().await.clone();
+    let config = state.view_analytics_config.read().clone();
     let fingerprint = build_client_fingerprint(&headers);
     let tracked = state
         .store
@@ -1290,7 +1291,7 @@ pub async fn get_article_view_trend(
     Query(query): Query<ViewTrendQuery>,
 ) -> Result<Json<ArticleViewTrendResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_article_exists(&state, &id).await?;
-    let config = state.view_analytics_config.read().await.clone();
+    let config = state.view_analytics_config.read().clone();
 
     let granularity = query
         .granularity
@@ -1337,7 +1338,7 @@ pub async fn get_view_analytics_config(
     headers: HeaderMap,
 ) -> Result<Json<ViewAnalyticsConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.view_analytics_config.read().await.clone();
+    let config = state.view_analytics_config.read().clone();
     Ok(Json(config.into()))
 }
 
@@ -1347,10 +1348,10 @@ pub async fn update_view_analytics_config(
     Json(request): Json<UpdateViewAnalyticsConfigRequest>,
 ) -> Result<Json<ViewAnalyticsConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let current = state.view_analytics_config.read().await.clone();
+    let current = state.view_analytics_config.read().clone();
     let next = apply_view_analytics_config_update(current, request)?;
     {
-        let mut writer = state.view_analytics_config.write().await;
+        let mut writer = state.view_analytics_config.write();
         *writer = next.clone();
     }
     Ok(Json(next.into()))
@@ -1361,7 +1362,7 @@ pub async fn get_comment_runtime_config(
     headers: HeaderMap,
 ) -> Result<Json<CommentRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.comment_runtime_config.read().await.clone();
+    let config = state.comment_runtime_config.read().clone();
     Ok(Json(config.into()))
 }
 
@@ -1372,10 +1373,10 @@ pub async fn update_comment_runtime_config(
 ) -> Result<Json<CommentRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let current = state.comment_runtime_config.read().await.clone();
+    let current = state.comment_runtime_config.read().clone();
     let next = apply_comment_runtime_config_update(current, request)?;
     {
-        let mut writer = state.comment_runtime_config.write().await;
+        let mut writer = state.comment_runtime_config.write();
         *writer = next.clone();
     }
 
@@ -1387,7 +1388,7 @@ pub async fn get_api_behavior_config(
     headers: HeaderMap,
 ) -> Result<Json<ApiBehaviorConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.api_behavior_runtime_config.read().await.clone();
+    let config = state.api_behavior_runtime_config.read().clone();
     Ok(Json(config.into()))
 }
 
@@ -1397,10 +1398,10 @@ pub async fn update_api_behavior_config(
     Json(request): Json<UpdateApiBehaviorConfigRequest>,
 ) -> Result<Json<ApiBehaviorConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let current = state.api_behavior_runtime_config.read().await.clone();
+    let current = state.api_behavior_runtime_config.read().clone();
     let next = apply_api_behavior_config_update(current, request)?;
     {
-        let mut writer = state.api_behavior_runtime_config.write().await;
+        let mut writer = state.api_behavior_runtime_config.write();
         *writer = next.clone();
     }
     Ok(Json(next.into()))
@@ -1411,7 +1412,7 @@ pub async fn get_compaction_runtime_config(
     headers: HeaderMap,
 ) -> Result<Json<CompactionRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.compaction_runtime_config.read().await.clone();
+    let config = state.compaction_runtime_config.read().clone();
     Ok(Json(config.into()))
 }
 
@@ -1421,10 +1422,10 @@ pub async fn update_compaction_runtime_config(
     Json(request): Json<UpdateCompactionRuntimeConfigRequest>,
 ) -> Result<Json<CompactionRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let current = state.compaction_runtime_config.read().await.clone();
+    let current = state.compaction_runtime_config.read().clone();
     let next = apply_compaction_runtime_config_update(current, request)?;
     {
-        let mut writer = state.compaction_runtime_config.write().await;
+        let mut writer = state.compaction_runtime_config.write();
         *writer = next.clone();
     }
     Ok(Json(next.into()))
@@ -1436,7 +1437,7 @@ pub async fn admin_api_behavior_overview(
     Query(query): Query<AdminApiBehaviorOverviewQuery>,
 ) -> Result<Json<ApiBehaviorOverviewResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.api_behavior_runtime_config.read().await.clone();
+    let config = state.api_behavior_runtime_config.read().clone();
     let days = normalize_behavior_window_days(query.days, &config);
     let top_limit = normalize_behavior_top_limit(query.limit);
     let since_ms = behavior_window_start_ms(days);
@@ -1456,7 +1457,7 @@ pub async fn admin_list_api_behavior_events(
 ) -> Result<Json<AdminApiBehaviorEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let config = state.api_behavior_runtime_config.read().await.clone();
+    let config = state.api_behavior_runtime_config.read().clone();
 
     // When `date` is provided (YYYY-MM-DD), compute Shanghai-timezone day
     // boundaries; otherwise fall back to the existing `days` window.
@@ -1578,7 +1579,7 @@ pub async fn admin_cleanup_api_behavior(
     Json(request): Json<AdminApiBehaviorCleanupRequest>,
 ) -> Result<Json<AdminApiBehaviorCleanupResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.api_behavior_runtime_config.read().await.clone();
+    let config = state.api_behavior_runtime_config.read().clone();
     let retention_days = request.retention_days.unwrap_or(config.retention_days);
     if retention_days <= 0 || retention_days > MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS {
         return Err(bad_request(
@@ -1744,15 +1745,14 @@ pub async fn submit_comment(
     let fingerprint = build_client_fingerprint(&headers);
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let runtime_config = state.comment_runtime_config.read().await.clone();
+    let runtime_config = state.comment_runtime_config.read().clone();
     enforce_public_submit_rate_limit(
         state.comment_submit_guard.as_ref(),
         &rate_limit_key,
         now_ms,
         runtime_config.submit_rate_limit_seconds,
         "comment submission",
-    )
-    .await?;
+    )?;
 
     let ip_region = state.geoip.resolve_region(&ip).await;
     let client_meta = request.client_meta.unwrap_or_default();
@@ -1817,7 +1817,7 @@ pub async fn list_comments(
         return Err(bad_request("`article_id` is required"));
     }
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit);
     let tasks = state
         .comment_store
@@ -1879,7 +1879,7 @@ pub async fn admin_list_comment_tasks(
 ) -> Result<Json<AdminCommentTaskListResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit);
     let status_filter = query
         .status
@@ -1917,7 +1917,7 @@ pub async fn admin_list_comment_tasks_grouped(
 ) -> Result<Json<AdminCommentTaskGroupedResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit);
     let status_filter = query
         .status
@@ -2362,7 +2362,7 @@ pub async fn admin_list_published_comments(
 ) -> Result<Json<AdminCommentPublishedResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit);
     let mut rows = state
         .comment_store
@@ -2560,7 +2560,7 @@ pub async fn admin_list_comment_audit_logs(
 ) -> Result<Json<AdminCommentAuditResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit);
     let logs = state
         .comment_store
@@ -2588,7 +2588,7 @@ pub async fn admin_list_comment_ai_runs(
 ) -> Result<Json<AdminCommentAiRunsResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let limit = normalize_comment_list_limit(query.limit, runtime.list_default_limit);
     let runs = state
         .comment_store
@@ -2625,7 +2625,7 @@ pub async fn admin_get_comment_task_ai_output(
         ));
     }
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let run_limit = normalize_comment_list_limit(Some(120), runtime.list_default_limit);
     let runs = state
         .comment_store
@@ -2693,7 +2693,7 @@ pub async fn admin_stream_comment_task_ai_output(
         ));
     }
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let runs = state
         .comment_store
         .list_ai_runs(
@@ -2724,10 +2724,19 @@ pub async fn admin_stream_comment_task_ai_output(
     let poll_ms = query.poll_ms.unwrap_or(500).clamp(200, 5_000);
     let poll_interval = Duration::from_millis(poll_ms);
     let store = state.comment_store.clone();
+    let mut shutdown_rx = state.shutdown_rx.clone();
     let task_id_for_stream = task_id.clone();
     let run_id_for_stream = run_id.clone();
     let stream = stream! {
         loop {
+            if *shutdown_rx.borrow() {
+                tracing::info!(
+                    task_id = %task_id_for_stream,
+                    run_id = %run_id_for_stream,
+                    "comment AI SSE stream shutting down with backend"
+                );
+                break;
+            }
             let chunks_result = store.list_ai_run_chunks(&run_id_for_stream, 5000).await;
             match chunks_result {
                 Ok(chunks) => {
@@ -2800,7 +2809,19 @@ pub async fn admin_stream_comment_task_ai_output(
                 },
             }
 
-            sleep(poll_interval).await;
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!(
+                            task_id = %task_id_for_stream,
+                            run_id = %run_id_for_stream,
+                            "comment AI SSE stream received backend shutdown signal"
+                        );
+                        break;
+                    }
+                }
+                _ = sleep(poll_interval) => {}
+            }
         }
     };
 
@@ -2818,7 +2839,7 @@ pub async fn admin_cleanup_comments(
 ) -> Result<Json<AdminCleanupResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
 
-    let runtime = state.comment_runtime_config.read().await.clone();
+    let runtime = state.comment_runtime_config.read().clone();
     let retention_days = request
         .retention_days
         .unwrap_or(runtime.cleanup_retention_days);
@@ -2860,7 +2881,7 @@ pub async fn admin_cleanup_comments(
 pub async fn list_tags(
     State(state): State<AppState>,
 ) -> Result<Json<TagsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if let Some(tags) = read_cache(state.tags_cache.as_ref()).await {
+    if let Some(tags) = read_cache(state.tags_cache.as_ref()) {
         return Ok(Json(TagsResponse {
             tags,
         }));
@@ -2872,7 +2893,7 @@ pub async fn list_tags(
         .await
         .map_err(|e| internal_error("Failed to fetch tags", e))?;
 
-    write_cache(state.tags_cache.as_ref(), tags.clone()).await;
+    write_cache(state.tags_cache.as_ref(), tags.clone());
     Ok(Json(TagsResponse {
         tags,
     }))
@@ -2881,7 +2902,7 @@ pub async fn list_tags(
 pub async fn list_categories(
     State(state): State<AppState>,
 ) -> Result<Json<CategoriesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if let Some(categories) = read_cache(state.categories_cache.as_ref()).await {
+    if let Some(categories) = read_cache(state.categories_cache.as_ref()) {
         return Ok(Json(CategoriesResponse {
             categories,
         }));
@@ -2893,7 +2914,7 @@ pub async fn list_categories(
         .await
         .map_err(|e| internal_error("Failed to fetch categories", e))?;
 
-    write_cache(state.categories_cache.as_ref(), categories.clone()).await;
+    write_cache(state.categories_cache.as_ref(), categories.clone());
     Ok(Json(CategoriesResponse {
         categories,
     }))
@@ -2902,7 +2923,7 @@ pub async fn list_categories(
 pub async fn get_stats(
     State(state): State<AppState>,
 ) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if let Some(stats) = read_cache(state.stats_cache.as_ref()).await {
+    if let Some(stats) = read_cache(state.stats_cache.as_ref()) {
         return Ok(Json(stats));
     }
 
@@ -2912,7 +2933,7 @@ pub async fn get_stats(
         .await
         .map_err(|e| internal_error("Failed to fetch stats", e))?;
 
-    write_cache(state.stats_cache.as_ref(), stats.clone()).await;
+    write_cache(state.stats_cache.as_ref(), stats.clone());
     Ok(Json(stats))
 }
 
@@ -3606,16 +3627,16 @@ fn is_valid_day_format(value: &str) -> bool {
     true
 }
 
-async fn read_cache<T: Clone>(cache: &tokio::sync::RwLock<Option<(T, Instant)>>) -> Option<T> {
-    let cache = cache.read().await;
+fn read_cache<T: Clone>(cache: &RwLock<Option<(T, Instant)>>) -> Option<T> {
+    let cache = cache.read();
     match cache.as_ref() {
         Some((items, cached_at)) if cached_at.elapsed() < CACHE_TTL => Some(items.clone()),
         _ => None,
     }
 }
 
-async fn write_cache<T>(cache: &tokio::sync::RwLock<Option<(T, Instant)>>, items: T) {
-    let mut cache = cache.write().await;
+fn write_cache<T>(cache: &RwLock<Option<(T, Instant)>>, items: T) {
+    let mut cache = cache.write();
     *cache = Some((items, Instant::now()));
 }
 
@@ -3962,7 +3983,7 @@ pub async fn list_songs(
     State(state): State<AppState>,
     Query(query): Query<ListSongsQuery>,
 ) -> Result<Json<SongListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let config = state.music_runtime_config.read().await.clone();
+    let config = state.music_runtime_config.read().clone();
     let limit = query.limit.unwrap_or(config.list_default_limit);
     let offset = query.offset.unwrap_or(0);
     let result = state
@@ -4240,28 +4261,31 @@ pub async fn track_song_play(
     }
 
     let fingerprint = build_client_fingerprint(&headers);
-    let config = state.music_runtime_config.read().await.clone();
+    let config = state.music_runtime_config.read().clone();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // Dedupe guard (in-memory, same pattern as article views)
-    {
+    let cooldown_hit = {
         let window_ms = (config.play_dedupe_window_seconds.max(1) as i64) * 1_000;
-        let mut guard = state.music_play_dedupe_guard.write().await;
+        let mut guard = state.music_play_dedupe_guard.write();
         let key = format!("{id}:{fingerprint}");
-        if let Some(last) = guard.get(&key) {
-            if now_ms - *last < window_ms {
-                // Still call store to get total_plays but mark counted=false
-                let result = state
-                    .music_store
-                    .track_play(&id, &fingerprint, config.play_dedupe_window_seconds)
-                    .await
-                    .map_err(|e| internal_error("Failed to track play", e))?;
-                return Ok(Json(result));
-            }
+        let hit = guard
+            .get(&key)
+            .is_some_and(|last| now_ms.saturating_sub(*last) < window_ms);
+        if !hit {
+            guard.insert(key, now_ms);
+            let stale_before = now_ms - window_ms * 6;
+            guard.retain(|_, v| *v >= stale_before);
         }
-        guard.insert(key, now_ms);
-        let stale_before = now_ms - window_ms * 6;
-        guard.retain(|_, v| *v >= stale_before);
+        hit
+    };
+    if cooldown_hit {
+        let result = state
+            .music_store
+            .track_play(&id, &fingerprint, config.play_dedupe_window_seconds)
+            .await
+            .map_err(|e| internal_error("Failed to track play", e))?;
+        return Ok(Json(result));
     }
 
     let result = state
@@ -4309,7 +4333,7 @@ pub async fn submit_music_comment(
     let ip = extract_client_ip(&headers);
     let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let config = state.music_runtime_config.read().await.clone();
+    let config = state.music_runtime_config.read().clone();
 
     // Reuse blog comment limiter semantics.
     enforce_public_submit_rate_limit(
@@ -4318,8 +4342,7 @@ pub async fn submit_music_comment(
         now_ms,
         config.comment_rate_limit_seconds,
         "music comment submission",
-    )
-    .await?;
+    )?;
 
     let ip_region = state.geoip.resolve_region(&ip).await;
     let nanos = std::time::SystemTime::now()
@@ -4354,7 +4377,7 @@ pub async fn list_music_comments(
     if song_id.trim().is_empty() {
         return Err(bad_request("`song_id` is required"));
     }
-    let config = state.music_runtime_config.read().await.clone();
+    let config = state.music_runtime_config.read().clone();
     let limit = query.limit.unwrap_or(config.list_default_limit);
     let offset = query.offset.unwrap_or(0);
     let result = state
@@ -4370,7 +4393,7 @@ pub async fn get_music_config(
     headers: HeaderMap,
 ) -> Result<Json<MusicConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.music_runtime_config.read().await.clone();
+    let config = state.music_runtime_config.read().clone();
     Ok(Json(MusicConfigResponse::from(config)))
 }
 
@@ -4380,7 +4403,7 @@ pub async fn update_music_config(
     Json(request): Json<UpdateMusicConfigRequest>,
 ) -> Result<Json<MusicConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let mut config = state.music_runtime_config.write().await;
+    let mut config = state.music_runtime_config.write();
     if let Some(v) = request.play_dedupe_window_seconds {
         if v == 0 || v > 3600 {
             return Err(bad_request("`play_dedupe_window_seconds` must be between 1 and 3600"));
@@ -4471,8 +4494,7 @@ pub async fn submit_music_wish(
         now_ms,
         60,
         "music wish submission",
-    )
-    .await?;
+    )?;
 
     let ip_region = state.geoip.resolve_region(&ip).await;
     let wish_id = generate_task_id("mw");
@@ -4787,12 +4809,17 @@ pub async fn admin_music_wish_ai_stream(
 > {
     ensure_admin_access(&state, &headers)?;
     let store = state.music_wish_store.clone();
+    let mut shutdown_rx = state.shutdown_rx.clone();
 
     let stream = stream! {
         let mut last_batch_index: i32 = -1;
         let mut consecutive_errors: u32 = 0;
         const MAX_CONSECUTIVE_ERRORS: u32 = 10;
         loop {
+            if *shutdown_rx.borrow() {
+                tracing::info!(wish_id = %wish_id, "music wish SSE stream shutting down with backend");
+                break;
+            }
             let runs = match store.list_ai_runs(&wish_id, Some(1)).await {
                 Ok(r) => { consecutive_errors = 0; r }
                 Err(_) => {
@@ -4803,14 +4830,30 @@ pub async fn admin_music_wish_ai_stream(
                         ));
                         break;
                     }
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                tracing::info!(wish_id = %wish_id, "music wish SSE stream received backend shutdown signal");
+                                break;
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(500)) => {}
+                    }
                     continue;
                 }
             };
             let run = match runs.into_iter().last() {
                 Some(r) => r,
                 None => {
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                tracing::info!(wish_id = %wish_id, "music wish SSE stream received backend shutdown signal");
+                                break;
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(500)) => {}
+                    }
                     continue;
                 }
             };
@@ -4825,7 +4868,15 @@ pub async fn admin_music_wish_ai_stream(
                         ));
                         break;
                     }
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                tracing::info!(wish_id = %wish_id, "music wish SSE stream received backend shutdown signal");
+                                break;
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(500)) => {}
+                    }
                     continue;
                 }
             };
@@ -4854,7 +4905,15 @@ pub async fn admin_music_wish_ai_stream(
                 break;
             }
 
-            sleep(Duration::from_millis(500)).await;
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!(wish_id = %wish_id, "music wish SSE stream received backend shutdown signal");
+                        break;
+                    }
+                }
+                _ = sleep(Duration::from_millis(500)) => {}
+            }
         }
     };
 
@@ -4977,8 +5036,7 @@ pub async fn submit_article_request(
         now_ms,
         60,
         "article request submission",
-    )
-    .await?;
+    )?;
 
     let ip_region = state.geoip.resolve_region(&ip).await;
     let request_id = generate_task_id("ar");
@@ -5316,12 +5374,17 @@ pub async fn admin_article_request_ai_stream(
 > {
     ensure_admin_access(&state, &headers)?;
     let store = state.article_request_store.clone();
+    let mut shutdown_rx = state.shutdown_rx.clone();
 
     let stream = stream! {
         let mut last_batch_index: i32 = -1;
         let mut consecutive_errors: u32 = 0;
         const MAX_CONSECUTIVE_ERRORS: u32 = 10;
         loop {
+            if *shutdown_rx.borrow() {
+                tracing::info!(request_id = %request_id, "article request SSE stream shutting down with backend");
+                break;
+            }
             let runs = match store.list_ai_runs(&request_id, Some(1)).await {
                 Ok(r) => { consecutive_errors = 0; r }
                 Err(_) => {
@@ -5332,14 +5395,30 @@ pub async fn admin_article_request_ai_stream(
                         ));
                         break;
                     }
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                tracing::info!(request_id = %request_id, "article request SSE stream received backend shutdown signal");
+                                break;
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(500)) => {}
+                    }
                     continue;
                 }
             };
             let run = match runs.into_iter().last() {
                 Some(r) => r,
                 None => {
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                tracing::info!(request_id = %request_id, "article request SSE stream received backend shutdown signal");
+                                break;
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(500)) => {}
+                    }
                     continue;
                 }
             };
@@ -5354,7 +5433,15 @@ pub async fn admin_article_request_ai_stream(
                         ));
                         break;
                     }
-                    sleep(Duration::from_millis(500)).await;
+                    tokio::select! {
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                tracing::info!(request_id = %request_id, "article request SSE stream received backend shutdown signal");
+                                break;
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(500)) => {}
+                    }
                     continue;
                 }
             };
@@ -5383,7 +5470,15 @@ pub async fn admin_article_request_ai_stream(
                 break;
             }
 
-            sleep(Duration::from_millis(500)).await;
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!(request_id = %request_id, "article request SSE stream received backend shutdown signal");
+                        break;
+                    }
+                }
+                _ = sleep(Duration::from_millis(500)) => {}
+            }
         }
     };
 

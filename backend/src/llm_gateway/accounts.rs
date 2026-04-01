@@ -14,8 +14,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as AsyncRwLock;
 
 use super::runtime::CodexAuthSnapshot;
 use crate::upstream_proxy::{AccountProxyMode, AccountProxySelection};
@@ -190,7 +191,7 @@ pub(crate) struct AccountSummarySnapshot {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct AccountPool {
-    accounts: RwLock<HashMap<String, Arc<RwLock<CodexAccount>>>>,
+    accounts: RwLock<HashMap<String, Arc<AsyncRwLock<CodexAccount>>>>,
     rate_limits: RwLock<HashMap<String, AccountRateLimitSnapshot>>,
     usage_refresh_health: RwLock<HashMap<String, AccountUsageRefreshHealth>>,
     last_routed_at_ms: RwLock<HashMap<String, i64>>,
@@ -244,12 +245,12 @@ impl AccountPool {
             match load_account_from_file(&path).await {
                 Ok(mut account) => {
                     account.name = name.clone();
-                    let entry = Arc::new(RwLock::new(account));
-                    self.accounts.write().await.insert(name.clone(), entry);
+                    let entry = Arc::new(AsyncRwLock::new(account));
+                    let modified_at = auth_file_modified_at(&path).await;
+                    self.accounts.write().insert(name.clone(), entry);
                     self.auth_file_mtimes
                         .write()
-                        .await
-                        .insert(name.clone(), auth_file_modified_at(&path).await);
+                        .insert(name.clone(), modified_at);
                     loaded += 1;
                 },
                 Err(err) => {
@@ -290,16 +291,13 @@ impl AccountPool {
             tracing::warn!("Failed to persist seeded default account: {err:#}");
             return None;
         }
-        let entry = Arc::new(RwLock::new(account));
-        self.accounts
-            .write()
-            .await
-            .insert("default".to_string(), entry);
+        let entry = Arc::new(AsyncRwLock::new(account));
+        self.accounts.write().insert("default".to_string(), entry);
         let persisted_path = auth_file_path(&self.auths_dir, "default");
+        let persisted_modified_at = auth_file_modified_at(&persisted_path).await;
         self.auth_file_mtimes
             .write()
-            .await
-            .insert("default".to_string(), auth_file_modified_at(&persisted_path).await);
+            .insert("default".to_string(), persisted_modified_at);
         tracing::info!(
             codex_path = %codex_path.display(),
             "Seeded account pool with default account from codex auth.json"
@@ -309,7 +307,7 @@ impl AccountPool {
 
     /// Check whether the given account name already exists.
     pub async fn exists(&self, name: &str) -> bool {
-        self.accounts.read().await.contains_key(name)
+        self.accounts.read().contains_key(name)
     }
 
     /// Insert a new account into the pool and persist it to disk.
@@ -317,22 +315,19 @@ impl AccountPool {
         let name = account.name.clone();
         persist_account_to_file(&self.auths_dir, &account).await?;
         let modified_at = auth_file_modified_at(&auth_file_path(&self.auths_dir, &name)).await;
-        let entry = Arc::new(RwLock::new(account));
-        self.accounts.write().await.insert(name.clone(), entry);
-        self.auth_file_mtimes
-            .write()
-            .await
-            .insert(name, modified_at);
+        let entry = Arc::new(AsyncRwLock::new(account));
+        self.accounts.write().insert(name.clone(), entry);
+        self.auth_file_mtimes.write().insert(name, modified_at);
         Ok(())
     }
 
     /// Remove an account from the pool and delete its file.
     pub async fn remove(&self, name: &str) -> Result<bool> {
-        let existed = self.accounts.write().await.remove(name).is_some();
-        self.rate_limits.write().await.remove(name);
-        self.usage_refresh_health.write().await.remove(name);
-        self.last_routed_at_ms.write().await.remove(name);
-        self.auth_file_mtimes.write().await.remove(name);
+        let existed = self.accounts.write().remove(name).is_some();
+        self.rate_limits.write().remove(name);
+        self.usage_refresh_health.write().remove(name);
+        self.last_routed_at_ms.write().remove(name);
+        self.auth_file_mtimes.write().remove(name);
         let path = self.auths_dir.join(format!("{name}.json"));
         if path.is_file() {
             tokio::fs::remove_file(&path)
@@ -350,17 +345,22 @@ impl AccountPool {
 
     /// Return a snapshot of all accounts with their rate-limit data.
     pub async fn list_summaries(&self) -> Vec<AccountSummarySnapshot> {
-        let accounts = self.accounts.read().await;
-        let rate_limits = self.rate_limits.read().await;
-        let usage_refresh_health = self.usage_refresh_health.read().await;
-        let mut out = Vec::with_capacity(accounts.len());
-        for (name, entry) in accounts.iter() {
+        let account_entries = self
+            .accounts
+            .read()
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.clone()))
+            .collect::<Vec<_>>();
+        let rate_limits = self.rate_limits.read().clone();
+        let usage_refresh_health = self.usage_refresh_health.read().clone();
+        let mut out = Vec::with_capacity(account_entries.len());
+        for (name, entry) in account_entries {
             let account = entry.read().await;
-            let rl = rate_limits.get(name).cloned().unwrap_or_default();
-            let refresh_health = usage_refresh_health.get(name).cloned().unwrap_or_default();
+            let rl = rate_limits.get(&name).cloned().unwrap_or_default();
+            let refresh_health = usage_refresh_health.get(&name).cloned().unwrap_or_default();
             let last_refresh_ms = account.last_refresh.map(|dt| dt.timestamp_millis());
             out.push(AccountSummarySnapshot {
-                name: name.clone(),
+                name,
                 status: account.status,
                 account_id: account.account_id.clone(),
                 rate_limits: rl,
@@ -389,17 +389,22 @@ impl AccountPool {
         /// deprioritized in favor of healthier ones.
         const LOW_QUOTA_THRESHOLD: f64 = 10.0;
 
-        let accounts = self.accounts.read().await;
-        let rate_limits = self.rate_limits.read().await;
-        let last_routed = self.last_routed_at_ms.read().await;
+        let account_entries = self
+            .accounts
+            .read()
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.clone()))
+            .collect::<Vec<_>>();
+        let rate_limits = self.rate_limits.read().clone();
+        let last_routed = self.last_routed_at_ms.read().clone();
 
         // Phase 1: collect eligible candidates, skipping any account where
         // either the 5h or weekly window is exhausted.
         type Candidate = (f64, f64, i64, String, CodexAuthSnapshot, bool);
         let mut candidates: Vec<Candidate> = Vec::new();
-        for (name, entry) in accounts.iter() {
+        for (name, entry) in account_entries {
             if let Some(allowed) = allowed_names {
-                if !allowed.contains(name) {
+                if !allowed.contains(&name) {
                     continue;
                 }
             }
@@ -408,23 +413,23 @@ impl AccountPool {
                 continue;
             }
             let primary_remaining = rate_limits
-                .get(name)
+                .get(&name)
                 .and_then(|rl| rl.primary_remaining_percent())
                 .unwrap_or(100.0);
             let secondary_remaining = rate_limits
-                .get(name)
+                .get(&name)
                 .and_then(|rl| rl.secondary_remaining_percent())
                 .unwrap_or(100.0);
             // Skip accounts where either quota window is exhausted.
             if primary_remaining <= 0.0 || secondary_remaining <= 0.0 {
                 continue;
             }
-            let routed_at_ms = last_routed.get(name).copied().unwrap_or(0);
+            let routed_at_ms = last_routed.get(&name).copied().unwrap_or(0);
             candidates.push((
                 primary_remaining,
                 secondary_remaining,
                 routed_at_ms,
-                name.clone(),
+                name,
                 account.to_auth_snapshot(),
                 account.map_gpt53_codex_to_spark,
             ));
@@ -470,14 +475,12 @@ impl AccountPool {
     pub async fn record_route_selection(&self, name: &str) {
         self.last_routed_at_ms
             .write()
-            .await
             .insert(name.to_string(), static_flow_shared::llm_gateway_store::now_ms());
     }
 
     /// Get a specific account by name.
     pub async fn get_account(&self, name: &str) -> Option<(CodexAuthSnapshot, bool)> {
-        let accounts = self.accounts.read().await;
-        let entry = accounts.get(name)?;
+        let entry = self.accounts.read().get(name).cloned()?;
         let account = entry.read().await;
         if account.status != AccountStatus::Active {
             return None;
@@ -485,12 +488,15 @@ impl AccountPool {
         Some((account.to_auth_snapshot(), account.map_gpt53_codex_to_spark))
     }
 
+    pub fn entry_by_name(&self, name: &str) -> Option<Arc<AsyncRwLock<CodexAccount>>> {
+        self.accounts.read().get(name).cloned()
+    }
+
     pub async fn update_settings(&self, name: &str, patch: AccountSettingsPatch) -> Result<bool> {
-        let accounts = self.accounts.read().await;
-        let Some(entry) = accounts.get(name) else {
+        let Some(entry) = self.accounts.read().get(name).cloned() else {
             return Ok(false);
         };
-        {
+        let updated_account = {
             let mut account = entry.write().await;
             if let Some(enabled) = patch.map_gpt53_codex_to_spark {
                 account.map_gpt53_codex_to_spark = enabled;
@@ -498,16 +504,16 @@ impl AccountPool {
             if let Some(proxy_selection) = patch.proxy_selection {
                 account.proxy_selection = proxy_selection.canonicalize();
             }
-            persist_account_settings_to_file(&self.auths_dir, &account).await?;
-        }
+            account.clone()
+        };
+        persist_account_settings_to_file(&self.auths_dir, &updated_account).await?;
         Ok(true)
     }
 
     /// Return clones of all account entries for the refresh task.
-    pub async fn all_entries(&self) -> Vec<(String, Arc<RwLock<CodexAccount>>)> {
+    pub async fn all_entries(&self) -> Vec<(String, Arc<AsyncRwLock<CodexAccount>>)> {
         self.accounts
             .read()
-            .await
             .iter()
             .map(|(name, entry)| (name.clone(), entry.clone()))
             .collect()
@@ -518,25 +524,21 @@ impl AccountPool {
         let checked_at = snapshot
             .last_checked_at
             .unwrap_or_else(static_flow_shared::llm_gateway_store::now_ms);
-        self.rate_limits
+        self.rate_limits.write().insert(name.to_string(), snapshot);
+        self.usage_refresh_health
             .write()
-            .await
-            .insert(name.to_string(), snapshot);
-        self.usage_refresh_health.write().await.insert(
-            name.to_string(),
-            AccountUsageRefreshHealth {
+            .insert(name.to_string(), AccountUsageRefreshHealth {
                 last_checked_at: Some(checked_at),
                 last_success_at: Some(checked_at),
                 error_message: None,
-            },
-        );
+            });
     }
 
     /// Record that the latest usage refresh attempt for one account failed.
     pub async fn mark_usage_refresh_failure(&self, name: &str, error_message: impl Into<String>) {
         let checked_at = static_flow_shared::llm_gateway_store::now_ms();
         let error_message = error_message.into();
-        let mut usage_refresh_health = self.usage_refresh_health.write().await;
+        let mut usage_refresh_health = self.usage_refresh_health.write();
         let previous_success_at = usage_refresh_health
             .get(name)
             .and_then(|entry| entry.last_success_at);
@@ -549,17 +551,18 @@ impl AccountPool {
 
     /// Persist updated tokens for an account back to its file.
     pub async fn persist(&self, name: &str) -> Result<()> {
-        let accounts = self.accounts.read().await;
-        let entry = accounts
+        let entry = self
+            .accounts
+            .read()
             .get(name)
+            .cloned()
             .with_context(|| format!("account `{name}` not found in pool"))?;
-        let account = entry.read().await;
+        let account = entry.read().await.clone();
         persist_account_to_file(&self.auths_dir, &account).await?;
-        drop(account);
-        self.auth_file_mtimes.write().await.insert(
-            name.to_string(),
-            auth_file_modified_at(&auth_file_path(&self.auths_dir, name)).await,
-        );
+        let modified_at = auth_file_modified_at(&auth_file_path(&self.auths_dir, name)).await;
+        self.auth_file_mtimes
+            .write()
+            .insert(name.to_string(), modified_at);
         Ok(())
     }
 
@@ -567,17 +570,11 @@ impl AccountPool {
     pub async fn sync_account_from_disk_if_changed(
         &self,
         name: &str,
-        entry: &Arc<RwLock<CodexAccount>>,
+        entry: &Arc<AsyncRwLock<CodexAccount>>,
     ) -> Result<bool> {
         let path = auth_file_path(&self.auths_dir, name);
         let modified_at = auth_file_modified_at(&path).await;
-        let cached_modified_at = self
-            .auth_file_mtimes
-            .read()
-            .await
-            .get(name)
-            .cloned()
-            .flatten();
+        let cached_modified_at = self.auth_file_mtimes.read().get(name).cloned().flatten();
         if modified_matches(cached_modified_at, modified_at) {
             return Ok(false);
         }
@@ -587,7 +584,6 @@ impl AccountPool {
         *entry.write().await = account;
         self.auth_file_mtimes
             .write()
-            .await
             .insert(name.to_string(), modified_at);
         Ok(true)
     }
@@ -599,7 +595,7 @@ impl AccountPool {
                   currently uses stronger account selection paths."
     )]
     pub async fn is_empty(&self) -> bool {
-        self.accounts.read().await.is_empty()
+        self.accounts.read().is_empty()
     }
 }
 

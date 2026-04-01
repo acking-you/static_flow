@@ -63,72 +63,109 @@ async fn refresh_all_accounts(
     proxy_registry: &UpstreamProxyRegistry,
 ) -> Result<()> {
     let entries = pool.all_entries().await;
-    let now = Utc::now().timestamp();
 
     for (name, entry) in &entries {
-        match pool.sync_account_from_disk_if_changed(name, entry).await {
-            Ok(true) => {
-                tracing::info!(
-                    account = name,
-                    "Reloaded auth file changes into in-memory account snapshot"
-                );
-            },
-            Ok(false) => {},
+        match refresh_account_entry(pool, proxy_registry, name, entry, false).await {
+            Ok(AccountRefreshResult::SkippedInactive) => {},
+            Ok(AccountRefreshResult::Refreshed) => {},
             Err(err) => {
-                tracing::warn!(
-                    account = name,
-                    "Failed to sync account from auth file, keeping in-memory state: {err:#}"
-                );
-            },
-        }
-
-        let needs_refresh = {
-            let account = entry.read().await;
-            if account.status != AccountStatus::Active {
-                continue;
-            }
-            token_needs_refresh(&account.access_token, now)
-        };
-
-        if needs_refresh {
-            match refresh_account_token(entry, proxy_registry).await {
-                Ok(()) => {
-                    if let Err(err) = pool.persist(name).await {
-                        tracing::warn!(
-                            account = name,
-                            "Failed to persist refreshed tokens: {err:#}"
-                        );
-                    }
-                    tracing::info!(account = name, "Refreshed access token");
-                },
-                Err(err) => {
-                    tracing::warn!(
-                        account = name,
-                        "Token refresh failed, marking unavailable: {err:#}"
-                    );
-                    entry.write().await.status = AccountStatus::Unavailable;
-                },
-            }
-        }
-
-        // Always poll usage for active accounts.
-        let snapshot = {
-            let account = entry.read().await;
-            if account.status != AccountStatus::Active {
-                continue;
-            }
-            account.to_auth_snapshot()
-        };
-        match fetch_account_usage(proxy_registry, &snapshot).await {
-            Ok(rl) => pool.update_rate_limit(name, rl).await,
-            Err(err) => {
-                pool.mark_usage_refresh_failure(name, format!("{err:#}"))
-                    .await;
-                tracing::warn!(account = name, "Usage poll failed: {err:#}");
+                tracing::warn!(account = name, "Account refresh cycle failed: {err:#}");
             },
         }
     }
     Ok(())
+}
+
+pub(crate) async fn refresh_account_once(
+    pool: &AccountPool,
+    proxy_registry: &UpstreamProxyRegistry,
+    name: &str,
+) -> Result<()> {
+    let entry = pool
+        .entry_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("account `{name}` not found"))?;
+    match refresh_account_entry(pool, proxy_registry, name, &entry, true).await? {
+        AccountRefreshResult::SkippedInactive | AccountRefreshResult::Refreshed => Ok(()),
+    }
+}
+
+enum AccountRefreshResult {
+    SkippedInactive,
+    Refreshed,
+}
+
+async fn refresh_account_entry(
+    pool: &AccountPool,
+    proxy_registry: &UpstreamProxyRegistry,
+    name: &str,
+    entry: &Arc<tokio::sync::RwLock<super::accounts::CodexAccount>>,
+    manual_refresh: bool,
+) -> Result<AccountRefreshResult> {
+    match pool.sync_account_from_disk_if_changed(name, entry).await {
+        Ok(true) => {
+            tracing::info!(
+                account = name,
+                "Reloaded auth file changes into in-memory account snapshot"
+            );
+        },
+        Ok(false) => {},
+        Err(err) => {
+            tracing::warn!(
+                account = name,
+                "Failed to sync account from auth file, keeping in-memory state: {err:#}"
+            );
+        },
+    }
+
+    let now = Utc::now().timestamp();
+    let (status, needs_refresh) = {
+        let account = entry.read().await;
+        (account.status, token_needs_refresh(&account.access_token, now))
+    };
+
+    if status != AccountStatus::Active && !manual_refresh {
+        return Ok(AccountRefreshResult::SkippedInactive);
+    }
+
+    if needs_refresh || (manual_refresh && status != AccountStatus::Active) {
+        match refresh_account_token(entry, proxy_registry).await {
+            Ok(()) => {
+                if let Err(err) = pool.persist(name).await {
+                    tracing::warn!(account = name, "Failed to persist refreshed tokens: {err:#}");
+                }
+                entry.write().await.status = AccountStatus::Active;
+                tracing::info!(account = name, "Refreshed access token");
+            },
+            Err(err) => {
+                tracing::warn!(
+                    account = name,
+                    "Token refresh failed, marking unavailable: {err:#}"
+                );
+                entry.write().await.status = AccountStatus::Unavailable;
+                pool.mark_usage_refresh_failure(name, format!("{err:#}"))
+                    .await;
+                return Err(err).context("token refresh failed");
+            },
+        }
+    }
+
+    let snapshot = {
+        let account = entry.read().await;
+        account.to_auth_snapshot()
+    };
+    match fetch_account_usage(proxy_registry, &snapshot).await {
+        Ok(rl) => {
+            pool.update_rate_limit(name, rl).await;
+            entry.write().await.status = AccountStatus::Active;
+            Ok(AccountRefreshResult::Refreshed)
+        },
+        Err(err) => {
+            entry.write().await.status = AccountStatus::Unavailable;
+            pool.mark_usage_refresh_failure(name, format!("{err:#}"))
+                .await;
+            Err(err).context("usage poll failed")
+        },
+    }
 }
 
 fn token_needs_refresh(access_token: &str, now_epoch: i64) -> bool {

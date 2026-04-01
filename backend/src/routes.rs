@@ -260,6 +260,10 @@ pub fn create_router(state: AppState) -> Router {
             delete(llm_gateway::remove_account).patch(llm_gateway::patch_account_settings),
         )
         .route(
+            "/admin/llm-gateway/accounts/:name/refresh",
+            post(llm_gateway::refresh_account),
+        )
+        .route(
             "/admin/kiro-gateway/keys",
             get(kiro_gateway::list_admin_keys).post(kiro_gateway::create_admin_key),
         )

@@ -9,8 +9,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
+use parking_lot::RwLock;
 use static_flow_shared::llm_gateway_store::LlmGatewayStore;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 use super::{
     auth_file::{
@@ -71,7 +72,7 @@ impl KiroGatewayRuntimeState {
         runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
         upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     ) -> Result<Self> {
-        let scheduler_defaults = runtime_config.read().await.clone();
+        let scheduler_defaults = runtime_config.read().clone();
         let token_manager = Arc::new(KiroTokenManager::new(upstream_proxy_registry.clone()).await?);
         let migrated_accounts = token_manager
             .backfill_missing_scheduler_limits(
@@ -98,7 +99,7 @@ impl KiroGatewayRuntimeState {
 
     /// Return a clone of the latest cached per-account status snapshot.
     pub async fn cached_status_snapshot(&self) -> KiroStatusCacheSnapshot {
-        self.status_cache.read().await.clone()
+        self.status_cache.read().clone()
     }
 }
 
@@ -145,7 +146,7 @@ impl KiroTokenManager {
     /// Delete one configured account.
     pub async fn delete_auth(&self, name: &str) -> Result<()> {
         delete_auth_record(&self.auths_dir, name).await?;
-        self.refresh_locks.write().await.remove(name);
+        self.refresh_locks.write().remove(name);
         Ok(())
     }
 
@@ -348,10 +349,10 @@ impl KiroTokenManager {
     }
 
     async fn refresh_lock_for_account(&self, account_name: &str) -> Arc<Mutex<()>> {
-        if let Some(lock) = self.refresh_locks.read().await.get(account_name).cloned() {
+        if let Some(lock) = self.refresh_locks.read().get(account_name).cloned() {
             return lock;
         }
-        let mut refresh_locks = self.refresh_locks.write().await;
+        let mut refresh_locks = self.refresh_locks.write();
         refresh_locks
             .entry(account_name.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))

@@ -93,7 +93,7 @@ pub(crate) fn spawn_status_refresher(
 pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>) -> Result<()> {
     let checked_at = now_ms();
     let auths = runtime.token_manager.list_auths().await?;
-    let previous = runtime.status_cache.read().await.clone();
+    let previous = runtime.status_cache.read().clone();
     let mut next = KiroStatusCacheSnapshot {
         status: STATUS_LOADING.to_string(),
         last_checked_at: Some(checked_at),
@@ -146,7 +146,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
         "refreshed cached kiro status snapshot"
     );
 
-    *runtime.status_cache.write().await = next;
+    *runtime.status_cache.write() = next;
     Ok(())
 }
 
@@ -163,7 +163,7 @@ pub(crate) async fn refresh_cached_status_for_account(
         .await?
         .ok_or_else(|| anyhow!("kiro account `{account_name}` not found"))?;
     let checked_at = now_ms();
-    let previous = runtime.status_cache.read().await.clone();
+    let previous = runtime.status_cache.read().clone();
     let prior = previous.accounts.get(account_name);
 
     let entry = if auth.disabled {
@@ -207,7 +207,7 @@ pub(crate) async fn refresh_cached_status_for_account(
         .count();
     apply_snapshot_summary(&mut snapshot, error_count, ready_count);
     log_duplicate_upstream_identities(&snapshot);
-    *runtime.status_cache.write().await = snapshot;
+    *runtime.status_cache.write() = snapshot;
 
     tracing::info!(
         account_name,
@@ -228,7 +228,7 @@ pub(crate) async fn remove_cached_status_for_account(
     runtime: &Arc<KiroGatewayRuntimeState>,
     account_name: &str,
 ) {
-    let mut snapshot = runtime.status_cache.write().await;
+    let mut snapshot = runtime.status_cache.write();
     snapshot.accounts.remove(account_name);
     let ready_count = snapshot
         .accounts
@@ -252,7 +252,7 @@ pub(crate) async fn mark_account_quota_exhausted(
 ) {
     let checked_at = now_ms();
     let error_message = error_message.into();
-    let mut snapshot = runtime.status_cache.write().await;
+    let mut snapshot = runtime.status_cache.write();
     let prior = snapshot.accounts.get(account_name).cloned();
     let entry = quota_exhausted_entry(prior.as_ref(), checked_at, error_message.clone());
     snapshot.last_checked_at = Some(checked_at);

@@ -207,7 +207,7 @@ pub async fn get_public_access(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<LlmGatewayAccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let config = state.llm_gateway_runtime_config.read().await.clone();
+    let config = state.llm_gateway_runtime_config.read().clone();
     let base_keys = state
         .llm_gateway_store
         .list_public_keys()
@@ -239,7 +239,7 @@ pub async fn get_public_access(
 pub async fn get_public_rate_limit_status(
     State(state): State<AppState>,
 ) -> Result<Json<LlmGatewayRateLimitStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let snapshot = state.llm_gateway.rate_limit_status.read().await.clone();
+    let snapshot = state.llm_gateway.rate_limit_status.read().clone();
     tracing::debug!(
         status = %snapshot.status,
         bucket_count = snapshot.buckets.len(),
@@ -256,7 +256,7 @@ pub async fn get_admin_runtime_config(
     headers: HeaderMap,
 ) -> Result<Json<LlmGatewayRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let config = state.llm_gateway_runtime_config.read().await.clone();
+    let config = state.llm_gateway_runtime_config.read().clone();
     Ok(Json(LlmGatewayRuntimeConfigResponse {
         auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
         max_request_body_bytes: config.max_request_body_bytes,
@@ -270,7 +270,7 @@ pub async fn update_admin_runtime_config(
     Json(request): Json<UpdateLlmGatewayRuntimeConfigRequest>,
 ) -> Result<Json<LlmGatewayRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let current = state.llm_gateway_runtime_config.read().await.clone();
+    let current = state.llm_gateway_runtime_config.read().clone();
     let ttl = request
         .auth_cache_ttl_seconds
         .unwrap_or(current.auth_cache_ttl_seconds);
@@ -300,7 +300,7 @@ pub async fn update_admin_runtime_config(
         .await
         .map_err(|err| internal_error("Failed to update llm gateway config", err))?;
     {
-        let mut runtime = state.llm_gateway_runtime_config.write().await;
+        let mut runtime = state.llm_gateway_runtime_config.write();
         *runtime = LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: ttl,
             max_request_body_bytes,
@@ -583,7 +583,7 @@ pub async fn list_admin_keys(
         .await
         .map_err(|err| internal_error("Failed to list llm gateway keys", err))?;
     let keys = state.llm_gateway.overlay_key_usage_batch(&base_keys).await;
-    let config = state.llm_gateway_runtime_config.read().await.clone();
+    let config = state.llm_gateway_runtime_config.read().clone();
 
     tracing::debug!(key_count = keys.len(), "Listed admin LLM gateway keys");
 
@@ -954,8 +954,7 @@ pub async fn submit_public_token_request(
         now_ms(),
         60,
         "llm-access public submission",
-    )
-    .await?;
+    )?;
 
     let request_id = generate_task_id("llmwish");
     let ip_region = state.geoip.resolve_region(&client_ip).await;
@@ -1456,8 +1455,7 @@ pub async fn submit_public_account_contribution_request(
         now_ms(),
         60,
         "llm-access public submission",
-    )
-    .await?;
+    )?;
 
     let request_id = generate_task_id("llmacct");
     let ip_region = state.geoip.resolve_region(&client_ip).await;
@@ -1594,8 +1592,7 @@ pub async fn submit_public_sponsor_request(
         now_ms(),
         60,
         "llm-access public submission",
-    )
-    .await?;
+    )?;
 
     let request_id = generate_task_id("llmsponsor");
     let ip_region = state.geoip.resolve_region(&client_ip).await;
@@ -2503,7 +2500,7 @@ pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeSta
 
     match result {
         Ok((buckets, partial_error)) => {
-            let mut status = runtime.rate_limit_status.write().await;
+            let mut status = runtime.rate_limit_status.write();
             *status = LlmGatewayRateLimitStatusResponse {
                 status: if partial_error.is_some() {
                     "degraded".to_string()
@@ -2525,7 +2522,7 @@ pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeSta
             Ok(())
         },
         Err(err) => {
-            let mut status = runtime.rate_limit_status.write().await;
+            let mut status = runtime.rate_limit_status.write();
             let had_snapshot = !status.buckets.is_empty();
             let previous_success_at = status.last_success_at;
             status.status = if had_snapshot { "degraded".to_string() } else { "error".to_string() };
@@ -2644,7 +2641,6 @@ pub async fn proxy_gateway_request(
         state
             .llm_gateway_runtime_config
             .read()
-            .await
             .max_request_body_bytes,
     )
     .map_err(|err| internal_error("Invalid llm gateway max request body size", err))?;
@@ -2893,7 +2889,6 @@ async fn current_cache_ttl(state: &AppState) -> u64 {
     state
         .llm_gateway_runtime_config
         .read()
-        .await
         .auth_cache_ttl_seconds
 }
 
@@ -3157,7 +3152,26 @@ async fn forward_upstream_response(
                 .bytes_stream()
                 .map_err(std::io::Error::other)
                 .eventsource();
-            while let Some(event) = events.next().await {
+            let mut shutdown_rx = state.shutdown_rx.clone();
+            loop {
+                let maybe_event = tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            tracing::info!(
+                                upstream_path = prepared.upstream_path,
+                                "stopping aggregated llm gateway SSE drain because backend is shutting down"
+                            );
+                            None
+                        } else {
+                            continue;
+                        }
+                    }
+                    event = events.next() => event,
+                };
+                let Some(event) = maybe_event else {
+                    break;
+                };
                 let event = event.map_err(|err| {
                     internal_error("Failed to parse llm gateway upstream SSE stream", err)
                 })?;
@@ -3229,6 +3243,7 @@ async fn forward_upstream_response(
         }
 
         let gateway = state.llm_gateway.clone();
+        let mut shutdown_rx = state.shutdown_rx.clone();
         let stream_key_lease = key_lease.clone();
         let stream_request_limit_lease = request_limit_lease;
         let stream_response_adapter = response_adapter;
@@ -3240,7 +3255,25 @@ async fn forward_upstream_response(
                 .bytes_stream()
                 .map_err(std::io::Error::other)
                 .eventsource();
-            while let Some(event) = events.next().await {
+            loop {
+                let maybe_event = tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            tracing::info!(
+                                upstream_path = prepared.upstream_path,
+                                "stopping llm gateway downstream stream because backend is shutting down"
+                            );
+                            None
+                        } else {
+                            continue;
+                        }
+                    }
+                    event = events.next() => event,
+                };
+                let Some(event) = maybe_event else {
+                    break;
+                };
                 match event {
                     Ok(event) => {
                         collector.observe_event(&event);
@@ -4016,6 +4049,33 @@ pub async fn patch_account_settings(
         "Updated Codex account settings"
     );
 
+    Ok(Json(build_codex_account_summary_view(&state, summary).await))
+}
+
+/// Force-refresh one managed Codex account and return its latest summary.
+pub async fn refresh_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<AccountSummaryView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let name = accounts::validate_account_name(&name).map_err(|err| bad_request(&err))?;
+    token_refresh::refresh_account_once(
+        state.llm_gateway.account_pool.as_ref(),
+        state.upstream_proxy_registry.as_ref(),
+        &name,
+    )
+    .await
+    .map_err(|err| internal_error("Failed to refresh account status", err))?;
+
+    let summary = state
+        .llm_gateway
+        .account_pool
+        .list_summaries()
+        .await
+        .into_iter()
+        .find(|summary| summary.name == name)
+        .ok_or_else(|| not_found("account not found"))?;
     Ok(Json(build_codex_account_summary_view(&state, summary).await))
 }
 

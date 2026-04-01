@@ -11,8 +11,8 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::Json,
 };
+use parking_lot::RwLock;
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
 
 use crate::handlers::ErrorResponse;
 
@@ -72,7 +72,7 @@ pub(crate) fn extract_client_ip(headers: &HeaderMap) -> String {
 /// On success the current timestamp is recorded immediately. On failure a
 /// detailed `429` response is returned so the user can see both the configured
 /// window and the remaining retry delay.
-pub(crate) async fn enforce_public_submit_rate_limit(
+pub(crate) fn enforce_public_submit_rate_limit(
     guard: &PublicSubmitGuard,
     rate_limit_key: &str,
     now_ms: i64,
@@ -80,7 +80,7 @@ pub(crate) async fn enforce_public_submit_rate_limit(
     action_label: &str,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let window_ms = (rate_limit_seconds.max(1) as i64) * 1_000;
-    let mut writer = guard.write().await;
+    let mut writer = guard.write();
     if let Some(last) = writer.get(rate_limit_key) {
         let elapsed_ms = now_ms.saturating_sub(*last);
         if elapsed_ms < window_ms {

@@ -10,9 +10,9 @@ use std::{
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use maxminddb::{geoip2, Reader};
+use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::RwLock;
 
 const DEFAULT_GEOIP_DB_URL: &str =
     "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz";
@@ -121,7 +121,7 @@ impl GeoIpResolver {
             .and_then(|item| item.modified().ok())
             .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
             .map(|value| value.as_millis() as i64);
-        let reader_ready = self.inner.reader.read().await.is_some();
+        let reader_ready = self.inner.reader.read().is_some();
 
         GeoIpStatus {
             db_path: self.inner.db_path.display().to_string(),
@@ -181,7 +181,7 @@ impl GeoIpResolver {
     async fn lookup_local_region(&self, ip: IpAddr) -> Result<Option<GeoRegion>> {
         self.ensure_reader().await?;
 
-        let reader_guard = self.inner.reader.read().await;
+        let reader_guard = self.inner.reader.read();
         let Some(reader) = reader_guard.as_ref() else {
             return Ok(None);
         };
@@ -292,7 +292,7 @@ impl GeoIpResolver {
 
     async fn ensure_reader(&self) -> Result<()> {
         {
-            let reader = self.inner.reader.read().await;
+            let reader = self.inner.reader.read();
             if reader.is_some() {
                 return Ok(());
             }
@@ -305,7 +305,7 @@ impl GeoIpResolver {
             .with_context(|| format!("failed to read geoip db {}", self.inner.db_path.display()))?;
         let reader = Reader::from_source(data).context("failed to open geoip mmdb")?;
 
-        let mut writer = self.inner.reader.write().await;
+        let mut writer = self.inner.reader.write();
         *writer = Some(reader);
         tracing::info!("geoip reader initialized from {}", self.inner.db_path.display());
         Ok(())

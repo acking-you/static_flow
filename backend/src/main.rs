@@ -17,7 +17,7 @@ mod seo;
 mod state;
 mod upstream_proxy;
 
-use std::env;
+use std::{env, time::Duration};
 
 use anyhow::Result;
 use better_mimalloc_rs::MiMalloc;
@@ -26,6 +26,7 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_LOG_FILTER: &str =
     "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";
+const GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 10;
 
 #[global_allocator]
 static GLOBAL_MIMALLOC: ProfiledMiMalloc = ProfiledMiMalloc::new(MiMalloc);
@@ -105,13 +106,48 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+    let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = server_shutdown_rx.await;
+            })
+            .await
+    });
+
+    tokio::select! {
+        server_result = &mut server => {
+            server_result??;
+        }
+        signal_result = tokio::signal::ctrl_c() => {
+            signal_result?;
             tracing::info!("shutdown signal received, stopping background tasks...");
             app_state_ref.shutdown();
-        })
-        .await?;
+            let _ = server_shutdown_tx.send(());
+
+            match tokio::time::timeout(
+                Duration::from_secs(GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS),
+                &mut server,
+            )
+            .await
+            {
+                Ok(server_result) => {
+                    server_result??;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_seconds = GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+                        "backend graceful shutdown timed out; aborting remaining server connections"
+                    );
+                    server.abort();
+                    match server.await {
+                        Err(join_err) if join_err.is_cancelled() => {}
+                        other => other??,
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }

@@ -24,8 +24,9 @@ use crate::{
         fetch_admin_llm_gateway_usage_events, import_admin_legacy_kiro_proxy_configs,
         import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
         patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
-        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
-        AccountSummaryView, AdminLlmGatewayAccountContributionRequestView,
+        refresh_admin_llm_gateway_account, update_admin_llm_gateway_config,
+        update_admin_llm_gateway_proxy_binding, AccountSummaryView,
+        AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
@@ -135,6 +136,24 @@ fn account_proxy_select_value(account: &AccountSummaryView) -> String {
             .map(|id| format!("fixed:{id}"))
             .unwrap_or_else(|| "inherit".to_string()),
         _ => "inherit".to_string(),
+    }
+}
+
+fn account_configured_proxy_label(account: &AccountSummaryView) -> String {
+    match account.proxy_mode.as_str() {
+        "direct" => "configured: direct".to_string(),
+        "fixed" => account
+            .effective_proxy_config_name
+            .as_deref()
+            .map(|name| format!("configured: fixed ({name})"))
+            .or_else(|| {
+                account
+                    .proxy_config_id
+                    .as_deref()
+                    .map(|id| format!("configured: fixed ({id})"))
+            })
+            .unwrap_or_else(|| "configured: fixed".to_string()),
+        _ => "configured: inherit provider".to_string(),
     }
 }
 
@@ -1545,6 +1564,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     let keys_resp = keys_result?;
                     let proxy_configs_resp = proxy_configs_result?;
                     let proxy_bindings_resp = proxy_bindings_result?;
+                    let accounts_resp = accounts_result?;
                     let effective_key_filter = if current_key_filter.is_empty()
                         || keys_resp
                             .keys
@@ -1561,7 +1581,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_configs_resp.proxy_configs,
                         proxy_bindings_resp.bindings,
                         effective_key_filter,
-                        accounts_result.ok(),
+                        accounts_resp,
                     ))
                 }
                 .await;
@@ -1595,17 +1615,15 @@ pub fn admin_llm_gateway_page() -> Html {
                         codex_proxy_binding_input.set(codex_bound);
                         kiro_proxy_binding_input.set(kiro_bound);
                         usage_key_filter.set(effective_key_filter);
-                        if let Some(acc_resp) = accounts_resp {
-                            let next_proxy_inputs = acc_resp
-                                .accounts
-                                .iter()
-                                .map(|account| {
-                                    (account.name.clone(), account_proxy_select_value(account))
-                                })
-                                .collect::<BTreeMap<_, _>>();
-                            accounts.set(acc_resp.accounts);
-                            account_proxy_inputs.set(next_proxy_inputs);
-                        }
+                        let next_proxy_inputs = accounts_resp
+                            .accounts
+                            .iter()
+                            .map(|account| {
+                                (account.name.clone(), account_proxy_select_value(account))
+                            })
+                            .collect::<BTreeMap<_, _>>();
+                        accounts.set(accounts_resp.accounts);
+                        account_proxy_inputs.set(next_proxy_inputs);
                         load_error.set(None);
                         reload_usage.emit((Some(current_page), Some(usage_filter_for_reload)));
                     },
@@ -2447,6 +2465,46 @@ pub fn admin_llm_gateway_page() -> Html {
                 )
                 .await
                 {
+                    Ok(updated) => {
+                        let mut items = (*accounts).clone();
+                        if let Some(item) = items.iter_mut().find(|item| item.name == updated.name)
+                        {
+                            *item = updated.clone();
+                        }
+                        accounts.set(items);
+
+                        let mut next_inputs = (*account_proxy_inputs).clone();
+                        next_inputs
+                            .insert(updated.name.clone(), account_proxy_select_value(&updated));
+                        account_proxy_inputs.set(next_inputs);
+                        load_error.set(None);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+
+                let mut inflight = (*account_action_inflight).clone();
+                inflight.remove(&account_name);
+                account_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_refresh_account = {
+        let account_action_inflight = account_action_inflight.clone();
+        let account_proxy_inputs = account_proxy_inputs.clone();
+        let accounts = accounts.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |account_name: String| {
+            let account_action_inflight = account_action_inflight.clone();
+            let account_proxy_inputs = account_proxy_inputs.clone();
+            let accounts = accounts.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut inflight = (*account_action_inflight).clone();
+                inflight.insert(account_name.clone());
+                account_action_inflight.set(inflight);
+
+                match refresh_admin_llm_gateway_account(&account_name).await {
                     Ok(updated) => {
                         let mut items = (*accounts).clone();
                         if let Some(item) = items.iter_mut().find(|item| item.name == updated.name)
@@ -3336,10 +3394,26 @@ pub fn admin_llm_gateway_page() -> Html {
                 if *active_tab == TAB_ACCOUNTS {
                 // === Codex Accounts ===
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                    <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Codex Accounts" }</h2>
-                    <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
-                        { format!("已导入 {} 个账号", accounts.len()) }
-                    </p>
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Codex Accounts" }</h2>
+                            <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
+                                { format!("已导入 {} 个账号。这里会显示账号状态、usage 刷新健康度和账号级 proxy 配置。", accounts.len()) }
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let reload = reload.clone();
+                                Callback::from(move |_| reload.emit(()))
+                            }}
+                            disabled={*loading}
+                        >
+                            <i class={classes!("fas", if *loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                            { if *loading { "刷新中..." } else { "刷新列表" } }
+                        </button>
+                    </div>
 
                     // Import form toggle
                     <div class={classes!("mt-3")}>
@@ -3458,6 +3532,7 @@ pub fn admin_llm_gateway_page() -> Html {
                             { for accounts.iter().map(|acc| {
                                 let acc_name_for_toggle = acc.name.clone();
                                 let acc_name_for_delete = acc.name.clone();
+                                let acc_name_for_refresh = acc.name.clone();
                                 let acc_name_for_proxy_change = acc.name.clone();
                                 let acc_name_for_proxy_save = acc.name.clone();
                                 let acc_name = acc.name.clone();
@@ -3469,12 +3544,26 @@ pub fn admin_llm_gateway_page() -> Html {
                                     .get(&acc_name)
                                     .cloned()
                                     .unwrap_or_else(|| account_proxy_select_value(acc));
+                                let configured_proxy_line = account_configured_proxy_label(acc);
                                 let effective_proxy_line = format!(
-                                    "{} · {}",
+                                    "effective: {} · {}",
                                     acc.effective_proxy_source,
                                     acc.effective_proxy_url.clone().unwrap_or_else(|| "direct".to_string())
                                 );
+                                let last_refresh_line = acc
+                                    .last_refresh
+                                    .map(format_ms)
+                                    .unwrap_or_else(|| "-".to_string());
+                                let last_usage_checked_line = acc
+                                    .last_usage_checked_at
+                                    .map(format_ms)
+                                    .unwrap_or_else(|| "-".to_string());
+                                let last_usage_success_line = acc
+                                    .last_usage_success_at
+                                    .map(format_ms)
+                                    .unwrap_or_else(|| "-".to_string());
                                 let on_delete = on_delete_account.clone();
+                                let on_refresh_account = on_refresh_account.clone();
                                 let on_toggle_account_spark_mapping =
                                     on_toggle_account_spark_mapping.clone();
                                 let on_save_account_proxy = on_save_account_proxy.clone();
@@ -3486,7 +3575,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                     .unwrap_or_else(|| "-".to_string());
                                 let is_pro = is_gpt_pro_account(acc_plan_type.as_deref());
                                 let show_spark_toggle = is_pro || spark_mapping_enabled;
-                                let spark_toggle_inflight =
+                                let account_busy =
                                     (*account_action_inflight).contains(&acc_name);
                                 html! {
                                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "px-4", "py-3", "flex-wrap")}>
@@ -3505,11 +3594,24 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     }
                                                 </div>
                                                 <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                    { configured_proxy_line.clone() }
+                                                </div>
+                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
                                                     { effective_proxy_line.clone() }
                                                     if let Some(proxy_name) = acc.effective_proxy_config_name.as_deref() {
                                                         { format!(" · {}", proxy_name) }
                                                     }
                                                 </div>
+                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]", "flex", "gap-3", "flex-wrap")}>
+                                                    <span>{ format!("token refresh {}", last_refresh_line) }</span>
+                                                    <span>{ format!("usage checked {}", last_usage_checked_line) }</span>
+                                                    <span>{ format!("usage success {}", last_usage_success_line) }</span>
+                                                </div>
+                                                if let Some(usage_error) = acc.usage_error_message.as_deref() {
+                                                    <div class={classes!("mt-2", "max-w-3xl", "text-xs", "leading-5", "text-amber-700", "dark:text-amber-300")}>
+                                                        { format!("usage refresh error: {}", usage_error) }
+                                                    </div>
+                                                }
                                             </div>
                                         </div>
                                         <div class={classes!("flex", "items-center", "gap-3", "flex-wrap", "justify-end")}>
@@ -3545,9 +3647,16 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 <button
                                                     class={classes!("btn-terminal")}
                                                     onclick={Callback::from(move |_| on_save_account_proxy.emit(acc_name_for_proxy_save.clone()))}
-                                                    disabled={spark_toggle_inflight}
+                                                    disabled={account_busy}
                                                 >
-                                                    { if spark_toggle_inflight { "保存中..." } else { "保存代理" } }
+                                                    { if account_busy { "处理中..." } else { "保存代理" } }
+                                                </button>
+                                                <button
+                                                    class={classes!("btn-terminal")}
+                                                    onclick={Callback::from(move |_| on_refresh_account.emit(acc_name_for_refresh.clone()))}
+                                                    disabled={account_busy}
+                                                >
+                                                    { if account_busy { "处理中..." } else { "刷新状态" } }
                                                 </button>
                                             </div>
                                             if show_spark_toggle {
@@ -3566,11 +3675,11 @@ pub fn admin_llm_gateway_page() -> Html {
                                                             !spark_mapping_enabled,
                                                         ))
                                                     })}
-                                                    disabled={spark_toggle_inflight}
+                                                    disabled={account_busy}
                                                     title="把客户端请求的 gpt-5.3-codex 映射到该账号上游的 gpt-5.3-codex-spark"
                                                 >
                                                     {
-                                                        if spark_toggle_inflight {
+                                                        if account_busy {
                                                             "切换中..."
                                                         } else if spark_mapping_enabled {
                                                             "Spark 映射已开"
@@ -3590,6 +3699,10 @@ pub fn admin_llm_gateway_page() -> Html {
                                     </div>
                                 }
                             }) }
+                        </div>
+                    } else {
+                        <div class={classes!("mt-4", "rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-6", "text-sm", "text-[var(--muted)]")}>
+                            { "当前还没有导入任何 Codex 账号。可以先导入账号，或者点击上方“刷新列表”确认后端是否已加载本地账号文件。" }
                         </div>
                     }
                 </section>
