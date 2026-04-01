@@ -18,7 +18,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
     StatusCode,
 };
-use static_flow_shared::llm_gateway_store::LLM_GATEWAY_PROVIDER_KIRO;
+use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LLM_GATEWAY_PROVIDER_KIRO};
 
 use super::{
     auth_file::{
@@ -113,29 +113,36 @@ impl KiroProvider {
     /// one succeeds or all are exhausted.
     pub async fn call_api(
         &self,
+        key_record: &LlmGatewayKeyRecord,
         conversation_state: &ConversationState,
     ) -> Result<ProviderCallResult> {
-        self.call_api_inner(conversation_state).await
+        self.call_api_inner(key_record, conversation_state).await
     }
 
     /// Streaming variant of [`call_api`](Self::call_api). The response body
     /// should be consumed as an event stream.
     pub async fn call_api_stream(
         &self,
+        key_record: &LlmGatewayKeyRecord,
         conversation_state: &ConversationState,
     ) -> Result<ProviderCallResult> {
-        self.call_api_inner(conversation_state).await
+        self.call_api_inner(key_record, conversation_state).await
     }
 
     /// Send an MCP (Model Context Protocol) request through the account pool.
-    pub async fn call_mcp(&self, request_body: &str) -> Result<ProviderCallResult> {
-        self.call_mcp_inner(request_body).await
+    pub async fn call_mcp(
+        &self,
+        key_record: &LlmGatewayKeyRecord,
+        request_body: &str,
+    ) -> Result<ProviderCallResult> {
+        self.call_mcp_inner(key_record, request_body).await
     }
 
     // Outer loop: retries the full account rotation when all accounts are
     // cooling down. Breaks out on success, fatal error, or full exhaustion.
     async fn call_api_inner(
         &self,
+        key_record: &LlmGatewayKeyRecord,
         conversation_state: &ConversationState,
     ) -> Result<ProviderCallResult> {
         let queued_at = Instant::now();
@@ -144,6 +151,7 @@ impl KiroProvider {
             if auths.is_empty() {
                 return Err(anyhow!("no kiro account available for request"));
             }
+            let auths = filter_auths_for_key_route(&auths, key_record)?;
             let snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<anyhow::Error> = None;
             let mut saw_quota_exhausted = false;
@@ -396,13 +404,18 @@ impl KiroProvider {
         }
     }
 
-    async fn call_mcp_inner(&self, request_body: &str) -> Result<ProviderCallResult> {
+    async fn call_mcp_inner(
+        &self,
+        key_record: &LlmGatewayKeyRecord,
+        request_body: &str,
+    ) -> Result<ProviderCallResult> {
         let queued_at = Instant::now();
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
             if auths.is_empty() {
                 return Err(anyhow!("no kiro account available for mcp request"));
             }
+            let auths = filter_auths_for_key_route(&auths, key_record)?;
             let snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<anyhow::Error> = None;
             let mut saw_quota_exhausted = false;
@@ -1197,6 +1210,45 @@ fn build_mcp_headers(ctx: &CallContext) -> Result<HeaderMap> {
     Ok(headers)
 }
 
+fn filter_auths_for_key_route(
+    auths: &[KiroAuthRecord],
+    key_record: &LlmGatewayKeyRecord,
+) -> anyhow::Result<Vec<KiroAuthRecord>> {
+    match key_record.route_strategy.as_deref() {
+        None => Ok(auths.to_vec()),
+        Some("fixed") => {
+            let account_name = key_record
+                .fixed_account_name
+                .as_deref()
+                .ok_or_else(|| anyhow!("fixed route_strategy requires fixed_account_name"))?;
+            let matched = auths
+                .iter()
+                .filter(|auth| auth.name == account_name)
+                .cloned()
+                .collect::<Vec<_>>();
+            if matched.is_empty() {
+                anyhow::bail!("fixed route account `{account_name}` is not available");
+            }
+            Ok(matched)
+        },
+        Some("auto") => {
+            let Some(auto_account_names) = key_record.auto_account_names.as_deref() else {
+                return Ok(auths.to_vec());
+            };
+            let matched = auths
+                .iter()
+                .filter(|auth| auto_account_names.contains(&auth.name))
+                .cloned()
+                .collect::<Vec<_>>();
+            if matched.is_empty() {
+                anyhow::bail!("no configured auto accounts are available");
+            }
+            Ok(matched)
+        },
+        Some(other) => anyhow::bail!("unsupported route strategy `{other}`"),
+    }
+}
+
 /// Order accounts by readiness/fairness first, then remaining balance.
 ///
 /// Accounts that have never started a request in this process are tried first.
@@ -1324,6 +1376,39 @@ mod tests {
         }
     }
 
+    fn key(
+        route_strategy: Option<&str>,
+        fixed: Option<&str>,
+        subset: Vec<&str>,
+    ) -> LlmGatewayKeyRecord {
+        LlmGatewayKeyRecord {
+            id: "test".to_string(),
+            name: "test-key".to_string(),
+            route_strategy: route_strategy.map(str::to_string),
+            fixed_account_name: fixed.map(str::to_string),
+            auto_account_names: Some(subset.into_iter().map(str::to_string).collect()),
+            secret: String::new(),
+            key_hash: String::new(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 0,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        }
+    }
+
     fn call_context(profile_arn: Option<&str>) -> CallContext {
         CallContext {
             auth: KiroAuthRecord {
@@ -1389,6 +1474,62 @@ mod tests {
         let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn filter_auths_for_key_route_auto_no_subset_keeps_full_pool() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let auths = filter_auths_for_key_route(&auths, &key(None, None, vec![]))
+            .expect("route should keep full pool");
+        let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn filter_auths_for_key_route_auto_strategy_without_subset_keeps_full_pool() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let mut key_record = key(Some("auto"), None, vec!["alpha"]);
+        key_record.auto_account_names = None;
+        let auths =
+            filter_auths_for_key_route(&auths, &key_record).expect("route should keep full pool");
+        let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn filter_auths_for_key_route_auto_with_empty_subset_errors() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let err = filter_auths_for_key_route(&auths, &key(Some("auto"), None, vec![])).unwrap_err();
+        assert_eq!(err.to_string(), "no configured auto accounts are available");
+    }
+
+    #[test]
+    fn filter_auths_for_key_route_fixed_keeps_single_account() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let auths = filter_auths_for_key_route(&auths, &key(Some("fixed"), Some("beta"), vec![]))
+            .expect("route should keep fixed account");
+        let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["beta"]);
+    }
+
+    #[test]
+    fn filter_auths_for_key_route_auto_with_subset_keeps_subset() {
+        let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
+        let auths =
+            filter_auths_for_key_route(&auths, &key(Some("auto"), None, vec!["alpha", "gamma"]))
+                .expect("route should keep auto subset");
+        let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "gamma"]);
+    }
+
+    #[test]
+    fn filter_auths_for_key_route_fixed_missing_account_errors() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let err = filter_auths_for_key_route(&auths, &key(Some("fixed"), Some("missing"), vec![]))
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("fixed route account `missing` is not available"));
     }
 
     #[test]

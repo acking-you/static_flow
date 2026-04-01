@@ -381,7 +381,10 @@ async fn handle_messages(
     event_context.endpoint = "/generateAssistantResponse".to_string();
 
     if payload.stream {
-        let response = match provider.call_api_stream(&conversation_state).await {
+        let response = match provider
+            .call_api_stream(&key_record, &conversation_state)
+            .await
+        {
             Ok(response) => response,
             Err(err) => return map_provider_error(err),
         };
@@ -416,7 +419,7 @@ async fn handle_messages(
         .await;
     }
 
-    let response = match provider.call_api(&conversation_state).await {
+    let response = match provider.call_api(&key_record, &conversation_state).await {
         Ok(response) => response,
         Err(err) => return map_provider_error(err),
     };

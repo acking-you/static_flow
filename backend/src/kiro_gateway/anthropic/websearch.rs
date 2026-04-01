@@ -130,7 +130,7 @@ pub async fn handle_websearch_request(
     );
 
     let (tool_use_id, mcp_request) = create_mcp_request(&query);
-    let search_results = match call_mcp_api(provider, &mcp_request).await {
+    let search_results = match call_mcp_api(&key_record, provider, &mcp_request).await {
         Ok(success) => {
             let McpCallSuccess {
                 response,
@@ -265,11 +265,12 @@ fn create_mcp_request(query: &str) -> (String, McpRequest) {
 }
 
 async fn call_mcp_api(
+    key_record: &LlmGatewayKeyRecord,
     provider: &crate::kiro_gateway::provider::KiroProvider,
     request: &McpRequest,
 ) -> anyhow::Result<McpCallSuccess> {
     let request_body = serde_json::to_string(request)?;
-    let response = provider.call_mcp(&request_body).await?;
+    let response = provider.call_mcp(key_record, &request_body).await?;
     let account_name = response.account_name;
     let body = response.response.text().await?;
     let mcp_response: McpResponse = serde_json::from_str(&body)?;
