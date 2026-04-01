@@ -303,13 +303,17 @@ pub async fn patch_admin_key(
             .into_iter()
             .map(|auth| auth.name)
             .collect::<BTreeSet<_>>();
-        let (route_strategy, fixed_account_name, auto_account_names) = normalize_key_route_config(
-            request.route_strategy.as_deref(),
-            request.fixed_account_name.as_deref(),
-            request.auto_account_names,
-            &existing_account_names,
-        )
-        .map_err(|err| bad_request(&err.to_string()))?;
+        let (route_strategy, fixed_account_name, auto_account_names) =
+            normalize_kiro_key_route_config_for_patch(
+                key.route_strategy.clone(),
+                key.fixed_account_name.clone(),
+                key.auto_account_names.clone(),
+                request.route_strategy.as_deref(),
+                request.fixed_account_name.as_deref(),
+                request.auto_account_names,
+                &existing_account_names,
+            )
+            .map_err(|err| bad_request(&err.to_string()))?;
         key.route_strategy = route_strategy;
         key.fixed_account_name = fixed_account_name;
         key.auto_account_names = auto_account_names;
@@ -1001,14 +1005,43 @@ fn normalize_key_route_config(
             {
                 anyhow::bail!("none of the configured auto accounts exist anymore");
             }
-            Ok((
-                None,
-                None,
-                filtered_auto_account_names.filter(|names| !names.is_empty()),
-            ))
+            Ok((None, None, filtered_auto_account_names.filter(|names| !names.is_empty())))
         },
         _ => anyhow::bail!("route_strategy must be `auto` or `fixed`"),
     }
+}
+
+fn normalize_kiro_key_route_config_for_patch(
+    current_route_strategy: Option<String>,
+    current_fixed_account_name: Option<String>,
+    current_auto_account_names: Option<Vec<String>>,
+    request_route_strategy: Option<&str>,
+    request_fixed_account_name: Option<&str>,
+    request_auto_account_names: Option<Vec<String>>,
+    existing_account_names: &BTreeSet<String>,
+) -> anyhow::Result<NormalizedKiroKeyRouteConfig> {
+    let route_strategy = if request_route_strategy.is_some() {
+        request_route_strategy
+    } else {
+        current_route_strategy.as_deref()
+    };
+    let fixed_account_name = if request_fixed_account_name.is_some() {
+        request_fixed_account_name
+    } else {
+        current_fixed_account_name.as_deref()
+    };
+    let auto_account_names = if request_auto_account_names.is_some() {
+        request_auto_account_names
+    } else {
+        current_auto_account_names
+    };
+
+    normalize_key_route_config(
+        route_strategy,
+        fixed_account_name,
+        auto_account_names,
+        existing_account_names,
+    )
 }
 
 fn normalize_status(raw: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
@@ -1131,7 +1164,10 @@ fn external_origin(headers: &HeaderMap) -> Option<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use super::{normalize_key_route_config, normalize_model_name_map};
+    use super::{
+        normalize_key_route_config, normalize_kiro_key_route_config_for_patch,
+        normalize_model_name_map,
+    };
 
     #[test]
     fn normalize_model_name_map_drops_identity_entries() {
@@ -1230,5 +1266,79 @@ mod tests {
             .expect("normalize should succeed");
 
         assert_eq!(normalized, (None, None, None));
+    }
+
+    #[test]
+    fn normalize_kiro_key_route_config_for_patch_keeps_fixed_route_when_only_fixed_account_updates()
+    {
+        let existing = BTreeSet::from(["alpha".to_string(), "beta".to_string()]);
+
+        let normalized = normalize_kiro_key_route_config_for_patch(
+            Some("fixed".to_string()),
+            Some("alpha".to_string()),
+            None,
+            None,
+            Some("beta"),
+            None,
+            &existing,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(normalized, (Some("fixed".to_string()), Some("beta".to_string()), None));
+    }
+
+    #[test]
+    fn normalize_kiro_key_route_config_for_patch_keeps_auto_route_when_only_subset_updates() {
+        let existing =
+            BTreeSet::from(["alpha".to_string(), "beta".to_string(), "gamma".to_string()]);
+
+        let normalized = normalize_kiro_key_route_config_for_patch(
+            Some("auto".to_string()),
+            None,
+            Some(vec!["alpha".to_string(), "beta".to_string()]),
+            None,
+            None,
+            Some(vec!["beta".to_string(), "missing".to_string()]),
+            &existing,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(normalized, (Some("auto".to_string()), None, Some(vec!["beta".to_string()])));
+    }
+
+    #[test]
+    fn normalize_kiro_key_route_config_for_patch_empty_strategy_clears_fixed_to_default() {
+        let existing = BTreeSet::from(["alpha".to_string()]);
+
+        let normalized = normalize_kiro_key_route_config_for_patch(
+            Some("fixed".to_string()),
+            Some("alpha".to_string()),
+            None,
+            Some(""),
+            None,
+            None,
+            &existing,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(normalized, (None, None, None));
+    }
+
+    #[test]
+    fn normalize_kiro_key_route_config_for_patch_rejects_unknown_fixed_account() {
+        let existing = BTreeSet::from(["alpha".to_string()]);
+
+        let err = normalize_kiro_key_route_config_for_patch(
+            Some("fixed".to_string()),
+            Some("alpha".to_string()),
+            None,
+            None,
+            Some("missing"),
+            None,
+            &existing,
+        )
+        .expect_err("unknown fixed account should fail");
+
+        assert!(err.to_string().contains("unknown account `missing`"));
     }
 }
