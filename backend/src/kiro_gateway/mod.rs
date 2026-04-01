@@ -953,6 +953,25 @@ fn normalize_auto_account_names_input(
     Ok(Some(names))
 }
 
+fn filter_known_auto_account_names(
+    auto_account_names: Option<Vec<String>>,
+    existing_account_names: &BTreeSet<String>,
+) -> anyhow::Result<Option<Vec<String>>> {
+    let filtered_auto_account_names = auto_account_names.map(|names| {
+        names
+            .into_iter()
+            .filter(|name| existing_account_names.contains(name))
+            .collect::<Vec<_>>()
+    });
+    if filtered_auto_account_names
+        .as_ref()
+        .is_some_and(|names| names.is_empty())
+    {
+        anyhow::bail!("none of the configured auto accounts exist anymore");
+    }
+    Ok(filtered_auto_account_names.filter(|names| !names.is_empty()))
+}
+
 fn normalize_key_route_config(
     route_strategy: Option<&str>,
     fixed_account_name: Option<&str>,
@@ -974,39 +993,11 @@ fn normalize_key_route_config(
             Ok((Some("fixed".to_string()), Some(fixed_account_name), None))
         },
         Some("auto") => {
-            let filtered_auto_account_names = auto_account_names.map(|names| {
-                names
-                    .into_iter()
-                    .filter(|name| existing_account_names.contains(name))
-                    .collect::<Vec<_>>()
-            });
-            if filtered_auto_account_names
-                .as_ref()
-                .is_some_and(|names| names.is_empty())
-            {
-                anyhow::bail!("none of the configured auto accounts exist anymore");
-            }
-            Ok((
-                Some("auto".to_string()),
-                None,
-                filtered_auto_account_names.filter(|names| !names.is_empty()),
-            ))
+            let auto_account_names =
+                filter_known_auto_account_names(auto_account_names, existing_account_names)?;
+            Ok((Some("auto".to_string()), None, auto_account_names))
         },
-        None => {
-            let filtered_auto_account_names = auto_account_names.map(|names| {
-                names
-                    .into_iter()
-                    .filter(|name| existing_account_names.contains(name))
-                    .collect::<Vec<_>>()
-            });
-            if filtered_auto_account_names
-                .as_ref()
-                .is_some_and(|names| names.is_empty())
-            {
-                anyhow::bail!("none of the configured auto accounts exist anymore");
-            }
-            Ok((None, None, filtered_auto_account_names.filter(|names| !names.is_empty())))
-        },
+        None => Ok((None, None, None)),
         _ => anyhow::bail!("route_strategy must be `auto` or `fixed`"),
     }
 }
@@ -1020,11 +1011,18 @@ fn normalize_kiro_key_route_config_for_patch(
     request_auto_account_names: Option<Vec<String>>,
     existing_account_names: &BTreeSet<String>,
 ) -> anyhow::Result<NormalizedKiroKeyRouteConfig> {
-    let route_strategy = if request_route_strategy.is_some() {
-        request_route_strategy
-    } else {
-        current_route_strategy.as_deref()
-    };
+    let request_route_strategy = request_route_strategy
+        .map(|value| normalize_route_strategy_input(Some(value)))
+        .transpose()?;
+
+    if let Some(None) = request_route_strategy {
+        return Ok((None, None, None));
+    }
+
+    let request_route_strategy = request_route_strategy.flatten();
+    let route_strategy = request_route_strategy
+        .as_deref()
+        .or(current_route_strategy.as_deref());
     let fixed_account_name = if request_fixed_account_name.is_some() {
         request_fixed_account_name
     } else {
@@ -1314,6 +1312,43 @@ mod tests {
             Some("fixed".to_string()),
             Some("alpha".to_string()),
             None,
+            Some(""),
+            None,
+            None,
+            &existing,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(normalized, (None, None, None));
+    }
+
+    #[test]
+    fn normalize_kiro_key_route_config_for_patch_empty_strategy_clears_auto_subset_to_default() {
+        let existing = BTreeSet::from(["alpha".to_string(), "beta".to_string()]);
+
+        let normalized = normalize_kiro_key_route_config_for_patch(
+            Some("auto".to_string()),
+            None,
+            Some(vec!["alpha".to_string(), "beta".to_string()]),
+            Some(""),
+            None,
+            None,
+            &existing,
+        )
+        .expect("normalize should succeed");
+
+        assert_eq!(normalized, (None, None, None));
+    }
+
+    #[test]
+    fn normalize_kiro_key_route_config_for_patch_empty_strategy_clears_auto_subset_with_stale_accounts(
+    ) {
+        let existing = BTreeSet::new();
+
+        let normalized = normalize_kiro_key_route_config_for_patch(
+            Some("auto".to_string()),
+            None,
+            Some(vec!["missing-alpha".to_string(), "missing-beta".to_string()]),
             Some(""),
             None,
             None,
