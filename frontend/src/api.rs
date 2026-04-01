@@ -6781,6 +6781,29 @@ pub async fn patch_admin_kiro_key(
                 serde_json::Value::Number(quota_billable_limit.into()),
             );
         }
+        if let Some(strategy) = request.route_strategy {
+            body.insert(
+                "route_strategy".to_string(),
+                serde_json::Value::String(strategy.to_string()),
+            );
+        }
+        if let Some(account_name) = request.fixed_account_name {
+            body.insert(
+                "fixed_account_name".to_string(),
+                serde_json::Value::String(account_name.to_string()),
+            );
+        }
+        if let Some(account_names) = request.auto_account_names {
+            body.insert(
+                "auto_account_names".to_string(),
+                serde_json::Value::Array(
+                    account_names
+                        .iter()
+                        .map(|value| serde_json::Value::String(value.clone()))
+                        .collect(),
+                ),
+            );
+        }
         if let Some(model_name_map) = request.model_name_map {
             let value = serde_json::to_value(model_name_map)
                 .map_err(|e| format!("Serialize error: {:?}", e))?;

@@ -1,6 +1,6 @@
 //! Admin UI for managing Kiro accounts, keys, usage, and proxy bindings.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
 use wasm_bindgen::prelude::*;
@@ -121,6 +121,52 @@ fn kiro_account_proxy_select_value(account: &KiroAccountView) -> String {
             .map(|id| format!("fixed:{id}"))
             .unwrap_or_else(|| "inherit".to_string()),
         _ => "inherit".to_string(),
+    }
+}
+
+fn sanitize_kiro_auto_account_names(names: &[String], available_names: &[String]) -> Vec<String> {
+    let valid_names = available_names
+        .iter()
+        .map(|name| name.as_str())
+        .collect::<HashSet<_>>();
+    let mut sanitized = names
+        .iter()
+        .filter(|name| valid_names.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    sanitized.sort();
+    sanitized.dedup();
+    sanitized
+}
+
+fn sanitize_kiro_fixed_account_name(value: Option<&str>, available_names: &[String]) -> String {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return String::new();
+    };
+    if available_names.iter().any(|name| name == value) {
+        value.to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn kiro_key_route_summary(
+    route_strategy: &str,
+    fixed_account_name: &str,
+    auto_account_names: &[String],
+) -> String {
+    if route_strategy == "fixed" {
+        format!(
+            "绑定: {}",
+            if fixed_account_name.is_empty() { "未选择" } else { fixed_account_name }
+        )
+    } else if auto_account_names.is_empty() {
+        "全账号池自动择优；如果某个账号不可用，会继续尝试其他账号。".to_string()
+    } else {
+        format!(
+            "仅在这些账号中自动择优: {}；如果子集里没有可用账号，请求会直接报错。",
+            auto_account_names.join(", ")
+        )
     }
 }
 
@@ -526,6 +572,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
 struct KiroKeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
     available_models: Vec<KiroModelView>,
+    accounts: Vec<KiroAccountView>,
     on_reload: Callback<()>,
     on_copy: Callback<(String, String)>,
     on_flash: Callback<(String, bool)>,
@@ -533,9 +580,33 @@ struct KiroKeyEditorCardProps {
 
 #[function_component(KiroKeyEditorCard)]
 fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
+    let available_account_names = props
+        .accounts
+        .iter()
+        .map(|account| account.name.clone())
+        .collect::<Vec<_>>();
     let name = use_state(|| props.key_item.name.clone());
     let quota = use_state(|| props.key_item.quota_billable_limit.to_string());
     let status = use_state(|| props.key_item.status.clone());
+    let route_strategy = use_state(|| {
+        props
+            .key_item
+            .route_strategy
+            .clone()
+            .unwrap_or_else(|| "auto".to_string())
+    });
+    let fixed_account_name = use_state(|| {
+        sanitize_kiro_fixed_account_name(
+            props.key_item.fixed_account_name.as_deref(),
+            &available_account_names,
+        )
+    });
+    let auto_account_names = use_state(|| {
+        sanitize_kiro_auto_account_names(
+            props.key_item.auto_account_names.as_deref().unwrap_or(&[]),
+            &available_account_names,
+        )
+    });
     let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
@@ -545,11 +616,29 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
+        let route_strategy = route_strategy.clone();
+        let fixed_account_name = fixed_account_name.clone();
+        let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
-        use_effect_with(props.key_item.clone(), move |_| {
+        let available_account_names = available_account_names.clone();
+        use_effect_with((props.key_item.clone(), available_account_names.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
             status.set(key_item.status.clone());
+            route_strategy.set(
+                key_item
+                    .route_strategy
+                    .clone()
+                    .unwrap_or_else(|| "auto".to_string()),
+            );
+            fixed_account_name.set(sanitize_kiro_fixed_account_name(
+                key_item.fixed_account_name.as_deref(),
+                &available_account_names,
+            ));
+            auto_account_names.set(sanitize_kiro_auto_account_names(
+                key_item.auto_account_names.as_deref().unwrap_or(&[]),
+                &available_account_names,
+            ));
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             || ()
         });
@@ -561,6 +650,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
+        let route_strategy = route_strategy.clone();
+        let fixed_account_name = fixed_account_name.clone();
+        let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
@@ -572,6 +664,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
             let status_value = (*status).clone();
+            let route_strategy_value = (*route_strategy).clone();
+            let fixed_account_name_value = (*fixed_account_name).clone();
+            let auto_account_names_value = (*auto_account_names).clone();
             let model_name_map_value = (*model_name_map).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
@@ -594,9 +689,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     status: Some(status_value.trim()),
                     public_visible: None,
                     quota_billable_limit: Some(parsed_quota),
-                    route_strategy: None,
-                    fixed_account_name: None,
-                    auto_account_names: None,
+                    route_strategy: Some(route_strategy_value.trim()),
+                    fixed_account_name: Some(fixed_account_name_value.trim()),
+                    auto_account_names: Some(auto_account_names_value.as_slice()),
                     model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
@@ -626,6 +721,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let key_name = props.key_item.name.clone();
         let name = name.clone();
         let quota = quota.clone();
+        let route_strategy = route_strategy.clone();
+        let fixed_account_name = fixed_account_name.clone();
+        let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
@@ -636,6 +734,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let key_name = key_name.clone();
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
+            let route_strategy_value = (*route_strategy).clone();
+            let fixed_account_name_value = (*fixed_account_name).clone();
+            let auto_account_names_value = (*auto_account_names).clone();
             let model_name_map_value = (*model_name_map).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
@@ -658,9 +759,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     status: Some("disabled"),
                     public_visible: None,
                     quota_billable_limit: Some(parsed_quota),
-                    route_strategy: None,
-                    fixed_account_name: None,
-                    auto_account_names: None,
+                    route_strategy: Some(route_strategy_value.trim()),
+                    fixed_account_name: Some(fixed_account_name_value.trim()),
+                    auto_account_names: Some(auto_account_names_value.as_slice()),
                     model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
@@ -727,6 +828,27 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         Callback::from(move |_| model_name_map.set(BTreeMap::new()))
     };
+
+    let toggle_auto_account_name = {
+        let auto_account_names = auto_account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*auto_account_names).clone();
+            if let Some(idx) = names.iter().position(|name| name == &account_name) {
+                names.remove(idx);
+            } else {
+                names.push(account_name);
+                names.sort();
+                names.dedup();
+            }
+            auto_account_names.set(names);
+        })
+    };
+
+    let route_summary = kiro_key_route_summary(
+        (*route_strategy).as_str(),
+        (*fixed_account_name).as_str(),
+        (*auto_account_names).as_slice(),
+    );
 
     let key_ratio = kiro_key_usage_ratio(
         props.key_item.remaining_billable,
@@ -856,6 +978,85 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         { "private" }
                     </span>
                     <span>{ "Kiro key 不会在公开页面暴露。" }</span>
+                </div>
+                <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm", "text-[var(--muted)]", "space-y-2")}>
+                    <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
+                        <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                            <span>{ "路由" }</span>
+                                <select
+                                    key={format!("{}-route-{}", props.key_item.id, (*route_strategy).clone())}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                                    onchange={{
+                                        let route_strategy = route_strategy.clone();
+                                        Callback::from(move |event: Event| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                route_strategy.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                >
+                                <option value="auto" selected={*route_strategy == "auto"}>{ "自动 (按额度)" }</option>
+                                <option value="fixed" selected={*route_strategy == "fixed"}>{ "绑定账号" }</option>
+                            </select>
+                        </label>
+                        if *route_strategy == "fixed" {
+                            <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                <span>{ "账号" }</span>
+                                <select
+                                    key={format!("{}-fixed-{}", props.key_item.id, (*fixed_account_name).clone())}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                                    onchange={{
+                                        let fixed_account_name = fixed_account_name.clone();
+                                        Callback::from(move |event: Event| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                fixed_account_name.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                >
+                                    <option value="" selected={(*fixed_account_name).is_empty()}>{ "-- 选择 --" }</option>
+                                    { for props.accounts.iter().map(|account| html! {
+                                        <option value={account.name.clone()} selected={*fixed_account_name == account.name}>{ account.name.clone() }</option>
+                                    }) }
+                                </select>
+                            </label>
+                        } else {
+                            <div class={classes!("w-full", "space-y-2")}>
+                                <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "自动候选账号（可选，空则走全池）" }</div>
+                                if props.accounts.is_empty() {
+                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
+                                        { "当前没有可供绑定的账号。" }
+                                    </div>
+                                } else {
+                                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                        { for props.accounts.iter().map(|account| {
+                                            let account_name = account.name.clone();
+                                            let checked = auto_account_names.iter().any(|name| name == &account.name);
+                                            let toggle_auto_account_name = toggle_auto_account_name.clone();
+                                            html! {
+                                                <label class={classes!(
+                                                    "flex", "cursor-pointer", "items-start", "gap-2", "rounded-lg", "border", "px-3", "py-2",
+                                                    if checked {
+                                                        "border-sky-500/30 bg-sky-500/8"
+                                                    } else {
+                                                        "border-[var(--border)] bg-[var(--surface-alt)]"
+                                                    }
+                                                )}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onchange={Callback::from(move |_| toggle_auto_account_name.emit(account_name.clone()))}
+                                                    />
+                                                    <span class={classes!("font-medium")}>{ account.name.clone() }</span>
+                                                </label>
+                                            }
+                                        }) }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ route_summary }</div>
                 </div>
                 <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
@@ -1692,6 +1893,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                         key={key_item.id.clone()}
                                         key_item={key_item.clone()}
                                         available_models={(*kiro_models).clone()}
+                                        accounts={(*accounts).clone()}
                                         on_reload={on_reload.clone()}
                                         on_copy={on_copy.clone()}
                                         on_flash={notify.clone()}
@@ -1828,4 +2030,41 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
             </div>
         </div>
     </> }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        kiro_key_route_summary, sanitize_kiro_auto_account_names, sanitize_kiro_fixed_account_name,
+    };
+
+    #[test]
+    fn sanitize_kiro_auto_account_names_drops_unknown_and_sorts() {
+        let available = vec!["beta".to_string(), "alpha".to_string()];
+        let configured = vec![
+            "beta".to_string(),
+            "missing".to_string(),
+            "alpha".to_string(),
+            "beta".to_string(),
+        ];
+
+        assert_eq!(sanitize_kiro_auto_account_names(&configured, &available), vec![
+            "alpha".to_string(),
+            "beta".to_string()
+        ]);
+    }
+
+    #[test]
+    fn sanitize_kiro_fixed_account_name_drops_unknown_value() {
+        let available = vec!["alpha".to_string(), "beta".to_string()];
+
+        assert_eq!(sanitize_kiro_fixed_account_name(Some("missing"), &available), "");
+        assert_eq!(sanitize_kiro_fixed_account_name(Some(" beta "), &available), "beta");
+    }
+
+    #[test]
+    fn kiro_key_route_summary_uses_full_pool_text_when_subset_is_empty() {
+        let summary = kiro_key_route_summary("auto", "", &[]);
+        assert!(summary.contains("全账号池自动择优"));
+    }
 }
