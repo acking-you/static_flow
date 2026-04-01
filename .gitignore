@@ -76,6 +76,7 @@ data/
 bin/
 tmp/
 backend/.local/
+.worktrees/
 
 # Local agent entry files (symlinked to external path)
 AGENTS.md
