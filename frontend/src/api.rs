@@ -6657,8 +6657,10 @@ pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, Stri
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/keys", admin_base());
+        let url = format!("{}/admin/kiro-gateway/keys?_ts={}", admin_base(), Date::now() as u64);
         let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
