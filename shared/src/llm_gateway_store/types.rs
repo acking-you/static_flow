@@ -46,6 +46,9 @@ pub const DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS: u64 = 60;
 /// Default maximum request body size (8 MiB) enforced by the gateway proxy
 /// layer.
 pub const DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES: u64 = 8 * 1024 * 1024;
+/// Allow a few transient upstream failures before one Codex account is marked
+/// unavailable for routing.
+pub const DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 3;
 /// Default Kiro upstream channel concurrency. `1` serializes requests to avoid
 /// bursty Claude Code traffic against the undocumented 5-minute credit window.
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
@@ -324,6 +327,9 @@ pub struct LlmGatewayRuntimeConfigRecord {
     /// Maximum allowed request body size in bytes; requests exceeding this are
     /// rejected.
     pub max_request_body_bytes: u64,
+    /// Number of consecutive Codex account refresh failures tolerated before
+    /// the account is marked unavailable.
+    pub account_failure_retry_limit: u64,
     /// Maximum number of Kiro upstream requests allowed in flight at once.
     pub kiro_channel_max_concurrency: u64,
     /// Minimum spacing between Kiro upstream request starts.
@@ -337,6 +343,7 @@ impl Default for LlmGatewayRuntimeConfigRecord {
             id: "default".to_string(),
             auth_cache_ttl_seconds: DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
             max_request_body_bytes: DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+            account_failure_retry_limit: DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
             kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
             kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
             updated_at: now_ms(),

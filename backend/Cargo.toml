@@ -43,3 +43,6 @@ crc = "3.3"
 hex = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 uuid = { version = "1.18", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

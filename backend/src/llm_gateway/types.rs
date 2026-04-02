@@ -122,7 +122,28 @@ pub struct LlmGatewayRateLimitStatusResponse {
     pub last_success_at: Option<i64>,
     pub source_url: String,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<LlmGatewayPublicAccountStatusView>,
     pub buckets: Vec<LlmGatewayRateLimitBucketView>,
+}
+
+/// One public Codex account summary rendered on `/llm-access`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmGatewayPublicAccountStatusView {
+    pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_remaining_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_remaining_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_usage_checked_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_usage_success_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_error_message: Option<String>,
 }
 
 /// One limit bucket rendered on the public status surface.
@@ -466,6 +487,9 @@ pub struct LlmGatewayRuntimeConfigResponse {
     pub auth_cache_ttl_seconds: u64,
     /// Maximum allowed request body size in bytes for proxied calls.
     pub max_request_body_bytes: u64,
+    /// Number of consecutive Codex refresh failures tolerated before an
+    /// account becomes unavailable.
+    pub account_failure_retry_limit: u64,
 }
 
 /// One reusable upstream proxy config managed from the admin UI.
@@ -582,6 +606,9 @@ pub struct UpdateLlmGatewayRuntimeConfigRequest {
     pub auth_cache_ttl_seconds: Option<u64>,
     /// New maximum request body size in bytes, if changing.
     pub max_request_body_bytes: Option<u64>,
+    /// New consecutive-failure threshold before one Codex account becomes
+    /// unavailable.
+    pub account_failure_retry_limit: Option<u64>,
 }
 
 /// Admin request body for creating a new externally visible gateway key.

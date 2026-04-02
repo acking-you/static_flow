@@ -81,6 +81,7 @@ impl LlmGatewayRuntimeState {
                 last_success_at: None,
                 source_url: String::new(),
                 error_message: None,
+                accounts: Vec::new(),
                 buckets: Vec::new(),
             })),
             usage_rollups: Arc::new(RwLock::new(HashMap::new())),

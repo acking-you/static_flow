@@ -9,29 +9,41 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use parking_lot::RwLock;
 
 use super::{
     accounts::{AccountPool, AccountRateLimitSnapshot, AccountStatus},
     runtime::CodexAuthSnapshot,
 };
-use crate::upstream_proxy::{HttpClientProfile, UpstreamProxyRegistry};
+use crate::{
+    state::LlmGatewayRuntimeConfig,
+    upstream_proxy::{HttpClientProfile, UpstreamProxyRegistry},
+};
 
 const REFRESH_INTERVAL_SECONDS: u64 = 60;
 const TOKEN_REFRESH_AHEAD_SECONDS: i64 = 600;
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
+fn account_refresh_interval() -> tokio::time::Interval {
+    let mut ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(REFRESH_INTERVAL_SECONDS),
+        Duration::from_secs(REFRESH_INTERVAL_SECONDS),
+    );
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker
+}
+
 /// Spawn the background refresh task. Returns a `JoinHandle` that runs until
 /// the shutdown signal fires.
 pub(crate) fn spawn_account_refresh_task(
     pool: Arc<AccountPool>,
     proxy_registry: Arc<UpstreamProxyRegistry>,
+    runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECONDS));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        ticker.tick().await; // first tick fires immediately
+        let mut ticker = account_refresh_interval();
 
         loop {
             tokio::select! {
@@ -42,7 +54,9 @@ pub(crate) fn spawn_account_refresh_task(
                     }
                 }
                 _ = ticker.tick() => {
-                    if let Err(err) = refresh_all_accounts(&pool, &proxy_registry).await {
+                    if let Err(err) =
+                        refresh_all_accounts(&pool, &proxy_registry, runtime_config.as_ref()).await
+                    {
                         tracing::warn!("Account refresh cycle failed: {err:#}");
                     }
                 }
@@ -54,23 +68,23 @@ pub(crate) fn spawn_account_refresh_task(
 pub(crate) async fn refresh_all_accounts_once(
     pool: &AccountPool,
     proxy_registry: &UpstreamProxyRegistry,
+    runtime_config: &RwLock<LlmGatewayRuntimeConfig>,
 ) -> Result<()> {
-    refresh_all_accounts(pool, proxy_registry).await
+    refresh_all_accounts(pool, proxy_registry, runtime_config).await
 }
 
 async fn refresh_all_accounts(
     pool: &AccountPool,
     proxy_registry: &UpstreamProxyRegistry,
+    runtime_config: &RwLock<LlmGatewayRuntimeConfig>,
 ) -> Result<()> {
     let entries = pool.all_entries().await;
 
     for (name, entry) in &entries {
-        match refresh_account_entry(pool, proxy_registry, name, entry, false).await {
-            Ok(AccountRefreshResult::SkippedInactive) => {},
-            Ok(AccountRefreshResult::Refreshed) => {},
-            Err(err) => {
-                tracing::warn!(account = name, "Account refresh cycle failed: {err:#}");
-            },
+        if let Err(err) =
+            refresh_account_entry(pool, proxy_registry, runtime_config, name, entry, false).await
+        {
+            tracing::warn!(account = name, "Account refresh cycle failed: {err:#}");
         }
     }
     Ok(())
@@ -79,28 +93,23 @@ async fn refresh_all_accounts(
 pub(crate) async fn refresh_account_once(
     pool: &AccountPool,
     proxy_registry: &UpstreamProxyRegistry,
+    runtime_config: &RwLock<LlmGatewayRuntimeConfig>,
     name: &str,
 ) -> Result<()> {
     let entry = pool
         .entry_by_name(name)
         .ok_or_else(|| anyhow::anyhow!("account `{name}` not found"))?;
-    match refresh_account_entry(pool, proxy_registry, name, &entry, true).await? {
-        AccountRefreshResult::SkippedInactive | AccountRefreshResult::Refreshed => Ok(()),
-    }
-}
-
-enum AccountRefreshResult {
-    SkippedInactive,
-    Refreshed,
+    refresh_account_entry(pool, proxy_registry, runtime_config, name, &entry, true).await
 }
 
 async fn refresh_account_entry(
     pool: &AccountPool,
     proxy_registry: &UpstreamProxyRegistry,
+    runtime_config: &RwLock<LlmGatewayRuntimeConfig>,
     name: &str,
     entry: &Arc<tokio::sync::RwLock<super::accounts::CodexAccount>>,
     manual_refresh: bool,
-) -> Result<AccountRefreshResult> {
+) -> Result<()> {
     match pool.sync_account_from_disk_if_changed(name, entry).await {
         Ok(true) => {
             tracing::info!(
@@ -123,13 +132,10 @@ async fn refresh_account_entry(
         (account.status, token_needs_refresh(&account.access_token, now))
     };
 
-    if status != AccountStatus::Active && !manual_refresh {
-        return Ok(AccountRefreshResult::SkippedInactive);
-    }
-
     if needs_refresh || (manual_refresh && status != AccountStatus::Active) {
         match refresh_account_token(entry, proxy_registry).await {
             Ok(()) => {
+                pool.clear_consecutive_refresh_failures(name).await;
                 if let Err(err) = pool.persist(name).await {
                     tracing::warn!(account = name, "Failed to persist refreshed tokens: {err:#}");
                 }
@@ -137,13 +143,19 @@ async fn refresh_account_entry(
                 tracing::info!(account = name, "Refreshed access token");
             },
             Err(err) => {
+                let failure_count = pool
+                    .mark_usage_refresh_failure(name, format!("{err:#}"))
+                    .await;
+                let retry_limit = runtime_config.read().account_failure_retry_limit;
+                let next_status = status_after_refresh_failure(failure_count, retry_limit);
                 tracing::warn!(
                     account = name,
-                    "Token refresh failed, marking unavailable: {err:#}"
+                    failure_count,
+                    retry_limit,
+                    next_status = next_status.as_str(),
+                    "Token refresh failed: {err:#}"
                 );
-                entry.write().await.status = AccountStatus::Unavailable;
-                pool.mark_usage_refresh_failure(name, format!("{err:#}"))
-                    .await;
+                entry.write().await.status = next_status;
                 return Err(err).context("token refresh failed");
             },
         }
@@ -157,14 +169,32 @@ async fn refresh_account_entry(
         Ok(rl) => {
             pool.update_rate_limit(name, rl).await;
             entry.write().await.status = AccountStatus::Active;
-            Ok(AccountRefreshResult::Refreshed)
+            Ok(())
         },
         Err(err) => {
-            entry.write().await.status = AccountStatus::Unavailable;
-            pool.mark_usage_refresh_failure(name, format!("{err:#}"))
+            let failure_count = pool
+                .mark_usage_refresh_failure(name, format!("{err:#}"))
                 .await;
+            let retry_limit = runtime_config.read().account_failure_retry_limit;
+            let next_status = status_after_refresh_failure(failure_count, retry_limit);
+            tracing::warn!(
+                account = name,
+                failure_count,
+                retry_limit,
+                next_status = next_status.as_str(),
+                "Usage poll failed: {err:#}"
+            );
+            entry.write().await.status = next_status;
             Err(err).context("usage poll failed")
         },
+    }
+}
+
+fn status_after_refresh_failure(consecutive_failures: u64, retry_limit: u64) -> AccountStatus {
+    if retry_limit == 0 || consecutive_failures >= retry_limit {
+        AccountStatus::Unavailable
+    } else {
+        AccountStatus::Active
     }
 }
 
@@ -332,4 +362,192 @@ pub(crate) async fn build_refresh_client(
 
 pub(crate) const fn codex_refresh_client_profile() -> HttpClientProfile {
     HttpClientProfile::new(Some(60), 8, 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::PathBuf,
+        sync::{Arc, OnceLock},
+        time::{Duration as StdDuration, SystemTime},
+    };
+
+    use static_flow_shared::llm_gateway_store::LlmGatewayStore;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::Mutex,
+        time::timeout,
+    };
+
+    use super::*;
+    use crate::{
+        llm_gateway::accounts::AccountStatus,
+        state::LlmGatewayRuntimeConfig,
+        upstream_proxy::{AccountProxyMode, AccountProxySelection},
+    };
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("staticflow-{prefix}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn sample_account(name: &str, status: AccountStatus) -> super::super::accounts::CodexAccount {
+        super::super::accounts::CodexAccount {
+            name: name.to_string(),
+            access_token: "not-a-jwt-access-token".to_string(),
+            account_id: Some(format!("{name}-acct")),
+            refresh_token: String::new(),
+            id_token: String::new(),
+            map_gpt53_codex_to_spark: false,
+            proxy_selection: AccountProxySelection {
+                proxy_mode: AccountProxyMode::Direct,
+                proxy_config_id: None,
+            },
+            last_refresh: None,
+            status,
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    async fn spawn_usage_server() -> (String, tokio::task::JoinHandle<bool>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local usage server");
+        let addr = listener.local_addr().expect("usage server local addr");
+        let handle = tokio::spawn(async move {
+            let Ok(Ok((mut stream, _peer))) =
+                timeout(StdDuration::from_millis(500), listener.accept()).await
+            else {
+                return false;
+            };
+            let mut request = vec![0_u8; 4096];
+            let read = stream.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(
+                request.starts_with("GET /api/codex/usage HTTP/1.1"),
+                "unexpected request line: {request}"
+            );
+            let body = serde_json::json!({
+                "plan_type": "Pro",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 11.0,
+                        "limit_window_seconds": 18_000,
+                        "reset_at": 1_777_777_777_i64
+                    },
+                    "secondary_window": {
+                        "used_percent": 17.0,
+                        "limit_window_seconds": 604_800,
+                        "reset_at": 1_778_888_888_i64
+                    }
+                }
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \
+                 {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+            true
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn refresh_cycle_recovers_unavailable_account_when_usage_poll_succeeds() {
+        let _env_guard = env_lock().lock().await;
+        let original_upstream_base = std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL").ok();
+        let auths_dir = temp_dir("codex-auths");
+        let store_dir = temp_dir("codex-store");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha", AccountStatus::Unavailable))
+            .await
+            .expect("insert unavailable account");
+
+        let store = Arc::new(
+            LlmGatewayStore::connect(&store_dir.to_string_lossy())
+                .await
+                .expect("connect llm gateway store"),
+        );
+        let proxy_registry = Arc::new(
+            UpstreamProxyRegistry::new(store)
+                .await
+                .expect("create upstream proxy registry"),
+        );
+        let runtime_config = parking_lot::RwLock::new(LlmGatewayRuntimeConfig::default());
+        let (upstream_base, server) = spawn_usage_server().await;
+        std::env::set_var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL", &upstream_base);
+
+        let refresh_result =
+            refresh_all_accounts_once(&pool, proxy_registry.as_ref(), &runtime_config).await;
+        let server_requested = timeout(StdDuration::from_secs(2), server)
+            .await
+            .expect("usage server task should finish")
+            .expect("usage server join");
+
+        if let Some(value) = original_upstream_base.as_deref() {
+            std::env::set_var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL", value);
+        } else {
+            std::env::remove_var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL");
+        }
+
+        refresh_result.expect("refresh cycle should succeed");
+        assert!(
+            server_requested,
+            "automatic refresh should still poll usage for unavailable accounts"
+        );
+
+        let summary = pool
+            .list_summaries()
+            .await
+            .into_iter()
+            .find(|summary| summary.name == "alpha")
+            .expect("alpha summary");
+        assert_eq!(summary.status, AccountStatus::Active);
+        assert_eq!(summary.rate_limits.primary_remaining_percent(), Some(89.0));
+        assert_eq!(summary.rate_limits.secondary_remaining_percent(), Some(83.0));
+        assert_eq!(summary.usage_refresh.error_message, None);
+
+        let _ = std::fs::remove_dir_all(&auths_dir);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[test]
+    fn failure_retry_limit_keeps_account_active_until_threshold_is_reached() {
+        assert_eq!(status_after_refresh_failure(1, 3), AccountStatus::Active);
+        assert_eq!(status_after_refresh_failure(2, 3), AccountStatus::Active);
+        assert_eq!(status_after_refresh_failure(3, 3), AccountStatus::Unavailable);
+    }
+
+    #[test]
+    fn failure_retry_limit_zero_marks_account_unavailable_immediately() {
+        assert_eq!(status_after_refresh_failure(1, 0), AccountStatus::Unavailable);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn account_refresh_interval_waits_full_period_before_first_tick() {
+        let mut ticker = account_refresh_interval();
+        let mut tick = std::pin::pin!(ticker.tick());
+
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
+        tokio::time::advance(StdDuration::from_secs(REFRESH_INTERVAL_SECONDS - 1)).await;
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
+        tokio::time::advance(StdDuration::from_secs(1)).await;
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Ready(_)));
+    }
 }

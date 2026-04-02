@@ -49,8 +49,13 @@ use static_flow_shared::llm_gateway_store::{
 };
 
 pub use self::runtime::LlmGatewayRuntimeState;
+pub(crate) use self::{
+    accounts::{resolve_auths_dir, AccountPool},
+    support::{load_support_asset, load_support_config, render_payment_email_markdown},
+    token_refresh::spawn_account_refresh_task,
+};
 use self::{
-    accounts::AccountSettingsPatch,
+    accounts::{AccountSettingsPatch, AccountStatus, AccountSummarySnapshot},
     models::{append_client_version_query, respond_local_models},
     request::{
         apply_gpt53_codex_spark_mapping, ensure_supported_gateway_path, external_origin,
@@ -82,9 +87,10 @@ use self::{
         AdminUpstreamProxyConfigView, AdminUpstreamProxyConfigsResponse,
         CreateAdminUpstreamProxyConfigRequest, CreateLlmGatewayKeyRequest, GatewayResponseAdapter,
         ImportAccountRequest, LlmGatewayAccessResponse, LlmGatewayCreditsView,
-        LlmGatewayEventContext, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
-        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
-        LlmGatewayRuntimeConfigResponse, LlmGatewaySupportConfigView, PatchAccountSettingsRequest,
+        LlmGatewayEventContext, LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView,
+        LlmGatewayRateLimitBucketView, LlmGatewayRateLimitStatusResponse,
+        LlmGatewayRateLimitWindowView, LlmGatewayRuntimeConfigResponse,
+        LlmGatewaySupportConfigView, PatchAccountSettingsRequest,
         PatchAdminUpstreamProxyConfigRequest, PatchLlmGatewayKeyRequest, PreparedGatewayRequest,
         PublicLlmGatewayAccountContributionView, PublicLlmGatewayAccountContributionsResponse,
         PublicLlmGatewaySponsorView, PublicLlmGatewaySponsorsResponse,
@@ -96,11 +102,6 @@ use self::{
         SubmitLlmGatewayTokenRequestResponse, UpdateAdminUpstreamProxyBindingRequest,
         UpdateLlmGatewayRuntimeConfigRequest, UsageBreakdown,
     },
-};
-pub(crate) use self::{
-    accounts::{resolve_auths_dir, AccountPool},
-    support::{load_support_asset, load_support_config, render_payment_email_markdown},
-    token_refresh::spawn_account_refresh_task,
 };
 use crate::{
     email::{
@@ -128,6 +129,9 @@ const MIN_RUNTIME_CACHE_TTL_SECONDS: u64 = 1;
 const MAX_RUNTIME_REQUEST_BODY_BYTES: u64 = 256 * 1024 * 1024;
 /// Hard lower bound on the configurable request body size (1 KiB).
 const MIN_RUNTIME_REQUEST_BODY_BYTES: u64 = 1024;
+/// Hard upper bound on tolerated consecutive account refresh failures.
+const MAX_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 100;
+const MIN_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 0;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
@@ -148,6 +152,15 @@ const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
 const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
 pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
+
+fn public_rate_limit_refresh_interval() -> tokio::time::Interval {
+    let mut ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(PUBLIC_RATE_LIMIT_REFRESH_SECONDS),
+        Duration::from_secs(PUBLIC_RATE_LIMIT_REFRESH_SECONDS),
+    );
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(super) struct UsageStatusPayload {
@@ -266,6 +279,7 @@ pub async fn get_admin_runtime_config(
     Ok(Json(LlmGatewayRuntimeConfigResponse {
         auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
         max_request_body_bytes: config.max_request_body_bytes,
+        account_failure_retry_limit: config.account_failure_retry_limit,
     }))
 }
 
@@ -292,10 +306,19 @@ pub async fn update_admin_runtime_config(
     {
         return Err(bad_request("max_request_body_bytes is out of range"));
     }
+    let account_failure_retry_limit = request
+        .account_failure_retry_limit
+        .unwrap_or(current.account_failure_retry_limit);
+    if !(MIN_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT..=MAX_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT)
+        .contains(&account_failure_retry_limit)
+    {
+        return Err(bad_request("account_failure_retry_limit is out of range"));
+    }
     let config = LlmGatewayRuntimeConfigRecord {
         id: "default".to_string(),
         auth_cache_ttl_seconds: ttl,
         max_request_body_bytes,
+        account_failure_retry_limit,
         kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
         kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
         updated_at: now_ms(),
@@ -310,6 +333,7 @@ pub async fn update_admin_runtime_config(
         *runtime = LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: ttl,
             max_request_body_bytes,
+            account_failure_retry_limit,
             kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
         };
@@ -318,12 +342,14 @@ pub async fn update_admin_runtime_config(
     tracing::info!(
         auth_cache_ttl_seconds = ttl,
         max_request_body_bytes,
+        account_failure_retry_limit,
         "Updated LLM gateway runtime config"
     );
 
     Ok(Json(LlmGatewayRuntimeConfigResponse {
         auth_cache_ttl_seconds: ttl,
         max_request_body_bytes,
+        account_failure_retry_limit,
     }))
 }
 
@@ -2491,10 +2517,7 @@ pub fn spawn_public_rate_limit_refresher(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
-        let mut ticker =
-            tokio::time::interval(Duration::from_secs(PUBLIC_RATE_LIMIT_REFRESH_SECONDS));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        ticker.tick().await;
+        let mut ticker = public_rate_limit_refresh_interval();
 
         loop {
             tokio::select! {
@@ -2528,101 +2551,179 @@ pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeSta
 
     let pool_entries = runtime.account_pool.all_entries().await;
 
-    let result: Result<(Vec<LlmGatewayRateLimitBucketView>, Option<String>)> = if pool_entries
-        .is_empty()
-    {
+    if pool_entries.is_empty() {
         // Legacy single-file path — one upstream request.
-        fetch_rate_limit_status_snapshot(runtime, &source_url)
-            .await
-            .map(|buckets| (buckets, None::<String>))
+        match fetch_rate_limit_status_snapshot(runtime, &source_url).await {
+            Ok(buckets) => {
+                let mut status = runtime.rate_limit_status.write();
+                *status = LlmGatewayRateLimitStatusResponse {
+                    status: "ready".to_string(),
+                    refresh_interval_seconds,
+                    last_checked_at: Some(checked_at),
+                    last_success_at: Some(checked_at),
+                    source_url,
+                    error_message: None,
+                    accounts: Vec::new(),
+                    buckets,
+                };
+                tracing::info!(
+                    bucket_count = status.buckets.len(),
+                    last_success_at = status.last_success_at.unwrap_or_default(),
+                    "Refreshed cached public LLM gateway rate-limit status"
+                );
+                Ok(())
+            },
+            Err(err) => {
+                let mut status = runtime.rate_limit_status.write();
+                let had_snapshot = !status.buckets.is_empty();
+                let previous_success_at = status.last_success_at;
+                status.status =
+                    if had_snapshot { "degraded".to_string() } else { "error".to_string() };
+                status.refresh_interval_seconds = refresh_interval_seconds;
+                status.last_checked_at = Some(checked_at);
+                status.last_success_at = previous_success_at;
+                status.source_url = source_url;
+                status.error_message = Some(err.to_string());
+                status.accounts.clear();
+                tracing::warn!(
+                    had_snapshot,
+                    last_success_at = previous_success_at.unwrap_or_default(),
+                    "Failed to refresh cached public LLM gateway rate-limit status: {err:#}"
+                );
+                Err(err)
+            },
+        }
     } else {
         // Multi-account: read the already-cached per-account snapshots kept
         // fresh by the background refresh task instead of hitting upstream.
         let summaries = runtime.account_pool.list_summaries().await;
-        let mut all_buckets = Vec::new();
-        let mut refresh_errors = Vec::new();
-        let mut active_account_count = 0usize;
-        for summary in &summaries {
-            if summary.status.as_str() != "active" {
-                continue;
-            }
-            active_account_count += 1;
-            if let Some(error_message) = summary.usage_refresh.error_message.as_deref() {
-                refresh_errors.push(format!(
-                    "{}: {}",
-                    summary.name,
-                    summarize_account_usage_refresh_error(error_message)
-                ));
-            }
-            for mut bucket in summary.rate_limits.buckets.clone() {
-                bucket.account_name = Some(summary.name.clone());
-                all_buckets.push(bucket);
-            }
-        }
-        let partial_error = if refresh_errors.is_empty() {
-            None
-        } else {
-            Some(format!(
-                "codex account usage refresh degraded for {} active account(s): {}",
-                refresh_errors.len(),
-                refresh_errors.join(" | ")
-            ))
-        };
-        if all_buckets.is_empty() && active_account_count > 0 {
-            Err(anyhow!(
-                "{}",
-                partial_error.unwrap_or_else(|| {
-                    format!(
-                        "codex account usage snapshots are not ready yet for {} active account(s)",
-                        active_account_count
-                    )
-                })
-            ))
-        } else {
-            Ok((all_buckets, partial_error))
-        }
-    };
-
-    match result {
-        Ok((buckets, partial_error)) => {
+        let (accounts, buckets, status_label, error_message) =
+            summarize_public_multi_account_status(&summaries);
+        {
             let mut status = runtime.rate_limit_status.write();
             *status = LlmGatewayRateLimitStatusResponse {
-                status: if partial_error.is_some() {
-                    "degraded".to_string()
-                } else {
-                    "ready".to_string()
-                },
+                status: status_label,
                 refresh_interval_seconds,
                 last_checked_at: Some(checked_at),
                 last_success_at: Some(checked_at),
                 source_url,
-                error_message: partial_error,
+                error_message,
+                accounts,
                 buckets,
             };
             tracing::info!(
+                account_count = status.accounts.len(),
                 bucket_count = status.buckets.len(),
+                status = status.status.as_str(),
                 last_success_at = status.last_success_at.unwrap_or_default(),
                 "Refreshed cached public LLM gateway rate-limit status"
             );
-            Ok(())
-        },
-        Err(err) => {
-            let mut status = runtime.rate_limit_status.write();
-            let had_snapshot = !status.buckets.is_empty();
-            let previous_success_at = status.last_success_at;
-            status.status = if had_snapshot { "degraded".to_string() } else { "error".to_string() };
-            status.refresh_interval_seconds = refresh_interval_seconds;
-            status.last_checked_at = Some(checked_at);
-            status.last_success_at = previous_success_at;
-            status.source_url = source_url;
-            status.error_message = Some(err.to_string());
-            tracing::warn!(
-                had_snapshot,
-                last_success_at = previous_success_at.unwrap_or_default(),
-                "Failed to refresh cached public LLM gateway rate-limit status: {err:#}"
-            );
-            Err(err)
-        },
+        }
+        Ok(())
+    }
+}
+
+fn summarize_public_multi_account_status(
+    summaries: &[AccountSummarySnapshot],
+) -> (
+    Vec<LlmGatewayPublicAccountStatusView>,
+    Vec<LlmGatewayRateLimitBucketView>,
+    String,
+    Option<String>,
+) {
+    let accounts = summaries
+        .iter()
+        .map(summarize_public_account_status)
+        .collect::<Vec<_>>();
+    let mut all_buckets = Vec::new();
+    let mut refresh_errors = Vec::new();
+    let mut missing_snapshots = Vec::new();
+    let mut active_account_count = 0usize;
+
+    for summary in summaries {
+        if summary.status != AccountStatus::Active {
+            continue;
+        }
+        active_account_count += 1;
+        if summary.rate_limits.buckets.is_empty() {
+            missing_snapshots.push(summary.name.clone());
+        }
+        if let Some(error_message) = summary.usage_refresh.error_message.as_deref() {
+            refresh_errors.push(format!(
+                "{}: {}",
+                summary.name,
+                summarize_account_usage_refresh_error(error_message)
+            ));
+        }
+        for mut bucket in summary.rate_limits.buckets.clone() {
+            bucket.account_name = Some(summary.name.clone());
+            all_buckets.push(bucket);
+        }
+    }
+
+    let error_message = summarize_public_multi_account_error(
+        summaries.len(),
+        active_account_count,
+        &refresh_errors,
+        &missing_snapshots,
+    );
+    let status = if active_account_count == 0 {
+        "error"
+    } else if error_message.is_some() {
+        "degraded"
+    } else {
+        "ready"
+    };
+    (accounts, all_buckets, status.to_string(), error_message)
+}
+
+fn summarize_public_account_status(
+    summary: &AccountSummarySnapshot,
+) -> LlmGatewayPublicAccountStatusView {
+    LlmGatewayPublicAccountStatusView {
+        name: summary.name.clone(),
+        status: summary.status.as_str().to_string(),
+        plan_type: summary.rate_limits.primary_plan_type(),
+        primary_remaining_percent: summary.rate_limits.primary_remaining_percent(),
+        secondary_remaining_percent: summary.rate_limits.secondary_remaining_percent(),
+        last_usage_checked_at: summary.usage_refresh.last_checked_at,
+        last_usage_success_at: summary.usage_refresh.last_success_at,
+        usage_error_message: summary.usage_refresh.error_message.clone(),
+    }
+}
+
+fn summarize_public_multi_account_error(
+    total_account_count: usize,
+    active_account_count: usize,
+    refresh_errors: &[String],
+    missing_snapshots: &[String],
+) -> Option<String> {
+    if active_account_count == 0 {
+        return Some(format!(
+            "no active codex accounts available out of {} configured account(s)",
+            total_account_count
+        ));
+    }
+
+    let mut issues = Vec::new();
+    if !refresh_errors.is_empty() {
+        issues.push(format!(
+            "usage refresh degraded for {} active account(s): {}",
+            refresh_errors.len(),
+            refresh_errors.join(" | ")
+        ));
+    }
+    if !missing_snapshots.is_empty() {
+        issues.push(format!(
+            "usage snapshots not ready yet for {} active account(s): {}",
+            missing_snapshots.len(),
+            missing_snapshots.join(", ")
+        ));
+    }
+    if issues.is_empty() {
+        None
+    } else {
+        Some(format!("codex account status degraded: {}", issues.join(" | ")))
     }
 }
 
@@ -4249,6 +4350,7 @@ pub async fn refresh_account(
     token_refresh::refresh_account_once(
         state.llm_gateway.account_pool.as_ref(),
         state.upstream_proxy_registry.as_ref(),
+        state.llm_gateway_runtime_config.as_ref(),
         &name,
     )
     .await
@@ -4353,6 +4455,10 @@ mod tests {
     };
 
     use super::*;
+    use crate::{
+        llm_gateway::accounts::{AccountRateLimitSnapshot, AccountUsageRefreshHealth},
+        upstream_proxy::AccountProxySelection,
+    };
 
     fn sample_public_lookup_key() -> LlmGatewayKeyRecord {
         let now = now_ms();
@@ -4412,6 +4518,63 @@ mod tests {
         }
     }
 
+    fn sample_account_summary(
+        name: &str,
+        status: AccountStatus,
+        buckets: Vec<LlmGatewayRateLimitBucketView>,
+        usage_error_message: Option<&str>,
+    ) -> AccountSummarySnapshot {
+        AccountSummarySnapshot {
+            name: name.to_string(),
+            status,
+            account_id: None,
+            rate_limits: AccountRateLimitSnapshot {
+                buckets,
+                last_checked_at: Some(1_710_000_123_000),
+            },
+            usage_refresh: AccountUsageRefreshHealth {
+                last_checked_at: Some(1_710_000_123_000),
+                last_success_at: Some(1_710_000_120_000),
+                error_message: usage_error_message.map(str::to_string),
+            },
+            last_refresh_ms: Some(1_710_000_110_000),
+            map_gpt53_codex_to_spark: false,
+            proxy_selection: AccountProxySelection::default(),
+        }
+    }
+
+    fn sample_bucket(
+        account_name: Option<&str>,
+        primary_remaining_percent: f64,
+        secondary_remaining_percent: f64,
+    ) -> LlmGatewayRateLimitBucketView {
+        LlmGatewayRateLimitBucketView {
+            limit_id: "codex".to_string(),
+            limit_name: None,
+            display_name: "codex".to_string(),
+            is_primary: true,
+            plan_type: Some("Pro".to_string()),
+            primary: Some(LlmGatewayRateLimitWindowView {
+                used_percent: 100.0 - primary_remaining_percent,
+                remaining_percent: primary_remaining_percent,
+                window_duration_mins: Some(300),
+                resets_at: Some(1_710_000_500_000),
+            }),
+            secondary: Some(LlmGatewayRateLimitWindowView {
+                used_percent: 100.0 - secondary_remaining_percent,
+                remaining_percent: secondary_remaining_percent,
+                window_duration_mins: Some(10_080),
+                resets_at: Some(1_710_600_500_000),
+            }),
+            credits: Some(LlmGatewayCreditsView {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("24".to_string()),
+            }),
+            account_name: account_name.map(str::to_string),
+        }
+    }
+
     #[test]
     fn build_public_usage_chart_points_uses_uncached_input_and_output_only() {
         let now_ms = 1_710_004_500_000;
@@ -4466,5 +4629,68 @@ mod tests {
             validate_public_usage_lookup_key(&hidden).is_ok(),
             "private active keys should still be queryable by secret"
         );
+    }
+
+    #[test]
+    fn summarize_public_multi_account_status_keeps_non_active_accounts_visible() {
+        let active = sample_account_summary(
+            "alpha",
+            AccountStatus::Active,
+            vec![sample_bucket(None, 62.0, 39.0)],
+            None,
+        );
+        let unavailable = sample_account_summary(
+            "beta",
+            AccountStatus::Unavailable,
+            vec![sample_bucket(None, 17.0, 5.0)],
+            Some("upstream 503"),
+        );
+
+        let (accounts, buckets, status, error_message) =
+            summarize_public_multi_account_status(&[active, unavailable]);
+
+        assert_eq!(status, "ready");
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].name, "alpha");
+        assert_eq!(accounts[0].status, "active");
+        assert_eq!(accounts[1].name, "beta");
+        assert_eq!(accounts[1].status, "unavailable");
+        assert_eq!(accounts[1].usage_error_message.as_deref(), Some("upstream 503"));
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].account_name.as_deref(), Some("alpha"));
+        assert!(error_message.is_none());
+    }
+
+    #[test]
+    fn summarize_public_multi_account_status_marks_all_non_active_accounts_as_error() {
+        let unavailable = sample_account_summary(
+            "alpha",
+            AccountStatus::Unavailable,
+            vec![sample_bucket(None, 17.0, 5.0)],
+            Some("upstream 503"),
+        );
+
+        let (accounts, buckets, status, error_message) =
+            summarize_public_multi_account_status(&[unavailable]);
+
+        assert_eq!(status, "error");
+        assert_eq!(accounts.len(), 1);
+        assert!(buckets.is_empty());
+        assert_eq!(
+            error_message.as_deref(),
+            Some("no active codex accounts available out of 1 configured account(s)")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn public_rate_limit_refresh_interval_waits_full_period_before_first_tick() {
+        let mut ticker = public_rate_limit_refresh_interval();
+        let mut tick = std::pin::pin!(ticker.tick());
+
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
+        tokio::time::advance(Duration::from_secs(PUBLIC_RATE_LIMIT_REFRESH_SECONDS - 1)).await;
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Ready(_)));
     }
 }

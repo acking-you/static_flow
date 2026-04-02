@@ -98,6 +98,9 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         // Upper bound on proxied request body size in bytes. Guards against
         // oversized payloads exhausting backend memory.
         Field::new("max_request_body_bytes", DataType::UInt64, false),
+        // Number of consecutive Codex refresh failures tolerated before
+        // marking one account unavailable.
+        Field::new("account_failure_retry_limit", DataType::UInt64, false),
         // Maximum concurrent Kiro upstream requests allowed.
         Field::new("kiro_channel_max_concurrency", DataType::UInt64, false),
         // Minimum milliseconds between consecutive Kiro upstream request starts.
@@ -286,6 +289,7 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
     // Backfill max_request_body_bytes for configs created before body-size
     // limiting.
     ensure_nullable_u64_column(&table, "max_request_body_bytes").await?;
+    ensure_nullable_u64_column(&table, "account_failure_retry_limit").await?;
     ensure_nullable_u64_column(&table, "kiro_channel_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "kiro_channel_min_start_interval_ms").await?;
     ensure_scalar_index(&table, "id").await?;

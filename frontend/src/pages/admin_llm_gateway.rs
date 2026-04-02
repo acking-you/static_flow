@@ -1299,6 +1299,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let load_error = use_state(|| None::<String>);
     let ttl_input = use_state(|| "60".to_string());
     let max_request_body_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
+    let account_failure_retry_limit_input = use_state(|| "3".to_string());
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let create_proxy_name = use_state(|| "shared-upstream".to_string());
@@ -1519,6 +1520,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let load_error = load_error.clone();
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
+        let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_page = usage_page.clone();
@@ -1535,6 +1537,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let load_error = load_error.clone();
             let ttl_input = ttl_input.clone();
             let max_request_body_input = max_request_body_input.clone();
+            let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_page = usage_page.clone();
@@ -1598,6 +1601,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         let usage_filter_for_reload = effective_key_filter.clone();
                         ttl_input.set(cfg.auth_cache_ttl_seconds.to_string());
                         max_request_body_input.set(cfg.max_request_body_bytes.to_string());
+                        account_failure_retry_limit_input
+                            .set(cfg.account_failure_retry_limit.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
                         let codex_bound = proxy_binding_items
@@ -1651,12 +1656,15 @@ pub fn admin_llm_gateway_page() -> Html {
     let on_save_runtime_config = {
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
+        let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
         let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
         Callback::from(move |_| {
             let ttl = (*ttl_input).trim().parse::<u64>();
             let max_request_body_bytes = (*max_request_body_input).trim().parse::<u64>();
+            let account_failure_retry_limit =
+                (*account_failure_retry_limit_input).trim().parse::<u64>();
             let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
@@ -1669,8 +1677,18 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("请求体上限必须是正整数".to_string()));
                     return;
                 };
+                let Ok(account_failure_retry_limit) = account_failure_retry_limit else {
+                    load_error.set(Some("账号失败重试次数必须是非负整数".to_string()));
+                    return;
+                };
                 saving_runtime_config.set(true);
-                match update_admin_llm_gateway_config(ttl, max_request_body_bytes).await {
+                match update_admin_llm_gateway_config(
+                    ttl,
+                    max_request_body_bytes,
+                    account_failure_retry_limit,
+                )
+                .await
+                {
                     Ok(_) => {
                         load_error.set(None);
                         reload.emit(());
@@ -2988,9 +3006,9 @@ pub fn admin_llm_gateway_page() -> Html {
                 // ── Settings Tab ──
                 if *active_tab == TAB_SETTINGS {
                 <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
-                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Runtime Config" }</h2>
-                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-2")}>
+                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-3")}>
                             <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "auth_cache_ttl_seconds" }</span>
                                 <input
@@ -3023,7 +3041,24 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
-                            <div class={classes!("flex", "items-end", "md:col-span-2")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "account_failure_retry_limit" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*account_failure_retry_limit_input).clone()}
+                                    oninput={{
+                                        let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                account_failure_retry_limit_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("flex", "items-end", "md:col-span-3")}>
                                 <button class={classes!("btn-terminal", "btn-terminal-primary", "w-full", "md:w-auto")} onclick={on_save_runtime_config} disabled={*saving_runtime_config}>
                                     { if *saving_runtime_config { "保存中..." } else { "保存" } }
                                 </button>
@@ -3036,6 +3071,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </p>
                                 <p class={classes!("m-0")}>
                                     { format!("当前请求体上限：{} bytes", format_number_u64(cfg.max_request_body_bytes)) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!("当前账号失败重试次数：{}", cfg.account_failure_retry_limit) }
                                 </p>
                             </div>
                         }

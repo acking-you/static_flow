@@ -30,11 +30,11 @@ pub use self::types::{
     LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
     NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
     DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
-    DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
-    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_KEYS_TABLE,
-    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
-    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
-    LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
+    DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
+    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+    LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
@@ -349,6 +349,7 @@ impl LlmGatewayStore {
                 "id",
                 "auth_cache_ttl_seconds",
                 "max_request_body_bytes",
+                "account_failure_retry_limit",
                 "kiro_channel_max_concurrency",
                 "kiro_channel_min_start_interval_ms",
                 "updated_at",
@@ -1562,6 +1563,32 @@ mod tests {
         assert_eq!(reloaded.model_name_map, None);
         assert_eq!(reloaded.request_max_concurrency, None);
         assert_eq!(reloaded.request_min_start_interval_ms, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_round_trip_preserves_account_failure_retry_limit() {
+        let dir = temp_store_dir("runtime-config-retry-limit");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let config = LlmGatewayRuntimeConfigRecord {
+            account_failure_retry_limit: 7,
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&config)
+            .await
+            .expect("upsert runtime config");
+
+        let loaded = store
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(loaded.account_failure_retry_limit, 7);
 
         let _ = fs::remove_dir_all(&dir);
     }

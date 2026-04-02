@@ -4289,6 +4289,18 @@ pub struct LlmGatewayRateLimitBucketView {
     pub account_name: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LlmGatewayPublicAccountStatusView {
+    pub name: String,
+    pub status: String,
+    pub plan_type: Option<String>,
+    pub primary_remaining_percent: Option<f64>,
+    pub secondary_remaining_percent: Option<f64>,
+    pub last_usage_checked_at: Option<i64>,
+    pub last_usage_success_at: Option<i64>,
+    pub usage_error_message: Option<String>,
+}
+
 /// Cached public rate-limit status for the upstream Codex account.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LlmGatewayRateLimitStatusResponse {
@@ -4298,6 +4310,8 @@ pub struct LlmGatewayRateLimitStatusResponse {
     pub last_success_at: Option<i64>,
     pub source_url: String,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<LlmGatewayPublicAccountStatusView>,
     pub buckets: Vec<LlmGatewayRateLimitBucketView>,
 }
 
@@ -4609,6 +4623,7 @@ pub struct AdminLlmGatewayTokenRequestsQuery {
 pub struct LlmGatewayRuntimeConfig {
     pub auth_cache_ttl_seconds: u64,
     pub max_request_body_bytes: u64,
+    pub account_failure_retry_limit: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -4844,6 +4859,28 @@ pub async fn fetch_llm_gateway_status() -> Result<LlmGatewayRateLimitStatusRespo
             last_success_at: Some(0),
             source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
             error_message: None,
+            accounts: vec![
+                LlmGatewayPublicAccountStatusView {
+                    name: "default".to_string(),
+                    status: "active".to_string(),
+                    plan_type: Some("Pro".to_string()),
+                    primary_remaining_percent: Some(62.0),
+                    secondary_remaining_percent: Some(39.0),
+                    last_usage_checked_at: Some(0),
+                    last_usage_success_at: Some(0),
+                    usage_error_message: None,
+                },
+                LlmGatewayPublicAccountStatusView {
+                    name: "backup".to_string(),
+                    status: "unavailable".to_string(),
+                    plan_type: Some("Pro".to_string()),
+                    primary_remaining_percent: Some(17.0),
+                    secondary_remaining_percent: Some(5.0),
+                    last_usage_checked_at: Some(0),
+                    last_usage_success_at: Some(0),
+                    usage_error_message: Some("upstream 503".to_string()),
+                },
+            ],
             buckets: vec![LlmGatewayRateLimitBucketView {
                 limit_id: "codex".to_string(),
                 limit_name: None,
@@ -4867,7 +4904,7 @@ pub async fn fetch_llm_gateway_status() -> Result<LlmGatewayRateLimitStatusRespo
                     unlimited: false,
                     balance: Some("24".to_string()),
                 }),
-                account_name: None,
+                account_name: Some("default".to_string()),
             }],
         })
     }
@@ -5156,6 +5193,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
         Ok(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: 60,
             max_request_body_bytes: 8 * 1024 * 1024,
+            account_failure_retry_limit: 3,
         })
     }
 
@@ -5181,12 +5219,14 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
 pub async fn update_admin_llm_gateway_config(
     auth_cache_ttl_seconds: u64,
     max_request_body_bytes: u64,
+    account_failure_retry_limit: u64,
 ) -> Result<LlmGatewayRuntimeConfig, String> {
     #[cfg(feature = "mock")]
     {
         Ok(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds,
             max_request_body_bytes,
+            account_failure_retry_limit,
         })
     }
 
@@ -5197,6 +5237,7 @@ pub async fn update_admin_llm_gateway_config(
             .json(&serde_json::json!({
                 "auth_cache_ttl_seconds": auth_cache_ttl_seconds,
                 "max_request_body_bytes": max_request_body_bytes,
+                "account_failure_retry_limit": account_failure_retry_limit,
             }))
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()

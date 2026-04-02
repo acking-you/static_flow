@@ -17,8 +17,9 @@ use static_flow_shared::{
     },
     llm_gateway_store::{
         self, LlmGatewayStore, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
-        DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+        DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
+        DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
     },
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
@@ -163,6 +164,9 @@ pub struct LlmGatewayRuntimeConfig {
     pub auth_cache_ttl_seconds: u64,
     /// Maximum allowed request body size in bytes for proxied gateway calls.
     pub max_request_body_bytes: u64,
+    /// Number of consecutive Codex refresh failures tolerated before marking
+    /// one account unavailable.
+    pub account_failure_retry_limit: u64,
     /// Maximum number of concurrent Kiro upstream requests.
     pub kiro_channel_max_concurrency: u64,
     /// Minimum milliseconds between consecutive Kiro upstream request starts.
@@ -174,6 +178,7 @@ impl Default for LlmGatewayRuntimeConfig {
         Self {
             auth_cache_ttl_seconds: DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
             max_request_body_bytes: DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+            account_failure_retry_limit: DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
             kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
             kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
         }
@@ -275,6 +280,8 @@ impl AppState {
             llm_gateway_runtime_config_record.auth_cache_ttl_seconds;
         let llm_gateway_max_request_body_bytes =
             llm_gateway_runtime_config_record.max_request_body_bytes;
+        let llm_gateway_account_failure_retry_limit =
+            llm_gateway_runtime_config_record.account_failure_retry_limit;
         let kiro_channel_max_concurrency =
             llm_gateway_runtime_config_record.kiro_channel_max_concurrency;
         let kiro_channel_min_start_interval_ms =
@@ -282,6 +289,7 @@ impl AppState {
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
+            account_failure_retry_limit = llm_gateway_account_failure_retry_limit,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
             "loaded llm gateway runtime config from storage"
@@ -289,6 +297,7 @@ impl AppState {
         let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes: llm_gateway_max_request_body_bytes,
+            account_failure_retry_limit: llm_gateway_account_failure_retry_limit,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
         }));
@@ -323,6 +332,7 @@ impl AppState {
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
+            account_failure_retry_limit = llm_gateway_account_failure_retry_limit,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
             "initialized llm gateway runtime state"
@@ -355,28 +365,63 @@ impl AppState {
         );
 
         let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
-        if let Err(err) = crate::llm_gateway::token_refresh::refresh_all_accounts_once(
-            llm_gateway.account_pool.as_ref(),
-            upstream_proxy_registry.as_ref(),
-        )
-        .await
-        {
-            tracing::warn!("Initial Codex account usage refresh failed: {err:#}");
-        }
-        if let Err(err) = crate::llm_gateway::refresh_public_rate_limit_status(&llm_gateway).await {
-            tracing::warn!("Initial LLM gateway rate-limit refresh failed: {err:#}");
-        }
+        let llm_gateway_warmup = llm_gateway.clone();
+        let llm_gateway_warmup_runtime_config = llm_gateway_runtime_config.clone();
+        let llm_gateway_warmup_proxy_registry = upstream_proxy_registry.clone();
+        let mut llm_gateway_warmup_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = llm_gateway_warmup_shutdown_rx.changed() => {
+                    if *llm_gateway_warmup_shutdown_rx.borrow() {
+                        tracing::info!("Initial LLM gateway warmup cancelled during shutdown");
+                    }
+                }
+                _ = async {
+                    if let Err(err) = crate::llm_gateway::token_refresh::refresh_all_accounts_once(
+                        llm_gateway_warmup.account_pool.as_ref(),
+                        llm_gateway_warmup_proxy_registry.as_ref(),
+                        llm_gateway_warmup_runtime_config.as_ref(),
+                    )
+                    .await
+                    {
+                        tracing::warn!("Initial Codex account usage refresh failed: {err:#}");
+                    }
+                    if let Err(err) =
+                        crate::llm_gateway::refresh_public_rate_limit_status(&llm_gateway_warmup)
+                            .await
+                    {
+                        tracing::warn!("Initial LLM gateway rate-limit refresh failed: {err:#}");
+                    }
+                } => {}
+            }
+        });
         crate::llm_gateway::spawn_public_rate_limit_refresher(
             llm_gateway.clone(),
             shutdown_rx.clone(),
         );
-        if let Err(err) = crate::kiro_gateway::refresh_cached_status(&kiro_gateway).await {
-            tracing::warn!("Initial Kiro cached status refresh failed: {err:#}");
-        }
+        let kiro_gateway_warmup = kiro_gateway.clone();
+        let mut kiro_gateway_warmup_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = kiro_gateway_warmup_shutdown_rx.changed() => {
+                    if *kiro_gateway_warmup_shutdown_rx.borrow() {
+                        tracing::info!("Initial Kiro warmup cancelled during shutdown");
+                    }
+                }
+                _ = async {
+                    if let Err(err) =
+                        crate::kiro_gateway::refresh_cached_status(&kiro_gateway_warmup).await
+                    {
+                        tracing::warn!("Initial Kiro cached status refresh failed: {err:#}");
+                    }
+                } => {}
+            }
+        });
         crate::kiro_gateway::spawn_status_refresher(kiro_gateway.clone(), shutdown_rx.clone());
         crate::llm_gateway::spawn_account_refresh_task(
             account_pool,
             upstream_proxy_registry.clone(),
+            llm_gateway_runtime_config.clone(),
             shutdown_rx.clone(),
         );
 

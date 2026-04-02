@@ -29,6 +29,15 @@ pub(crate) const STATUS_DISABLED: &str = "disabled";
 pub(crate) const STATUS_EMPTY: &str = "empty";
 pub(crate) const STATUS_QUOTA_EXHAUSTED: &str = "quota_exhausted";
 
+fn kiro_status_refresh_interval() -> tokio::time::Interval {
+    let mut ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS),
+        Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS),
+    );
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ticker
+}
+
 /// Cached status for a single Kiro account: last-known balance and cache
 /// metadata.
 #[derive(Debug, Clone)]
@@ -67,9 +76,7 @@ pub(crate) fn spawn_status_refresher(
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        ticker.tick().await;
+        let mut ticker = kiro_status_refresh_interval();
 
         loop {
             tokio::select! {
@@ -526,5 +533,49 @@ mod tests {
         };
 
         assert!(!account_is_request_eligible(&auth, Some(&status)));
+    }
+
+    #[test]
+    fn request_eligibility_keeps_degraded_accounts_retryable() {
+        let auth = KiroAuthRecord {
+            name: "alpha".to_string(),
+            disabled: false,
+            ..KiroAuthRecord::default()
+        };
+        let status = KiroCachedAccountStatus {
+            balance: Some(KiroBalanceView {
+                current_usage: 55.0,
+                usage_limit: 100.0,
+                remaining: 45.0,
+                next_reset_at: Some(123),
+                subscription_title: Some("plan".to_string()),
+                user_id: Some("user-1".to_string()),
+            }),
+            cache: KiroCacheView {
+                status: STATUS_DEGRADED.to_string(),
+                refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+                last_checked_at: Some(100),
+                last_success_at: Some(90),
+                error_message: Some("temporary upstream failure".to_string()),
+            },
+        };
+
+        assert!(
+            account_is_request_eligible(&auth, Some(&status)),
+            "transient degraded cache entries must stay eligible so the next refresh/request can \
+             recover the account"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kiro_status_refresh_interval_waits_full_period_before_first_tick() {
+        let mut ticker = kiro_status_refresh_interval();
+        let mut tick = std::pin::pin!(ticker.tick());
+
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
+        tokio::time::advance(Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS - 1)).await;
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Ready(_)));
     }
 }

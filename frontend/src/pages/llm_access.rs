@@ -11,7 +11,8 @@ use crate::{
         fetch_llm_gateway_sponsors, fetch_llm_gateway_status, fetch_llm_gateway_support_config,
         submit_llm_gateway_account_contribution_request, submit_llm_gateway_sponsor_request,
         submit_llm_gateway_token_request, KiroAccessResponse, LlmGatewayAccessResponse,
-        LlmGatewayPublicKeyView, LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
+        LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView,
+        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
         LlmGatewaySupportConfigView, PublicLlmGatewayAccountContributionView,
         PublicLlmGatewaySponsorView, SubmitLlmGatewayAccountContributionInput,
         SubmitLlmGatewaySponsorInput, API_BASE,
@@ -67,6 +68,30 @@ fn account_accent_class(index: usize) -> &'static str {
         "border-l-4 border-l-rose-500/70",
     ];
     ACCENTS[index % ACCENTS.len()]
+}
+
+fn codex_account_status_text_class(status: &str) -> &'static str {
+    match status {
+        "active" => "text-emerald-600",
+        "unavailable" => "text-amber-600",
+        _ => "text-[var(--muted)]",
+    }
+}
+
+fn codex_account_status_dot_class(status: &str) -> &'static str {
+    match status {
+        "active" => "bg-emerald-500",
+        "unavailable" => "bg-amber-500",
+        _ => "bg-slate-400",
+    }
+}
+
+fn codex_account_placeholder_message(status: &str) -> &'static str {
+    match status {
+        "active" => "等待限额快照同步。",
+        "unavailable" => "当前账号未参与请求路由，等待下一轮自动刷新恢复。",
+        _ => "当前账号状态未知。",
+    }
 }
 
 
@@ -854,26 +879,51 @@ pub fn llm_access_page() -> Html {
             let effective_status_error = (*status_error)
                 .clone()
                 .or_else(|| status.error_message.clone());
-            let mut account_groups: Vec<(
+            let mut seen_bucket_order: Vec<Option<String>> = Vec::new();
+            let mut bucket_map: std::collections::HashMap<
                 Option<String>,
                 Vec<crate::api::LlmGatewayRateLimitBucketView>,
-            )> = Vec::new();
+            > = std::collections::HashMap::new();
             {
-                let mut seen_order: Vec<Option<String>> = Vec::new();
-                let mut map: std::collections::HashMap<
-                    Option<String>,
-                    Vec<crate::api::LlmGatewayRateLimitBucketView>,
-                > = std::collections::HashMap::new();
                 for bucket in status.buckets.iter() {
                     let key = bucket.account_name.clone();
-                    if !map.contains_key(&key) {
-                        seen_order.push(key.clone());
+                    if !bucket_map.contains_key(&key) {
+                        seen_bucket_order.push(key.clone());
                     }
-                    map.entry(key).or_default().push(bucket.clone());
+                    bucket_map.entry(key).or_default().push(bucket.clone());
                 }
-                for key in seen_order {
-                    if let Some(buckets) = map.remove(&key) {
-                        account_groups.push((key, buckets));
+            }
+            let mut rendered_accounts: Vec<(
+                String,
+                Option<LlmGatewayPublicAccountStatusView>,
+                Vec<crate::api::LlmGatewayRateLimitBucketView>,
+            )> = Vec::new();
+            if !status.accounts.is_empty() {
+                for account in status.accounts.iter() {
+                    let key = Some(account.name.clone());
+                    rendered_accounts.push((
+                        account.name.clone(),
+                        Some(account.clone()),
+                        bucket_map.remove(&key).unwrap_or_default(),
+                    ));
+                }
+                for key in seen_bucket_order {
+                    if let Some(buckets) = bucket_map.remove(&key) {
+                        rendered_accounts.push((
+                            key.unwrap_or_else(|| "default".to_string()),
+                            None,
+                            buckets,
+                        ));
+                    }
+                }
+            } else {
+                for key in seen_bucket_order {
+                    if let Some(buckets) = bucket_map.remove(&key) {
+                        rendered_accounts.push((
+                            key.unwrap_or_else(|| "default".to_string()),
+                            None,
+                            buckets,
+                        ));
                     }
                 }
             }
@@ -935,12 +985,18 @@ pub fn llm_access_page() -> Html {
 
                     if *status_expanded {
                     // Account groups
-                    { for account_groups.iter().enumerate().map(|(group_idx, (account_name, group_buckets))| {
+                    { for rendered_accounts.iter().enumerate().map(|(group_idx, (account_name, account_summary, group_buckets))| {
                         let primary_bucket = group_buckets.iter().find(|b| b.is_primary).cloned()
                             .or_else(|| group_buckets.first().cloned());
                         let additional_buckets: Vec<_> = group_buckets.iter().filter(|b| !b.is_primary).cloned().collect();
-                        let group_label = account_name.as_deref().unwrap_or("default");
-                        let show_account_header = account_groups.len() > 1 || account_name.is_some();
+                        let summary_status = account_summary.as_ref().map(|value| value.status.as_str()).unwrap_or("active");
+                        let summary_plan = account_summary.as_ref().and_then(|value| value.plan_type.clone());
+                        let summary_primary_remaining = account_summary.as_ref().and_then(|value| value.primary_remaining_percent);
+                        let summary_secondary_remaining = account_summary.as_ref().and_then(|value| value.secondary_remaining_percent);
+                        let summary_last_checked_at = account_summary.as_ref().and_then(|value| value.last_usage_checked_at);
+                        let summary_last_success_at = account_summary.as_ref().and_then(|value| value.last_usage_success_at);
+                        let summary_error_message = account_summary.as_ref().and_then(|value| value.usage_error_message.clone());
+                        let show_account_header = rendered_accounts.len() > 1 || account_summary.is_some();
                         html! {
                             <div class={classes!(
                                 "mt-4", "rounded-lg", "border", "border-[var(--border)]",
@@ -948,13 +1004,35 @@ pub fn llm_access_page() -> Html {
                                 account_accent_class(group_idx),
                             )}>
                                 if show_account_header {
-                                    <div class={classes!("mb-3")}>
-                                        <span class={classes!(
-                                            "font-mono", "text-[11px]", "font-bold", "uppercase", "tracking-wider",
-                                            "text-[var(--primary)]",
-                                        )}>
-                                            { group_label }
-                                        </span>
+                                    <div class={classes!("mb-3", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                            <span class={classes!(
+                                                "font-mono", "text-[11px]", "font-bold", "uppercase", "tracking-wider",
+                                                "text-[var(--primary)]",
+                                            )}>
+                                                { account_name.clone() }
+                                            </span>
+                                            if account_summary.is_some() {
+                                                <span class={classes!(
+                                                    "inline-flex", "items-center", "gap-1.5",
+                                                    "rounded-full", "px-2.5", "py-0.5",
+                                                    "font-mono", "text-[10px]", "font-semibold", "uppercase", "tracking-wider",
+                                                    "bg-[var(--surface)]",
+                                                    codex_account_status_text_class(summary_status),
+                                                )}>
+                                                    <span class={classes!(
+                                                        "inline-block", "h-1.5", "w-1.5", "rounded-full",
+                                                        codex_account_status_dot_class(summary_status),
+                                                    )} />
+                                                    { summary_status }
+                                                </span>
+                                            }
+                                        </div>
+                                        if let Some(plan) = primary_bucket.as_ref().and_then(|bucket| bucket.plan_type.clone()).or(summary_plan) {
+                                            <span class={classes!("font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                { plan }
+                                            </span>
+                                        }
                                     </div>
                                 }
                                 if let Some(primary_bucket) = primary_bucket.clone() {
@@ -986,6 +1064,28 @@ pub fn llm_access_page() -> Html {
                                         </div>
                                     </div>
                                 }
+                                if primary_bucket.is_none() {
+                                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-3")}>
+                                        <div class={classes!("flex", "items-center", "gap-3", "flex-wrap", "font-mono", "text-xs", "text-[var(--text)]")}>
+                                            if let Some(pct) = summary_primary_remaining {
+                                                <span>{ format!("5h {}", format_percent(pct)) }</span>
+                                            }
+                                            if let Some(pct) = summary_secondary_remaining {
+                                                <span>{ format!("wk {}", format_percent(pct)) }</span>
+                                            }
+                                            if summary_primary_remaining.is_none() && summary_secondary_remaining.is_none() {
+                                                <span class={classes!("text-[var(--muted)]")}>
+                                                    { codex_account_placeholder_message(summary_status) }
+                                                </span>
+                                            }
+                                        </div>
+                                        if let Some(error_message) = summary_error_message.clone() {
+                                            <div class={classes!("mt-2", "font-mono", "text-xs", "text-amber-700", "dark:text-amber-200")}>
+                                                { error_message }
+                                            </div>
+                                        }
+                                    </div>
+                                }
                                 if !additional_buckets.is_empty() {
                                     <div class={classes!("mt-3", "space-y-2")}>
                                         { for additional_buckets.iter().map(|bucket| {
@@ -1011,6 +1111,23 @@ pub fn llm_access_page() -> Html {
                                                 </div>
                                             }
                                         }) }
+                                    </div>
+                                }
+                                if let Some(error_message) = summary_error_message {
+                                    if primary_bucket.is_some() {
+                                        <div class={classes!("mt-3", "font-mono", "text-[11px]", "text-amber-700", "dark:text-amber-200")}>
+                                            { error_message }
+                                        </div>
+                                    }
+                                }
+                                if summary_last_checked_at.is_some() || summary_last_success_at.is_some() {
+                                    <div class={classes!("mt-3", "flex", "items-center", "gap-3", "font-mono", "text-[10px]", "text-[var(--muted)]", "flex-wrap")}>
+                                        if let Some(ts) = summary_last_checked_at {
+                                            <span>{ format!("last_check {}", format_ms(ts)) }</span>
+                                        }
+                                        if let Some(ts) = summary_last_success_at {
+                                            <span>{ format!("last_ok {}", format_ms(ts)) }</span>
+                                        }
                                     </div>
                                 }
                             </div>

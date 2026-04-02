@@ -27,6 +27,7 @@ use super::{
         LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
         LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+        DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
         DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, LLM_GATEWAY_PROTOCOL_OPENAI,
         LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     },
@@ -225,6 +226,7 @@ pub fn build_runtime_config_batch(
     let mut id = StringBuilder::new();
     let mut auth_cache_ttl_seconds = UInt64Builder::new();
     let mut max_request_body_bytes = UInt64Builder::new(); // max allowed request body size in bytes
+    let mut account_failure_retry_limit = UInt64Builder::new();
     let mut kiro_channel_max_concurrency = UInt64Builder::new();
     let mut kiro_channel_min_start_interval_ms = UInt64Builder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
@@ -233,6 +235,7 @@ pub fn build_runtime_config_batch(
         id.append_value(&record.id);
         auth_cache_ttl_seconds.append_value(record.auth_cache_ttl_seconds);
         max_request_body_bytes.append_value(record.max_request_body_bytes);
+        account_failure_retry_limit.append_value(record.account_failure_retry_limit);
         kiro_channel_max_concurrency.append_value(record.kiro_channel_max_concurrency);
         kiro_channel_min_start_interval_ms.append_value(record.kiro_channel_min_start_interval_ms);
         updated_at.append_value(record.updated_at);
@@ -242,6 +245,7 @@ pub fn build_runtime_config_batch(
         Arc::new(id.finish()) as ArrayRef,
         Arc::new(auth_cache_ttl_seconds.finish()),
         Arc::new(max_request_body_bytes.finish()),
+        Arc::new(account_failure_retry_limit.finish()),
         Arc::new(kiro_channel_max_concurrency.finish()),
         Arc::new(kiro_channel_min_start_interval_ms.finish()),
         Arc::new(updated_at.finish()),
@@ -761,9 +765,9 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
 /// [`LlmGatewayRuntimeConfigRecord`] rows.
 ///
 /// Columns added after the initial schema (`max_request_body_bytes`,
-/// `kiro_channel_max_concurrency`, `kiro_channel_min_start_interval_ms`) are
-/// read optionally so that rows written before the migration still decode with
-/// sensible defaults.
+/// `account_failure_retry_limit`, `kiro_channel_max_concurrency`,
+/// `kiro_channel_min_start_interval_ms`) are read optionally so that rows
+/// written before the migration still decode with sensible defaults.
 pub fn batches_to_runtime_config(
     batches: &[RecordBatch],
 ) -> Result<Vec<LlmGatewayRuntimeConfigRecord>> {
@@ -773,6 +777,9 @@ pub fn batches_to_runtime_config(
         let auth_cache_ttl_seconds = required_u64_col(batch, "auth_cache_ttl_seconds")?;
         let max_request_body_bytes = batch
             .column_by_name("max_request_body_bytes")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let account_failure_retry_limit = batch
+            .column_by_name("account_failure_retry_limit")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
         let kiro_channel_max_concurrency = batch
             .column_by_name("kiro_channel_max_concurrency")
@@ -788,6 +795,9 @@ pub fn batches_to_runtime_config(
                 max_request_body_bytes: max_request_body_bytes
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES),
+                account_failure_retry_limit: account_failure_retry_limit
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT),
                 kiro_channel_max_concurrency: kiro_channel_max_concurrency
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),

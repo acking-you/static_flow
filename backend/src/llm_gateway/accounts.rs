@@ -194,6 +194,7 @@ pub(crate) struct AccountPool {
     accounts: RwLock<HashMap<String, Arc<AsyncRwLock<CodexAccount>>>>,
     rate_limits: RwLock<HashMap<String, AccountRateLimitSnapshot>>,
     usage_refresh_health: RwLock<HashMap<String, AccountUsageRefreshHealth>>,
+    consecutive_refresh_failures: RwLock<HashMap<String, u64>>,
     last_routed_at_ms: RwLock<HashMap<String, i64>>,
     auth_file_mtimes: RwLock<HashMap<String, Option<SystemTime>>>,
     auths_dir: PathBuf,
@@ -205,6 +206,7 @@ impl AccountPool {
             accounts: RwLock::new(HashMap::new()),
             rate_limits: RwLock::new(HashMap::new()),
             usage_refresh_health: RwLock::new(HashMap::new()),
+            consecutive_refresh_failures: RwLock::new(HashMap::new()),
             last_routed_at_ms: RwLock::new(HashMap::new()),
             auth_file_mtimes: RwLock::new(HashMap::new()),
             auths_dir,
@@ -326,6 +328,7 @@ impl AccountPool {
         let existed = self.accounts.write().remove(name).is_some();
         self.rate_limits.write().remove(name);
         self.usage_refresh_health.write().remove(name);
+        self.consecutive_refresh_failures.write().remove(name);
         self.last_routed_at_ms.write().remove(name);
         self.auth_file_mtimes.write().remove(name);
         let path = self.auths_dir.join(format!("{name}.json"));
@@ -525,6 +528,7 @@ impl AccountPool {
             .last_checked_at
             .unwrap_or_else(static_flow_shared::llm_gateway_store::now_ms);
         self.rate_limits.write().insert(name.to_string(), snapshot);
+        self.consecutive_refresh_failures.write().remove(name);
         self.usage_refresh_health
             .write()
             .insert(name.to_string(), AccountUsageRefreshHealth {
@@ -534,10 +538,44 @@ impl AccountPool {
             });
     }
 
+    /// Return the current consecutive refresh failure count for one account.
+    #[cfg(test)]
+    pub fn consecutive_refresh_failures(&self, name: &str) -> u64 {
+        self.consecutive_refresh_failures
+            .read()
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Increment and return the consecutive refresh failure count for one
+    /// account.
+    pub async fn increment_consecutive_refresh_failures(&self, name: &str) -> Option<u64> {
+        let mut counts = self.consecutive_refresh_failures.write();
+        let next = counts
+            .entry(name.to_string())
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+        Some(*next)
+    }
+
+    /// Clear the consecutive refresh failure count for one account.
+    pub async fn clear_consecutive_refresh_failures(&self, name: &str) {
+        self.consecutive_refresh_failures.write().remove(name);
+    }
+
     /// Record that the latest usage refresh attempt for one account failed.
-    pub async fn mark_usage_refresh_failure(&self, name: &str, error_message: impl Into<String>) {
+    pub async fn mark_usage_refresh_failure(
+        &self,
+        name: &str,
+        error_message: impl Into<String>,
+    ) -> u64 {
         let checked_at = static_flow_shared::llm_gateway_store::now_ms();
         let error_message = error_message.into();
+        let failure_count = self
+            .increment_consecutive_refresh_failures(name)
+            .await
+            .unwrap_or(0);
         let mut usage_refresh_health = self.usage_refresh_health.write();
         let previous_success_at = usage_refresh_health
             .get(name)
@@ -547,6 +585,7 @@ impl AccountPool {
             last_success_at: previous_success_at,
             error_message: Some(error_message),
         });
+        failure_count
     }
 
     /// Persist updated tokens for an account back to its file.
@@ -1034,6 +1073,25 @@ mod tests {
             .expect("alpha summary after recovery");
         assert_eq!(recovered_summary.usage_refresh.last_success_at, second_success_at);
         assert_eq!(recovered_summary.usage_refresh.error_message, None);
+        let _ = std::fs::remove_dir_all(auths_dir);
+    }
+
+    #[tokio::test]
+    async fn consecutive_refresh_failures_accumulate_until_cleared() {
+        let auths_dir = test_auths_dir("refresh-failure-counts");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+
+        assert_eq!(pool.increment_consecutive_refresh_failures("alpha").await, Some(1));
+        assert_eq!(pool.increment_consecutive_refresh_failures("alpha").await, Some(2));
+        assert_eq!(pool.consecutive_refresh_failures("alpha"), 2);
+
+        pool.clear_consecutive_refresh_failures("alpha").await;
+        assert_eq!(pool.consecutive_refresh_failures("alpha"), 0);
+        assert_eq!(pool.increment_consecutive_refresh_failures("alpha").await, Some(1));
+
         let _ = std::fs::remove_dir_all(auths_dir);
     }
 }
