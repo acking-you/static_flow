@@ -4315,6 +4315,10 @@ pub struct LlmGatewayRateLimitStatusResponse {
     pub buckets: Vec<LlmGatewayRateLimitBucketView>,
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 /// Admin-only editable representation of a gateway key.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
@@ -4342,6 +4346,8 @@ pub struct AdminLlmGatewayKeyView {
     pub model_name_map: Option<BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default = "default_true")]
+    pub kiro_request_validation_enabled: bool,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -5746,6 +5752,7 @@ pub async fn create_admin_llm_gateway_key(
             model_name_map: None,
             request_max_concurrency,
             request_min_start_interval_ms,
+            kiro_request_validation_enabled: true,
         })
     }
 
@@ -5788,6 +5795,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub model_name_map: Option<&'a BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    pub kiro_request_validation_enabled: Option<bool>,
     pub request_max_concurrency_unlimited: bool,
     pub request_min_start_interval_ms_unlimited: bool,
 }
@@ -5810,6 +5818,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
+            request.kiro_request_validation_enabled,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -5882,6 +5891,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "request_min_start_interval_ms".to_string(),
                 serde_json::Value::Number(request_min_start_interval_ms.into()),
+            );
+        }
+        if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
+            body.insert(
+                "kiro_request_validation_enabled".to_string(),
+                serde_json::Value::Bool(kiro_request_validation_enabled),
             );
         }
         if request.request_max_concurrency_unlimited {
@@ -6746,6 +6761,7 @@ pub async fn create_admin_kiro_key(
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
         })
     }
 
@@ -6790,6 +6806,7 @@ pub async fn patch_admin_kiro_key(
             request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
+            request.kiro_request_validation_enabled,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -6851,6 +6868,12 @@ pub async fn patch_admin_kiro_key(
             let value = serde_json::to_value(model_name_map)
                 .map_err(|e| format!("Serialize error: {:?}", e))?;
             body.insert("model_name_map".to_string(), value);
+        }
+        if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
+            body.insert(
+                "kiro_request_validation_enabled".to_string(),
+                serde_json::Value::Bool(kiro_request_validation_enabled),
+            );
         }
         let response = api_patch(&url)
             .json(&serde_json::Value::Object(body))

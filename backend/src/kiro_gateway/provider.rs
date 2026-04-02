@@ -1406,6 +1406,7 @@ mod tests {
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
         }
     }
 

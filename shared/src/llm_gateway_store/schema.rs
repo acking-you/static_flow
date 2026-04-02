@@ -56,6 +56,7 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("model_name_map_json", DataType::Utf8, true),
         Field::new("request_max_concurrency", DataType::UInt64, true),
         Field::new("request_min_start_interval_ms", DataType::UInt64, true),
+        Field::new("kiro_request_validation_enabled", DataType::Boolean, true),
     ]))
 }
 
@@ -242,6 +243,7 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "model_name_map_json").await?;
     ensure_nullable_u64_column(&table, "request_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "request_min_start_interval_ms").await?;
+    ensure_nullable_bool_column(&table, "kiro_request_validation_enabled").await?;
     ensure_scalar_index(&table, "id").await?;
     ensure_scalar_index(&table, "key_hash").await?;
     ensure_scalar_index(&table, "status").await?;
@@ -574,7 +576,7 @@ async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
 }
 
 /// Ordered projection used when reading key rows back from LanceDB.
-pub fn key_columns() -> [&'static str; 24] {
+pub fn key_columns() -> [&'static str; 25] {
     [
         "id",
         "name",
@@ -600,6 +602,7 @@ pub fn key_columns() -> [&'static str; 24] {
         "model_name_map_json",
         "request_max_concurrency",
         "request_min_start_interval_ms",
+        "kiro_request_validation_enabled",
     ]
 }
 

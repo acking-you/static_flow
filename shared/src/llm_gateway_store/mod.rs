@@ -1487,6 +1487,7 @@ mod tests {
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
         }
     }
 
@@ -1516,6 +1517,7 @@ mod tests {
         )]));
         updated.request_max_concurrency = Some(2);
         updated.request_min_start_interval_ms = Some(1_250);
+        updated.kiro_request_validation_enabled = false;
         updated.updated_at = now_ms();
         store.upsert_key(&updated).await.expect("update key");
 
@@ -1528,6 +1530,7 @@ mod tests {
         assert_eq!(reloaded.model_name_map, updated.model_name_map);
         assert_eq!(reloaded.request_max_concurrency, Some(2));
         assert_eq!(reloaded.request_min_start_interval_ms, Some(1_250));
+        assert!(!reloaded.kiro_request_validation_enabled);
 
         let _ = fs::remove_dir_all(&dir);
     }

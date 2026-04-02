@@ -36,7 +36,7 @@ pub mod websearch;
 use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 
 use self::{
-    converter::{convert_request, ConversionError},
+    converter::{convert_request_with_validation, ConversionError},
     stream::{BufferedStreamContext, StreamContext},
     types::{
         CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model,
@@ -290,6 +290,7 @@ async fn handle_messages(
         Ok(value) => value,
         Err(err) => return err.into_response(),
     };
+    let request_validation_enabled = key_record.kiro_request_validation_enabled;
     let requested_model = payload.model.clone();
     if let Some((source_model, target_model)) = apply_key_model_mapping(&key_record, payload) {
         tracing::info!(
@@ -330,6 +331,7 @@ async fn handle_messages(
         message_count = payload.messages.len(),
         tool_count = tool_names.len(),
         web_search_tool_count,
+        request_validation_enabled,
         tool_names = ?tool_names,
         "received kiro anthropic request"
     );
@@ -353,7 +355,7 @@ async fn handle_messages(
         )
         .await;
     }
-    let conversion = match convert_request(payload) {
+    let conversion = match convert_request_with_validation(payload, request_validation_enabled) {
         Ok(result) => result,
         Err(err) => {
             let message = match &err {
@@ -369,6 +371,7 @@ async fn handle_messages(
                 effective_model = %payload.model,
                 stream = payload.stream,
                 buffered_for_cc,
+                request_validation_enabled,
                 error = %message,
                 "rejected malformed kiro public request before upstream call"
             );
@@ -1039,6 +1042,7 @@ mod tests {
             }),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
         }
     }
 

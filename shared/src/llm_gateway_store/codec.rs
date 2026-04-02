@@ -63,6 +63,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut model_name_map_json = StringBuilder::new();
     let mut request_max_concurrency = UInt64Builder::new();
     let mut request_min_start_interval_ms = UInt64Builder::new();
+    let mut kiro_request_validation_enabled = BooleanBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -98,6 +99,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
             &mut request_min_start_interval_ms,
             record.request_min_start_interval_ms,
         );
+        kiro_request_validation_enabled.append_value(record.kiro_request_validation_enabled);
     }
 
     RecordBatch::try_new(schema, vec![
@@ -125,6 +127,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(model_name_map_json.finish()),
         Arc::new(request_max_concurrency.finish()),
         Arc::new(request_min_start_interval_ms.finish()),
+        Arc::new(kiro_request_validation_enabled.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
@@ -563,6 +566,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let request_min_start_interval_ms = batch
             .column_by_name("request_min_start_interval_ms")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_request_validation_enabled = batch
+            .column_by_name("kiro_request_validation_enabled")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = usage_input_uncached_tokens
@@ -613,6 +619,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                     .and_then(|column| value_u64_opt(column, idx)),
                 request_min_start_interval_ms: request_min_start_interval_ms
                     .and_then(|column| value_u64_opt(column, idx)),
+                kiro_request_validation_enabled: kiro_request_validation_enabled
+                    .and_then(|column| value_bool_opt(column, idx))
+                    .unwrap_or(true),
             });
         }
     }

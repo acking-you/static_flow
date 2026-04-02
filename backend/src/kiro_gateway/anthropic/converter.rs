@@ -235,13 +235,23 @@ fn map_tool_name(name: &str, tool_name_map: &mut HashMap<String, String>) -> Str
 /// Steps: map model, build history (merging consecutive same-role messages),
 /// inject system prompt + thinking prefix, validate tool-result pairing,
 /// strip orphaned tool_uses, and assemble the final wire payload.
+#[cfg(test)]
 pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, ConversionError> {
+    convert_request_with_validation(req, true)
+}
+
+pub fn convert_request_with_validation(
+    req: &MessagesRequest,
+    request_validation_enabled: bool,
+) -> Result<ConversionResult, ConversionError> {
     let model_id = map_model(&req.model)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
     if req.messages.is_empty() {
         return Err(ConversionError::EmptyMessages);
     }
-    validate_messages_request(req)?;
+    if request_validation_enabled {
+        validate_messages_request(req)?;
+    }
     // If the last message is not from the user, truncate to the last user
     // message — trailing assistant prefills are dropped.
     let messages: &[_] = if req
@@ -372,13 +382,10 @@ fn validate_user_message_content(
                             .get("text")
                             .and_then(serde_json::Value::as_str)
                             .map(str::trim)
-                            .is_none_or(|value| value.is_empty())
+                            .is_some_and(|value| !value.is_empty())
                         {
-                            return Err(invalid_request(format!(
-                                "message {message_index} text block {block_index} is missing text"
-                            )));
+                            has_supported_content = true;
                         }
-                        has_supported_content = true;
                     },
                     "image" => {
                         let Some(source) = obj.get("source").and_then(serde_json::Value::as_object)
@@ -506,27 +513,20 @@ fn validate_assistant_message_content(
                             .get("text")
                             .and_then(serde_json::Value::as_str)
                             .map(str::trim)
-                            .is_none_or(|value| value.is_empty())
+                            .is_some_and(|value| !value.is_empty())
                         {
-                            return Err(invalid_request(format!(
-                                "message {message_index} text block {block_index} is missing text"
-                            )));
+                            has_supported_content = true;
                         }
-                        has_supported_content = true;
                     },
                     "thinking" => {
                         if obj
                             .get("thinking")
                             .and_then(serde_json::Value::as_str)
                             .map(str::trim)
-                            .is_none_or(|value| value.is_empty())
+                            .is_some_and(|value| !value.is_empty())
                         {
-                            return Err(invalid_request(format!(
-                                "message {message_index} thinking block {block_index} is missing \
-                                 thinking"
-                            )));
+                            has_supported_content = true;
                         }
-                        has_supported_content = true;
                     },
                     "tool_use" => {
                         if obj
@@ -589,7 +589,7 @@ fn process_message_content(
                 if let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone()) {
                     match block.block_type.as_str() {
                         "text" => {
-                            if let Some(text) = block.text {
+                            if let Some(text) = block.text.filter(|text| !text.trim().is_empty()) {
                                 text_parts.push(text);
                             }
                         },
@@ -902,12 +902,15 @@ fn convert_assistant_message(
                 if let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone()) {
                     match block.block_type.as_str() {
                         "thinking" => {
-                            if let Some(thinking) = block.thinking {
+                            if let Some(thinking) = block
+                                .thinking
+                                .filter(|thinking| !thinking.trim().is_empty())
+                            {
                                 thinking_content.push_str(&thinking);
                             }
                         },
                         "text" => {
-                            if let Some(text) = block.text {
+                            if let Some(text) = block.text.filter(|text| !text.trim().is_empty()) {
                                 text_content.push_str(&text);
                             }
                         },
@@ -1459,5 +1462,64 @@ mod tests {
         assert!(current.content.is_empty());
         assert_eq!(current.user_input_message_context.tool_results.len(), 1);
         assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-1");
+    }
+
+    #[test]
+    fn convert_request_allows_empty_assistant_text_placeholder_with_tool_use() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Read the file"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": " "
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/test.txt"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "file content"
+                    }
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("empty assistant text placeholder should pass");
+        let assistant = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => &message.assistant_response_message,
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert_eq!(assistant.content, " ");
+        assert_eq!(assistant.tool_uses.as_ref().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn convert_request_validation_toggle_can_bypass_empty_text_rejection() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "text",
+                    "text": " "
+                }
+            ]),
+        }]);
+
+        assert!(convert_request(&req).is_err());
+        assert!(convert_request_with_validation(&req, false).is_ok());
     }
 }

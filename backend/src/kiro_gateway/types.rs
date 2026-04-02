@@ -152,6 +152,7 @@ pub struct AdminKiroKeyView {
     /// actual model name forwarded upstream.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_name_map: Option<BTreeMap<String, String>>,
+    pub kiro_request_validation_enabled: bool,
 }
 
 impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
@@ -177,6 +178,7 @@ impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
             fixed_account_name: value.fixed_account_name.clone(),
             auto_account_names: value.auto_account_names.clone(),
             model_name_map: value.model_name_map.clone(),
+            kiro_request_validation_enabled: value.kiro_request_validation_enabled,
         }
     }
 }
@@ -288,6 +290,8 @@ pub struct PatchKiroKeyRequest {
     pub auto_account_names: Option<Vec<String>>,
     #[serde(default)]
     pub model_name_map: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub kiro_request_validation_enabled: Option<bool>,
 }
 
 /// Normalized account-balance snapshot derived from Kiro `getUsageLimits`.

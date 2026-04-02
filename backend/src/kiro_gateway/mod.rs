@@ -257,6 +257,7 @@ pub async fn create_admin_key(
         model_name_map: None,
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
+        kiro_request_validation_enabled: true,
     };
     state
         .llm_gateway_store
@@ -320,6 +321,9 @@ pub async fn patch_admin_key(
     }
     if let Some(model_name_map) = request.model_name_map {
         key.model_name_map = normalize_model_name_map(model_name_map)?;
+    }
+    if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
+        key.kiro_request_validation_enabled = kiro_request_validation_enabled;
     }
     key.public_visible = false;
     key.updated_at = now_ms();

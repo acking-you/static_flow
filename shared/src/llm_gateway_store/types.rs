@@ -111,6 +111,9 @@ pub struct LlmGatewayKeyRecord {
     ///
     /// `None` means unlimited/no pacing constraint.
     pub request_min_start_interval_ms: Option<u64>,
+    /// Whether Kiro requests using this key should run strict local request
+    /// validation before conversion and proxying.
+    pub kiro_request_validation_enabled: bool,
 }
 
 impl LlmGatewayKeyRecord {
