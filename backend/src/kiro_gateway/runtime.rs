@@ -502,6 +502,9 @@ async fn refresh_idc(
     if let Some(refresh_token) = payload.refresh_token {
         next_auth.refresh_token = Some(refresh_token);
     }
+    if let Some(profile_arn) = payload.profile_arn {
+        next_auth.profile_arn = Some(profile_arn);
+    }
     next_auth.expires_at =
         derive_refreshed_expires_at(next_auth.access_token.as_deref(), payload.expires_in);
     Ok(next_auth)

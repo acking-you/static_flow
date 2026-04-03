@@ -413,6 +413,8 @@ pub struct IdcRefreshResponse {
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub expires_in: Option<i64>,
+    #[serde(default)]
+    pub profile_arn: Option<String>,
 }
 
 /// Response from the Kiro `getUsageLimits` endpoint, containing subscription
@@ -725,5 +727,28 @@ impl Event {
                 .to_string(),
             message: frame.payload_as_str(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IdcRefreshResponse;
+
+    #[test]
+    fn idc_refresh_response_deserializes_profile_arn() {
+        let payload: IdcRefreshResponse = serde_json::from_str(
+            r#"{
+                "accessToken": "access-token",
+                "refreshToken": "refresh-token",
+                "expiresIn": 3600,
+                "profileArn": "arn:aws:iam::123456789012:role/KiroProfile"
+            }"#,
+        )
+        .expect("idc refresh response should deserialize");
+
+        assert_eq!(
+            payload.profile_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/KiroProfile")
+        );
     }
 }
