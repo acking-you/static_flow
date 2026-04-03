@@ -60,24 +60,40 @@ Use this skill when the source page is not a normal Markdown/article import:
 - Preserve original visual behavior, code highlighting, component structure, and interaction wiring unless a change is required for localization.
 - Translation quality target is a faithful full-text translation, not a shortened rewrite.
 
-### Rule 7: Provide direct access to the raw localized entry page
+### Rule 7: Raw localized entries must remain single-locale
+- `/interactive-pages/<page_id>/entry?lang=zh` must read as a Chinese-first page and must not embed a full English article body.
+- `/interactive-pages/<page_id>/entry?lang=en` must read as an English-first page and must not embed a full Chinese article body.
+- Do not stack two full-language article bodies inside one raw entry.
+- Do not treat “English source page + appended Chinese translation block” as acceptable localization.
+
+### Rule 8: Bilingual comparison belongs to the article track
+- Bilingual comparison is allowed in `articles.content` / `articles.content_en` or article detail UI.
+- Raw interactive entries must not implement bilingual comparison by appending a second full-language article below the first.
+- `/interactive-pages/<page_id>/entry?lang=<locale>` is a localized mirror, not a side-by-side bilingual view.
+
+### Rule 9: Translation source must be clean
+- If the currently published LanceDB article body is malformed, do not reuse it as translation source material.
+- Rebuild bilingual article artifacts from source HTML, clean source Markdown, or another verified clean extraction.
+- Existing broken reposts require a rebuild from clean source, not patch stacking on top of corrupted Markdown.
+
+### Rule 10: Provide direct access to the raw localized entry page
 - The standalone wrapper is useful, but it is not the only entry.
 - The user should be able to open the current-language raw render directly:
   - `/interactive-pages/<page_id>/entry?lang=zh`
   - `/interactive-pages/<page_id>/entry?lang=en`
 - If a wrapper shell exists, include a visible CTA that opens the current-language raw render.
 
-### Rule 8: Verify routes, DB rows, and real interaction after write
+### Rule 11: Verify routes, DB rows, and real interaction after write
 - Query the DB rows after publish.
 - Open the local mirror route and confirm it renders.
 - Verify core interaction still works after localization.
 - Verify localized copy on real rendered frames, not only the landing screen.
 
-### Rule 9: Article date should default to the import date
+### Rule 12: Article date should default to the import date
 - Unless the user explicitly asks to preserve the source publication date in `articles.date`, use the actual import date.
 - If the source article has its own original publication date, mention it in the article body or attribution instead of reusing it as the StaticFlow article date by default.
 
-### Rule 10: Do not capture the executed DOM as the entry HTML
+### Rule 13: Do not capture the executed DOM as the entry HTML
 - For JS-heavy pages, the entry HTML should come from the original fetched response HTML whenever practical.
 - Do not serialize `document.documentElement.outerHTML` after the page has already executed and mutated the DOM unless the task specifically requires a post-init snapshot.
 - Otherwise replay can duplicate runtime-generated nodes, causing overlapping titles, SVGs, or other animated content on reload.
@@ -181,6 +197,9 @@ Locale QA requirements before `add-locale`:
 - Audit the localized HTML/JS assets for leftover user-visible English sentences, especially frame scripts that update subtitles over time.
 - Do not stop at the first frame; inspect later frames such as election, replication, partition recovery, conclusion, and any direct-entry hash routes.
 - If you manually patch localized asset files after generating the locale manifest, refresh the manifest `sha256` values before publishing.
+- Confirm the localized raw entry is single-locale, not a bilingual stacked page.
+- Confirm there is no malformed Jekyll macro residue, broken table markdown, or raw template marker carried over from a previous repost.
+- If the existing LanceDB article content is malformed, regenerate bilingual article artifacts from clean source before publishing the locale.
 
 ### Step 5: Frontend entry policy
 - Article detail should open the local mirror directly.
@@ -221,6 +240,7 @@ Behavior verification:
 - confirm there are no duplicated runtime-generated elements after reload such as overlapping titles, subtitles, or SVG scenes
 - confirm requests are served from `/api/interactive-pages/<page_id>/assets/...`
 - confirm there are no obvious leftover English sentences in the localized locale except intentional protocol names / proper nouns
+- confirm `/entry?lang=<locale>` does not embed a full second-language article body below the localized one
 
 ## Deliverable Checklist
 - `articles` row exists and is queryable from frontend
