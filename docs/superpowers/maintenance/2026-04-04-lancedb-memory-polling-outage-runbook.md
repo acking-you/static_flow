@@ -35,15 +35,13 @@ cargo build -p sf-cli -p static-flow-backend
 target/debug/sf-cli
 ```
 
-## Optional Backup
+## Backup Note
 
-If you want a fast rollback point, copy the two hot tables before rebuild:
+`sf-cli db rebuild-table-stable` already creates a filesystem backup under the
+data-root sibling backup directory:
 
 ```bash
-cp -a /mnt/wsl/data4tb/static-flow-data/lancedb/llm_gateway_usage_events.lance \
-  /mnt/wsl/data4tb/static-flow-data/lancedb/llm_gateway_usage_events.lance.bak.$(date +%Y%m%d-%H%M%S)
-cp -a /mnt/wsl/data4tb/static-flow-data/lancedb/api_behavior_events.lance \
-  /mnt/wsl/data4tb/static-flow-data/lancedb/api_behavior_events.lance.bak.$(date +%Y%m%d-%H%M%S)
+/mnt/wsl/data4tb/static-flow-data/lancedb-backups
 ```
 
 ## Pre-Rebuild Audit
@@ -51,12 +49,14 @@ cp -a /mnt/wsl/data4tb/static-flow-data/lancedb/api_behavior_events.lance \
 Record the current storage state before touching the tables:
 
 ```bash
-target/debug/sf-cli db audit-storage \
+target/debug/sf-cli db \
   --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
+  audit-storage \
   --table llm_gateway_usage_events
 
-target/debug/sf-cli db audit-storage \
+target/debug/sf-cli db \
   --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
+  audit-storage \
   --table api_behavior_events
 ```
 
@@ -65,30 +65,57 @@ target/debug/sf-cli db audit-storage \
 Rebuild both hot append-only tables with stable row IDs:
 
 ```bash
-target/debug/sf-cli db rebuild-table-stable \
+target/debug/sf-cli db \
   --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
-  --table llm_gateway_usage_events \
+  rebuild-table-stable \
+  llm_gateway_usage_events \
   --force \
   --batch-size 256
 
-target/debug/sf-cli db rebuild-table-stable \
+target/debug/sf-cli db \
   --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
-  --table api_behavior_events \
+  rebuild-table-stable \
+  api_behavior_events \
   --force \
   --batch-size 256
 ```
+
+After rebuild, compact and prune both tables once while still offline:
+
+```bash
+target/debug/sf-cli db \
+  --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
+  optimize \
+  --all \
+  --prune-now \
+  llm_gateway_usage_events
+
+target/debug/sf-cli db \
+  --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
+  optimize \
+  --all \
+  --prune-now \
+  api_behavior_events
+```
+
+`llm_gateway_usage_events` is not part of the CLI-managed index policy, so if
+its indexes are missing after rebuild, start the backend once against the real
+DB paths and then stop it. The normal startup path will restore the table's
+expected scalar indexes.
 
 ## Post-Rebuild Audit
 
 Verify that both tables now report the expected healthier layout:
 
 ```bash
-target/debug/sf-cli db audit-storage \
+target/debug/sf-cli db \
   --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
+  audit-storage \
   --table llm_gateway_usage_events
 
-target/debug/sf-cli db audit-storage \
+target/debug/sf-cli db \
   --db-path /mnt/wsl/data4tb/static-flow-data/lancedb \
+  audit-storage \
   --table api_behavior_events
 ```
 
@@ -96,7 +123,8 @@ Expected signals:
 
 - `stable_row_ids=true`
 - `_versions/` size is materially lower than before rebuild
-- fragment counts are reset to a reasonable baseline
+- fragment counts are reset to `1`
+- `llm_gateway_usage_events` indexes include `id`, `key_id`, `provider_type`, `created_at`
 
 ## Restart And Verify
 
