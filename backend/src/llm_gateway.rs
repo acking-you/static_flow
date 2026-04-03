@@ -134,6 +134,15 @@ const MIN_RUNTIME_REQUEST_BODY_BYTES: u64 = 1024;
 /// Hard upper bound on tolerated consecutive account refresh failures.
 const MAX_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 100;
 const MIN_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 0;
+const MIN_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 240;
+const MAX_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 3_600;
+const MAX_RUNTIME_STATUS_ACCOUNT_JITTER_SECONDS: u64 = 60;
+const MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 1;
+const MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 16_384;
+const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
+const MAX_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 3_600;
+const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
+const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
@@ -163,6 +172,43 @@ fn public_rate_limit_refresh_interval() -> tokio::time::Interval {
     );
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticker
+}
+
+fn build_runtime_config_response(
+    config: &LlmGatewayRuntimeConfig,
+) -> LlmGatewayRuntimeConfigResponse {
+    LlmGatewayRuntimeConfigResponse {
+        auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
+        max_request_body_bytes: config.max_request_body_bytes,
+        account_failure_retry_limit: config.account_failure_retry_limit,
+        codex_status_refresh_min_interval_seconds: config.codex_status_refresh_min_interval_seconds,
+        codex_status_refresh_max_interval_seconds: config.codex_status_refresh_max_interval_seconds,
+        codex_status_account_jitter_max_seconds: config.codex_status_account_jitter_max_seconds,
+        kiro_status_refresh_min_interval_seconds: config.kiro_status_refresh_min_interval_seconds,
+        kiro_status_refresh_max_interval_seconds: config.kiro_status_refresh_max_interval_seconds,
+        kiro_status_account_jitter_max_seconds: config.kiro_status_account_jitter_max_seconds,
+        usage_event_flush_batch_size: config.usage_event_flush_batch_size,
+        usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
+        usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
+    }
+}
+
+fn validate_runtime_refresh_window(
+    min_seconds: u64,
+    max_seconds: u64,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if !(MIN_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS..=MAX_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS)
+        .contains(&min_seconds)
+        || !(MIN_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS
+            ..=MAX_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS)
+            .contains(&max_seconds)
+    {
+        return Err(bad_request("refresh window seconds must be between 240 and 3600"));
+    }
+    if min_seconds > max_seconds {
+        return Err(bad_request("refresh min interval must be less than or equal to max interval"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -279,11 +325,7 @@ pub async fn get_admin_runtime_config(
 ) -> Result<Json<LlmGatewayRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let config = state.llm_gateway_runtime_config.read().clone();
-    Ok(Json(LlmGatewayRuntimeConfigResponse {
-        auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
-        max_request_body_bytes: config.max_request_body_bytes,
-        account_failure_retry_limit: config.account_failure_retry_limit,
-    }))
+    Ok(Json(build_runtime_config_response(&config)))
 }
 
 /// Persist admin-controlled runtime gateway configuration changes.
@@ -317,6 +359,64 @@ pub async fn update_admin_runtime_config(
     {
         return Err(bad_request("account_failure_retry_limit is out of range"));
     }
+    let codex_status_refresh_min_interval_seconds = request
+        .codex_status_refresh_min_interval_seconds
+        .unwrap_or(current.codex_status_refresh_min_interval_seconds);
+    let codex_status_refresh_max_interval_seconds = request
+        .codex_status_refresh_max_interval_seconds
+        .unwrap_or(current.codex_status_refresh_max_interval_seconds);
+    validate_runtime_refresh_window(
+        codex_status_refresh_min_interval_seconds,
+        codex_status_refresh_max_interval_seconds,
+    )?;
+    let codex_status_account_jitter_max_seconds = request
+        .codex_status_account_jitter_max_seconds
+        .unwrap_or(current.codex_status_account_jitter_max_seconds);
+    if codex_status_account_jitter_max_seconds > MAX_RUNTIME_STATUS_ACCOUNT_JITTER_SECONDS {
+        return Err(bad_request("codex_status_account_jitter_max_seconds is out of range"));
+    }
+    let kiro_status_refresh_min_interval_seconds = request
+        .kiro_status_refresh_min_interval_seconds
+        .unwrap_or(current.kiro_status_refresh_min_interval_seconds);
+    let kiro_status_refresh_max_interval_seconds = request
+        .kiro_status_refresh_max_interval_seconds
+        .unwrap_or(current.kiro_status_refresh_max_interval_seconds);
+    validate_runtime_refresh_window(
+        kiro_status_refresh_min_interval_seconds,
+        kiro_status_refresh_max_interval_seconds,
+    )?;
+    let kiro_status_account_jitter_max_seconds = request
+        .kiro_status_account_jitter_max_seconds
+        .unwrap_or(current.kiro_status_account_jitter_max_seconds);
+    if kiro_status_account_jitter_max_seconds > MAX_RUNTIME_STATUS_ACCOUNT_JITTER_SECONDS {
+        return Err(bad_request("kiro_status_account_jitter_max_seconds is out of range"));
+    }
+    let usage_event_flush_batch_size = request
+        .usage_event_flush_batch_size
+        .unwrap_or(current.usage_event_flush_batch_size);
+    if !(MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE..=MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE)
+        .contains(&usage_event_flush_batch_size)
+    {
+        return Err(bad_request("usage_event_flush_batch_size is out of range"));
+    }
+    let usage_event_flush_interval_seconds = request
+        .usage_event_flush_interval_seconds
+        .unwrap_or(current.usage_event_flush_interval_seconds);
+    if !(MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS
+        ..=MAX_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS)
+        .contains(&usage_event_flush_interval_seconds)
+    {
+        return Err(bad_request("usage_event_flush_interval_seconds is out of range"));
+    }
+    let usage_event_flush_max_buffer_bytes = request
+        .usage_event_flush_max_buffer_bytes
+        .unwrap_or(current.usage_event_flush_max_buffer_bytes);
+    if !(MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES
+        ..=MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES)
+        .contains(&usage_event_flush_max_buffer_bytes)
+    {
+        return Err(bad_request("usage_event_flush_max_buffer_bytes is out of range"));
+    }
     let config = LlmGatewayRuntimeConfigRecord {
         id: "default".to_string(),
         auth_cache_ttl_seconds: ttl,
@@ -324,6 +424,15 @@ pub async fn update_admin_runtime_config(
         account_failure_retry_limit,
         kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
         kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
+        codex_status_refresh_min_interval_seconds,
+        codex_status_refresh_max_interval_seconds,
+        codex_status_account_jitter_max_seconds,
+        kiro_status_refresh_min_interval_seconds,
+        kiro_status_refresh_max_interval_seconds,
+        kiro_status_account_jitter_max_seconds,
+        usage_event_flush_batch_size,
+        usage_event_flush_interval_seconds,
+        usage_event_flush_max_buffer_bytes,
         updated_at: now_ms(),
     };
     state
@@ -339,6 +448,15 @@ pub async fn update_admin_runtime_config(
             account_failure_retry_limit,
             kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
+            codex_status_refresh_min_interval_seconds,
+            codex_status_refresh_max_interval_seconds,
+            codex_status_account_jitter_max_seconds,
+            kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds,
+            usage_event_flush_batch_size,
+            usage_event_flush_interval_seconds,
+            usage_event_flush_max_buffer_bytes,
         };
     }
 
@@ -346,14 +464,20 @@ pub async fn update_admin_runtime_config(
         auth_cache_ttl_seconds = ttl,
         max_request_body_bytes,
         account_failure_retry_limit,
+        codex_status_refresh_min_interval_seconds,
+        codex_status_refresh_max_interval_seconds,
+        codex_status_account_jitter_max_seconds,
+        kiro_status_refresh_min_interval_seconds,
+        kiro_status_refresh_max_interval_seconds,
+        kiro_status_account_jitter_max_seconds,
+        usage_event_flush_batch_size,
+        usage_event_flush_interval_seconds,
+        usage_event_flush_max_buffer_bytes,
         "Updated LLM gateway runtime config"
     );
 
-    Ok(Json(LlmGatewayRuntimeConfigResponse {
-        auth_cache_ttl_seconds: ttl,
-        max_request_body_bytes,
-        account_failure_retry_limit,
-    }))
+    let updated = state.llm_gateway_runtime_config.read().clone();
+    Ok(Json(build_runtime_config_response(&updated)))
 }
 
 /// List reusable upstream proxy configs managed from the admin UI.
@@ -900,11 +1024,11 @@ pub async fn list_admin_usage_events(
         limit,
         "Listing admin LLM gateway usage events"
     );
-    let total = state
-        .llm_gateway_store
-        .count_usage_events(query.key_id.as_deref())
-        .await
-        .map_err(|err| internal_error("Failed to count llm gateway usage events", err))?;
+    let total = query
+        .key_id
+        .as_deref()
+        .map(|key_id| state.llm_gateway.usage_event_count_for_key(key_id))
+        .unwrap_or_else(|| state.llm_gateway.total_usage_event_count());
     if total == 0 || offset >= total {
         tracing::debug!(
             key_id = query.key_id.as_deref().unwrap_or("all"),
@@ -980,10 +1104,8 @@ pub async fn lookup_public_usage(
         .unwrap_or(PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT)
         .clamp(1, PUBLIC_USAGE_LOOKUP_MAX_LIMIT);
     let total = state
-        .llm_gateway_store
-        .count_usage_events(Some(&effective_key.id))
-        .await
-        .map_err(|err| internal_error("Failed to count public gateway usage events", err))?;
+        .llm_gateway
+        .usage_event_count_for_key(&effective_key.id);
 
     let now_ms = now_ms();
     let chart_start_ms = public_usage_chart_window_start(now_ms);
@@ -2720,7 +2842,10 @@ pub fn spawn_public_rate_limit_refresher(
 /// request as before.
 pub async fn refresh_public_rate_limit_status(runtime: &Arc<LlmGatewayRuntimeState>) -> Result<()> {
     let checked_at = now_ms();
-    let refresh_interval_seconds = PUBLIC_RATE_LIMIT_REFRESH_SECONDS;
+    let refresh_interval_seconds = runtime
+        .runtime_config
+        .read()
+        .codex_status_refresh_max_interval_seconds;
     let source_url = compute_rate_limit_status_url();
 
     let pool_entries = runtime.account_pool.all_entries().await;
@@ -5466,6 +5591,15 @@ mod tests {
 
         assert_eq!(parsed["status_code"], 599);
         assert_eq!(parsed["failure_stage"], "stream_read");
+    }
+
+    #[test]
+    fn update_runtime_config_rejects_invalid_refresh_ranges() {
+        let err = validate_runtime_refresh_window(301, 300).expect_err("min > max should fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+
+        let err = validate_runtime_refresh_window(239, 300).expect_err("too-small min should fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test(start_paused = true)]

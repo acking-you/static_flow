@@ -370,11 +370,15 @@ pub async fn list_admin_usage_events(
     Query(query): Query<AdminKiroUsageQuery>,
 ) -> Result<Json<AdminKiroUsageEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let total = state
-        .llm_gateway_store
-        .count_usage_events_for_provider(query.key_id.as_deref(), Some(LLM_GATEWAY_PROVIDER_KIRO))
-        .await
-        .map_err(|err| internal_error("Failed to count Kiro usage events", err))?;
+    let total = query
+        .key_id
+        .as_deref()
+        .map(|key_id| state.llm_gateway.usage_event_count_for_key(key_id))
+        .unwrap_or_else(|| {
+            state
+                .llm_gateway
+                .usage_event_count_for_provider(LLM_GATEWAY_PROVIDER_KIRO)
+        });
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     if total == 0 || offset >= total {
@@ -661,9 +665,14 @@ async fn build_account_views(state: &AppState) -> Vec<KiroAccountView> {
     let Ok(auths) = state.kiro_gateway.token_manager.list_auths().await else {
         return Vec::new();
     };
+    let refresh_interval_seconds = state
+        .llm_gateway_runtime_config
+        .read()
+        .kiro_status_refresh_max_interval_seconds;
     let mut views = Vec::with_capacity(auths.len());
     for auth in auths {
-        let (balance, cache) = cached_status_parts(cached.accounts.get(&auth.name));
+        let (balance, cache) =
+            cached_status_parts(cached.accounts.get(&auth.name), refresh_interval_seconds);
         let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
             effective_account_proxy_parts(state, &auth).await;
         views.push(KiroAccountView::from_auth(
@@ -689,7 +698,11 @@ async fn build_account_view_by_name(state: &AppState, name: &str) -> Option<Kiro
         .ok()
         .flatten()?;
     let cached = state.kiro_gateway.cached_status_snapshot().await;
-    let (balance, cache) = cached_status_parts(cached.accounts.get(name));
+    let refresh_interval_seconds = state
+        .llm_gateway_runtime_config
+        .read()
+        .kiro_status_refresh_max_interval_seconds;
+    let (balance, cache) = cached_status_parts(cached.accounts.get(name), refresh_interval_seconds);
     let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
         effective_account_proxy_parts(state, &auth).await;
     Some(KiroAccountView::from_auth(
@@ -726,9 +739,14 @@ async fn build_public_statuses(state: &AppState) -> Vec<KiroPublicStatusView> {
     let Ok(auths) = state.kiro_gateway.token_manager.list_auths().await else {
         return Vec::new();
     };
+    let refresh_interval_seconds = state
+        .llm_gateway_runtime_config
+        .read()
+        .kiro_status_refresh_max_interval_seconds;
     let mut statuses = Vec::with_capacity(auths.len());
     for auth in auths {
-        let (balance, cache) = cached_status_parts(cached.accounts.get(&auth.name));
+        let (balance, cache) =
+            cached_status_parts(cached.accounts.get(&auth.name), refresh_interval_seconds);
         statuses.push(KiroPublicStatusView::from_auth_and_balance(&auth, balance.as_ref(), cache));
     }
     statuses
@@ -738,13 +756,14 @@ async fn build_public_statuses(state: &AppState) -> Vec<KiroPublicStatusView> {
 /// components, returning sensible defaults when no entry exists yet.
 fn cached_status_parts(
     entry: Option<&KiroCachedAccountStatus>,
+    refresh_interval_seconds: u64,
 ) -> (Option<KiroBalanceView>, KiroCacheView) {
     entry
         .map(|status| (status.balance.clone(), status.cache.clone()))
         .unwrap_or_else(|| {
             (None, KiroCacheView {
                 status: "loading".to_string(),
-                refresh_interval_seconds: status_cache::KIRO_STATUS_REFRESH_SECONDS,
+                refresh_interval_seconds,
                 last_checked_at: None,
                 last_success_at: None,
                 error_message: None,

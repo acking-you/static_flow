@@ -1864,9 +1864,9 @@ pub async fn fetch_admin_compaction_runtime_config() -> Result<CompactionRuntime
     {
         Ok(CompactionRuntimeConfig {
             enabled: true,
-            scan_interval_seconds: 180,
-            fragment_threshold: 10,
-            prune_older_than_hours: 2,
+            scan_interval_seconds: 900,
+            fragment_threshold: 128,
+            prune_older_than_hours: 1,
         })
     }
 
@@ -4630,6 +4630,15 @@ pub struct LlmGatewayRuntimeConfig {
     pub auth_cache_ttl_seconds: u64,
     pub max_request_body_bytes: u64,
     pub account_failure_retry_limit: u64,
+    pub codex_status_refresh_min_interval_seconds: u64,
+    pub codex_status_refresh_max_interval_seconds: u64,
+    pub codex_status_account_jitter_max_seconds: u64,
+    pub kiro_status_refresh_min_interval_seconds: u64,
+    pub kiro_status_refresh_max_interval_seconds: u64,
+    pub kiro_status_account_jitter_max_seconds: u64,
+    pub usage_event_flush_batch_size: u64,
+    pub usage_event_flush_interval_seconds: u64,
+    pub usage_event_flush_max_buffer_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -5200,6 +5209,15 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             auth_cache_ttl_seconds: 60,
             max_request_body_bytes: 8 * 1024 * 1024,
             account_failure_retry_limit: 3,
+            codex_status_refresh_min_interval_seconds: 240,
+            codex_status_refresh_max_interval_seconds: 300,
+            codex_status_account_jitter_max_seconds: 10,
+            kiro_status_refresh_min_interval_seconds: 240,
+            kiro_status_refresh_max_interval_seconds: 300,
+            kiro_status_account_jitter_max_seconds: 10,
+            usage_event_flush_batch_size: 256,
+            usage_event_flush_interval_seconds: 15,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
         })
     }
 
@@ -5223,28 +5241,18 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
 
 /// Persist a new admin-selected auth cache TTL for gateway key validation.
 pub async fn update_admin_llm_gateway_config(
-    auth_cache_ttl_seconds: u64,
-    max_request_body_bytes: u64,
-    account_failure_retry_limit: u64,
+    config: &LlmGatewayRuntimeConfig,
 ) -> Result<LlmGatewayRuntimeConfig, String> {
     #[cfg(feature = "mock")]
     {
-        Ok(LlmGatewayRuntimeConfig {
-            auth_cache_ttl_seconds,
-            max_request_body_bytes,
-            account_failure_retry_limit,
-        })
+        Ok(config.clone())
     }
 
     #[cfg(not(feature = "mock"))]
     {
         let url = format!("{}/admin/llm-gateway/config", admin_base());
         let response = api_post(&url)
-            .json(&serde_json::json!({
-                "auth_cache_ttl_seconds": auth_cache_ttl_seconds,
-                "max_request_body_bytes": max_request_body_bytes,
-                "account_failure_retry_limit": account_failure_retry_limit,
-            }))
+            .json(config)
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()
             .await

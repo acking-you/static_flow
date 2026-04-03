@@ -49,6 +49,24 @@ pub const DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES: u64 = 8 * 1024 * 1024;
 /// Allow a few transient upstream failures before one Codex account is marked
 /// unavailable for routing.
 pub const DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 3;
+/// Default randomized Codex status refresh window lower bound.
+pub const DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
+/// Default randomized Codex status refresh window upper bound.
+pub const DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
+/// Default maximum random delay before probing the next Codex account.
+pub const DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
+/// Default randomized Kiro status refresh window lower bound.
+pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
+/// Default randomized Kiro status refresh window upper bound.
+pub const DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
+/// Default maximum random delay before probing the next Kiro account.
+pub const DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
+/// Default usage-event flush batch size used to reduce version churn.
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 256;
+/// Default timed usage-event flush interval in seconds.
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
+/// Default maximum buffered usage-event payload size before a forced flush.
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 /// Default Kiro upstream channel concurrency. `1` serializes requests to avoid
 /// bursty Claude Code traffic against the undocumented 5-minute credit window.
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
@@ -337,6 +355,24 @@ pub struct LlmGatewayRuntimeConfigRecord {
     pub kiro_channel_max_concurrency: u64,
     /// Minimum spacing between Kiro upstream request starts.
     pub kiro_channel_min_start_interval_ms: u64,
+    /// Minimum randomized interval between Codex status refresh rounds.
+    pub codex_status_refresh_min_interval_seconds: u64,
+    /// Maximum randomized interval between Codex status refresh rounds.
+    pub codex_status_refresh_max_interval_seconds: u64,
+    /// Maximum random per-account delay inside one Codex refresh round.
+    pub codex_status_account_jitter_max_seconds: u64,
+    /// Minimum randomized interval between Kiro status refresh rounds.
+    pub kiro_status_refresh_min_interval_seconds: u64,
+    /// Maximum randomized interval between Kiro status refresh rounds.
+    pub kiro_status_refresh_max_interval_seconds: u64,
+    /// Maximum random per-account delay inside one Kiro refresh round.
+    pub kiro_status_account_jitter_max_seconds: u64,
+    /// Maximum number of usage events buffered before persisting a batch.
+    pub usage_event_flush_batch_size: u64,
+    /// Maximum time to hold usage events before persisting a partial batch.
+    pub usage_event_flush_interval_seconds: u64,
+    /// Maximum buffered usage-event payload size before a forced flush.
+    pub usage_event_flush_max_buffer_bytes: u64,
     pub updated_at: i64,
 }
 
@@ -349,6 +385,22 @@ impl Default for LlmGatewayRuntimeConfigRecord {
             account_failure_retry_limit: DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
             kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
             kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+            codex_status_refresh_min_interval_seconds:
+                DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+            codex_status_refresh_max_interval_seconds:
+                DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            codex_status_account_jitter_max_seconds:
+                DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+            kiro_status_refresh_min_interval_seconds:
+                DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+            kiro_status_refresh_max_interval_seconds:
+                DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            kiro_status_account_jitter_max_seconds: DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+            usage_event_flush_batch_size: DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
+            usage_event_flush_interval_seconds:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+            usage_event_flush_max_buffer_bytes:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             updated_at: now_ms(),
         }
     }

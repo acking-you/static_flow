@@ -6683,6 +6683,7 @@ dependencies = [
  "memory-stats",
  "parking_lot",
  "pulldown-cmark 0.12.2",
+ "rand 0.8.5",
  "reqwest",
  "rusqlite",
  "rustc-demangle",

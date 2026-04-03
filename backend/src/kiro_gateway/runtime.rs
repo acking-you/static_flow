@@ -61,6 +61,7 @@ pub struct KiroGatewayRuntimeState {
     pub(crate) token_manager: Arc<KiroTokenManager>,
     pub(crate) status_cache: Arc<RwLock<KiroStatusCacheSnapshot>>,
     pub(crate) request_scheduler: Arc<KiroRequestScheduler>,
+    pub(crate) runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
     pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
 }
 
@@ -93,6 +94,7 @@ impl KiroGatewayRuntimeState {
             token_manager,
             status_cache: Arc::new(RwLock::new(KiroStatusCacheSnapshot::default())),
             request_scheduler: KiroRequestScheduler::new(),
+            runtime_config,
             upstream_proxy_registry,
         })
     }

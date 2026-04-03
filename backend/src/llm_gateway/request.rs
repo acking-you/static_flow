@@ -27,6 +27,7 @@ use super::{
 ///
 /// `max_request_body_bytes` caps the body read to prevent oversized payloads
 /// from exhausting backend memory.
+#[cfg(test)]
 pub(crate) async fn prepare_gateway_request(
     gateway_path: &str,
     query: &str,

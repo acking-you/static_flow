@@ -490,6 +490,15 @@ pub struct LlmGatewayRuntimeConfigResponse {
     /// Number of consecutive Codex refresh failures tolerated before an
     /// account becomes unavailable.
     pub account_failure_retry_limit: u64,
+    pub codex_status_refresh_min_interval_seconds: u64,
+    pub codex_status_refresh_max_interval_seconds: u64,
+    pub codex_status_account_jitter_max_seconds: u64,
+    pub kiro_status_refresh_min_interval_seconds: u64,
+    pub kiro_status_refresh_max_interval_seconds: u64,
+    pub kiro_status_account_jitter_max_seconds: u64,
+    pub usage_event_flush_batch_size: u64,
+    pub usage_event_flush_interval_seconds: u64,
+    pub usage_event_flush_max_buffer_bytes: u64,
 }
 
 /// One reusable upstream proxy config managed from the admin UI.
@@ -609,6 +618,15 @@ pub struct UpdateLlmGatewayRuntimeConfigRequest {
     /// New consecutive-failure threshold before one Codex account becomes
     /// unavailable.
     pub account_failure_retry_limit: Option<u64>,
+    pub codex_status_refresh_min_interval_seconds: Option<u64>,
+    pub codex_status_refresh_max_interval_seconds: Option<u64>,
+    pub codex_status_account_jitter_max_seconds: Option<u64>,
+    pub kiro_status_refresh_min_interval_seconds: Option<u64>,
+    pub kiro_status_refresh_max_interval_seconds: Option<u64>,
+    pub kiro_status_account_jitter_max_seconds: Option<u64>,
+    pub usage_event_flush_batch_size: Option<u64>,
+    pub usage_event_flush_interval_seconds: Option<u64>,
+    pub usage_event_flush_max_buffer_bytes: Option<u64>,
 }
 
 /// Admin request body for creating a new externally visible gateway key.

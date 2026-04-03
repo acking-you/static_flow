@@ -26,9 +26,17 @@ use super::{
         LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
         LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
         LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-        DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+        DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
-        DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, LLM_GATEWAY_PROTOCOL_OPENAI,
+        DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES, LLM_GATEWAY_PROTOCOL_OPENAI,
         LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     },
 };
@@ -232,6 +240,15 @@ pub fn build_runtime_config_batch(
     let mut account_failure_retry_limit = UInt64Builder::new();
     let mut kiro_channel_max_concurrency = UInt64Builder::new();
     let mut kiro_channel_min_start_interval_ms = UInt64Builder::new();
+    let mut codex_status_refresh_min_interval_seconds = UInt64Builder::new();
+    let mut codex_status_refresh_max_interval_seconds = UInt64Builder::new();
+    let mut codex_status_account_jitter_max_seconds = UInt64Builder::new();
+    let mut kiro_status_refresh_min_interval_seconds = UInt64Builder::new();
+    let mut kiro_status_refresh_max_interval_seconds = UInt64Builder::new();
+    let mut kiro_status_account_jitter_max_seconds = UInt64Builder::new();
+    let mut usage_event_flush_batch_size = UInt64Builder::new();
+    let mut usage_event_flush_interval_seconds = UInt64Builder::new();
+    let mut usage_event_flush_max_buffer_bytes = UInt64Builder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
 
     for record in records {
@@ -241,6 +258,21 @@ pub fn build_runtime_config_batch(
         account_failure_retry_limit.append_value(record.account_failure_retry_limit);
         kiro_channel_max_concurrency.append_value(record.kiro_channel_max_concurrency);
         kiro_channel_min_start_interval_ms.append_value(record.kiro_channel_min_start_interval_ms);
+        codex_status_refresh_min_interval_seconds
+            .append_value(record.codex_status_refresh_min_interval_seconds);
+        codex_status_refresh_max_interval_seconds
+            .append_value(record.codex_status_refresh_max_interval_seconds);
+        codex_status_account_jitter_max_seconds
+            .append_value(record.codex_status_account_jitter_max_seconds);
+        kiro_status_refresh_min_interval_seconds
+            .append_value(record.kiro_status_refresh_min_interval_seconds);
+        kiro_status_refresh_max_interval_seconds
+            .append_value(record.kiro_status_refresh_max_interval_seconds);
+        kiro_status_account_jitter_max_seconds
+            .append_value(record.kiro_status_account_jitter_max_seconds);
+        usage_event_flush_batch_size.append_value(record.usage_event_flush_batch_size);
+        usage_event_flush_interval_seconds.append_value(record.usage_event_flush_interval_seconds);
+        usage_event_flush_max_buffer_bytes.append_value(record.usage_event_flush_max_buffer_bytes);
         updated_at.append_value(record.updated_at);
     }
 
@@ -251,6 +283,15 @@ pub fn build_runtime_config_batch(
         Arc::new(account_failure_retry_limit.finish()),
         Arc::new(kiro_channel_max_concurrency.finish()),
         Arc::new(kiro_channel_min_start_interval_ms.finish()),
+        Arc::new(codex_status_refresh_min_interval_seconds.finish()),
+        Arc::new(codex_status_refresh_max_interval_seconds.finish()),
+        Arc::new(codex_status_account_jitter_max_seconds.finish()),
+        Arc::new(kiro_status_refresh_min_interval_seconds.finish()),
+        Arc::new(kiro_status_refresh_max_interval_seconds.finish()),
+        Arc::new(kiro_status_account_jitter_max_seconds.finish()),
+        Arc::new(usage_event_flush_batch_size.finish()),
+        Arc::new(usage_event_flush_interval_seconds.finish()),
+        Arc::new(usage_event_flush_max_buffer_bytes.finish()),
         Arc::new(updated_at.finish()),
     ])
     .context("failed to build llm gateway runtime config batch")
@@ -796,6 +837,33 @@ pub fn batches_to_runtime_config(
         let kiro_channel_min_start_interval_ms = batch
             .column_by_name("kiro_channel_min_start_interval_ms")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let codex_status_refresh_min_interval_seconds = batch
+            .column_by_name("codex_status_refresh_min_interval_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let codex_status_refresh_max_interval_seconds = batch
+            .column_by_name("codex_status_refresh_max_interval_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let codex_status_account_jitter_max_seconds = batch
+            .column_by_name("codex_status_account_jitter_max_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_status_refresh_min_interval_seconds = batch
+            .column_by_name("kiro_status_refresh_min_interval_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_status_refresh_max_interval_seconds = batch
+            .column_by_name("kiro_status_refresh_max_interval_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_status_account_jitter_max_seconds = batch
+            .column_by_name("kiro_status_account_jitter_max_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let usage_event_flush_batch_size = batch
+            .column_by_name("usage_event_flush_batch_size")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let usage_event_flush_interval_seconds = batch
+            .column_by_name("usage_event_flush_interval_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let usage_event_flush_max_buffer_bytes = batch
+            .column_by_name("usage_event_flush_max_buffer_bytes")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
         let updated_at = required_ts_col(batch, "updated_at")?;
         for idx in 0..batch.num_rows() {
             rows.push(LlmGatewayRuntimeConfigRecord {
@@ -813,6 +881,35 @@ pub fn batches_to_runtime_config(
                 kiro_channel_min_start_interval_ms: kiro_channel_min_start_interval_ms
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
+                codex_status_refresh_min_interval_seconds:
+                    codex_status_refresh_min_interval_seconds
+                        .and_then(|column| value_u64_opt(column, idx))
+                        .unwrap_or(DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS),
+                codex_status_refresh_max_interval_seconds:
+                    codex_status_refresh_max_interval_seconds
+                        .and_then(|column| value_u64_opt(column, idx))
+                        .unwrap_or(DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS),
+                codex_status_account_jitter_max_seconds: codex_status_account_jitter_max_seconds
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS),
+                kiro_status_refresh_min_interval_seconds: kiro_status_refresh_min_interval_seconds
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS),
+                kiro_status_refresh_max_interval_seconds: kiro_status_refresh_max_interval_seconds
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS),
+                kiro_status_account_jitter_max_seconds: kiro_status_account_jitter_max_seconds
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS),
+                usage_event_flush_batch_size: usage_event_flush_batch_size
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE),
+                usage_event_flush_interval_seconds: usage_event_flush_interval_seconds
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS),
+                usage_event_flush_max_buffer_bytes: usage_event_flush_max_buffer_bytes
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES),
                 updated_at: updated_at.value(idx),
             });
         }

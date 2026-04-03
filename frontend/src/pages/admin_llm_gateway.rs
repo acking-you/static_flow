@@ -1301,6 +1301,15 @@ pub fn admin_llm_gateway_page() -> Html {
     let ttl_input = use_state(|| "60".to_string());
     let max_request_body_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
     let account_failure_retry_limit_input = use_state(|| "3".to_string());
+    let codex_refresh_min_input = use_state(|| "240".to_string());
+    let codex_refresh_max_input = use_state(|| "300".to_string());
+    let codex_account_jitter_max_input = use_state(|| "10".to_string());
+    let kiro_refresh_min_input = use_state(|| "240".to_string());
+    let kiro_refresh_max_input = use_state(|| "300".to_string());
+    let kiro_account_jitter_max_input = use_state(|| "10".to_string());
+    let usage_flush_batch_size_input = use_state(|| "256".to_string());
+    let usage_flush_interval_input = use_state(|| "15".to_string());
+    let usage_flush_max_buffer_bytes_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let create_proxy_name = use_state(|| "shared-upstream".to_string());
@@ -1522,6 +1531,15 @@ pub fn admin_llm_gateway_page() -> Html {
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
         let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+        let codex_refresh_min_input = codex_refresh_min_input.clone();
+        let codex_refresh_max_input = codex_refresh_max_input.clone();
+        let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
+        let kiro_refresh_min_input = kiro_refresh_min_input.clone();
+        let kiro_refresh_max_input = kiro_refresh_max_input.clone();
+        let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
+        let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
+        let usage_flush_interval_input = usage_flush_interval_input.clone();
+        let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_page = usage_page.clone();
@@ -1539,6 +1557,15 @@ pub fn admin_llm_gateway_page() -> Html {
             let ttl_input = ttl_input.clone();
             let max_request_body_input = max_request_body_input.clone();
             let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+            let codex_refresh_min_input = codex_refresh_min_input.clone();
+            let codex_refresh_max_input = codex_refresh_max_input.clone();
+            let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
+            let kiro_refresh_min_input = kiro_refresh_min_input.clone();
+            let kiro_refresh_max_input = kiro_refresh_max_input.clone();
+            let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
+            let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
+            let usage_flush_interval_input = usage_flush_interval_input.clone();
+            let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_page = usage_page.clone();
@@ -1604,6 +1631,24 @@ pub fn admin_llm_gateway_page() -> Html {
                         max_request_body_input.set(cfg.max_request_body_bytes.to_string());
                         account_failure_retry_limit_input
                             .set(cfg.account_failure_retry_limit.to_string());
+                        codex_refresh_min_input
+                            .set(cfg.codex_status_refresh_min_interval_seconds.to_string());
+                        codex_refresh_max_input
+                            .set(cfg.codex_status_refresh_max_interval_seconds.to_string());
+                        codex_account_jitter_max_input
+                            .set(cfg.codex_status_account_jitter_max_seconds.to_string());
+                        kiro_refresh_min_input
+                            .set(cfg.kiro_status_refresh_min_interval_seconds.to_string());
+                        kiro_refresh_max_input
+                            .set(cfg.kiro_status_refresh_max_interval_seconds.to_string());
+                        kiro_account_jitter_max_input
+                            .set(cfg.kiro_status_account_jitter_max_seconds.to_string());
+                        usage_flush_batch_size_input
+                            .set(cfg.usage_event_flush_batch_size.to_string());
+                        usage_flush_interval_input
+                            .set(cfg.usage_event_flush_interval_seconds.to_string());
+                        usage_flush_max_buffer_bytes_input
+                            .set(cfg.usage_event_flush_max_buffer_bytes.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
                         let codex_bound = proxy_binding_items
@@ -1658,6 +1703,15 @@ pub fn admin_llm_gateway_page() -> Html {
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
         let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+        let codex_refresh_min_input = codex_refresh_min_input.clone();
+        let codex_refresh_max_input = codex_refresh_max_input.clone();
+        let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
+        let kiro_refresh_min_input = kiro_refresh_min_input.clone();
+        let kiro_refresh_max_input = kiro_refresh_max_input.clone();
+        let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
+        let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
+        let usage_flush_interval_input = usage_flush_interval_input.clone();
+        let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
         let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
@@ -1666,6 +1720,24 @@ pub fn admin_llm_gateway_page() -> Html {
             let max_request_body_bytes = (*max_request_body_input).trim().parse::<u64>();
             let account_failure_retry_limit =
                 (*account_failure_retry_limit_input).trim().parse::<u64>();
+            let codex_status_refresh_min_interval_seconds =
+                (*codex_refresh_min_input).trim().parse::<u64>();
+            let codex_status_refresh_max_interval_seconds =
+                (*codex_refresh_max_input).trim().parse::<u64>();
+            let codex_status_account_jitter_max_seconds =
+                (*codex_account_jitter_max_input).trim().parse::<u64>();
+            let kiro_status_refresh_min_interval_seconds =
+                (*kiro_refresh_min_input).trim().parse::<u64>();
+            let kiro_status_refresh_max_interval_seconds =
+                (*kiro_refresh_max_input).trim().parse::<u64>();
+            let kiro_status_account_jitter_max_seconds =
+                (*kiro_account_jitter_max_input).trim().parse::<u64>();
+            let usage_event_flush_batch_size =
+                (*usage_flush_batch_size_input).trim().parse::<u64>();
+            let usage_event_flush_interval_seconds =
+                (*usage_flush_interval_input).trim().parse::<u64>();
+            let usage_event_flush_max_buffer_bytes =
+                (*usage_flush_max_buffer_bytes_input).trim().parse::<u64>();
             let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
@@ -1682,14 +1754,72 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("账号失败重试次数必须是非负整数".to_string()));
                     return;
                 };
-                saving_runtime_config.set(true);
-                match update_admin_llm_gateway_config(
-                    ttl,
+                let Ok(codex_status_refresh_min_interval_seconds) =
+                    codex_status_refresh_min_interval_seconds
+                else {
+                    load_error.set(Some("Codex 最小轮询间隔必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(codex_status_refresh_max_interval_seconds) =
+                    codex_status_refresh_max_interval_seconds
+                else {
+                    load_error.set(Some("Codex 最大轮询间隔必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(codex_status_account_jitter_max_seconds) =
+                    codex_status_account_jitter_max_seconds
+                else {
+                    load_error.set(Some("Codex 单账号抖动上限必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(kiro_status_refresh_min_interval_seconds) =
+                    kiro_status_refresh_min_interval_seconds
+                else {
+                    load_error.set(Some("Kiro 最小轮询间隔必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(kiro_status_refresh_max_interval_seconds) =
+                    kiro_status_refresh_max_interval_seconds
+                else {
+                    load_error.set(Some("Kiro 最大轮询间隔必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(kiro_status_account_jitter_max_seconds) =
+                    kiro_status_account_jitter_max_seconds
+                else {
+                    load_error.set(Some("Kiro 单账号抖动上限必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(usage_event_flush_batch_size) = usage_event_flush_batch_size else {
+                    load_error.set(Some("usage flush 批大小必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(usage_event_flush_interval_seconds) = usage_event_flush_interval_seconds
+                else {
+                    load_error.set(Some("usage flush 间隔必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(usage_event_flush_max_buffer_bytes) = usage_event_flush_max_buffer_bytes
+                else {
+                    load_error.set(Some("usage flush 缓冲上限必须是非负整数".to_string()));
+                    return;
+                };
+                let runtime_config = LlmGatewayRuntimeConfig {
+                    auth_cache_ttl_seconds: ttl,
                     max_request_body_bytes,
                     account_failure_retry_limit,
-                )
-                .await
-                {
+                    codex_status_refresh_min_interval_seconds,
+                    codex_status_refresh_max_interval_seconds,
+                    codex_status_account_jitter_max_seconds,
+                    kiro_status_refresh_min_interval_seconds,
+                    kiro_status_refresh_max_interval_seconds,
+                    kiro_status_account_jitter_max_seconds,
+                    usage_event_flush_batch_size,
+                    usage_event_flush_interval_seconds,
+                    usage_event_flush_max_buffer_bytes,
+                };
+                saving_runtime_config.set(true);
+                match update_admin_llm_gateway_config(&runtime_config).await {
                     Ok(_) => {
                         load_error.set(None);
                         reload.emit(());
@@ -3009,7 +3139,7 @@ pub fn admin_llm_gateway_page() -> Html {
                 <section class={classes!("grid", "gap-4", "xl:grid-cols-2")}>
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Runtime Config" }</h2>
-                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-3")}>
+                        <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-3")}>
                             <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "auth_cache_ttl_seconds" }</span>
                                 <input
@@ -3059,7 +3189,168 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
-                            <div class={classes!("flex", "items-end", "md:col-span-3")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_status_refresh_min_interval_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="240"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_refresh_min_input).clone()}
+                                    oninput={{
+                                        let codex_refresh_min_input = codex_refresh_min_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_refresh_min_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_status_refresh_max_interval_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="240"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_refresh_max_input).clone()}
+                                    oninput={{
+                                        let codex_refresh_max_input = codex_refresh_max_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_refresh_max_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_status_account_jitter_max_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_account_jitter_max_input).clone()}
+                                    oninput={{
+                                        let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_account_jitter_max_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "kiro_status_refresh_min_interval_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="240"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*kiro_refresh_min_input).clone()}
+                                    oninput={{
+                                        let kiro_refresh_min_input = kiro_refresh_min_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                kiro_refresh_min_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "kiro_status_refresh_max_interval_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="240"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*kiro_refresh_max_input).clone()}
+                                    oninput={{
+                                        let kiro_refresh_max_input = kiro_refresh_max_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                kiro_refresh_max_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "kiro_status_account_jitter_max_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*kiro_account_jitter_max_input).clone()}
+                                    oninput={{
+                                        let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                kiro_account_jitter_max_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "usage_event_flush_batch_size" }</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*usage_flush_batch_size_input).clone()}
+                                    oninput={{
+                                        let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_flush_batch_size_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "usage_event_flush_interval_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*usage_flush_interval_input).clone()}
+                                    oninput={{
+                                        let usage_flush_interval_input = usage_flush_interval_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_flush_interval_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "usage_event_flush_max_buffer_bytes" }</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*usage_flush_max_buffer_bytes_input).clone()}
+                                    oninput={{
+                                        let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_flush_max_buffer_bytes_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "text-xs", "text-[var(--muted)]", "md:col-span-2", "xl:col-span-3")}>
+                                <p class={classes!("m-0")}>
+                                    { "默认轮询窗口：Codex / Kiro 都是 240-300 秒；每个账号请求之间插入 0-10 秒随机抖动。" }
+                                </p>
+                                <p class={classes!("m-0", "mt-1")}>
+                                    { "默认 usage flush：256 条、15 秒、8 MiB。提高阈值能显著降低 version churn，但会增加短时缓冲占用。" }
+                                </p>
+                            </div>
+                            <div class={classes!("flex", "items-end", "md:col-span-2", "xl:col-span-3")}>
                                 <button class={classes!("btn-terminal", "btn-terminal-primary", "w-full", "md:w-auto")} onclick={on_save_runtime_config} disabled={*saving_runtime_config}>
                                     { if *saving_runtime_config { "保存中..." } else { "保存" } }
                                 </button>
@@ -3075,6 +3366,30 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </p>
                                 <p class={classes!("m-0")}>
                                     { format!("当前账号失败重试次数：{}", cfg.account_failure_retry_limit) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!(
+                                        "当前 Codex 轮询窗口：{}-{} 秒，单账号抖动上限：{} 秒",
+                                        cfg.codex_status_refresh_min_interval_seconds,
+                                        cfg.codex_status_refresh_max_interval_seconds,
+                                        cfg.codex_status_account_jitter_max_seconds
+                                    ) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!(
+                                        "当前 Kiro 轮询窗口：{}-{} 秒，单账号抖动上限：{} 秒",
+                                        cfg.kiro_status_refresh_min_interval_seconds,
+                                        cfg.kiro_status_refresh_max_interval_seconds,
+                                        cfg.kiro_status_account_jitter_max_seconds
+                                    ) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!(
+                                        "当前 usage flush：{} 条 / {} 秒 / {} bytes",
+                                        cfg.usage_event_flush_batch_size,
+                                        cfg.usage_event_flush_interval_seconds,
+                                        format_number_u64(cfg.usage_event_flush_max_buffer_bytes)
+                                    ) }
                                 </p>
                             </div>
                         }

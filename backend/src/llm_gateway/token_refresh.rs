@@ -10,6 +10,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use parking_lot::RwLock;
+use rand::Rng;
 
 use super::{
     accounts::{AccountPool, AccountRateLimitSnapshot, AccountStatus},
@@ -20,18 +21,32 @@ use crate::{
     upstream_proxy::{HttpClientProfile, UpstreamProxyRegistry},
 };
 
-const REFRESH_INTERVAL_SECONDS: u64 = 60;
 const TOKEN_REFRESH_AHEAD_SECONDS: i64 = 600;
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-fn account_refresh_interval() -> tokio::time::Interval {
-    let mut ticker = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(REFRESH_INTERVAL_SECONDS),
-        Duration::from_secs(REFRESH_INTERVAL_SECONDS),
-    );
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    ticker
+fn next_codex_refresh_delay(config: &LlmGatewayRuntimeConfig) -> Duration {
+    let min_seconds = config
+        .codex_status_refresh_min_interval_seconds
+        .min(config.codex_status_refresh_max_interval_seconds);
+    let max_seconds = config
+        .codex_status_refresh_min_interval_seconds
+        .max(config.codex_status_refresh_max_interval_seconds);
+    let seconds = if min_seconds == max_seconds {
+        min_seconds
+    } else {
+        rand::thread_rng().gen_range(min_seconds..=max_seconds)
+    };
+    Duration::from_secs(seconds)
+}
+
+fn next_codex_account_jitter(config: &LlmGatewayRuntimeConfig) -> Duration {
+    let max_seconds = config.codex_status_account_jitter_max_seconds;
+    if max_seconds == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(rand::thread_rng().gen_range(0..=max_seconds))
+    }
 }
 
 /// Spawn the background refresh task. Returns a `JoinHandle` that runs until
@@ -43,9 +58,11 @@ pub(crate) fn spawn_account_refresh_task(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
-        let mut ticker = account_refresh_interval();
-
         loop {
+            let delay = {
+                let config = runtime_config.read().clone();
+                next_codex_refresh_delay(&config)
+            };
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
@@ -53,7 +70,7 @@ pub(crate) fn spawn_account_refresh_task(
                         return;
                     }
                 }
-                _ = ticker.tick() => {
+                _ = tokio::time::sleep(delay) => {
                     if let Err(err) =
                         refresh_all_accounts(&pool, &proxy_registry, runtime_config.as_ref()).await
                     {
@@ -80,7 +97,16 @@ async fn refresh_all_accounts(
 ) -> Result<()> {
     let entries = pool.all_entries().await;
 
-    for (name, entry) in &entries {
+    for (index, (name, entry)) in entries.iter().enumerate() {
+        if index > 0 {
+            let jitter = {
+                let config = runtime_config.read().clone();
+                next_codex_account_jitter(&config)
+            };
+            if !jitter.is_zero() {
+                tokio::time::sleep(jitter).await;
+            }
+        }
         if let Err(err) =
             refresh_account_entry(pool, proxy_registry, runtime_config, name, entry, false).await
         {
@@ -539,15 +565,30 @@ mod tests {
         assert_eq!(status_after_refresh_failure(1, 0), AccountStatus::Unavailable);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn account_refresh_interval_waits_full_period_before_first_tick() {
-        let mut ticker = account_refresh_interval();
-        let mut tick = std::pin::pin!(ticker.tick());
+    #[test]
+    fn codex_refresh_interval_draw_uses_configured_bounds() {
+        let config = crate::state::LlmGatewayRuntimeConfig {
+            codex_status_refresh_min_interval_seconds: 240,
+            codex_status_refresh_max_interval_seconds: 300,
+            ..crate::state::LlmGatewayRuntimeConfig::default()
+        };
 
-        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
-        tokio::time::advance(StdDuration::from_secs(REFRESH_INTERVAL_SECONDS - 1)).await;
-        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
-        tokio::time::advance(StdDuration::from_secs(1)).await;
-        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Ready(_)));
+        for _ in 0..64 {
+            let value = next_codex_refresh_delay(&config).as_secs();
+            assert!((240..=300).contains(&value));
+        }
+    }
+
+    #[test]
+    fn codex_per_account_jitter_stays_within_configured_limit() {
+        let config = crate::state::LlmGatewayRuntimeConfig {
+            codex_status_account_jitter_max_seconds: 10,
+            ..crate::state::LlmGatewayRuntimeConfig::default()
+        };
+
+        for _ in 0..64 {
+            let value = next_codex_account_jitter(&config).as_secs();
+            assert!(value <= 10);
+        }
     }
 }

@@ -5691,7 +5691,7 @@ mod tests {
 
         assert!(!config.enabled);
         assert_eq!(config.scan_interval_seconds, 300);
-        assert_eq!(config.fragment_threshold, 10);
+        assert_eq!(config.fragment_threshold, 128);
         assert_eq!(config.prune_older_than_hours, 6);
     }
 

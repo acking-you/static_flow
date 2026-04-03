@@ -106,6 +106,15 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         Field::new("kiro_channel_max_concurrency", DataType::UInt64, false),
         // Minimum milliseconds between consecutive Kiro upstream request starts.
         Field::new("kiro_channel_min_start_interval_ms", DataType::UInt64, false),
+        Field::new("codex_status_refresh_min_interval_seconds", DataType::UInt64, false),
+        Field::new("codex_status_refresh_max_interval_seconds", DataType::UInt64, false),
+        Field::new("codex_status_account_jitter_max_seconds", DataType::UInt64, false),
+        Field::new("kiro_status_refresh_min_interval_seconds", DataType::UInt64, false),
+        Field::new("kiro_status_refresh_max_interval_seconds", DataType::UInt64, false),
+        Field::new("kiro_status_account_jitter_max_seconds", DataType::UInt64, false),
+        Field::new("usage_event_flush_batch_size", DataType::UInt64, false),
+        Field::new("usage_event_flush_interval_seconds", DataType::UInt64, false),
+        Field::new("usage_event_flush_max_buffer_bytes", DataType::UInt64, false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
@@ -294,6 +303,15 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
     ensure_nullable_u64_column(&table, "account_failure_retry_limit").await?;
     ensure_nullable_u64_column(&table, "kiro_channel_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "kiro_channel_min_start_interval_ms").await?;
+    ensure_nullable_u64_column(&table, "codex_status_refresh_min_interval_seconds").await?;
+    ensure_nullable_u64_column(&table, "codex_status_refresh_max_interval_seconds").await?;
+    ensure_nullable_u64_column(&table, "codex_status_account_jitter_max_seconds").await?;
+    ensure_nullable_u64_column(&table, "kiro_status_refresh_min_interval_seconds").await?;
+    ensure_nullable_u64_column(&table, "kiro_status_refresh_max_interval_seconds").await?;
+    ensure_nullable_u64_column(&table, "kiro_status_account_jitter_max_seconds").await?;
+    ensure_nullable_u64_column(&table, "usage_event_flush_batch_size").await?;
+    ensure_nullable_u64_column(&table, "usage_event_flush_interval_seconds").await?;
+    ensure_nullable_u64_column(&table, "usage_event_flush_max_buffer_bytes").await?;
     ensure_scalar_index(&table, "id").await?;
     Ok(table)
 }

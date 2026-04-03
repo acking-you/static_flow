@@ -8,6 +8,8 @@ mod codec;
 mod schema;
 mod types;
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use arrow_array::{
     Array, Float64Array, Int64Array, RecordBatchIterator, RecordBatchReader, StringArray,
@@ -29,12 +31,20 @@ pub use self::types::{
     LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
     LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
     NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
-    DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+    DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+    DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+    DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+    DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+    DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+    DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
     DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
-    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
-    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
-    LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
+    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
+    DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+    DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_KEYS_TABLE,
+    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
+    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
+    LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
@@ -65,6 +75,13 @@ use crate::optimize::compact_table_with_fallback;
 /// Owns the LanceDB-backed storage layer for all LLM gateway admin data.
 pub struct LlmGatewayStore {
     db: Connection,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LlmGatewayUsageEventCounts {
+    pub total_event_count: usize,
+    pub provider_event_counts: HashMap<String, usize>,
+    pub key_event_counts: HashMap<String, usize>,
 }
 
 impl LlmGatewayStore {
@@ -352,6 +369,15 @@ impl LlmGatewayStore {
                 "account_failure_retry_limit",
                 "kiro_channel_max_concurrency",
                 "kiro_channel_min_start_interval_ms",
+                "codex_status_refresh_min_interval_seconds",
+                "codex_status_refresh_max_interval_seconds",
+                "codex_status_account_jitter_max_seconds",
+                "kiro_status_refresh_min_interval_seconds",
+                "kiro_status_refresh_max_interval_seconds",
+                "kiro_status_account_jitter_max_seconds",
+                "usage_event_flush_batch_size",
+                "usage_event_flush_interval_seconds",
+                "usage_event_flush_max_buffer_bytes",
                 "updated_at",
             ]))
             .execute()
@@ -916,6 +942,17 @@ impl LlmGatewayStore {
         aggregate_usage_rollups_from_dataset(&dataset).await
     }
 
+    pub async fn aggregate_usage_event_counts(&self) -> Result<LlmGatewayUsageEventCounts> {
+        let table = self.usage_events_table().await?;
+        let dataset = table
+            .dataset()
+            .context("usage-event counts require a native Lance table")?
+            .get()
+            .await
+            .context("failed to open usage-event dataset for counts")?;
+        aggregate_usage_event_counts_from_dataset(&dataset).await
+    }
+
     pub async fn upsert_token_request(&self, record: &LlmGatewayTokenRequestRecord) -> Result<()> {
         let table = self.token_requests_table().await?;
         let batch = build_token_requests_batch(std::slice::from_ref(record))?;
@@ -1405,6 +1442,66 @@ async fn aggregate_usage_rollups_from_dataset(
     Ok(rows)
 }
 
+async fn aggregate_usage_event_counts_from_dataset(
+    dataset: &Dataset,
+) -> Result<LlmGatewayUsageEventCounts> {
+    let sql = r#"
+        SELECT
+            COALESCE(provider_type, 'unknown') AS provider_type,
+            key_id,
+            CAST(COUNT(*) AS BIGINT) AS event_count
+        FROM dataset
+        GROUP BY COALESCE(provider_type, 'unknown'), key_id
+    "#;
+    let batches = dataset
+        .sql(sql)
+        .table_name("dataset")
+        .build()
+        .await
+        .context("failed to build usage count aggregate query")?
+        .into_batch_records()
+        .await
+        .context("failed to execute usage count aggregate query")?;
+
+    let mut counts = LlmGatewayUsageEventCounts::default();
+    for batch in batches {
+        let provider_types = batch
+            .column_by_name("provider_type")
+            .context("aggregate result missing provider_type")?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("aggregate provider_type column was not Utf8")?;
+        let key_ids = batch
+            .column_by_name("key_id")
+            .context("aggregate result missing key_id")?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("aggregate key_id column was not Utf8")?;
+        let event_count = batch
+            .column_by_name("event_count")
+            .context("aggregate result missing event_count")?;
+
+        for idx in 0..batch.num_rows() {
+            let row_count = usize::try_from(
+                array_value_as_u64(event_count, idx)
+                    .context("failed to decode aggregate event_count")?,
+            )
+            .context("aggregate event_count did not fit into usize")?;
+            counts.total_event_count = counts.total_event_count.saturating_add(row_count);
+            *counts
+                .provider_event_counts
+                .entry(provider_types.value(idx).to_string())
+                .or_default() += row_count;
+            *counts
+                .key_event_counts
+                .entry(key_ids.value(idx).to_string())
+                .or_default() += row_count;
+        }
+    }
+
+    Ok(counts)
+}
+
 /// Extract a `u64` from an Arrow array at `idx`, accepting both `UInt64` and
 /// non-negative `Int64` (Lance SQL CAST may produce either).
 fn array_value_as_u64(array: &dyn Array, idx: usize) -> Result<u64> {
@@ -1592,6 +1689,48 @@ mod tests {
             .await
             .expect("load runtime config");
         assert_eq!(loaded.account_failure_retry_limit, 7);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_round_trip_preserves_polling_and_usage_flush_fields() {
+        let dir = temp_store_dir("runtime-config-polling-and-flush");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let config = LlmGatewayRuntimeConfigRecord {
+            codex_status_refresh_min_interval_seconds: 240,
+            codex_status_refresh_max_interval_seconds: 300,
+            codex_status_account_jitter_max_seconds: 10,
+            kiro_status_refresh_min_interval_seconds: 240,
+            kiro_status_refresh_max_interval_seconds: 300,
+            kiro_status_account_jitter_max_seconds: 10,
+            usage_event_flush_batch_size: 256,
+            usage_event_flush_interval_seconds: 15,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&config)
+            .await
+            .expect("upsert runtime config");
+
+        let loaded = store
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(loaded.codex_status_refresh_min_interval_seconds, 240);
+        assert_eq!(loaded.codex_status_refresh_max_interval_seconds, 300);
+        assert_eq!(loaded.codex_status_account_jitter_max_seconds, 10);
+        assert_eq!(loaded.kiro_status_refresh_min_interval_seconds, 240);
+        assert_eq!(loaded.kiro_status_refresh_max_interval_seconds, 300);
+        assert_eq!(loaded.kiro_status_account_jitter_max_seconds, 10);
+        assert_eq!(loaded.usage_event_flush_batch_size, 256);
+        assert_eq!(loaded.usage_event_flush_interval_seconds, 15);
+        assert_eq!(loaded.usage_event_flush_max_buffer_bytes, 8 * 1024 * 1024);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1989,6 +2128,86 @@ mod tests {
             .field_with_name("usage_credit_missing_events")
             .expect("usage_credit_missing_events field")
             .is_nullable());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_event_counts_groups_by_provider_and_key() {
+        let dir = temp_store_dir("usage-event-counts");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let key = sample_key_record("key-count", "Count Key");
+        store.create_key(&key).await.expect("create key");
+
+        let now = now_ms();
+        let kiro_event = LlmGatewayUsageEventRecord {
+            id: "evt-kiro".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+            account_name: Some("alpha".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            latency_ms: 10,
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-5".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 1,
+            input_cached_tokens: 0,
+            output_tokens: 1,
+            billable_tokens: 2,
+            usage_missing: false,
+            credit_usage: Some(1.0),
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            created_at: now,
+        };
+        let codex_event = LlmGatewayUsageEventRecord {
+            id: "evt-codex".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("beta".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 12,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5.3-codex".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 2,
+            input_cached_tokens: 0,
+            output_tokens: 1,
+            billable_tokens: 3,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("world".to_string()),
+            created_at: now + 1,
+        };
+
+        store
+            .append_usage_events(&[kiro_event, codex_event])
+            .await
+            .expect("append usage events");
+
+        let counts = store
+            .aggregate_usage_event_counts()
+            .await
+            .expect("aggregate usage counts");
+
+        assert_eq!(counts.total_event_count, 2);
+        assert_eq!(counts.provider_event_counts.get(LLM_GATEWAY_PROVIDER_KIRO), Some(&1));
+        assert_eq!(counts.provider_event_counts.get(LLM_GATEWAY_PROVIDER_CODEX), Some(&1));
+        assert_eq!(counts.key_event_counts.get(&key.id), Some(&2));
 
         let _ = fs::remove_dir_all(&dir);
     }

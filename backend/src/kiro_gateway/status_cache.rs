@@ -9,17 +9,15 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
+use rand::Rng;
 use static_flow_shared::llm_gateway_store::now_ms;
-use tokio::{sync::watch, time::MissedTickBehavior};
+use tokio::sync::watch;
 
 use super::{
     auth_file::KiroAuthRecord,
     runtime::KiroGatewayRuntimeState,
     types::{KiroBalanceView, KiroCacheView},
 };
-
-/// Interval in seconds between automatic status cache refreshes.
-pub(crate) const KIRO_STATUS_REFRESH_SECONDS: u64 = 60;
 
 pub(crate) const STATUS_LOADING: &str = "loading";
 pub(crate) const STATUS_READY: &str = "ready";
@@ -29,13 +27,28 @@ pub(crate) const STATUS_DISABLED: &str = "disabled";
 pub(crate) const STATUS_EMPTY: &str = "empty";
 pub(crate) const STATUS_QUOTA_EXHAUSTED: &str = "quota_exhausted";
 
-fn kiro_status_refresh_interval() -> tokio::time::Interval {
-    let mut ticker = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS),
-        Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS),
-    );
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    ticker
+fn next_kiro_refresh_delay(config: &crate::state::LlmGatewayRuntimeConfig) -> Duration {
+    let min_seconds = config
+        .kiro_status_refresh_min_interval_seconds
+        .min(config.kiro_status_refresh_max_interval_seconds);
+    let max_seconds = config
+        .kiro_status_refresh_min_interval_seconds
+        .max(config.kiro_status_refresh_max_interval_seconds);
+    let seconds = if min_seconds == max_seconds {
+        min_seconds
+    } else {
+        rand::thread_rng().gen_range(min_seconds..=max_seconds)
+    };
+    Duration::from_secs(seconds)
+}
+
+fn next_kiro_account_jitter(config: &crate::state::LlmGatewayRuntimeConfig) -> Duration {
+    let max_seconds = config.kiro_status_account_jitter_max_seconds;
+    if max_seconds == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(rand::thread_rng().gen_range(0..=max_seconds))
+    }
 }
 
 /// Cached status for a single Kiro account: last-known balance and cache
@@ -76,9 +89,11 @@ pub(crate) fn spawn_status_refresher(
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
-        let mut ticker = kiro_status_refresh_interval();
-
         loop {
+            let delay = {
+                let config = runtime.runtime_config.read().clone();
+                next_kiro_refresh_delay(&config)
+            };
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
@@ -86,7 +101,7 @@ pub(crate) fn spawn_status_refresher(
                         return;
                     }
                 }
-                _ = ticker.tick() => {
+                _ = tokio::time::sleep(delay) => {
                     if let Err(err) = refresh_cached_status(&runtime).await {
                         tracing::warn!("failed to refresh cached kiro status: {err:#}");
                     }
@@ -101,6 +116,10 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
     let checked_at = now_ms();
     let auths = runtime.token_manager.list_auths().await?;
     let previous = runtime.status_cache.read().clone();
+    let refresh_interval_seconds = runtime
+        .runtime_config
+        .read()
+        .kiro_status_refresh_max_interval_seconds;
     let mut next = KiroStatusCacheSnapshot {
         status: STATUS_LOADING.to_string(),
         last_checked_at: Some(checked_at),
@@ -111,10 +130,19 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
     let mut error_count = 0usize;
     let mut ready_count = 0usize;
 
-    for auth in auths {
+    for (index, auth) in auths.into_iter().enumerate() {
+        if index > 0 {
+            let jitter = {
+                let config = runtime.runtime_config.read().clone();
+                next_kiro_account_jitter(&config)
+            };
+            if !jitter.is_zero() {
+                tokio::time::sleep(jitter).await;
+            }
+        }
         let prior = previous.accounts.get(&auth.name);
         let account_status = if auth.disabled {
-            disabled_entry(prior, checked_at)
+            disabled_entry(prior, checked_at, refresh_interval_seconds)
         } else {
             match runtime
                 .token_manager
@@ -123,7 +151,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
             {
                 Ok(usage) => {
                     ready_count += 1;
-                    ready_entry(&usage, checked_at)
+                    ready_entry(&usage, checked_at, refresh_interval_seconds)
                 },
                 Err(err) => {
                     error_count += 1;
@@ -132,7 +160,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
                         error = %err,
                         "failed to refresh cached kiro status for account"
                     );
-                    error_entry(prior, checked_at, err.to_string())
+                    error_entry(prior, checked_at, err.to_string(), refresh_interval_seconds)
                 },
             }
         };
@@ -172,16 +200,20 @@ pub(crate) async fn refresh_cached_status_for_account(
     let checked_at = now_ms();
     let previous = runtime.status_cache.read().clone();
     let prior = previous.accounts.get(account_name);
+    let refresh_interval_seconds = runtime
+        .runtime_config
+        .read()
+        .kiro_status_refresh_max_interval_seconds;
 
     let entry = if auth.disabled {
-        disabled_entry(prior, checked_at)
+        disabled_entry(prior, checked_at, refresh_interval_seconds)
     } else {
         match runtime
             .token_manager
             .fetch_usage_limits_for_account(account_name, force_refresh)
             .await
         {
-            Ok(usage) => ready_entry(&usage, checked_at),
+            Ok(usage) => ready_entry(&usage, checked_at, refresh_interval_seconds),
             Err(err) => {
                 tracing::warn!(
                     account_name,
@@ -189,7 +221,7 @@ pub(crate) async fn refresh_cached_status_for_account(
                     force_refresh,
                     "failed to refresh cached kiro status for account"
                 );
-                error_entry(prior, checked_at, err.to_string())
+                error_entry(prior, checked_at, err.to_string(), refresh_interval_seconds)
             },
         }
     };
@@ -259,9 +291,18 @@ pub(crate) async fn mark_account_quota_exhausted(
 ) {
     let checked_at = now_ms();
     let error_message = error_message.into();
+    let refresh_interval_seconds = runtime
+        .runtime_config
+        .read()
+        .kiro_status_refresh_max_interval_seconds;
     let mut snapshot = runtime.status_cache.write();
     let prior = snapshot.accounts.get(account_name).cloned();
-    let entry = quota_exhausted_entry(prior.as_ref(), checked_at, error_message.clone());
+    let entry = quota_exhausted_entry(
+        prior.as_ref(),
+        checked_at,
+        error_message.clone(),
+        refresh_interval_seconds,
+    );
     snapshot.last_checked_at = Some(checked_at);
     snapshot.last_success_at = Some(checked_at);
     snapshot.accounts.insert(account_name.to_string(), entry);
@@ -368,12 +409,13 @@ fn log_duplicate_upstream_identities(snapshot: &KiroStatusCacheSnapshot) {
 fn ready_entry(
     usage: &super::wire::UsageLimitsResponse,
     checked_at: i64,
+    refresh_interval_seconds: u64,
 ) -> KiroCachedAccountStatus {
     KiroCachedAccountStatus {
         balance: Some(KiroBalanceView::from_usage(usage)),
         cache: KiroCacheView {
             status: STATUS_READY.to_string(),
-            refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+            refresh_interval_seconds,
             last_checked_at: Some(checked_at),
             last_success_at: Some(checked_at),
             error_message: None,
@@ -385,6 +427,7 @@ fn error_entry(
     prior: Option<&KiroCachedAccountStatus>,
     checked_at: i64,
     error_message: String,
+    refresh_interval_seconds: u64,
 ) -> KiroCachedAccountStatus {
     let previous_balance = prior.and_then(|status| status.balance.clone());
     let previous_success_at = prior.and_then(|status| status.cache.last_success_at);
@@ -393,7 +436,7 @@ fn error_entry(
         balance: previous_balance,
         cache: KiroCacheView {
             status: status.to_string(),
-            refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+            refresh_interval_seconds,
             last_checked_at: Some(checked_at),
             last_success_at: previous_success_at,
             error_message: Some(error_message),
@@ -404,12 +447,13 @@ fn error_entry(
 fn disabled_entry(
     prior: Option<&KiroCachedAccountStatus>,
     checked_at: i64,
+    refresh_interval_seconds: u64,
 ) -> KiroCachedAccountStatus {
     KiroCachedAccountStatus {
         balance: prior.and_then(|status| status.balance.clone()),
         cache: KiroCacheView {
             status: STATUS_DISABLED.to_string(),
-            refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+            refresh_interval_seconds,
             last_checked_at: Some(checked_at),
             last_success_at: prior.and_then(|status| status.cache.last_success_at),
             error_message: None,
@@ -421,6 +465,7 @@ fn quota_exhausted_entry(
     prior: Option<&KiroCachedAccountStatus>,
     checked_at: i64,
     error_message: String,
+    refresh_interval_seconds: u64,
 ) -> KiroCachedAccountStatus {
     let previous_balance = prior.and_then(|status| status.balance.clone());
     let previous_success_at = prior
@@ -435,7 +480,7 @@ fn quota_exhausted_entry(
         balance,
         cache: KiroCacheView {
             status: STATUS_QUOTA_EXHAUSTED.to_string(),
-            refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+            refresh_interval_seconds,
             last_checked_at: Some(checked_at),
             last_success_at: previous_success_at,
             error_message: Some(error_message),
@@ -460,14 +505,14 @@ mod tests {
             }),
             cache: KiroCacheView {
                 status: STATUS_READY.to_string(),
-                refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+                refresh_interval_seconds: 300,
                 last_checked_at: Some(100),
                 last_success_at: Some(100),
                 error_message: None,
             },
         };
 
-        let next = error_entry(Some(&prior), 200, "boom".to_string());
+        let next = error_entry(Some(&prior), 200, "boom".to_string(), 300);
         assert_eq!(next.cache.status, STATUS_DEGRADED);
         assert_eq!(next.cache.last_success_at, Some(100));
         assert!(next.balance.is_some());
@@ -493,14 +538,14 @@ mod tests {
             }),
             cache: KiroCacheView {
                 status: STATUS_READY.to_string(),
-                refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+                refresh_interval_seconds: 300,
                 last_checked_at: Some(100),
                 last_success_at: Some(100),
                 error_message: None,
             },
         };
 
-        let next = quota_exhausted_entry(Some(&prior), 200, "quota exhausted".to_string());
+        let next = quota_exhausted_entry(Some(&prior), 200, "quota exhausted".to_string(), 300);
         assert_eq!(next.cache.status, STATUS_QUOTA_EXHAUSTED);
         assert_eq!(next.cache.last_success_at, Some(100));
         assert_eq!(next.balance.as_ref().map(|value| value.remaining), Some(0.0));
@@ -525,7 +570,7 @@ mod tests {
             }),
             cache: KiroCacheView {
                 status: STATUS_READY.to_string(),
-                refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+                refresh_interval_seconds: 300,
                 last_checked_at: Some(100),
                 last_success_at: Some(100),
                 error_message: None,
@@ -553,7 +598,7 @@ mod tests {
             }),
             cache: KiroCacheView {
                 status: STATUS_DEGRADED.to_string(),
-                refresh_interval_seconds: KIRO_STATUS_REFRESH_SECONDS,
+                refresh_interval_seconds: 300,
                 last_checked_at: Some(100),
                 last_success_at: Some(90),
                 error_message: Some("temporary upstream failure".to_string()),
@@ -567,15 +612,17 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn kiro_status_refresh_interval_waits_full_period_before_first_tick() {
-        let mut ticker = kiro_status_refresh_interval();
-        let mut tick = std::pin::pin!(ticker.tick());
+    #[test]
+    fn kiro_refresh_interval_draw_uses_configured_bounds() {
+        let config = crate::state::LlmGatewayRuntimeConfig {
+            kiro_status_refresh_min_interval_seconds: 240,
+            kiro_status_refresh_max_interval_seconds: 300,
+            ..crate::state::LlmGatewayRuntimeConfig::default()
+        };
 
-        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
-        tokio::time::advance(Duration::from_secs(KIRO_STATUS_REFRESH_SECONDS - 1)).await;
-        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Pending));
-        tokio::time::advance(Duration::from_secs(1)).await;
-        assert!(matches!(futures_util::poll!(tick.as_mut()), std::task::Poll::Ready(_)));
+        for _ in 0..64 {
+            let value = next_kiro_refresh_delay(&config).as_secs();
+            assert!((240..=300).contains(&value));
+        }
     }
 }

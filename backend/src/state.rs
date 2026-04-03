@@ -16,10 +16,17 @@ use static_flow_shared::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     llm_gateway_store::{
-        self, LlmGatewayStore, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+        self, LlmGatewayStore, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+        DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
         DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
     },
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
@@ -61,10 +68,10 @@ pub const DEFAULT_API_BEHAVIOR_MAX_DAYS: usize = 180;
 pub const MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS: i64 = 3650;
 pub const MAX_CONFIGURABLE_API_BEHAVIOR_DAYS: usize = 365;
 pub const DEFAULT_TABLE_COMPACT_ENABLED: bool = true;
-pub const DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 180;
+pub const DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 900;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 30;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 86_400;
-pub const DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10;
+pub const DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 128;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 2;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10_000;
 pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
@@ -171,6 +178,15 @@ pub struct LlmGatewayRuntimeConfig {
     pub kiro_channel_max_concurrency: u64,
     /// Minimum milliseconds between consecutive Kiro upstream request starts.
     pub kiro_channel_min_start_interval_ms: u64,
+    pub codex_status_refresh_min_interval_seconds: u64,
+    pub codex_status_refresh_max_interval_seconds: u64,
+    pub codex_status_account_jitter_max_seconds: u64,
+    pub kiro_status_refresh_min_interval_seconds: u64,
+    pub kiro_status_refresh_max_interval_seconds: u64,
+    pub kiro_status_account_jitter_max_seconds: u64,
+    pub usage_event_flush_batch_size: u64,
+    pub usage_event_flush_interval_seconds: u64,
+    pub usage_event_flush_max_buffer_bytes: u64,
 }
 
 impl Default for LlmGatewayRuntimeConfig {
@@ -181,6 +197,22 @@ impl Default for LlmGatewayRuntimeConfig {
             account_failure_retry_limit: DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
             kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
             kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+            codex_status_refresh_min_interval_seconds:
+                DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+            codex_status_refresh_max_interval_seconds:
+                DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            codex_status_account_jitter_max_seconds:
+                DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+            kiro_status_refresh_min_interval_seconds:
+                DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+            kiro_status_refresh_max_interval_seconds:
+                DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            kiro_status_account_jitter_max_seconds: DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+            usage_event_flush_batch_size: DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
+            usage_event_flush_interval_seconds:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+            usage_event_flush_max_buffer_bytes:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
         }
     }
 }
@@ -286,12 +318,39 @@ impl AppState {
             llm_gateway_runtime_config_record.kiro_channel_max_concurrency;
         let kiro_channel_min_start_interval_ms =
             llm_gateway_runtime_config_record.kiro_channel_min_start_interval_ms;
+        let codex_status_refresh_min_interval_seconds =
+            llm_gateway_runtime_config_record.codex_status_refresh_min_interval_seconds;
+        let codex_status_refresh_max_interval_seconds =
+            llm_gateway_runtime_config_record.codex_status_refresh_max_interval_seconds;
+        let codex_status_account_jitter_max_seconds =
+            llm_gateway_runtime_config_record.codex_status_account_jitter_max_seconds;
+        let kiro_status_refresh_min_interval_seconds =
+            llm_gateway_runtime_config_record.kiro_status_refresh_min_interval_seconds;
+        let kiro_status_refresh_max_interval_seconds =
+            llm_gateway_runtime_config_record.kiro_status_refresh_max_interval_seconds;
+        let kiro_status_account_jitter_max_seconds =
+            llm_gateway_runtime_config_record.kiro_status_account_jitter_max_seconds;
+        let usage_event_flush_batch_size =
+            llm_gateway_runtime_config_record.usage_event_flush_batch_size;
+        let usage_event_flush_interval_seconds =
+            llm_gateway_runtime_config_record.usage_event_flush_interval_seconds;
+        let usage_event_flush_max_buffer_bytes =
+            llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
             account_failure_retry_limit = llm_gateway_account_failure_retry_limit,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
+            codex_status_refresh_min_interval_seconds,
+            codex_status_refresh_max_interval_seconds,
+            codex_status_account_jitter_max_seconds,
+            kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds,
+            usage_event_flush_batch_size,
+            usage_event_flush_interval_seconds,
+            usage_event_flush_max_buffer_bytes,
             "loaded llm gateway runtime config from storage"
         );
         let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
@@ -300,6 +359,15 @@ impl AppState {
             account_failure_retry_limit: llm_gateway_account_failure_retry_limit,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
+            codex_status_refresh_min_interval_seconds,
+            codex_status_refresh_max_interval_seconds,
+            codex_status_account_jitter_max_seconds,
+            kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds,
+            usage_event_flush_batch_size,
+            usage_event_flush_interval_seconds,
+            usage_event_flush_max_buffer_bytes,
         }));
         let auths_dir = crate::llm_gateway::resolve_auths_dir();
         let account_pool = Arc::new(crate::llm_gateway::AccountPool::new(auths_dir.clone()));
@@ -321,6 +389,7 @@ impl AppState {
             shutdown_rx.clone(),
         )?);
         llm_gateway.rebuild_usage_rollups().await?;
+        llm_gateway.rebuild_usage_event_counts().await?;
         let kiro_gateway = Arc::new(
             KiroGatewayRuntimeState::new(
                 llm_gateway_store.clone(),
@@ -335,6 +404,15 @@ impl AppState {
             account_failure_retry_limit = llm_gateway_account_failure_retry_limit,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
+            codex_status_refresh_min_interval_seconds,
+            codex_status_refresh_max_interval_seconds,
+            codex_status_account_jitter_max_seconds,
+            kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds,
+            usage_event_flush_batch_size,
+            usage_event_flush_interval_seconds,
+            usage_event_flush_max_buffer_bytes,
             "initialized llm gateway runtime state"
         );
         let comment_worker_tx = comment_worker::spawn_comment_worker(
@@ -588,13 +666,27 @@ fn read_compaction_runtime_config_from_env() -> CompactionRuntimeConfig {
     }
 }
 
-/// Buffered writer for api_behavior_events.
-///
-/// Events are collected via an mpsc channel and flushed as a single batch
-/// every `FLUSH_INTERVAL` or when the buffer reaches `FLUSH_BATCH_SIZE`,
-/// whichever comes first.
-const BEHAVIOR_FLUSH_BATCH_SIZE: usize = 50;
+const DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE: usize = 256;
+const DEFAULT_BEHAVIOR_FLUSH_INTERVAL_SECS: u64 = 15;
+const DEFAULT_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 const BEHAVIOR_CHANNEL_CAPACITY: usize = 2048;
+
+fn estimate_behavior_event_bytes(event: &NewApiBehaviorEventInput) -> usize {
+    event.client_source.len()
+        + event.method.len()
+        + event.path.len()
+        + event.query.len()
+        + event.page_path.len()
+        + event.referrer.as_deref().map_or(0, str::len)
+        + event.client_ip.len()
+        + event.ip_region.len()
+        + event.ua_raw.as_deref().map_or(0, str::len)
+        + event.device_type.len()
+        + event.os_family.len()
+        + event.browser_family.len()
+        + event.request_id.len()
+        + event.trace_id.len()
+}
 
 fn spawn_behavior_event_flusher(
     store: Arc<StaticFlowDataStore>,
@@ -603,8 +695,9 @@ fn spawn_behavior_event_flusher(
     let (tx, mut rx) = mpsc::channel::<NewApiBehaviorEventInput>(BEHAVIOR_CHANNEL_CAPACITY);
 
     tokio::spawn(async move {
-        let flush_interval = tokio::time::Duration::from_secs(5);
-        let mut buffer = Vec::with_capacity(BEHAVIOR_FLUSH_BATCH_SIZE);
+        let flush_interval = tokio::time::Duration::from_secs(DEFAULT_BEHAVIOR_FLUSH_INTERVAL_SECS);
+        let mut buffer = Vec::with_capacity(DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE);
+        let mut buffered_bytes = 0usize;
         let mut flush_count: u64 = 0;
 
         loop {
@@ -628,15 +721,25 @@ fn spawn_behavior_event_flusher(
                 result = tokio::time::timeout(flush_interval, rx.recv()) => result,
             };
 
-            match event {
+            let should_flush = match event {
                 Ok(Some(input)) => {
+                    buffered_bytes =
+                        buffered_bytes.saturating_add(estimate_behavior_event_bytes(&input));
                     buffer.push(input);
-                    while buffer.len() < BEHAVIOR_FLUSH_BATCH_SIZE {
+                    while buffer.len() < DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE
+                        && buffered_bytes < DEFAULT_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES
+                    {
                         match rx.try_recv() {
-                            Ok(input) => buffer.push(input),
+                            Ok(input) => {
+                                buffered_bytes = buffered_bytes
+                                    .saturating_add(estimate_behavior_event_bytes(&input));
+                                buffer.push(input);
+                            },
                             Err(_) => break,
                         }
                     }
+                    buffer.len() >= DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE
+                        || buffered_bytes >= DEFAULT_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES
                 },
                 Ok(None) => {
                     if !buffer.is_empty() {
@@ -650,14 +753,15 @@ fn spawn_behavior_event_flusher(
                     tracing::info!("behavior event flusher shutting down");
                     return;
                 },
-                Err(_) => {},
-            }
+                Err(_) => !buffer.is_empty(),
+            };
 
-            if buffer.is_empty() {
+            if !should_flush || buffer.is_empty() {
                 continue;
             }
 
             let batch = std::mem::take(&mut buffer);
+            buffered_bytes = 0;
             let count = batch.len();
 
             if let Err(err) = store.append_api_behavior_events(batch).await {
