@@ -20,12 +20,15 @@ use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 use uuid::Uuid;
 
 use super::{
-    map_provider_error,
+    build_failure_diagnostic_payload, map_provider_error,
     stream::SseEvent,
     types::{ErrorResponse, MessagesRequest},
+    zero_usage_summary,
 };
 use crate::{
-    kiro_gateway::{record_messages_usage, KiroEventContext, KiroUsageSummary},
+    kiro_gateway::{
+        provider::ProviderCallError, record_messages_usage, KiroEventContext, KiroUsageSummary,
+    },
     state::AppState,
 };
 
@@ -111,6 +114,31 @@ pub async fn handle_websearch_request(
     let query = match extract_search_query(payload) {
         Some(query) => query,
         None => {
+            let diagnostic_payload = build_failure_diagnostic_payload(
+                super::DiagnosticRequestContext {
+                    event_context: &event_context,
+                    request_validation_enabled: key_record.kiro_request_validation_enabled,
+                    stream: payload.stream,
+                    buffered_for_cc: false,
+                },
+                "websearch_query_extract",
+                "Unable to extract web search query from messages.",
+                StatusCode::BAD_REQUEST.as_u16() as i32,
+                None,
+            );
+            if let Err(err) = crate::kiro_gateway::record_failed_request_event(
+                &state,
+                &key_record,
+                &event_context,
+                StatusCode::BAD_REQUEST.as_u16() as i32,
+                diagnostic_payload,
+                zero_usage_summary(),
+                false,
+            )
+            .await
+            {
+                tracing::warn!("failed to persist kiro web_search validation failure: {err:#}");
+            }
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::new(
@@ -130,6 +158,7 @@ pub async fn handle_websearch_request(
     );
 
     let (tool_use_id, mcp_request) = create_mcp_request(&query);
+    event_context.upstream_request_body_json = serde_json::to_string(&mcp_request).ok();
     let search_results = match call_mcp_api(&key_record, provider, &mcp_request).await {
         Ok(success) => {
             let McpCallSuccess {
@@ -141,7 +170,21 @@ pub async fn handle_websearch_request(
         },
         Err(err) => {
             if should_propagate_mcp_error(&err) {
-                return map_provider_error(err);
+                return map_provider_error(
+                    super::ProviderFailureContext {
+                        state: &state,
+                        key_record: &key_record,
+                        diagnostic: super::DiagnosticRequestContext {
+                            event_context: &event_context,
+                            request_validation_enabled: key_record.kiro_request_validation_enabled,
+                            stream: payload.stream,
+                            buffered_for_cc: false,
+                        },
+                    },
+                    err,
+                    "websearch_mcp_call",
+                )
+                .await;
             }
             tracing::warn!(
                 query = %query,
@@ -268,18 +311,33 @@ async fn call_mcp_api(
     key_record: &LlmGatewayKeyRecord,
     provider: &crate::kiro_gateway::provider::KiroProvider,
     request: &McpRequest,
-) -> anyhow::Result<McpCallSuccess> {
-    let request_body = serde_json::to_string(request)?;
+) -> std::result::Result<McpCallSuccess, ProviderCallError> {
+    let request_body = serde_json::to_string(request).map_err(|err| {
+        ProviderCallError::new(anyhow::anyhow!("serialize mcp request: {err}"), None)
+    })?;
     let response = provider.call_mcp(key_record, &request_body).await?;
     let account_name = response.account_name;
-    let body = response.response.text().await?;
-    let mcp_response: McpResponse = serde_json::from_str(&body)?;
+    let body = response.response.text().await.map_err(|err| {
+        ProviderCallError::new(
+            anyhow::anyhow!("read mcp response body: {err}"),
+            Some(request_body.clone()),
+        )
+    })?;
+    let mcp_response: McpResponse = serde_json::from_str(&body).map_err(|err| {
+        ProviderCallError::new(
+            anyhow::anyhow!("parse mcp response body: {err}; body={body}"),
+            Some(request_body.clone()),
+        )
+    })?;
     if let Some(error) = &mcp_response.error {
-        anyhow::bail!(
-            "MCP error: {} - {}",
-            error.code.unwrap_or(-1),
-            error.message.as_deref().unwrap_or("Unknown error")
-        );
+        return Err(ProviderCallError::new(
+            anyhow::anyhow!(
+                "MCP error: {} - {}",
+                error.code.unwrap_or(-1),
+                error.message.as_deref().unwrap_or("Unknown error")
+            ),
+            Some(request_body),
+        ));
     }
     Ok(McpCallSuccess {
         response: mcp_response,
@@ -306,7 +364,7 @@ fn parse_search_results(mcp_response: &McpResponse) -> Option<WebSearchResults> 
 
 // Determines whether an MCP error should be propagated to the client
 // (quota/auth errors) vs. silently returning empty results.
-fn should_propagate_mcp_error(err: &anyhow::Error) -> bool {
+fn should_propagate_mcp_error(err: &impl std::fmt::Display) -> bool {
     let err_text = err.to_string();
     err_text.contains("quota exhausted")
         || err_text.contains("no kiro account available")

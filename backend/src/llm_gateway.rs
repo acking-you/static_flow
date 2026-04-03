@@ -16,7 +16,7 @@ pub(crate) mod accounts;
 pub(crate) mod token_refresh;
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     env,
     sync::Arc,
     time::{Duration, Instant},
@@ -60,7 +60,9 @@ use self::{
     request::{
         apply_gpt53_codex_spark_mapping, ensure_supported_gateway_path, external_origin,
         extract_last_message_content, extract_presented_key, normalize_name, normalize_status,
-        normalize_upstream_base_url, prepare_gateway_request as normalize_gateway_request,
+        normalize_upstream_base_url,
+        prepare_gateway_request_from_bytes as normalize_gateway_request_from_bytes,
+        read_gateway_request_body,
     },
     response::{
         adapt_completed_response_json, apply_upstream_response_headers,
@@ -150,6 +152,7 @@ const PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT: usize = 50;
 const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 200;
 const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
 const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
+const CODEX_STREAM_FAILURE_STATUS_CODE: i32 = 599;
 pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
 pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
@@ -1492,6 +1495,176 @@ fn summarize_upstream_error_body(body: &str) -> String {
     }
 }
 
+fn maybe_parse_gateway_json_bytes(raw: &Bytes) -> serde_json::Value {
+    if raw.is_empty() {
+        return serde_json::Value::Null;
+    }
+    serde_json::from_slice::<serde_json::Value>(raw)
+        .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(raw).to_string()))
+}
+
+fn default_gateway_event_context(prepared: &PreparedGatewayRequest) -> LlmGatewayEventContext {
+    LlmGatewayEventContext {
+        request_method: prepared.method.as_str().to_string(),
+        request_url: prepared.original_path.clone(),
+        client_ip: "unknown".to_string(),
+        ip_region: "Unknown".to_string(),
+        request_headers_json: "{}".to_string(),
+        started_at: Instant::now(),
+    }
+}
+
+struct GatewayUsageEventBuild<'a> {
+    current: &'a LlmGatewayKeyRecord,
+    prepared: &'a PreparedGatewayRequest,
+    context: &'a LlmGatewayEventContext,
+    latency_ms: i32,
+    status_code: i32,
+    usage: UsageBreakdown,
+    last_message_content: Option<String>,
+    selected_account_name: Option<&'a str>,
+}
+
+struct GatewayFailureUsageRequest<'a> {
+    prepared: &'a PreparedGatewayRequest,
+    status_code: i32,
+    usage: UsageBreakdown,
+    event_context: Option<&'a LlmGatewayEventContext>,
+    selected_account_name: Option<&'a str>,
+    failure_stage: &'a str,
+    error: &'a str,
+    details: Option<serde_json::Value>,
+}
+
+fn build_gateway_usage_event_record(
+    args: GatewayUsageEventBuild<'_>,
+) -> LlmGatewayUsageEventRecord {
+    LlmGatewayUsageEventRecord {
+        id: generate_id("llm-usage"),
+        key_id: args.current.id.clone(),
+        key_name: args.current.name.clone(),
+        provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+        account_name: args
+            .selected_account_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        request_method: args.context.request_method.clone(),
+        request_url: args.context.request_url.clone(),
+        latency_ms: args.latency_ms,
+        endpoint: args.prepared.upstream_path.clone(),
+        model: args.prepared.model.clone(),
+        status_code: args.status_code,
+        input_uncached_tokens: args.usage.input_uncached_tokens,
+        input_cached_tokens: args.usage.input_cached_tokens,
+        output_tokens: args.usage.output_tokens,
+        billable_tokens: args
+            .usage
+            .billable_tokens_with_multiplier(args.prepared.billable_multiplier),
+        usage_missing: args.usage.usage_missing,
+        credit_usage: None,
+        credit_usage_missing: false,
+        client_ip: args.context.client_ip.clone(),
+        ip_region: args.context.ip_region.clone(),
+        request_headers_json: args.context.request_headers_json.clone(),
+        last_message_content: args.last_message_content,
+        created_at: now_ms(),
+    }
+}
+
+fn build_codex_failure_diagnostic_payload(
+    prepared: &PreparedGatewayRequest,
+    event_context: Option<&LlmGatewayEventContext>,
+    selected_account_name: Option<&str>,
+    failure_stage: &str,
+    status_code: i32,
+    error: &str,
+    details: Option<serde_json::Value>,
+) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "kind": "codex_failure_diagnostic",
+        "failure_stage": failure_stage,
+        "status_code": status_code,
+        "request_method": event_context.map(|ctx| ctx.request_method.clone()),
+        "request_url": event_context.map(|ctx| ctx.request_url.clone()),
+        "endpoint": prepared.upstream_path,
+        "model": prepared.model,
+        "account_name": selected_account_name,
+        "original_last_message_content": extract_last_message_content(&prepared.client_request_body).ok().flatten(),
+        "client_request_body": maybe_parse_gateway_json_bytes(&prepared.client_request_body),
+        "upstream_request_body": maybe_parse_gateway_json_bytes(&prepared.request_body),
+        "error": error,
+        "details": details.unwrap_or_else(|| json!({})),
+    }))
+    .unwrap_or_else(|serialize_err| {
+        format!(
+            "{{\"kind\":\"codex_failure_diagnostic\",\"failure_stage\":{:?},\"status_code\":{},\"error\":{:?},\"serialize_error\":{:?}}}",
+            failure_stage,
+            status_code,
+            error,
+            serialize_err.to_string()
+        )
+    })
+}
+
+fn missing_usage_breakdown() -> UsageBreakdown {
+    UsageBreakdown {
+        usage_missing: true,
+        ..UsageBreakdown::default()
+    }
+}
+
+fn extract_request_model_and_stream(raw_body: &Bytes) -> (Option<String>, bool) {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(raw_body) else {
+        return (None, false);
+    };
+    let Some(root) = value.as_object() else {
+        return (None, false);
+    };
+    let model = root
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let wants_stream = root
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    (model, wants_stream)
+}
+
+fn build_failure_prepared_gateway_request(
+    gateway_path: &str,
+    query: &str,
+    method: axum::http::Method,
+    raw_body: Bytes,
+    content_type: &str,
+) -> PreparedGatewayRequest {
+    let original_path = format!("{gateway_path}{query}");
+    let (model, wants_stream) = extract_request_model_and_stream(&raw_body);
+    PreparedGatewayRequest {
+        original_path: original_path.clone(),
+        upstream_path: original_path,
+        method,
+        client_request_body: raw_body,
+        request_body: Bytes::new(),
+        model,
+        client_visible_model: None,
+        wants_stream,
+        force_upstream_stream: false,
+        content_type: content_type.to_string(),
+        response_adapter: if gateway_path == "/v1/chat/completions" {
+            GatewayResponseAdapter::ChatCompletions
+        } else {
+            GatewayResponseAdapter::Responses
+        },
+        thread_anchor: None,
+        tool_name_restore_map: BTreeMap::new(),
+        billable_multiplier: 1,
+    }
+}
+
 async fn validate_account_names_exist(
     pool: &AccountPool,
     names: &[String],
@@ -2803,11 +2976,102 @@ pub async fn proxy_gateway_request(
         "Validated LLM gateway key and forwarding request"
     );
 
-    let record_route_selection = !request::is_models_path(&gateway_path);
-    let (auth_snapshot, selected_account_name, map_gpt53_codex_to_spark) =
-        resolve_auth_for_key(&state, &key_lease.record, record_route_selection).await?;
+    let is_models_path = request::is_models_path(&gateway_path);
+    let request_method = parts.method.clone();
+    let content_type = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/json")
+        .to_string();
+    let max_request_body_bytes = usize::try_from(
+        state
+            .llm_gateway_runtime_config
+            .read()
+            .max_request_body_bytes,
+    )
+    .map_err(|err| internal_error("Invalid llm gateway max request body size", err))?;
+    let raw_request_body = if is_models_path {
+        Bytes::new()
+    } else {
+        match read_gateway_request_body(body, max_request_body_bytes).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let prepared = build_failure_prepared_gateway_request(
+                    &gateway_path,
+                    &query,
+                    request_method.clone(),
+                    Bytes::new(),
+                    &content_type,
+                );
+                if let Err(persist_err) = persist_gateway_failure_usage(
+                    state.llm_gateway.as_ref(),
+                    key_lease.as_ref(),
+                    GatewayFailureUsageRequest {
+                        prepared: &prepared,
+                        status_code: err.0.as_u16() as i32,
+                        usage: missing_usage_breakdown(),
+                        event_context: event_context.as_ref(),
+                        selected_account_name: None,
+                        failure_stage: "read_request_body",
+                        error: &err.1 .0.error,
+                        details: Some(json!({ "error_code": err.1.0.code })),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        "failed to persist codex failure usage after request body read error: {persist_err:#}"
+                    );
+                }
+                return Err(err);
+            },
+        }
+    };
+    let failure_prepared = build_failure_prepared_gateway_request(
+        &gateway_path,
+        &query,
+        request_method.clone(),
+        raw_request_body.clone(),
+        &content_type,
+    );
 
-    if request::is_models_path(&gateway_path) {
+    let record_route_selection = !is_models_path;
+    let (auth_snapshot, selected_account_name, map_gpt53_codex_to_spark) =
+        match resolve_auth_for_key(&state, &key_lease.record, record_route_selection).await {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                if !is_models_path {
+                    if let Err(persist_err) = persist_gateway_failure_usage(
+                        state.llm_gateway.as_ref(),
+                        key_lease.as_ref(),
+                        GatewayFailureUsageRequest {
+                            prepared: &failure_prepared,
+                            status_code: err.0.as_u16() as i32,
+                            usage: missing_usage_breakdown(),
+                            event_context: event_context.as_ref(),
+                            selected_account_name: None,
+                            failure_stage: "resolve_auth_for_key",
+                            error: &err.1 .0.error,
+                            details: Some(json!({ "error_code": err.1.0.code })),
+                        },
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            key_id = %key_lease.record.id,
+                            "failed to persist codex failure usage after auth resolution error: {persist_err:#}"
+                        );
+                    }
+                }
+                return Err(err);
+            },
+        };
+
+    if is_models_path {
         return respond_local_models(
             &state,
             &auth_snapshot,
@@ -2818,29 +3082,53 @@ pub async fn proxy_gateway_request(
         .await;
     }
 
-    let request_limit_lease = state
+    let request_limit_lease = match state
         .llm_gateway
         .request_scheduler
         .try_acquire(&key_lease.record)
-        .map_err(|rejection| codex_key_request_limit_error(&key_lease.record, rejection))?;
+    {
+        Ok(lease) => lease,
+        Err(rejection) => {
+            let response = codex_key_request_limit_error(&key_lease.record, rejection.clone());
+            if let Err(persist_err) = persist_gateway_failure_usage(
+                state.llm_gateway.as_ref(),
+                key_lease.as_ref(),
+                GatewayFailureUsageRequest {
+                    prepared: &failure_prepared,
+                    status_code: response.0.as_u16() as i32,
+                    usage: missing_usage_breakdown(),
+                    event_context: event_context.as_ref(),
+                    selected_account_name: selected_account_name.as_deref(),
+                    failure_stage: "key_request_limit",
+                    error: &response.1 .0.error,
+                    details: Some(json!({
+                        "reason": rejection.reason,
+                        "in_flight": rejection.in_flight,
+                        "max_concurrency": rejection.max_concurrency,
+                        "min_start_interval_ms": rejection.min_start_interval_ms,
+                        "wait_ms": rejection.wait.map(|value| value.as_millis() as u64),
+                        "elapsed_since_last_start_ms": rejection.elapsed_since_last_start_ms,
+                    })),
+                },
+            )
+            .await
+            {
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    "failed to persist codex failure usage after key request limit error: {persist_err:#}"
+                );
+            }
+            return Err(response);
+        },
+    };
 
-    let max_request_body_bytes = usize::try_from(
-        state
-            .llm_gateway_runtime_config
-            .read()
-            .max_request_body_bytes,
-    )
-    .map_err(|err| internal_error("Invalid llm gateway max request body size", err))?;
-    let prepared = match normalize_gateway_request(
+    let prepared = match normalize_gateway_request_from_bytes(
         &gateway_path,
         &query,
-        parts.method,
+        request_method.clone(),
         &parts.headers,
-        body,
-        max_request_body_bytes,
-    )
-    .await
-    {
+        raw_request_body,
+    ) {
         Ok(prepared) => prepared,
         Err(err) => {
             tracing::error!(
@@ -2850,12 +3138,59 @@ pub async fn proxy_gateway_request(
                 error = %err.1.0.error,
                 "rejected malformed codex public request before upstream call"
             );
+            if let Err(persist_err) = persist_gateway_failure_usage(
+                state.llm_gateway.as_ref(),
+                key_lease.as_ref(),
+                GatewayFailureUsageRequest {
+                    prepared: &failure_prepared,
+                    status_code: err.0.as_u16() as i32,
+                    usage: missing_usage_breakdown(),
+                    event_context: event_context.as_ref(),
+                    selected_account_name: selected_account_name.as_deref(),
+                    failure_stage: "normalize_request",
+                    error: &err.1 .0.error,
+                    details: Some(json!({ "error_code": err.1.0.code })),
+                },
+            )
+            .await
+            {
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    "failed to persist codex failure usage after request normalization error: {persist_err:#}"
+                );
+            }
             return Err(err);
         },
     };
-    let prepared = apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark)?;
+    let prepared = match apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            if let Err(persist_err) = persist_gateway_failure_usage(
+                state.llm_gateway.as_ref(),
+                key_lease.as_ref(),
+                GatewayFailureUsageRequest {
+                    prepared: &prepared,
+                    status_code: err.0.as_u16() as i32,
+                    usage: missing_usage_breakdown(),
+                    event_context: event_context.as_ref(),
+                    selected_account_name: selected_account_name.as_deref(),
+                    failure_stage: "apply_model_mapping",
+                    error: &err.1 .0.error,
+                    details: Some(json!({ "error_code": err.1.0.code })),
+                },
+            )
+            .await
+            {
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    "failed to persist codex failure usage after model mapping error: {persist_err:#}"
+                );
+            }
+            return Err(err);
+        },
+    };
 
-    let response = send_upstream_with_retry(
+    let response = match send_upstream_with_retry(
         &state,
         &prepared,
         &parts.headers,
@@ -2863,7 +3198,33 @@ pub async fn proxy_gateway_request(
         selected_account_name.as_deref(),
     )
     .await
-    .map_err(|err| internal_error("Failed to proxy llm gateway request", err))?;
+    {
+        Ok(response) => response,
+        Err(err) => {
+            if let Err(persist_err) = persist_gateway_failure_usage(
+                state.llm_gateway.as_ref(),
+                key_lease.as_ref(),
+                GatewayFailureUsageRequest {
+                    prepared: &prepared,
+                    status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                    usage: missing_usage_breakdown(),
+                    event_context: event_context.as_ref(),
+                    selected_account_name: selected_account_name.as_deref(),
+                    failure_stage: "send_upstream",
+                    error: &err.to_string(),
+                    details: Some(json!({ "error_chain": format!("{err:#}") })),
+                },
+            )
+            .await
+            {
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    "failed to persist codex failure usage after upstream send error: {persist_err:#}"
+                );
+            }
+            return Err(internal_error("Failed to proxy llm gateway request", err));
+        },
+    };
 
     forward_upstream_response(
         state,
@@ -3372,33 +3733,70 @@ async fn forward_upstream_response(
                 let Some(event) = maybe_event else {
                     break;
                 };
-                let event = event.map_err(|err| {
-                    internal_error("Failed to parse llm gateway upstream SSE stream", err)
-                })?;
-                collector.observe_event(&event);
+                match event {
+                    Ok(event) => collector.observe_event(&event),
+                    Err(err) => {
+                        if let Err(persist_err) = persist_gateway_failure_usage(
+                            state.llm_gateway.as_ref(),
+                            key_lease.as_ref(),
+                            GatewayFailureUsageRequest {
+                                prepared: &prepared,
+                                status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                                usage: collector.usage.unwrap_or_else(missing_usage_breakdown),
+                                event_context: event_context.as_ref(),
+                                selected_account_name: selected_account_name.as_deref(),
+                                failure_stage: "stream_read",
+                                error: &format!(
+                                    "Failed to parse llm gateway upstream SSE stream: {err}"
+                                ),
+                                details: Some(json!({ "stream_kind": "aggregated_sse" })),
+                            },
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                key_id = %key_lease.record.id,
+                                "failed to persist codex failure usage after aggregated SSE parse error: {persist_err:#}"
+                            );
+                        }
+                        return Err(internal_error(
+                            "Failed to parse llm gateway upstream SSE stream",
+                            err,
+                        ));
+                    },
+                }
             }
-            let usage = collector.usage.unwrap_or(UsageBreakdown {
-                usage_missing: true,
-                ..UsageBreakdown::default()
-            });
-            persist_gateway_usage(
-                state.llm_gateway.as_ref(),
-                key_lease.as_ref(),
-                &prepared,
-                status.as_u16(),
-                usage,
-                event_context.clone(),
-                selected_account_name.as_deref(),
-            )
-            .await
-            .map_err(|err| internal_error("Failed to persist llm gateway usage", err))?;
-
-            let response_json = collector.completed_response.ok_or_else(|| {
-                internal_error(
-                    "Failed to aggregate llm gateway response",
-                    "response.completed event missing",
-                )
-            })?;
+            let usage = collector.usage.unwrap_or_else(missing_usage_breakdown);
+            let response_json = match collector.completed_response {
+                Some(response_json) => response_json,
+                None => {
+                    if let Err(persist_err) = persist_gateway_failure_usage(
+                        state.llm_gateway.as_ref(),
+                        key_lease.as_ref(),
+                        GatewayFailureUsageRequest {
+                            prepared: &prepared,
+                            status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                            usage,
+                            event_context: event_context.as_ref(),
+                            selected_account_name: selected_account_name.as_deref(),
+                            failure_stage: "aggregate_response",
+                            error: "response.completed event missing",
+                            details: Some(json!({ "stream_kind": "aggregated_sse" })),
+                        },
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            key_id = %key_lease.record.id,
+                            "failed to persist codex failure usage after aggregated SSE completion error: {persist_err:#}"
+                        );
+                    }
+                    return Err(internal_error(
+                        "Failed to aggregate llm gateway response",
+                        "response.completed event missing",
+                    ));
+                },
+            };
             let response_json = if let (Some(model_from), Some(model_to)) =
                 (prepared.model.as_deref(), prepared.client_visible_model.as_deref())
             {
@@ -3428,18 +3826,84 @@ async fn forward_upstream_response(
                 response_adapter,
                 Some(&prepared.tool_name_restore_map),
             );
-            let body = serde_json::to_vec(&adapted_json).map_err(|err| {
-                internal_error("Failed to encode aggregated llm gateway response", err)
-            })?;
+            let body = match serde_json::to_vec(&adapted_json) {
+                Ok(body) => body,
+                Err(err) => {
+                    if let Err(persist_err) = persist_gateway_failure_usage(
+                        state.llm_gateway.as_ref(),
+                        key_lease.as_ref(),
+                        GatewayFailureUsageRequest {
+                            prepared: &prepared,
+                            status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                            usage,
+                            event_context: event_context.as_ref(),
+                            selected_account_name: selected_account_name.as_deref(),
+                            failure_stage: "adapt_response",
+                            error: "Failed to encode aggregated llm gateway response",
+                            details: Some(json!({ "error": err.to_string() })),
+                        },
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            key_id = %key_lease.record.id,
+                            "failed to persist codex failure usage after aggregated response encode error: {persist_err:#}"
+                        );
+                    }
+                    return Err(internal_error(
+                        "Failed to encode aggregated llm gateway response",
+                        err,
+                    ));
+                },
+            };
             let builder = Response::builder()
                 .status(status)
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::CACHE_CONTROL, "no-store");
-            return apply_upstream_response_headers(builder, &upstream_headers)
+            let response = match apply_upstream_response_headers(builder, &upstream_headers)
                 .body(Body::from(body))
-                .map_err(|err| {
-                    internal_error("Failed to build aggregated llm gateway response", err)
-                });
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    if let Err(persist_err) = persist_gateway_failure_usage(
+                        state.llm_gateway.as_ref(),
+                        key_lease.as_ref(),
+                        GatewayFailureUsageRequest {
+                            prepared: &prepared,
+                            status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                            usage,
+                            event_context: event_context.as_ref(),
+                            selected_account_name: selected_account_name.as_deref(),
+                            failure_stage: "build_response",
+                            error: "Failed to build aggregated llm gateway response",
+                            details: Some(json!({ "error": err.to_string() })),
+                        },
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            key_id = %key_lease.record.id,
+                            "failed to persist codex failure usage after aggregated response build error: {persist_err:#}"
+                        );
+                    }
+                    return Err(internal_error(
+                        "Failed to build aggregated llm gateway response",
+                        err,
+                    ));
+                },
+            };
+            persist_gateway_usage(
+                state.llm_gateway.as_ref(),
+                key_lease.as_ref(),
+                &prepared,
+                status.as_u16(),
+                usage,
+                event_context.clone(),
+                selected_account_name.as_deref(),
+            )
+            .await
+            .map_err(|err| internal_error("Failed to persist llm gateway usage", err))?;
+            return Ok(response);
         }
 
         let gateway = state.llm_gateway.clone();
@@ -3447,6 +3911,9 @@ async fn forward_upstream_response(
         let stream_key_lease = key_lease.clone();
         let stream_request_limit_lease = request_limit_lease;
         let stream_response_adapter = response_adapter;
+        let stream_event_context = event_context.clone();
+        let stream_selected_account_name = selected_account_name.clone();
+        let stream_prepared = prepared.clone();
         let body_stream = stream! {
             let _request_limit_lease = stream_request_limit_lease;
             let mut collector = SseUsageCollector::default();
@@ -3461,7 +3928,7 @@ async fn forward_upstream_response(
                     _ = shutdown_rx.changed() => {
                         if *shutdown_rx.borrow() {
                             tracing::info!(
-                                upstream_path = prepared.upstream_path,
+                                upstream_path = stream_prepared.upstream_path,
                                 "stopping llm gateway downstream stream because backend is shutting down"
                             );
                             None
@@ -3481,17 +3948,17 @@ async fn forward_upstream_response(
                             GatewayResponseAdapter::Responses => {
                                 yield Ok::<Bytes, std::io::Error>(encode_sse_event_with_model_alias(
                                     &event,
-                                    prepared.model.as_deref(),
-                                    prepared.client_visible_model.as_deref(),
+                                    stream_prepared.model.as_deref(),
+                                    stream_prepared.client_visible_model.as_deref(),
                                 ));
                             }
                             GatewayResponseAdapter::ChatCompletions => {
                                 if let Some(chunk) = convert_response_event_to_chat_chunk(
                                     &event,
-                                    Some(&prepared.tool_name_restore_map),
+                                    Some(&stream_prepared.tool_name_restore_map),
                                     &mut chat_metadata,
-                                    prepared.model.as_deref(),
-                                    prepared.client_visible_model.as_deref(),
+                                    stream_prepared.model.as_deref(),
+                                    stream_prepared.client_visible_model.as_deref(),
                                 ) {
                                     yield Ok::<Bytes, std::io::Error>(encode_json_sse_chunk(&chunk));
                                 }
@@ -3499,6 +3966,25 @@ async fn forward_upstream_response(
                         }
                     }
                     Err(err) => {
+                        if let Err(persist_err) = persist_gateway_failure_usage(
+                            gateway.as_ref(),
+                            stream_key_lease.as_ref(),
+                            GatewayFailureUsageRequest {
+                                prepared: &stream_prepared,
+                                status_code: CODEX_STREAM_FAILURE_STATUS_CODE,
+                                usage: collector.usage.unwrap_or_else(missing_usage_breakdown),
+                                event_context: stream_event_context.as_ref(),
+                                selected_account_name: stream_selected_account_name.as_deref(),
+                                failure_stage: "stream_read",
+                                error: &format!("failed to parse upstream SSE event: {err}"),
+                                details: Some(json!({ "stream_kind": "sse" })),
+                            },
+                        ).await {
+                            yield Err(std::io::Error::other(format!(
+                                "failed to persist llm gateway failure usage: {persist_err}"
+                            )));
+                            return;
+                        }
                         yield Err(std::io::Error::other(format!(
                             "failed to parse upstream SSE event: {err}"
                         )));
@@ -3506,18 +3992,15 @@ async fn forward_upstream_response(
                     }
                 }
             }
-            let usage = collector.usage.unwrap_or(UsageBreakdown {
-                usage_missing: true,
-                ..UsageBreakdown::default()
-            });
+            let usage = collector.usage.unwrap_or_else(missing_usage_breakdown);
             if let Err(err) = persist_gateway_usage(
                 gateway.as_ref(),
                 stream_key_lease.as_ref(),
-                &prepared,
+                &stream_prepared,
                 status.as_u16(),
                 usage,
-                event_context.clone(),
-                selected_account_name.as_deref(),
+                stream_event_context.clone(),
+                stream_selected_account_name.as_deref(),
             ).await {
                 yield Err(std::io::Error::other(format!(
                     "failed to persist llm gateway usage: {err}"
@@ -3539,15 +4022,69 @@ async fn forward_upstream_response(
                 },
             )
             .header(header::CACHE_CONTROL, "no-store");
-        return apply_upstream_response_headers(builder, &upstream_headers)
+        let response = match apply_upstream_response_headers(builder, &upstream_headers)
             .body(Body::from_stream(body_stream))
-            .map_err(|err| internal_error("Failed to build llm gateway stream response", err));
+        {
+            Ok(response) => response,
+            Err(err) => {
+                if let Err(persist_err) = persist_gateway_failure_usage(
+                    state.llm_gateway.as_ref(),
+                    key_lease.as_ref(),
+                    GatewayFailureUsageRequest {
+                        prepared: &prepared,
+                        status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                        usage: missing_usage_breakdown(),
+                        event_context: event_context.as_ref(),
+                        selected_account_name: selected_account_name.as_deref(),
+                        failure_stage: "build_response",
+                        error: "Failed to build llm gateway stream response",
+                        details: Some(json!({ "error": err.to_string() })),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        "failed to persist codex failure usage after stream response build error: {persist_err:#}"
+                    );
+                }
+                return Err(internal_error("Failed to build llm gateway stream response", err));
+            },
+        };
+        return Ok(response);
     }
 
-    let body_bytes = upstream
-        .bytes()
-        .await
-        .map_err(|err| internal_error("Failed to read llm gateway upstream response", err))?;
+    let body_bytes = match upstream.bytes().await {
+        Ok(body_bytes) => body_bytes,
+        Err(err) => {
+            if let Err(persist_err) = persist_gateway_failure_usage(
+                state.llm_gateway.as_ref(),
+                key_lease.as_ref(),
+                GatewayFailureUsageRequest {
+                    prepared: &prepared,
+                    status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                    usage: missing_usage_breakdown(),
+                    event_context: event_context.as_ref(),
+                    selected_account_name: selected_account_name.as_deref(),
+                    failure_stage: "read_upstream_response",
+                    error: "Failed to read llm gateway upstream response",
+                    details: Some(json!({
+                        "upstream_status": status.as_u16(),
+                        "content_type": content_type,
+                        "error": err.to_string(),
+                    })),
+                },
+            )
+            .await
+            {
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    "failed to persist codex failure usage after upstream body read error: {persist_err:#}"
+                );
+            }
+            return Err(internal_error("Failed to read llm gateway upstream response", err));
+        },
+    };
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body_bytes);
         tracing::error!(
@@ -3563,30 +4100,32 @@ async fn forward_upstream_response(
             body_preview = %summarize_upstream_error_body(&body_text),
             "codex public request returned non-success upstream response"
         );
-    }
-    let usage = if status.is_success() {
-        extract_usage_from_bytes(&body_bytes).unwrap_or(UsageBreakdown {
-            usage_missing: true,
-            ..UsageBreakdown::default()
-        })
-    } else {
-        UsageBreakdown {
-            usage_missing: true,
-            ..UsageBreakdown::default()
+        if let Err(persist_err) = persist_gateway_failure_usage(
+            state.llm_gateway.as_ref(),
+            key_lease.as_ref(),
+            GatewayFailureUsageRequest {
+                prepared: &prepared,
+                status_code: status.as_u16() as i32,
+                usage: missing_usage_breakdown(),
+                event_context: event_context.as_ref(),
+                selected_account_name: selected_account_name.as_deref(),
+                failure_stage: "upstream_non_success",
+                error: &format!("upstream returned non-success status {}", status.as_u16()),
+                details: Some(json!({
+                    "content_type": content_type,
+                    "upstream_body": body_text.to_string(),
+                })),
+            },
+        )
+        .await
+        {
+            tracing::warn!(
+                key_id = %key_lease.record.id,
+                "failed to persist codex failure usage after non-success upstream response: {persist_err:#}"
+            );
         }
-    };
-
-    persist_gateway_usage(
-        state.llm_gateway.as_ref(),
-        key_lease.as_ref(),
-        &prepared,
-        status.as_u16(),
-        usage,
-        event_context,
-        selected_account_name.as_deref(),
-    )
-    .await
-    .map_err(|err| internal_error("Failed to persist llm gateway usage", err))?;
+    }
+    let usage = extract_usage_from_bytes(&body_bytes).unwrap_or_else(missing_usage_breakdown);
 
     let aliased_body_bytes = rewrite_json_response_model_alias(
         &body_bytes,
@@ -3595,20 +4134,47 @@ async fn forward_upstream_response(
     )
     .unwrap_or_else(|| body_bytes.to_vec());
 
-    let response_bytes =
-        if status.is_success() && response_adapter == GatewayResponseAdapter::ChatCompletions {
-            convert_json_response_to_chat_completion(
-                &body_bytes,
-                Some(&prepared.tool_name_restore_map),
-                prepared.model.as_deref(),
-                prepared.client_visible_model.as_deref(),
-            )
-            .map_err(|err| {
-                internal_error("Failed to adapt upstream response to chat.completions", err)
-            })?
-        } else {
-            aliased_body_bytes
-        };
+    let response_bytes = if status.is_success()
+        && response_adapter == GatewayResponseAdapter::ChatCompletions
+    {
+        match convert_json_response_to_chat_completion(
+            &body_bytes,
+            Some(&prepared.tool_name_restore_map),
+            prepared.model.as_deref(),
+            prepared.client_visible_model.as_deref(),
+        ) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                if let Err(persist_err) = persist_gateway_failure_usage(
+                    state.llm_gateway.as_ref(),
+                    key_lease.as_ref(),
+                    GatewayFailureUsageRequest {
+                        prepared: &prepared,
+                        status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                        usage,
+                        event_context: event_context.as_ref(),
+                        selected_account_name: selected_account_name.as_deref(),
+                        failure_stage: "adapt_response",
+                        error: "Failed to adapt upstream response to chat.completions",
+                        details: Some(json!({ "error": err })),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        "failed to persist codex failure usage after response adaptation error: {persist_err:#}"
+                    );
+                }
+                return Err(internal_error(
+                    "Failed to adapt upstream response to chat.completions",
+                    err,
+                ));
+            },
+        }
+    } else {
+        aliased_body_bytes
+    };
 
     let builder = Response::builder()
         .status(status)
@@ -3621,9 +4187,51 @@ async fn forward_upstream_response(
             },
         )
         .header(header::CACHE_CONTROL, "no-store");
-    apply_upstream_response_headers(builder, &upstream_headers)
+    let response = match apply_upstream_response_headers(builder, &upstream_headers)
         .body(Body::from(response_bytes))
-        .map_err(|err| internal_error("Failed to build llm gateway response", err))
+    {
+        Ok(response) => response,
+        Err(err) => {
+            if status.is_success() {
+                if let Err(persist_err) = persist_gateway_failure_usage(
+                    state.llm_gateway.as_ref(),
+                    key_lease.as_ref(),
+                    GatewayFailureUsageRequest {
+                        prepared: &prepared,
+                        status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                        usage,
+                        event_context: event_context.as_ref(),
+                        selected_account_name: selected_account_name.as_deref(),
+                        failure_stage: "build_response",
+                        error: "Failed to build llm gateway response",
+                        details: Some(json!({ "error": err.to_string() })),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        "failed to persist codex failure usage after response build error: {persist_err:#}"
+                    );
+                }
+            }
+            return Err(internal_error("Failed to build llm gateway response", err));
+        },
+    };
+    if status.is_success() {
+        persist_gateway_usage(
+            state.llm_gateway.as_ref(),
+            key_lease.as_ref(),
+            &prepared,
+            status.as_u16(),
+            usage,
+            event_context,
+            selected_account_name.as_deref(),
+        )
+        .await
+        .map_err(|err| internal_error("Failed to persist llm gateway usage", err))?;
+    }
+    Ok(response)
 }
 
 /// Persist one settled usage event and refresh the key cache with new counters.
@@ -3641,14 +4249,7 @@ async fn persist_gateway_usage(
         .get_key_by_id(&cached_key.record.id)
         .await?
         .unwrap_or_else(|| cached_key.record.clone());
-    let context = event_context.unwrap_or_else(|| LlmGatewayEventContext {
-        request_method: prepared.method.as_str().to_string(),
-        request_url: prepared.original_path.clone(),
-        client_ip: "unknown".to_string(),
-        ip_region: "Unknown".to_string(),
-        request_headers_json: "{}".to_string(),
-        started_at: Instant::now(),
-    });
+    let context = event_context.unwrap_or_else(|| default_gateway_event_context(prepared));
     let latency_ms = context
         .started_at
         .elapsed()
@@ -3663,7 +4264,7 @@ async fn persist_gateway_usage(
             "LLM gateway usage payload was missing and fell back to zeroed counters"
         );
     }
-    let last_message_content = match extract_last_message_content(&prepared.request_body) {
+    let last_message_content = match extract_last_message_content(&prepared.client_request_body) {
         Ok(content) => content,
         Err(err) => {
             tracing::debug!(
@@ -3674,34 +4275,16 @@ async fn persist_gateway_usage(
             Some(LAST_MESSAGE_CONTENT_EXTRACT_FAILED.to_string())
         },
     };
-    let event = LlmGatewayUsageEventRecord {
-        id: generate_id("llm-usage"),
-        key_id: current.id.clone(),
-        key_name: current.name.clone(),
-        provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
-        account_name: selected_account_name
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        request_method: context.request_method,
-        request_url: context.request_url,
+    let event = build_gateway_usage_event_record(GatewayUsageEventBuild {
+        current: &current,
+        prepared,
+        context: &context,
         latency_ms,
-        endpoint: prepared.upstream_path.clone(),
-        model: prepared.model.clone(),
         status_code: status_code as i32,
-        input_uncached_tokens: usage.input_uncached_tokens,
-        input_cached_tokens: usage.input_cached_tokens,
-        output_tokens: usage.output_tokens,
-        billable_tokens: usage.billable_tokens_with_multiplier(prepared.billable_multiplier),
-        usage_missing: usage.usage_missing,
-        credit_usage: None,
-        credit_usage_missing: false,
-        client_ip: context.client_ip,
-        ip_region: context.ip_region,
-        request_headers_json: context.request_headers_json,
+        usage,
         last_message_content,
-        created_at: now_ms(),
-    };
+        selected_account_name,
+    });
     let updated = gateway.append_usage_event(&current, &event).await?;
 
     tracing::info!(
@@ -3714,6 +4297,66 @@ async fn persist_gateway_usage(
         latency_ms = event.latency_ms,
         billable_tokens = event.billable_tokens,
         "Persisted LLM gateway usage event"
+    );
+
+    let ttl = gateway_auth_cache_ttl(gateway).await;
+    if updated.status == LLM_GATEWAY_KEY_STATUS_ACTIVE {
+        gateway.key_cache.renew(updated, Duration::from_secs(ttl));
+    } else {
+        gateway.key_cache.invalidate(&cached_key.record.key_hash);
+    }
+    Ok(())
+}
+
+async fn persist_gateway_failure_usage(
+    gateway: &LlmGatewayRuntimeState,
+    cached_key: &CachedKeyLease,
+    failure: GatewayFailureUsageRequest<'_>,
+) -> Result<()> {
+    let current = gateway
+        .store
+        .get_key_by_id(&cached_key.record.id)
+        .await?
+        .unwrap_or_else(|| cached_key.record.clone());
+    let context = failure
+        .event_context
+        .cloned()
+        .unwrap_or_else(|| default_gateway_event_context(failure.prepared));
+    let latency_ms = context
+        .started_at
+        .elapsed()
+        .as_millis()
+        .min(i32::MAX as u128) as i32;
+    let diagnostic_payload = build_codex_failure_diagnostic_payload(
+        failure.prepared,
+        Some(&context),
+        failure.selected_account_name,
+        failure.failure_stage,
+        failure.status_code,
+        failure.error,
+        failure.details,
+    );
+    let event = build_gateway_usage_event_record(GatewayUsageEventBuild {
+        current: &current,
+        prepared: failure.prepared,
+        context: &context,
+        latency_ms,
+        status_code: failure.status_code,
+        usage: failure.usage,
+        last_message_content: Some(diagnostic_payload),
+        selected_account_name: failure.selected_account_name,
+    });
+    let updated = gateway.append_usage_event(&current, &event).await?;
+
+    tracing::warn!(
+        key_id = %updated.id,
+        key_name = %updated.name,
+        event_id = %event.id,
+        account_name = event.account_name.as_deref().unwrap_or("legacy"),
+        request_url = %event.request_url,
+        status_code = event.status_code,
+        latency_ms = event.latency_ms,
+        "Persisted LLM gateway failure usage event"
     );
 
     let ttl = gateway_auth_cache_ttl(gateway).await;
@@ -4451,6 +5094,8 @@ pub async fn remove_account(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use static_flow_shared::llm_gateway_store::{
         now_ms, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
     };
@@ -4517,6 +5162,36 @@ mod tests {
             request_headers_json: "{}".to_string(),
             last_message_content: Some("secret".to_string()),
             created_at,
+        }
+    }
+
+    fn sample_prepared_gateway_request() -> PreparedGatewayRequest {
+        PreparedGatewayRequest {
+            original_path: "/v1/responses".to_string(),
+            upstream_path: "/v1/responses".to_string(),
+            method: axum::http::Method::POST,
+            client_request_body: Bytes::from_static(br#"{"input":"hello"}"#),
+            request_body: Bytes::from_static(br#"{"input":"hello","stream":true}"#),
+            model: Some("gpt-5.3-codex".to_string()),
+            client_visible_model: None,
+            wants_stream: false,
+            force_upstream_stream: true,
+            content_type: "application/json".to_string(),
+            response_adapter: GatewayResponseAdapter::Responses,
+            thread_anchor: None,
+            tool_name_restore_map: BTreeMap::new(),
+            billable_multiplier: 1,
+        }
+    }
+
+    fn sample_gateway_event_context() -> LlmGatewayEventContext {
+        LlmGatewayEventContext {
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            started_at: Instant::now(),
         }
     }
 
@@ -4682,6 +5357,115 @@ mod tests {
             error_message.as_deref(),
             Some("no active codex accounts available out of 1 configured account(s)")
         );
+    }
+
+    #[test]
+    fn build_codex_failure_usage_event_preserves_status_and_diagnostic_payload() {
+        let key = sample_public_lookup_key();
+        let prepared = sample_prepared_gateway_request();
+        let context = sample_gateway_event_context();
+
+        let diagnostic = build_codex_failure_diagnostic_payload(
+            &prepared,
+            Some(&context),
+            Some("acct-a"),
+            "send_upstream",
+            502,
+            "upstream request failed",
+            None,
+        );
+        let event = build_gateway_usage_event_record(GatewayUsageEventBuild {
+            current: &key,
+            prepared: &prepared,
+            context: &context,
+            latency_ms: 12,
+            status_code: 502,
+            usage: UsageBreakdown {
+                usage_missing: true,
+                ..UsageBreakdown::default()
+            },
+            last_message_content: Some(diagnostic.clone()),
+            selected_account_name: Some("acct-a"),
+        });
+
+        assert_eq!(event.status_code, 502);
+        assert_eq!(event.last_message_content.as_deref(), Some(diagnostic.as_str()));
+    }
+
+    #[test]
+    fn codex_failure_diagnostic_payload_contains_client_and_upstream_bodies() {
+        let prepared = sample_prepared_gateway_request();
+
+        let payload = build_codex_failure_diagnostic_payload(
+            &prepared,
+            None,
+            Some("acct-a"),
+            "request_validation",
+            400,
+            "Invalid JSON body",
+            Some(json!({ "detail": "bad field" })),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("diagnostic json");
+
+        assert_eq!(parsed["kind"], "codex_failure_diagnostic");
+        assert_eq!(parsed["client_request_body"]["input"], "hello");
+        assert_eq!(parsed["upstream_request_body"]["stream"], true);
+        assert_eq!(parsed["account_name"], "acct-a");
+        assert_eq!(parsed["status_code"], 400);
+    }
+
+    #[test]
+    fn build_codex_failure_usage_event_uses_diagnostic_payload_for_429() {
+        let key = sample_public_lookup_key();
+        let prepared = sample_prepared_gateway_request();
+        let context = sample_gateway_event_context();
+
+        let payload = build_codex_failure_diagnostic_payload(
+            &prepared,
+            Some(&context),
+            Some("acct-a"),
+            "key_request_limit",
+            429,
+            "local_start_interval",
+            Some(json!({ "wait_ms": 123 })),
+        );
+        let event = build_gateway_usage_event_record(GatewayUsageEventBuild {
+            current: &key,
+            prepared: &prepared,
+            context: &context,
+            latency_ms: 10,
+            status_code: 429,
+            usage: UsageBreakdown {
+                usage_missing: true,
+                ..UsageBreakdown::default()
+            },
+            last_message_content: Some(payload.clone()),
+            selected_account_name: Some("acct-a"),
+        });
+
+        assert_eq!(event.status_code, 429);
+        assert_eq!(event.last_message_content.as_deref(), Some(payload.as_str()));
+    }
+
+    #[test]
+    fn build_codex_failure_diagnostic_payload_preserves_stream_failure_status() {
+        let mut prepared = sample_prepared_gateway_request();
+        prepared.wants_stream = true;
+        prepared.force_upstream_stream = false;
+
+        let payload = build_codex_failure_diagnostic_payload(
+            &prepared,
+            None,
+            Some("acct-a"),
+            "stream_read",
+            599,
+            "failed to parse upstream SSE event",
+            Some(json!({ "stream_kind": "sse" })),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("diagnostic json");
+
+        assert_eq!(parsed["status_code"], 599);
+        assert_eq!(parsed["failure_stage"], "stream_read");
     }
 
     #[tokio::test(start_paused = true)]

@@ -64,20 +64,54 @@ pub async fn build_client(
 pub struct ProviderCallResult {
     pub response: reqwest::Response,
     pub account_name: String,
+    pub request_body: String,
     _channel_lease: KiroRequestLease,
+}
+
+#[derive(Debug)]
+pub struct ProviderCallError {
+    pub error: anyhow::Error,
+    pub request_body: Option<String>,
+}
+
+impl ProviderCallError {
+    pub(crate) fn new(error: anyhow::Error, request_body: Option<String>) -> Self {
+        Self {
+            error,
+            request_body,
+        }
+    }
+}
+
+impl std::fmt::Display for ProviderCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for ProviderCallError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.error.root_cause())
+    }
+}
+
+impl From<anyhow::Error> for ProviderCallError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::new(error, None)
+    }
 }
 
 /// Per-account attempt outcome that drives the retry/failover decision.
 enum ProviderAttemptError {
     /// Transient failure; try the next account in the rotation.
-    RetryNext(anyhow::Error),
+    RetryNext(ProviderCallError),
     /// Unrecoverable error; abort immediately.
-    Fatal(anyhow::Error),
+    Fatal(ProviderCallError),
     /// Monthly quota exhausted (HTTP 402); mark account and move on.
-    QuotaExhausted(anyhow::Error),
+    QuotaExhausted(ProviderCallError),
     /// Upstream 5-minute credit window hit (HTTP 429); apply cooldown then move
     /// on.
-    RateLimited { error: anyhow::Error, cooldown: Duration },
+    RateLimited { error: ProviderCallError, cooldown: Duration },
 }
 
 #[derive(Clone, Copy)]
@@ -115,7 +149,7 @@ impl KiroProvider {
         &self,
         key_record: &LlmGatewayKeyRecord,
         conversation_state: &ConversationState,
-    ) -> Result<ProviderCallResult> {
+    ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         self.call_api_inner(key_record, conversation_state).await
     }
 
@@ -125,7 +159,7 @@ impl KiroProvider {
         &self,
         key_record: &LlmGatewayKeyRecord,
         conversation_state: &ConversationState,
-    ) -> Result<ProviderCallResult> {
+    ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         self.call_api_inner(key_record, conversation_state).await
     }
 
@@ -134,7 +168,7 @@ impl KiroProvider {
         &self,
         key_record: &LlmGatewayKeyRecord,
         request_body: &str,
-    ) -> Result<ProviderCallResult> {
+    ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         self.call_mcp_inner(key_record, request_body).await
     }
 
@@ -144,16 +178,16 @@ impl KiroProvider {
         &self,
         key_record: &LlmGatewayKeyRecord,
         conversation_state: &ConversationState,
-    ) -> Result<ProviderCallResult> {
+    ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         let queued_at = Instant::now();
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
             if auths.is_empty() {
-                return Err(anyhow!("no kiro account available for request"));
+                return Err(anyhow!("no kiro account available for request").into());
             }
             let auths = filter_auths_for_key_route(&auths, key_record)?;
             let snapshot = self.runtime.cached_status_snapshot().await;
-            let mut last_error: Option<anyhow::Error> = None;
+            let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
             let mut shortest_cooldown: Option<Duration> = None;
             let mut shortest_local_wait: Option<Duration> = None;
@@ -210,7 +244,10 @@ impl KiroProvider {
                     if quota_exhausted {
                         saw_quota_exhausted = true;
                     } else {
-                        last_error = Some(anyhow!("kiro account `{}` is disabled", auth.name));
+                        last_error = Some(ProviderCallError::new(
+                            anyhow!("kiro account `{}` is disabled", auth.name),
+                            None,
+                        ));
                     }
                     tracing::info!(
                     account_name = %auth.name,
@@ -393,14 +430,22 @@ impl KiroProvider {
             }
 
             if saw_quota_exhausted {
-                return Err(anyhow!(
-                    "all configured kiro accounts are quota exhausted; blocked_accounts={}",
-                    blocked_accounts.join(" | ")
+                return Err(ProviderCallError::new(
+                    anyhow!(
+                        "all configured kiro accounts are quota exhausted; blocked_accounts={}",
+                        blocked_accounts.join(" | ")
+                    ),
+                    None,
                 ));
             }
-            let base_error =
-                last_error.unwrap_or_else(|| anyhow!("no kiro account available for request"));
-            return Err(anyhow!("{base_error}; blocked_accounts={}", blocked_accounts.join(" | ")));
+            let base_error = last_error.unwrap_or_else(|| {
+                ProviderCallError::new(anyhow!("no kiro account available for request"), None)
+            });
+            let request_body = base_error.request_body.clone();
+            return Err(ProviderCallError::new(
+                anyhow!("{base_error}; blocked_accounts={}", blocked_accounts.join(" | ")),
+                request_body,
+            ));
         }
     }
 
@@ -408,16 +453,16 @@ impl KiroProvider {
         &self,
         key_record: &LlmGatewayKeyRecord,
         request_body: &str,
-    ) -> Result<ProviderCallResult> {
+    ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         let queued_at = Instant::now();
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
             if auths.is_empty() {
-                return Err(anyhow!("no kiro account available for mcp request"));
+                return Err(anyhow!("no kiro account available for mcp request").into());
             }
             let auths = filter_auths_for_key_route(&auths, key_record)?;
             let snapshot = self.runtime.cached_status_snapshot().await;
-            let mut last_error: Option<anyhow::Error> = None;
+            let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
             let mut shortest_cooldown: Option<Duration> = None;
             let mut shortest_local_wait: Option<Duration> = None;
@@ -470,7 +515,10 @@ impl KiroProvider {
                     if quota_exhausted {
                         saw_quota_exhausted = true;
                     } else {
-                        last_error = Some(anyhow!("kiro account `{}` is disabled", auth.name));
+                        last_error = Some(ProviderCallError::new(
+                            anyhow!("kiro account `{}` is disabled", auth.name),
+                            Some(request_body.to_string()),
+                        ));
                     }
                     tracing::info!(
                     account_name = %auth.name,
@@ -653,15 +701,29 @@ impl KiroProvider {
             }
 
             if saw_quota_exhausted {
-                return Err(anyhow!(
-                    "all configured kiro accounts are quota exhausted for mcp request; \
-                     blocked_accounts={}",
-                    blocked_accounts.join(" | ")
+                return Err(ProviderCallError::new(
+                    anyhow!(
+                        "all configured kiro accounts are quota exhausted for mcp request; \
+                         blocked_accounts={}",
+                        blocked_accounts.join(" | ")
+                    ),
+                    Some(request_body.to_string()),
                 ));
             }
-            let base_error =
-                last_error.unwrap_or_else(|| anyhow!("no kiro account available for mcp request"));
-            return Err(anyhow!("{base_error}; blocked_accounts={}", blocked_accounts.join(" | ")));
+            let base_error = last_error.unwrap_or_else(|| {
+                ProviderCallError::new(
+                    anyhow!("no kiro account available for mcp request"),
+                    Some(request_body.to_string()),
+                )
+            });
+            let request_body = base_error
+                .request_body
+                .clone()
+                .or_else(|| Some(request_body.to_string()));
+            return Err(ProviderCallError::new(
+                anyhow!("{base_error}; blocked_accounts={}", blocked_accounts.join(" | ")),
+                request_body,
+            ));
         }
     }
 
@@ -675,7 +737,7 @@ impl KiroProvider {
         channel_lease: KiroRequestLease,
     ) -> Result<ProviderCallResult, ProviderAttemptError> {
         let mut force_refresh = false;
-        let mut last_error: Option<anyhow::Error> = None;
+        let mut last_error: Option<ProviderCallError> = None;
         let queue_wait_ms = channel_lease.waited_ms();
         for attempt in 0..3 {
             let attempt = attempt + 1;
@@ -684,19 +746,24 @@ impl KiroProvider {
                 .token_manager
                 .ensure_context_for_account(account_name, force_refresh)
                 .await
-                .map_err(ProviderAttemptError::RetryNext)?;
+                .map_err(|err| ProviderAttemptError::RetryNext(err.into()))?;
             let request_body = serde_json::to_string(&KiroRequest {
                 conversation_state: conversation_state.clone(),
                 profile_arn: ctx.auth.profile_arn.clone(),
             })
-            .map_err(|err| ProviderAttemptError::Fatal(anyhow!("serialize kiro request: {err}")))?;
+            .map_err(|err| {
+                ProviderAttemptError::Fatal(ProviderCallError::new(
+                    anyhow!("serialize kiro request: {err}"),
+                    None,
+                ))
+            })?;
             let (client, resolved_proxy) = build_client(
                 self.runtime.upstream_proxy_registry.as_ref(),
                 &ctx.auth,
                 KIRO_API_CLIENT_PROFILE,
             )
             .await
-            .map_err(ProviderAttemptError::Fatal)?;
+            .map_err(|err| ProviderAttemptError::Fatal(err.into()))?;
             let url = format!(
                 "https://q.{}.amazonaws.com/generateAssistantResponse",
                 ctx.auth.effective_api_region()
@@ -726,8 +793,10 @@ impl KiroProvider {
             };
             let response = client
                 .post(url)
-                .headers(build_headers(&ctx).map_err(ProviderAttemptError::Fatal)?)
-                .body(request_body)
+                .headers(
+                    build_headers(&ctx).map_err(|err| ProviderAttemptError::Fatal(err.into()))?,
+                )
+                .body(request_body.clone())
                 .send()
                 .await;
             let response = match response {
@@ -750,9 +819,9 @@ impl KiroProvider {
                         invalidated_client = invalidated,
                         "kiro upstream client send failed: {err}"
                     );
-                    last_error = Some(anyhow!(
-                        "kiro upstream transport failure for {}: {err}",
-                        log_ctx.endpoint
+                    last_error = Some(ProviderCallError::new(
+                        anyhow!("kiro upstream transport failure for {}: {err}", log_ctx.endpoint),
+                        Some(request_body.clone()),
                     ));
                     continue;
                 },
@@ -769,6 +838,7 @@ impl KiroProvider {
                 return Ok(ProviderCallResult {
                     response,
                     account_name: ctx.auth.name,
+                    request_body,
                     _channel_lease: channel_lease,
                 });
             }
@@ -783,8 +853,9 @@ impl KiroProvider {
                     "kiro upstream request returned quota-exhausted response",
                     None,
                 );
-                return Err(ProviderAttemptError::QuotaExhausted(anyhow!(
-                    "kiro account quota exhausted: {status} {body}"
+                return Err(ProviderAttemptError::QuotaExhausted(ProviderCallError::new(
+                    anyhow!("kiro account quota exhausted: {status} {body}"),
+                    Some(request_body.clone()),
                 )));
             }
             if status.as_u16() == 429 {
@@ -798,7 +869,10 @@ impl KiroProvider {
                         Some(cooldown),
                     );
                     return Err(ProviderAttemptError::RateLimited {
-                        error: anyhow!("kiro upstream rate limit reached: {status} {body}"),
+                        error: ProviderCallError::new(
+                            anyhow!("kiro upstream rate limit reached: {status} {body}"),
+                            Some(request_body.clone()),
+                        ),
                         cooldown,
                     });
                 }
@@ -821,8 +895,9 @@ impl KiroProvider {
                 None,
             );
             if status.as_u16() == 400 {
-                return Err(ProviderAttemptError::Fatal(anyhow!(
-                    "kiro upstream rejected request: {status} {body}"
+                return Err(ProviderAttemptError::Fatal(ProviderCallError::new(
+                    anyhow!("kiro upstream rejected request: {status} {body}"),
+                    Some(request_body.clone()),
                 )));
             }
             if matches!(status.as_u16(), 401 | 403) && !force_refresh {
@@ -833,27 +908,35 @@ impl KiroProvider {
                     "kiro upstream auth failed; forcing token refresh before retry"
                 );
                 force_refresh = true;
-                last_error = Some(anyhow!("kiro upstream auth failed: {status} {body}"));
+                last_error = Some(ProviderCallError::new(
+                    anyhow!("kiro upstream auth failed: {status} {body}"),
+                    Some(request_body.clone()),
+                ));
                 continue;
             }
             if matches!(status.as_u16(), 401 | 403) {
-                return Err(ProviderAttemptError::RetryNext(anyhow!(
-                    "kiro upstream auth failed after refresh: {status} {body}"
+                return Err(ProviderAttemptError::RetryNext(ProviderCallError::new(
+                    anyhow!("kiro upstream auth failed after refresh: {status} {body}"),
+                    Some(request_body.clone()),
                 )));
             }
             if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
-                last_error = Some(anyhow!("kiro upstream transient failure: {status} {body}"));
+                last_error = Some(ProviderCallError::new(
+                    anyhow!("kiro upstream transient failure: {status} {body}"),
+                    Some(request_body.clone()),
+                ));
                 tokio::time::sleep(Duration::from_millis(350)).await;
                 continue;
             }
-            return Err(ProviderAttemptError::Fatal(anyhow!(
-                "kiro upstream failure: {status} {body}"
+            return Err(ProviderAttemptError::Fatal(ProviderCallError::new(
+                anyhow!("kiro upstream failure: {status} {body}"),
+                Some(request_body.clone()),
             )));
         }
         drop(channel_lease);
-        Err(ProviderAttemptError::RetryNext(
-            last_error.unwrap_or_else(|| anyhow!("kiro upstream request failed")),
-        ))
+        Err(ProviderAttemptError::RetryNext(last_error.unwrap_or_else(|| {
+            ProviderCallError::new(anyhow!("kiro upstream request failed"), None)
+        })))
     }
 
     async fn call_mcp_for_account(
@@ -863,7 +946,7 @@ impl KiroProvider {
         channel_lease: KiroRequestLease,
     ) -> Result<ProviderCallResult, ProviderAttemptError> {
         let mut force_refresh = false;
-        let mut last_error: Option<anyhow::Error> = None;
+        let mut last_error: Option<ProviderCallError> = None;
         let queue_wait_ms = channel_lease.waited_ms();
         for attempt in 0..3 {
             let attempt = attempt + 1;
@@ -872,14 +955,14 @@ impl KiroProvider {
                 .token_manager
                 .ensure_context_for_account(account_name, force_refresh)
                 .await
-                .map_err(ProviderAttemptError::RetryNext)?;
+                .map_err(|err| ProviderAttemptError::RetryNext(err.into()))?;
             let (client, resolved_proxy) = build_client(
                 self.runtime.upstream_proxy_registry.as_ref(),
                 &ctx.auth,
                 KIRO_MCP_CLIENT_PROFILE,
             )
             .await
-            .map_err(ProviderAttemptError::Fatal)?;
+            .map_err(|err| ProviderAttemptError::Fatal(err.into()))?;
             let url = format!("https://q.{}.amazonaws.com/mcp", ctx.auth.effective_api_region());
             tracing::info!(
                 account_name = %ctx.auth.name,
@@ -906,7 +989,10 @@ impl KiroProvider {
             };
             let response = client
                 .post(url)
-                .headers(build_mcp_headers(&ctx).map_err(ProviderAttemptError::Fatal)?)
+                .headers(
+                    build_mcp_headers(&ctx)
+                        .map_err(|err| ProviderAttemptError::Fatal(err.into()))?,
+                )
                 .body(request_body.to_string())
                 .send()
                 .await;
@@ -930,9 +1016,9 @@ impl KiroProvider {
                         invalidated_client = invalidated,
                         "kiro upstream mcp client send failed: {err}"
                     );
-                    last_error = Some(anyhow!(
-                        "kiro upstream transport failure for {}: {err}",
-                        log_ctx.endpoint
+                    last_error = Some(ProviderCallError::new(
+                        anyhow!("kiro upstream transport failure for {}: {err}", log_ctx.endpoint),
+                        Some(request_body.to_string()),
                     ));
                     continue;
                 },
@@ -949,6 +1035,7 @@ impl KiroProvider {
                 return Ok(ProviderCallResult {
                     response,
                     account_name: ctx.auth.name,
+                    request_body: request_body.to_string(),
                     _channel_lease: channel_lease,
                 });
             }
@@ -963,8 +1050,9 @@ impl KiroProvider {
                     "kiro upstream mcp request returned quota-exhausted response",
                     None,
                 );
-                return Err(ProviderAttemptError::QuotaExhausted(anyhow!(
-                    "kiro account quota exhausted for mcp request: {status} {body}"
+                return Err(ProviderAttemptError::QuotaExhausted(ProviderCallError::new(
+                    anyhow!("kiro account quota exhausted for mcp request: {status} {body}"),
+                    Some(request_body.to_string()),
                 )));
             }
             if status.as_u16() == 429 {
@@ -978,7 +1066,10 @@ impl KiroProvider {
                         Some(cooldown),
                     );
                     return Err(ProviderAttemptError::RateLimited {
-                        error: anyhow!("kiro upstream mcp rate limit reached: {status} {body}"),
+                        error: ProviderCallError::new(
+                            anyhow!("kiro upstream mcp rate limit reached: {status} {body}"),
+                            Some(request_body.to_string()),
+                        ),
                         cooldown,
                     });
                 }
@@ -1001,8 +1092,9 @@ impl KiroProvider {
                 None,
             );
             if status.as_u16() == 400 {
-                return Err(ProviderAttemptError::Fatal(anyhow!(
-                    "kiro upstream mcp rejected request: {status} {body}"
+                return Err(ProviderAttemptError::Fatal(ProviderCallError::new(
+                    anyhow!("kiro upstream mcp rejected request: {status} {body}"),
+                    Some(request_body.to_string()),
                 )));
             }
             if matches!(status.as_u16(), 401 | 403) && !force_refresh {
@@ -1013,27 +1105,38 @@ impl KiroProvider {
                     "kiro upstream mcp auth failed; forcing token refresh before retry"
                 );
                 force_refresh = true;
-                last_error = Some(anyhow!("kiro upstream mcp auth failed: {status} {body}"));
+                last_error = Some(ProviderCallError::new(
+                    anyhow!("kiro upstream mcp auth failed: {status} {body}"),
+                    Some(request_body.to_string()),
+                ));
                 continue;
             }
             if matches!(status.as_u16(), 401 | 403) {
-                return Err(ProviderAttemptError::RetryNext(anyhow!(
-                    "kiro upstream mcp auth failed after refresh: {status} {body}"
+                return Err(ProviderAttemptError::RetryNext(ProviderCallError::new(
+                    anyhow!("kiro upstream mcp auth failed after refresh: {status} {body}"),
+                    Some(request_body.to_string()),
                 )));
             }
             if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
-                last_error = Some(anyhow!("kiro upstream mcp transient failure: {status} {body}"));
+                last_error = Some(ProviderCallError::new(
+                    anyhow!("kiro upstream mcp transient failure: {status} {body}"),
+                    Some(request_body.to_string()),
+                ));
                 tokio::time::sleep(Duration::from_millis(350)).await;
                 continue;
             }
-            return Err(ProviderAttemptError::Fatal(anyhow!(
-                "kiro upstream mcp failure: {status} {body}"
+            return Err(ProviderAttemptError::Fatal(ProviderCallError::new(
+                anyhow!("kiro upstream mcp failure: {status} {body}"),
+                Some(request_body.to_string()),
             )));
         }
         drop(channel_lease);
-        Err(ProviderAttemptError::RetryNext(
-            last_error.unwrap_or_else(|| anyhow!("kiro upstream mcp request failed")),
-        ))
+        Err(ProviderAttemptError::RetryNext(last_error.unwrap_or_else(|| {
+            ProviderCallError::new(
+                anyhow!("kiro upstream mcp request failed"),
+                Some(request_body.to_string()),
+            )
+        })))
     }
 }
 

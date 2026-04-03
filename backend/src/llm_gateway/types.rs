@@ -682,6 +682,7 @@ pub(crate) struct PreparedGatewayRequest {
     pub original_path: String,
     pub upstream_path: String,
     pub method: Method,
+    pub client_request_body: axum::body::Bytes,
     pub request_body: axum::body::Bytes,
     pub model: Option<String>,
     pub client_visible_model: Option<String>,

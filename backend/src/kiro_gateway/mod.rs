@@ -88,6 +88,10 @@ pub struct KiroEventContext {
     pub request_headers_json: String,
     /// Trailing user message content, kept for audit/logging.
     pub last_message_content: Option<String>,
+    /// Full downstream client request body, serialized before local mutation.
+    pub client_request_body_json: Option<String>,
+    /// Full upstream Kiro request body prepared for diagnostics.
+    pub upstream_request_body_json: Option<String>,
     /// Wall-clock instant when authentication started; used for latency.
     pub started_at: Instant,
 }
@@ -171,6 +175,8 @@ impl AppKiroStateExt for AppState {
             ip_region,
             request_headers_json,
             last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             started_at: Instant::now(),
         }))
     }
@@ -765,33 +771,15 @@ pub async fn record_messages_usage(
         .elapsed()
         .as_millis()
         .min(i32::MAX as u128) as i32;
-    let event = LlmGatewayUsageEventRecord {
-        id: generate_task_id("kiro-usage"),
-        key_id: current.id.clone(),
-        key_name: current.name.clone(),
-        provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
-        account_name: event_context.account_name.clone(),
-        request_method: event_context.request_method.clone(),
-        request_url: event_context.request_url.clone(),
+    let event = build_kiro_usage_event_record(
+        &current,
+        event_context,
         latency_ms,
-        endpoint: event_context.endpoint.clone(),
-        model: event_context.model.clone(),
-        status_code: 200,
-        input_uncached_tokens: usage.input_uncached_tokens.max(0) as u64,
-        input_cached_tokens: usage.input_cached_tokens.max(0) as u64,
-        output_tokens: usage.output_tokens.max(0) as u64,
-        billable_tokens: (usage.input_uncached_tokens.max(0)
-            + usage.input_cached_tokens.max(0)
-            + usage.output_tokens.max(0)) as u64,
+        200,
+        usage,
         usage_missing,
-        credit_usage: usage.credit_usage,
-        credit_usage_missing: usage.credit_usage_missing,
-        client_ip: event_context.client_ip.clone(),
-        ip_region: event_context.ip_region.clone(),
-        request_headers_json: event_context.request_headers_json.clone(),
-        last_message_content: event_context.last_message_content.clone(),
-        created_at: now_ms(),
-    };
+        event_context.last_message_content.clone(),
+    );
     let _updated = state
         .llm_gateway
         .append_usage_event(&current, &event)
@@ -809,6 +797,89 @@ pub async fn record_messages_usage(
         "persisted kiro usage event"
     );
     Ok(())
+}
+
+pub async fn record_failed_request_event(
+    state: &AppState,
+    key: &LlmGatewayKeyRecord,
+    event_context: &KiroEventContext,
+    status_code: i32,
+    diagnostic_payload: String,
+    usage: KiroUsageSummary,
+    usage_missing: bool,
+) -> anyhow::Result<()> {
+    let current = state
+        .llm_gateway_store
+        .get_key_by_id_for_provider(&key.id, LLM_GATEWAY_PROVIDER_KIRO)
+        .await?
+        .unwrap_or_else(|| key.clone());
+    let latency_ms = event_context
+        .started_at
+        .elapsed()
+        .as_millis()
+        .min(i32::MAX as u128) as i32;
+    let event = build_kiro_usage_event_record(
+        &current,
+        event_context,
+        latency_ms,
+        status_code,
+        usage,
+        usage_missing,
+        Some(diagnostic_payload),
+    );
+    let _updated = state
+        .llm_gateway
+        .append_usage_event(&current, &event)
+        .await?;
+    tracing::warn!(
+        key_id = %current.id,
+        key_name = %current.name,
+        account_name = event.account_name.as_deref().unwrap_or("unknown"),
+        endpoint = %event.endpoint,
+        request_url = %event.request_url,
+        status_code = event.status_code,
+        latency_ms = event.latency_ms,
+        "persisted kiro failure usage event"
+    );
+    Ok(())
+}
+
+fn build_kiro_usage_event_record(
+    current: &LlmGatewayKeyRecord,
+    event_context: &KiroEventContext,
+    latency_ms: i32,
+    status_code: i32,
+    usage: KiroUsageSummary,
+    usage_missing: bool,
+    last_message_content: Option<String>,
+) -> LlmGatewayUsageEventRecord {
+    LlmGatewayUsageEventRecord {
+        id: generate_task_id("kiro-usage"),
+        key_id: current.id.clone(),
+        key_name: current.name.clone(),
+        provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+        account_name: event_context.account_name.clone(),
+        request_method: event_context.request_method.clone(),
+        request_url: event_context.request_url.clone(),
+        latency_ms,
+        endpoint: event_context.endpoint.clone(),
+        model: event_context.model.clone(),
+        status_code,
+        input_uncached_tokens: usage.input_uncached_tokens.max(0) as u64,
+        input_cached_tokens: usage.input_cached_tokens.max(0) as u64,
+        output_tokens: usage.output_tokens.max(0) as u64,
+        billable_tokens: (usage.input_uncached_tokens.max(0)
+            + usage.input_cached_tokens.max(0)
+            + usage.output_tokens.max(0)) as u64,
+        usage_missing,
+        credit_usage: usage.credit_usage,
+        credit_usage_missing: usage.credit_usage_missing,
+        client_ip: event_context.client_ip.clone(),
+        ip_region: event_context.ip_region.clone(),
+        request_headers_json: event_context.request_headers_json.clone(),
+        last_message_content,
+        created_at: now_ms(),
+    }
 }
 
 /// Convert a manual account creation request into a canonicalized auth record,
@@ -1166,9 +1237,12 @@ fn external_origin(headers: &HeaderMap) -> Option<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
+
     use super::{
-        normalize_key_route_config, normalize_kiro_key_route_config_for_patch,
-        normalize_model_name_map,
+        build_kiro_usage_event_record, normalize_key_route_config,
+        normalize_kiro_key_route_config_for_patch, normalize_model_name_map, KiroEventContext,
+        KiroUsageSummary,
     };
 
     #[test]
@@ -1379,5 +1453,72 @@ mod tests {
         .expect_err("unknown fixed account should fail");
 
         assert!(err.to_string().contains("unknown account `missing`"));
+    }
+
+    #[test]
+    fn build_kiro_failure_usage_event_preserves_status_and_diagnostic_payload() {
+        let key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+        };
+        let event_context = KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            started_at: std::time::Instant::now(),
+        };
+        let diagnostic = r#"{"kind":"kiro_failure_diagnostic","error":"boom"}"#.to_string();
+
+        let record = build_kiro_usage_event_record(
+            &key,
+            &event_context,
+            12,
+            502,
+            KiroUsageSummary {
+                input_uncached_tokens: 0,
+                input_cached_tokens: 0,
+                output_tokens: 0,
+                credit_usage: None,
+                credit_usage_missing: false,
+            },
+            false,
+            Some(diagnostic.clone()),
+        );
+
+        assert_eq!(record.status_code, 502);
+        assert_eq!(record.last_message_content.as_deref(), Some(diagnostic.as_str()));
+        assert_eq!(record.account_name.as_deref(), Some("acct-a"));
+        assert_eq!(record.billable_tokens, 0);
     }
 }

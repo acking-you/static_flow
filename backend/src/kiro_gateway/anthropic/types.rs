@@ -60,7 +60,7 @@ const MAX_BUDGET_TOKENS: i32 = 24_576;
 ///
 /// Supports `"enabled"` (explicit budget) and `"adaptive"` (effort-based)
 /// modes.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Thinking {
     #[serde(rename = "type")]
     pub thinking_type: String,
@@ -87,7 +87,7 @@ where
 }
 
 /// Output configuration controlling generation effort level.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OutputConfig {
     #[serde(default = "default_effort")]
     pub effort: String,
@@ -98,7 +98,7 @@ fn default_effort() -> String {
 }
 
 /// Optional request metadata (e.g. session tracking via `user_id`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Metadata {
     pub user_id: Option<String>,
 }
@@ -108,7 +108,7 @@ pub struct Metadata {
 /// Accepts the standard Anthropic fields: model, messages, system prompt,
 /// tools, thinking config, and streaming flag. The `system` field is
 /// polymorphic (string or array) via a custom deserializer.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MessagesRequest {
     pub model: String,
     #[serde(rename = "max_tokens")]

@@ -38,6 +38,29 @@ pub(crate) async fn prepare_gateway_request(
     PreparedGatewayRequest,
     (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>),
 > {
+    let body = read_gateway_request_body(body, max_request_body_bytes).await?;
+    prepare_gateway_request_from_bytes(gateway_path, query, method, headers, body)
+}
+
+pub(crate) async fn read_gateway_request_body(
+    body: Body,
+    max_request_body_bytes: usize,
+) -> Result<Bytes, (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>)> {
+    to_bytes(body, max_request_body_bytes)
+        .await
+        .map_err(|err| internal_error("Failed to read llm gateway request body", err))
+}
+
+pub(crate) fn prepare_gateway_request_from_bytes(
+    gateway_path: &str,
+    query: &str,
+    method: Method,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<
+    PreparedGatewayRequest,
+    (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>),
+> {
     let allows_get = is_models_path(gateway_path);
     let allows_post =
         gateway_path == "/v1/chat/completions" || gateway_path.starts_with("/v1/responses");
@@ -55,9 +78,7 @@ pub(crate) async fn prepare_gateway_request(
         .filter(|value| !value.is_empty())
         .unwrap_or("application/json")
         .to_string();
-    let body = to_bytes(body, max_request_body_bytes)
-        .await
-        .map_err(|err| internal_error("Failed to read llm gateway request body", err))?;
+    let client_request_body = body.clone();
     let mut json_value = if content_type.starts_with("application/json") && !body.is_empty() {
         serde_json::from_slice::<Value>(&body)
             .map(Some)
@@ -133,6 +154,7 @@ pub(crate) async fn prepare_gateway_request(
         original_path,
         upstream_path,
         method,
+        client_request_body,
         request_body,
         model,
         client_visible_model: None,
@@ -1504,10 +1526,10 @@ pub(crate) fn normalize_status(
 
 #[cfg(test)]
 mod tests {
-    use axum::http::StatusCode;
+    use axum::{body::Body, http::StatusCode};
     use serde_json::json;
 
-    use super::adapt_openai_chat_completions_request;
+    use super::{adapt_openai_chat_completions_request, prepare_gateway_request};
 
     #[test]
     fn adapt_openai_chat_completions_request_rejects_message_without_role() {
@@ -1546,5 +1568,56 @@ mod tests {
             .expect_err("user message without supported content should be rejected");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(err.1 .0.error.contains("content"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_preserves_raw_body_on_chat_validation_error() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{"model":"gpt-5.3-codex","messages":[{"role":"user","content":[{"type":"image_url"}]}]}"#,
+        );
+
+        let err = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect_err("unsupported chat payload should fail");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1 .0.error.contains("content"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_keeps_raw_client_body_and_normalized_upstream_body() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(r#"{"model":"gpt-5.3-codex","input":"hello"}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should normalize");
+
+        let raw: serde_json::Value =
+            serde_json::from_slice(&prepared.client_request_body).expect("raw body json");
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(raw["input"], "hello");
+        assert_eq!(upstream["input"][0]["type"], "message");
+        assert_eq!(upstream["input"][0]["role"], "user");
+        assert_eq!(upstream["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
+        assert_eq!(upstream["stream"], true);
     }
 }

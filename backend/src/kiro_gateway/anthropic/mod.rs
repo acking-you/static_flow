@@ -7,7 +7,6 @@
 
 use std::convert::Infallible;
 
-use anyhow::Error;
 use async_stream::stream;
 use axum::{
     body::Body,
@@ -23,8 +22,9 @@ use tokio::{
 };
 
 use super::{
-    parser::decoder::EventStreamDecoder, provider::KiroProvider, token, AppKiroStateExt,
-    KiroUsageSummary,
+    parser::decoder::EventStreamDecoder,
+    provider::{KiroProvider, ProviderCallError},
+    token, AppKiroStateExt, KiroUsageSummary,
 };
 use crate::kiro_gateway::{record_messages_usage, KiroEventContext};
 
@@ -59,6 +59,7 @@ const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
     ("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
 ];
 const KIRO_UPSTREAM_LOG_PREVIEW_CHARS: usize = 8_192;
+const KIRO_STREAM_FAILURE_STATUS_CODE: i32 = 599;
 
 // Bundles the state needed to persist usage after a streaming response
 // completes.
@@ -66,6 +67,40 @@ struct UsagePersistContext {
     state: AppState,
     key_record: LlmGatewayKeyRecord,
     event_context: KiroEventContext,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct DiagnosticRequestContext<'a> {
+    event_context: &'a KiroEventContext,
+    request_validation_enabled: bool,
+    stream: bool,
+    buffered_for_cc: bool,
+}
+
+pub(super) struct ProviderFailureContext<'a> {
+    state: &'a AppState,
+    key_record: &'a LlmGatewayKeyRecord,
+    diagnostic: DiagnosticRequestContext<'a>,
+}
+
+struct NonStreamRequestContext {
+    model: String,
+    input_tokens: i32,
+    tool_name_map: std::collections::HashMap<String, String>,
+    request_validation_enabled: bool,
+}
+
+enum UsagePersistOutcome {
+    Success {
+        summary: KiroUsageSummary,
+        usage_missing: bool,
+    },
+    Failure {
+        status_code: i32,
+        summary: KiroUsageSummary,
+        usage_missing: bool,
+        diagnostic_payload: String,
+    },
 }
 
 #[derive(Clone)]
@@ -185,9 +220,8 @@ fn log_kiro_stream_read_error(
 
 /// Maps a Kiro provider error into an appropriate HTTP error response.
 /// Recognizes context-length, input-length, and quota-exhaustion errors.
-pub(super) fn map_provider_error(err: Error) -> Response {
-    let err_text = err.to_string();
-    let (status, error_type, message) = if err_text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
+fn classify_provider_error(err_text: &str) -> (StatusCode, &'static str, String) {
+    if err_text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
         (
             StatusCode::BAD_REQUEST,
             "invalid_request_error",
@@ -210,15 +244,110 @@ pub(super) fn map_provider_error(err: Error) -> Response {
         )
     } else {
         (StatusCode::BAD_GATEWAY, "api_error", format!("Kiro upstream request failed: {err_text}"))
-    };
+    }
+}
+
+fn provider_error_response(err_text: &str) -> Response {
+    let (status, error_type, message) = classify_provider_error(err_text);
     tracing::error!(
         status = status.as_u16(),
         error_type,
-        error = %err,
+        error = err_text,
         response_message = %message,
         "kiro public request failed while calling upstream"
     );
     (status, Json(ErrorResponse::new(error_type, message))).into_response()
+}
+
+pub(super) async fn map_provider_error(
+    ctx: ProviderFailureContext<'_>,
+    err: ProviderCallError,
+    failure_stage: &str,
+) -> Response {
+    let err_text = err.to_string();
+    let (status, _, _) = classify_provider_error(&err_text);
+    let mut diagnostic_event_context = ctx.diagnostic.event_context.clone();
+    if err.request_body.is_some() {
+        diagnostic_event_context.upstream_request_body_json = err.request_body.clone();
+    }
+    let diagnostic_payload = build_failure_diagnostic_payload(
+        DiagnosticRequestContext {
+            event_context: &diagnostic_event_context,
+            ..ctx.diagnostic
+        },
+        failure_stage,
+        &err_text,
+        status.as_u16() as i32,
+        None,
+    );
+    if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
+        ctx.state,
+        ctx.key_record,
+        ctx.diagnostic.event_context,
+        status.as_u16() as i32,
+        diagnostic_payload,
+        zero_usage_summary(),
+        false,
+    )
+    .await
+    {
+        tracing::warn!("failed to persist kiro failure usage event: {persist_err:#}");
+    }
+    provider_error_response(&err_text)
+}
+
+fn zero_usage_summary() -> KiroUsageSummary {
+    KiroUsageSummary {
+        input_uncached_tokens: 0,
+        input_cached_tokens: 0,
+        output_tokens: 0,
+        credit_usage: None,
+        credit_usage_missing: false,
+    }
+}
+
+fn maybe_parse_json_text(raw: Option<&str>) -> serde_json::Value {
+    match raw {
+        Some(text) => serde_json::from_str::<serde_json::Value>(text)
+            .unwrap_or_else(|_| serde_json::Value::String(text.to_string())),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn build_failure_diagnostic_payload(
+    ctx: DiagnosticRequestContext<'_>,
+    failure_stage: &str,
+    error: &str,
+    status_code: i32,
+    details: Option<serde_json::Value>,
+) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "kind": "kiro_failure_diagnostic",
+        "failure_stage": failure_stage,
+        "status_code": status_code,
+        "request_method": ctx.event_context.request_method,
+        "request_url": ctx.event_context.request_url,
+        "endpoint": ctx.event_context.endpoint,
+        "model": ctx.event_context.model,
+        "account_name": ctx.event_context.account_name,
+        "original_last_message_content": ctx.event_context.last_message_content,
+        "request_validation_enabled": ctx.request_validation_enabled,
+        "stream": ctx.stream,
+        "buffered_for_cc": ctx.buffered_for_cc,
+        "client_request_body": maybe_parse_json_text(ctx.event_context.client_request_body_json.as_deref()),
+        "upstream_request_body": maybe_parse_json_text(ctx.event_context.upstream_request_body_json.as_deref()),
+        "error": error,
+        "details": details.unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
+    }))
+    .unwrap_or_else(|serialize_err| {
+        format!(
+            "{{\"kind\":\"kiro_failure_diagnostic\",\"failure_stage\":{:?},\"status_code\":{},\"error\":{:?},\"serialize_error\":{:?}}}",
+            failure_stage,
+            status_code,
+            error,
+            serialize_err.to_string()
+        )
+    })
 }
 
 /// Returns the list of available models for the `/v1/models` endpoint.
@@ -290,6 +419,7 @@ async fn handle_messages(
         Ok(value) => value,
         Err(err) => return err.into_response(),
     };
+    event_context.client_request_body_json = serde_json::to_string(&*payload).ok();
     let request_validation_enabled = key_record.kiro_request_validation_enabled;
     let requested_model = payload.model.clone();
     if let Some((source_model, target_model)) = apply_key_model_mapping(&key_record, payload) {
@@ -375,6 +505,37 @@ async fn handle_messages(
                 error = %message,
                 "rejected malformed kiro public request before upstream call"
             );
+            let diagnostic_payload = build_failure_diagnostic_payload(
+                DiagnosticRequestContext {
+                    event_context: &event_context,
+                    request_validation_enabled,
+                    stream: payload.stream,
+                    buffered_for_cc,
+                },
+                "request_validation",
+                &message,
+                StatusCode::BAD_REQUEST.as_u16() as i32,
+                Some(serde_json::json!({
+                    "public_route": public_path,
+                    "requested_model": requested_model,
+                    "effective_model": payload.model,
+                })),
+            );
+            if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
+                &state,
+                &key_record,
+                &event_context,
+                StatusCode::BAD_REQUEST.as_u16() as i32,
+                diagnostic_payload,
+                zero_usage_summary(),
+                false,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "failed to persist kiro validation failure usage event: {persist_err:#}"
+                );
+            }
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::new("invalid_request_error", message)),
@@ -384,6 +545,12 @@ async fn handle_messages(
     };
     let conversation_state = conversion.conversation_state;
     let tool_name_map = conversion.tool_name_map;
+    event_context.upstream_request_body_json =
+        serde_json::to_string(&crate::kiro_gateway::wire::KiroRequest {
+            conversation_state: conversation_state.clone(),
+            profile_arn: None,
+        })
+        .ok();
     let thinking_enabled = payload
         .thinking
         .as_ref()
@@ -397,8 +564,25 @@ async fn handle_messages(
             .await
         {
             Ok(response) => response,
-            Err(err) => return map_provider_error(err),
+            Err(err) => {
+                return map_provider_error(
+                    ProviderFailureContext {
+                        state: &state,
+                        key_record: &key_record,
+                        diagnostic: DiagnosticRequestContext {
+                            event_context: &event_context,
+                            request_validation_enabled,
+                            stream: true,
+                            buffered_for_cc,
+                        },
+                    },
+                    err,
+                    "provider_call_stream",
+                )
+                .await;
+            },
         };
+        event_context.upstream_request_body_json = Some(response.request_body.clone());
         event_context.account_name = Some(response.account_name);
         if buffered_for_cc {
             return handle_stream_request_buffered(
@@ -412,6 +596,7 @@ async fn handle_messages(
                 input_tokens,
                 thinking_enabled,
                 tool_name_map,
+                request_validation_enabled,
             )
             .await;
         }
@@ -426,23 +611,44 @@ async fn handle_messages(
             input_tokens,
             thinking_enabled,
             tool_name_map,
+            request_validation_enabled,
         )
         .await;
     }
 
     let response = match provider.call_api(&key_record, &conversation_state).await {
         Ok(response) => response,
-        Err(err) => return map_provider_error(err),
+        Err(err) => {
+            return map_provider_error(
+                ProviderFailureContext {
+                    state: &state,
+                    key_record: &key_record,
+                    diagnostic: DiagnosticRequestContext {
+                        event_context: &event_context,
+                        request_validation_enabled,
+                        stream: false,
+                        buffered_for_cc,
+                    },
+                },
+                err,
+                "provider_call_non_stream",
+            )
+            .await;
+        },
     };
+    event_context.upstream_request_body_json = Some(response.request_body.clone());
     event_context.account_name = Some(response.account_name);
     handle_non_stream_request(
         state,
         key_record,
         event_context,
         response.response,
-        &payload.model,
-        input_tokens,
-        tool_name_map,
+        NonStreamRequestContext {
+            model: payload.model.clone(),
+            input_tokens,
+            tool_name_map,
+            request_validation_enabled,
+        },
     )
     .await
 }
@@ -457,8 +663,9 @@ async fn handle_stream_request(
     input_tokens: i32,
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
+    request_validation_enabled: bool,
 ) -> Response {
-    let (done_tx, done_rx) = oneshot::channel::<KiroUsageSummary>();
+    let (done_tx, done_rx) = oneshot::channel::<UsagePersistOutcome>();
     let log_ctx = KiroUpstreamLogContext::new(
         &usage_ctx.key_record,
         usage_ctx.event_context.account_name.as_deref(),
@@ -469,20 +676,46 @@ async fn handle_stream_request(
         response,
         StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, tool_name_map),
         log_ctx,
+        usage_ctx.event_context.clone(),
+        request_validation_enabled,
         done_tx,
         usage_ctx.state.shutdown_rx.clone(),
     );
     tokio::spawn(async move {
-        if let Ok(summary) = done_rx.await {
-            if let Err(err) = record_messages_usage(
-                &usage_ctx.state,
-                &usage_ctx.key_record,
-                &usage_ctx.event_context,
-                summary,
-                false,
-            )
-            .await
-            {
+        if let Ok(outcome) = done_rx.await {
+            let persist_result = match outcome {
+                UsagePersistOutcome::Success {
+                    summary,
+                    usage_missing,
+                } => {
+                    record_messages_usage(
+                        &usage_ctx.state,
+                        &usage_ctx.key_record,
+                        &usage_ctx.event_context,
+                        summary,
+                        usage_missing,
+                    )
+                    .await
+                },
+                UsagePersistOutcome::Failure {
+                    status_code,
+                    summary,
+                    usage_missing,
+                    diagnostic_payload,
+                } => {
+                    crate::kiro_gateway::record_failed_request_event(
+                        &usage_ctx.state,
+                        &usage_ctx.key_record,
+                        &usage_ctx.event_context,
+                        status_code,
+                        diagnostic_payload,
+                        summary,
+                        usage_missing,
+                    )
+                    .await
+                },
+            };
+            if let Err(err) = persist_result {
                 tracing::warn!("failed to persist kiro usage event: {err:#}");
             }
         }
@@ -506,8 +739,9 @@ async fn handle_stream_request_buffered(
     estimated_input_tokens: i32,
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
+    request_validation_enabled: bool,
 ) -> Response {
-    let (done_tx, done_rx) = oneshot::channel::<KiroUsageSummary>();
+    let (done_tx, done_rx) = oneshot::channel::<UsagePersistOutcome>();
     let log_ctx = KiroUpstreamLogContext::new(
         &usage_ctx.key_record,
         usage_ctx.event_context.account_name.as_deref(),
@@ -518,20 +752,46 @@ async fn handle_stream_request_buffered(
         response,
         BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map),
         log_ctx,
+        usage_ctx.event_context.clone(),
+        request_validation_enabled,
         done_tx,
         usage_ctx.state.shutdown_rx.clone(),
     );
     tokio::spawn(async move {
-        if let Ok(summary) = done_rx.await {
-            if let Err(err) = record_messages_usage(
-                &usage_ctx.state,
-                &usage_ctx.key_record,
-                &usage_ctx.event_context,
-                summary,
-                false,
-            )
-            .await
-            {
+        if let Ok(outcome) = done_rx.await {
+            let persist_result = match outcome {
+                UsagePersistOutcome::Success {
+                    summary,
+                    usage_missing,
+                } => {
+                    record_messages_usage(
+                        &usage_ctx.state,
+                        &usage_ctx.key_record,
+                        &usage_ctx.event_context,
+                        summary,
+                        usage_missing,
+                    )
+                    .await
+                },
+                UsagePersistOutcome::Failure {
+                    status_code,
+                    summary,
+                    usage_missing,
+                    diagnostic_payload,
+                } => {
+                    crate::kiro_gateway::record_failed_request_event(
+                        &usage_ctx.state,
+                        &usage_ctx.key_record,
+                        &usage_ctx.event_context,
+                        status_code,
+                        diagnostic_payload,
+                        summary,
+                        usage_missing,
+                    )
+                    .await
+                },
+            };
+            if let Err(err) = persist_result {
                 tracing::warn!("failed to persist kiro usage event: {err:#}");
             }
         }
@@ -553,21 +813,55 @@ async fn handle_non_stream_request(
     key_record: static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord,
     event_context: KiroEventContext,
     response: reqwest::Response,
-    model: &str,
-    input_tokens: i32,
-    tool_name_map: std::collections::HashMap<String, String>,
+    request_ctx: NonStreamRequestContext,
 ) -> Response {
     let log_ctx = KiroUpstreamLogContext::new(
         &key_record,
         event_context.account_name.as_deref(),
-        model,
+        &request_ctx.model,
         false,
     );
-    tracing::info!(model, input_tokens, "starting kiro non-stream upstream request");
+    tracing::info!(
+        model = request_ctx.model,
+        input_tokens = request_ctx.input_tokens,
+        "starting kiro non-stream upstream request"
+    );
     let body = match response.bytes().await {
         Ok(body) => body,
         Err(err) => {
             log_kiro_stream_read_error(&log_ctx, "non_stream_body", &err);
+            let diagnostic_payload = build_failure_diagnostic_payload(
+                DiagnosticRequestContext {
+                    event_context: &event_context,
+                    request_validation_enabled: request_ctx.request_validation_enabled,
+                    stream: false,
+                    buffered_for_cc: false,
+                },
+                "non_stream_body_read",
+                &err.to_string(),
+                StatusCode::BAD_GATEWAY.as_u16() as i32,
+                Some(serde_json::json!({
+                    "stream_kind": "non_stream_body",
+                    "is_timeout": err.is_timeout(),
+                    "is_connect": err.is_connect(),
+                    "upstream_url": err.url().map(|url| url.to_string()),
+                })),
+            );
+            if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
+                &state,
+                &key_record,
+                &event_context,
+                StatusCode::BAD_GATEWAY.as_u16() as i32,
+                diagnostic_payload,
+                zero_usage_summary(),
+                false,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "failed to persist kiro non-stream body read failure: {persist_err:#}"
+                );
+            }
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse::new(
@@ -602,7 +896,8 @@ async fn handle_non_stream_request(
                         } else {
                             serde_json::from_str(buffer).unwrap_or_else(|_| serde_json::json!({}))
                         };
-                        let original_name = tool_name_map
+                        let original_name = request_ctx
+                            .tool_name_map
                             .get(&event.name)
                             .cloned()
                             .unwrap_or_else(|| event.name.clone());
@@ -616,7 +911,7 @@ async fn handle_non_stream_request(
                 },
                 Ok(Event::ContextUsage(event)) => {
                     let actual_input_tokens = (event.context_usage_percentage
-                        * converter::get_context_window_size(model) as f64
+                        * converter::get_context_window_size(&request_ctx.model) as f64
                         / 100.0) as i32;
                     context_input_tokens = Some(actual_input_tokens);
                     if event.context_usage_percentage >= 100.0 {
@@ -663,15 +958,15 @@ async fn handle_non_stream_request(
     content.extend(tool_uses);
     let output_tokens = token::estimate_output_tokens(&content);
     let usage = KiroUsageSummary {
-        input_uncached_tokens: context_input_tokens.unwrap_or(input_tokens),
+        input_uncached_tokens: context_input_tokens.unwrap_or(request_ctx.input_tokens),
         input_cached_tokens: 0,
         output_tokens,
         credit_usage: credit_usage_observed.then_some(credit_usage.max(0.0)),
         credit_usage_missing: !credit_usage_observed,
     };
     tracing::info!(
-        model,
-        stop_reason,
+        model = %request_ctx.model,
+        stop_reason = %stop_reason,
         content_block_count = content.len(),
         usage_input_uncached_tokens = usage.input_uncached_tokens,
         usage_input_cached_tokens = usage.input_cached_tokens,
@@ -689,7 +984,7 @@ async fn handle_non_stream_request(
             "type": "message",
             "role": "assistant",
             "content": content,
-            "model": model,
+            "model": request_ctx.model,
             "stop_reason": stop_reason,
             "stop_sequence": null,
             "usage": {
@@ -744,7 +1039,9 @@ fn create_sse_stream(
     response: reqwest::Response,
     mut ctx: StreamContext,
     log_ctx: KiroUpstreamLogContext,
-    done_tx: oneshot::Sender<KiroUsageSummary>,
+    event_context: KiroEventContext,
+    request_validation_enabled: bool,
+    done_tx: oneshot::Sender<UsagePersistOutcome>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
@@ -762,6 +1059,7 @@ fn create_sse_stream(
         let mut ping_interval = interval(Duration::from_secs(25));
         ping_interval.tick().await;
         let mut done_tx = Some(done_tx);
+        let mut failure_diagnostic_payload = None;
 
         loop {
             tokio::select! {
@@ -803,6 +1101,23 @@ fn create_sse_stream(
                         }
                         Some(Err(err)) => {
                             log_kiro_stream_read_error(&log_ctx, "stream", &err);
+                            failure_diagnostic_payload = Some(build_failure_diagnostic_payload(
+                                DiagnosticRequestContext {
+                                    event_context: &event_context,
+                                    request_validation_enabled,
+                                    stream: true,
+                                    buffered_for_cc: false,
+                                },
+                                "stream_read",
+                                &err.to_string(),
+                                KIRO_STREAM_FAILURE_STATUS_CODE,
+                                Some(serde_json::json!({
+                                    "stream_kind": "stream",
+                                    "is_timeout": err.is_timeout(),
+                                    "is_connect": err.is_connect(),
+                                    "upstream_url": err.url().map(|url| url.to_string()),
+                                })),
+                            ));
                             break;
                         }
                         None => break,
@@ -824,13 +1139,25 @@ fn create_sse_stream(
             "finished kiro streaming response"
         );
         if let Some(sender) = done_tx.take() {
-            let _ = sender.send(KiroUsageSummary {
+            let summary = KiroUsageSummary {
                 input_uncached_tokens: input_tokens,
                 input_cached_tokens: 0,
                 output_tokens,
                 credit_usage,
                 credit_usage_missing,
-            });
+            };
+            let _ = match failure_diagnostic_payload {
+                Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
+                    status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
+                    summary,
+                    usage_missing: true,
+                    diagnostic_payload,
+                }),
+                None => sender.send(UsagePersistOutcome::Success {
+                    summary,
+                    usage_missing: false,
+                }),
+            };
         }
         for event in final_events {
             yield Ok(Bytes::from(event.to_sse_string()));
@@ -842,7 +1169,9 @@ fn create_buffered_sse_stream(
     response: reqwest::Response,
     mut ctx: BufferedStreamContext,
     log_ctx: KiroUpstreamLogContext,
-    done_tx: oneshot::Sender<KiroUsageSummary>,
+    event_context: KiroEventContext,
+    request_validation_enabled: bool,
+    done_tx: oneshot::Sender<UsagePersistOutcome>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
@@ -857,6 +1186,7 @@ fn create_buffered_sse_stream(
         let mut ping_interval = interval(Duration::from_secs(25));
         ping_interval.tick().await;
         let mut done_tx = Some(done_tx);
+        let mut failure_diagnostic_payload = None;
 
         loop {
             tokio::select! {
@@ -904,6 +1234,23 @@ fn create_buffered_sse_stream(
                         }
                         Some(Err(err)) => {
                             log_kiro_stream_read_error(&log_ctx, "buffered_stream", &err);
+                            failure_diagnostic_payload = Some(build_failure_diagnostic_payload(
+                                DiagnosticRequestContext {
+                                    event_context: &event_context,
+                                    request_validation_enabled,
+                                    stream: true,
+                                    buffered_for_cc: true,
+                                },
+                                "buffered_stream_read",
+                                &err.to_string(),
+                                KIRO_STREAM_FAILURE_STATUS_CODE,
+                                Some(serde_json::json!({
+                                    "stream_kind": "buffered_stream",
+                                    "is_timeout": err.is_timeout(),
+                                    "is_connect": err.is_connect(),
+                                    "upstream_url": err.url().map(|url| url.to_string()),
+                                })),
+                            ));
                             break;
                         }
                         None => break,
@@ -925,13 +1272,25 @@ fn create_buffered_sse_stream(
             "finished kiro buffered streaming response"
         );
         if let Some(sender) = done_tx.take() {
-            let _ = sender.send(KiroUsageSummary {
+            let summary = KiroUsageSummary {
                 input_uncached_tokens: input_tokens,
                 input_cached_tokens: 0,
                 output_tokens,
                 credit_usage,
                 credit_usage_missing,
-            });
+            };
+            let _ = match failure_diagnostic_payload {
+                Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
+                    status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
+                    summary,
+                    usage_missing: true,
+                    diagnostic_payload,
+                }),
+                None => sender.send(UsagePersistOutcome::Success {
+                    summary,
+                    usage_missing: false,
+                }),
+            };
         }
         for event in all_events {
             yield Ok(Bytes::from(event.to_sse_string()));
@@ -1122,5 +1481,75 @@ mod tests {
                 .map(|config| config.effort.as_str()),
             Some("medium")
         );
+    }
+
+    #[test]
+    fn failure_diagnostic_payload_embeds_structured_request_bodies() {
+        let mut event_context = crate::kiro_gateway::KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some(
+                r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}"#
+                    .to_string(),
+            ),
+            upstream_request_body_json: Some(
+                r#"{"conversationState":{"conversationId":"conv-1"}}"#.to_string(),
+            ),
+            started_at: std::time::Instant::now(),
+        };
+        let payload = build_failure_diagnostic_payload(
+            DiagnosticRequestContext {
+                event_context: &event_context,
+                request_validation_enabled: true,
+                stream: true,
+                buffered_for_cc: false,
+            },
+            "provider_call",
+            "upstream returned 400",
+            502,
+            Some(serde_json::json!({
+                "proxy_url": "http://127.0.0.1:11113",
+                "upstream_status": 400
+            })),
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("diagnostic payload should be valid json");
+        assert_eq!(parsed["kind"], "kiro_failure_diagnostic");
+        assert_eq!(parsed["failure_stage"], "provider_call");
+        assert_eq!(parsed["status_code"], 502);
+        assert_eq!(parsed["original_last_message_content"], "hello");
+        assert_eq!(parsed["client_request_body"]["model"], "claude-sonnet-4-6");
+        assert_eq!(
+            parsed["upstream_request_body"]["conversationState"]["conversationId"],
+            "conv-1"
+        );
+        assert_eq!(parsed["details"]["proxy_url"], "http://127.0.0.1:11113");
+        assert_eq!(parsed["details"]["upstream_status"], 400);
+
+        event_context.client_request_body_json = Some("not-json".to_string());
+        let payload = build_failure_diagnostic_payload(
+            DiagnosticRequestContext {
+                event_context: &event_context,
+                request_validation_enabled: false,
+                stream: false,
+                buffered_for_cc: false,
+            },
+            "request_validation",
+            "bad request",
+            400,
+            None,
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("fallback diagnostic payload should be json");
+        assert_eq!(parsed["client_request_body"], "not-json");
+        assert!(parsed["upstream_request_body"].is_object());
     }
 }
