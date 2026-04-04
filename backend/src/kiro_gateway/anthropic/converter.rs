@@ -4,7 +4,10 @@
 //! tool schema normalization, conversation history building (with consecutive
 //! same-role message merging), and tool-result pairing validation.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -151,6 +154,30 @@ impl std::error::Error for ConversionError {}
 
 fn invalid_request(message: impl Into<String>) -> ConversionError {
     ConversionError::InvalidRequest(message.into())
+}
+
+fn trailing_user_message_start(
+    messages: &[super::types::Message],
+) -> Result<usize, ConversionError> {
+    let Some(mut start) = messages.iter().rposition(|message| message.role == "user") else {
+        return Err(ConversionError::EmptyMessages);
+    };
+    while start > 0 && messages[start - 1].role == "user" {
+        start -= 1;
+    }
+    Ok(start)
+}
+
+pub(crate) fn current_user_message_range(
+    messages: &[super::types::Message],
+) -> Result<Range<usize>, ConversionError> {
+    let end = messages
+        .iter()
+        .rposition(|message| message.role == "user")
+        .map(|index| index + 1)
+        .ok_or(ConversionError::EmptyMessages)?;
+    let start = trailing_user_message_start(&messages[..end])?;
+    Ok(start..end)
 }
 
 #[derive(Debug)]
@@ -451,6 +478,8 @@ pub fn convert_request_with_validation(
     if messages.is_empty() {
         return Err(ConversionError::EmptyMessages);
     }
+    let current_range = current_user_message_range(messages)?;
+    let current_messages = messages[current_range.clone()].iter().collect::<Vec<_>>();
 
     // Reuse session UUID from metadata as conversation_id for continuity;
     // fall back to a fresh UUID.
@@ -461,13 +490,14 @@ pub fn convert_request_with_validation(
         .and_then(extract_session_id)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let agent_continuation_id = Uuid::new_v4().to_string();
-    let last_message = messages.last().ok_or(ConversionError::EmptyMessages)?;
-    let (text_content, images, tool_results) = process_message_content(&last_message.content)?;
+    let mut user_input = merge_current_user_messages(&current_messages, &model_id)?;
     let mut tool_name_map = HashMap::new();
     let mut tools = convert_tools(&req.tools, &mut tool_name_map);
-    let mut history = build_history(req, messages, &model_id, &mut tool_name_map)?;
+    let mut history =
+        build_history(req, &messages[..current_range.start], &model_id, &mut tool_name_map)?;
+    let current_tool_results = user_input.user_input_message_context.tool_results.clone();
     let (validated_tool_results, orphaned_tool_use_ids) =
-        validate_tool_pairing(&history, &tool_results);
+        validate_tool_pairing(&history, &current_tool_results);
     remove_orphaned_tool_uses(&mut history, &orphaned_tool_use_ids);
 
     // Inject placeholder tool specs for tools that appear in history but
@@ -482,20 +512,12 @@ pub fn convert_request_with_validation(
         }
     }
 
-    let mut context = UserInputMessageContext::new();
+    let mut context = user_input.user_input_message_context.clone();
     if !tools.is_empty() {
         context = context.with_tools(tools);
     }
-    if !validated_tool_results.is_empty() {
-        context = context.with_tool_results(validated_tool_results);
-    }
-
-    let mut user_input = UserInputMessage::new(text_content, &model_id)
-        .with_context(context)
-        .with_origin("AI_EDITOR");
-    if !images.is_empty() {
-        user_input = user_input.with_images(images);
-    }
+    context = context.with_tool_results(validated_tool_results);
+    user_input = user_input.with_context(context).with_origin("AI_EDITOR");
 
     Ok(ConversionResult {
         conversation_state: ConversationState::new(conversation_id)
@@ -818,7 +840,7 @@ fn get_image_format(media_type: &str) -> Option<String> {
     }
 }
 
-fn extract_tool_result_content(content: &Option<serde_json::Value>) -> String {
+pub(crate) fn extract_tool_result_content(content: &Option<serde_json::Value>) -> String {
     match content {
         Some(serde_json::Value::String(text)) => text.clone(),
         Some(serde_json::Value::Array(items)) => items
@@ -964,9 +986,10 @@ fn has_thinking_tags(content: &str) -> bool {
     content.contains("<thinking_mode>") || content.contains("<max_thinking_length>")
 }
 
-// Builds the Kiro history from Anthropic messages. Injects system prompt
-// (with thinking prefix) as a synthetic user/assistant turn pair at the
-// start. Merges consecutive same-role messages into single turns.
+// Builds the Kiro history from Anthropic messages that precede the current
+// trailing user turn. Injects system prompt (with thinking prefix) as a
+// synthetic user/assistant turn pair at the start, then merges consecutive
+// same-role messages into single turns.
 fn build_history(
     req: &MessagesRequest,
     messages: &[super::types::Message],
@@ -1005,11 +1028,10 @@ fn build_history(
         )));
     }
 
-    let history_end_index = messages.len().saturating_sub(1);
     let mut user_buffer = Vec::new();
     let mut assistant_buffer = Vec::new();
 
-    for message in messages.iter().take(history_end_index) {
+    for message in messages {
         if message.role == "user" {
             if !assistant_buffer.is_empty() {
                 history.push(Message::Assistant(merge_assistant_messages(
@@ -1032,14 +1054,39 @@ fn build_history(
         history
             .push(Message::Assistant(merge_assistant_messages(&assistant_buffer, tool_name_map)?));
     }
-    // If history ends with buffered user messages but no following assistant
-    // turn, append a synthetic "OK" assistant reply so the history alternates.
     if !user_buffer.is_empty() {
         history.push(Message::User(merge_user_messages(&user_buffer, model_id)?));
-        history.push(Message::Assistant(HistoryAssistantMessage::new("OK")));
     }
 
     Ok(history)
+}
+
+fn merge_current_user_messages(
+    messages: &[&super::types::Message],
+    model_id: &str,
+) -> Result<UserInputMessage, ConversionError> {
+    let mut content_parts = Vec::new();
+    let mut images = Vec::new();
+    let mut tool_results = Vec::new();
+    for message in messages {
+        let (text, message_images, message_tool_results) =
+            process_message_content(&message.content)?;
+        if !text.is_empty() {
+            content_parts.push(text);
+        }
+        images.extend(message_images);
+        tool_results.extend(message_tool_results);
+    }
+    let content = content_parts.join("\n");
+    let mut user_message = UserInputMessage::new(&content, model_id);
+    if !images.is_empty() {
+        user_message = user_message.with_images(images);
+    }
+    if !tool_results.is_empty() {
+        user_message = user_message
+            .with_context(UserInputMessageContext::new().with_tool_results(tool_results));
+    }
+    Ok(user_message)
 }
 
 fn merge_user_messages(
@@ -1646,6 +1693,123 @@ mod tests {
         assert!(current.content.is_empty());
         assert_eq!(current.user_input_message_context.tool_results.len(), 1);
         assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-1");
+    }
+
+    #[test]
+    fn convert_request_merges_trailing_user_tool_results_into_current_turn() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("帮我获得这个的vip"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": "好的，让我先分析一下这个 APK 的结构。"
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "tool-manifest",
+                        "name": "get_manifest",
+                        "input": {}
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "tool-search",
+                        "name": "search_classes",
+                        "input": {"keyword": "vip"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-manifest",
+                        "content": "manifest output"
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-search",
+                        "content": "search output"
+                    }
+                ]),
+            },
+        ]);
+
+        let result =
+            convert_request(&req).expect("trailing user tool results should merge into current");
+        let current = &result.conversation_state.current_message.user_input_message;
+        assert!(current.content.is_empty());
+        assert_eq!(current.user_input_message_context.tool_results.len(), 2);
+        assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-manifest");
+        assert_eq!(current.user_input_message_context.tool_results[1].tool_use_id, "tool-search");
+
+        assert_eq!(result.conversation_state.history.len(), 2);
+        let assistant = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => &message.assistant_response_message,
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert_ne!(assistant.content, "OK");
+        assert_eq!(assistant.tool_uses.as_ref().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn convert_request_merges_trailing_user_text_and_tool_result_into_current_turn() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Read the file"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/test.txt"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Please continue"),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "file content"
+                    }
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req)
+            .expect("trailing user text and tool result should merge into current");
+        let current = &result.conversation_state.current_message.user_input_message;
+        assert_eq!(current.content, "Please continue");
+        assert_eq!(current.user_input_message_context.tool_results.len(), 1);
+        assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-1");
+
+        assert_eq!(result.conversation_state.history.len(), 2);
+        let assistant = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => &message.assistant_response_message,
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert_ne!(assistant.content, "OK");
+        assert_eq!(assistant.tool_uses.as_ref().map(Vec::len), Some(1));
     }
 
     #[test]

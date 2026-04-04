@@ -36,7 +36,10 @@ pub mod websearch;
 use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 
 use self::{
-    converter::{convert_request_with_validation, ConversionError},
+    converter::{
+        convert_request_with_validation, current_user_message_range, extract_tool_result_content,
+        ConversionError,
+    },
     stream::{BufferedStreamContext, StreamContext},
     types::{
         CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model,
@@ -60,6 +63,8 @@ const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
 ];
 const KIRO_UPSTREAM_LOG_PREVIEW_CHARS: usize = 8_192;
 const KIRO_STREAM_FAILURE_STATUS_CODE: i32 = 599;
+const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 160;
+const KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS: usize = 1_024;
 
 // Bundles the state needed to persist usage after a streaming response
 // completes.
@@ -1016,40 +1021,136 @@ async fn handle_non_stream_request(
         .into_response()
 }
 
-// Extracts a human-readable summary of the last message content for
-// logging/event context (text, tool_result placeholders, tool_use names).
+// Extracts a compact human-readable summary of the current user turn for
+// logging/event context. Uses the same trailing-user-turn boundary as the
+// converter so logs stay aligned with the actual upstream request shape.
 fn extract_last_message_content(payload: &MessagesRequest) -> Option<String> {
-    let message = payload.messages.last()?;
-    match &message.content {
+    let current_range = current_user_message_range(&payload.messages).ok()?;
+    let tool_name_by_id = collect_tool_name_map(&payload.messages[..current_range.start]);
+    let mut parts = Vec::new();
+    for message in &payload.messages[current_range] {
+        append_message_summary_parts(&message.content, &tool_name_by_id, &mut parts);
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(truncate_summary(&parts.join("\n"), KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS))
+    }
+}
+
+fn collect_tool_name_map(messages: &[types::Message]) -> std::collections::HashMap<String, String> {
+    let mut tool_name_by_id = std::collections::HashMap::new();
+    for message in messages {
+        let Some(blocks) = message.content.as_array() else {
+            continue;
+        };
+        for block in blocks {
+            if block.get("type").and_then(|value| value.as_str()) != Some("tool_use") {
+                continue;
+            }
+            let Some(tool_use_id) = block
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some(tool_name) = block
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            tool_name_by_id.insert(tool_use_id.to_string(), tool_name.to_string());
+        }
+    }
+    tool_name_by_id
+}
+
+fn append_message_summary_parts(
+    content: &serde_json::Value,
+    tool_name_by_id: &std::collections::HashMap<String, String>,
+    parts: &mut Vec<String>,
+) {
+    match content {
         serde_json::Value::String(text) => {
-            let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        },
-        serde_json::Value::Array(blocks) => {
-            let parts = blocks
-                .iter()
-                .filter_map(|block| match block.get("type").and_then(|value| value.as_str()) {
-                    Some("text") => block
-                        .get("text")
-                        .and_then(|value| value.as_str())
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string),
-                    Some("tool_result") => Some("[tool_result]".to_string()),
-                    Some("tool_use") => block
-                        .get("name")
-                        .and_then(|value| value.as_str())
-                        .map(|value| format!("[tool_use:{value}]")),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n"))
+            if let Some(summary) = summarize_text(text) {
+                parts.push(summary);
             }
         },
-        _ => None,
+        serde_json::Value::Array(blocks) => {
+            for block in blocks {
+                match block.get("type").and_then(|value| value.as_str()) {
+                    Some("text") => {
+                        if let Some(text) = block.get("text").and_then(|value| value.as_str()) {
+                            if let Some(summary) = summarize_text(text) {
+                                parts.push(summary);
+                            }
+                        }
+                    },
+                    Some("tool_result") => {
+                        if let Some(summary) = summarize_tool_result(block, tool_name_by_id) {
+                            parts.push(summary);
+                        }
+                    },
+                    Some("tool_use") => {
+                        if let Some(name) = block.get("name").and_then(|value| value.as_str()) {
+                            if let Some(summary) = summarize_text(&format!("[tool_use:{name}]")) {
+                                parts.push(summary);
+                            }
+                        }
+                    },
+                    Some("image") => parts.push("[image]".to_string()),
+                    _ => {},
+                }
+            }
+        },
+        _ => {},
+    }
+}
+
+fn summarize_tool_result(
+    block: &serde_json::Value,
+    tool_name_by_id: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let tool_use_id = block
+        .get("tool_use_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let label = tool_name_by_id
+        .get(tool_use_id)
+        .map(String::as_str)
+        .unwrap_or(tool_use_id);
+    let preview = extract_tool_result_content(&block.get("content").cloned());
+    let preview = compact_preview(&preview, KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS);
+    Some(if preview.is_empty() {
+        format!("[tool_result:{label}]")
+    } else {
+        format!("[tool_result:{label}] {preview}")
+    })
+}
+
+fn summarize_text(text: &str) -> Option<String> {
+    let preview = compact_preview(text, KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS);
+    (!preview.is_empty()).then_some(preview)
+}
+
+fn compact_preview(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_summary(compact.trim(), max_chars)
+}
+
+fn truncate_summary(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
     }
 }
 
@@ -1569,5 +1670,110 @@ mod tests {
             serde_json::from_str(&payload).expect("fallback diagnostic payload should be json");
         assert_eq!(parsed["client_request_body"], "not-json");
         assert!(parsed["upstream_request_body"].is_object());
+    }
+
+    #[test]
+    fn extract_last_message_content_summarizes_trailing_user_tool_results() {
+        let mut payload = base_request("claude-sonnet-4-6");
+        payload.messages = vec![
+            types::Message {
+                role: "user".to_string(),
+                content: json!("帮我获得这个的vip"),
+            },
+            types::Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {
+                        "type": "text",
+                        "text": "好的，让我先分析一下这个 APK 的结构。"
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "tool-manifest",
+                        "name": "get_manifest",
+                        "input": {}
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "tool-search",
+                        "name": "search_classes",
+                        "input": {"keyword": "vip"}
+                    }
+                ]),
+            },
+            types::Message {
+                role: "user".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-manifest",
+                        "content": "manifest output"
+                    }
+                ]),
+            },
+            types::Message {
+                role: "user".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-search",
+                        "content": "search output"
+                    }
+                ]),
+            },
+        ];
+
+        let summary = extract_last_message_content(&payload);
+
+        assert_eq!(
+            summary.as_deref(),
+            Some(
+                "[tool_result:get_manifest] manifest output\n[tool_result:search_classes] search \
+                 output"
+            )
+        );
+    }
+
+    #[test]
+    fn extract_last_message_content_merges_trailing_user_text_and_tool_result() {
+        let mut payload = base_request("claude-sonnet-4-6");
+        payload.messages = vec![
+            types::Message {
+                role: "user".to_string(),
+                content: json!("Read the file"),
+            },
+            types::Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/test.txt"}
+                    }
+                ]),
+            },
+            types::Message {
+                role: "user".to_string(),
+                content: json!("Please continue"),
+            },
+            types::Message {
+                role: "user".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "file content"
+                    }
+                ]),
+            },
+        ];
+
+        let summary = extract_last_message_content(&payload);
+
+        assert_eq!(
+            summary.as_deref(),
+            Some("Please continue\n[tool_result:read_file] file content")
+        );
     }
 }
