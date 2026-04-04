@@ -5,7 +5,7 @@
 //! same-role message merging), and tool-result pairing validation.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
 };
 
@@ -133,6 +133,24 @@ pub struct NormalizationEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolNormalizationEvent {
+    pub tool_index: usize,
+    pub tool_name: String,
+    pub action: &'static str,
+    pub reason: &'static str,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolValidationSummary {
+    pub normalized_tool_description_count: usize,
+    pub empty_tool_name_count: usize,
+    pub schema_keyword_counts: BTreeMap<String, usize>,
+}
+
+type ToolNormalizationResult =
+    (Option<Vec<super::types::Tool>>, Vec<ToolNormalizationEvent>, ToolValidationSummary);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolUseIdRewrite {
     pub original_tool_use_id: String,
     pub rewritten_tool_use_id: String,
@@ -200,6 +218,8 @@ pub(crate) struct NormalizedRequest {
     pub request: MessagesRequest,
     pub tool_use_id_rewrites: Vec<ToolUseIdRewrite>,
     pub normalization_events: Vec<NormalizationEvent>,
+    pub tool_normalization_events: Vec<ToolNormalizationEvent>,
+    pub tool_validation_summary: ToolValidationSummary,
     message_index_map: Vec<usize>,
 }
 
@@ -328,6 +348,78 @@ fn normalize_message(
     }
 }
 
+fn normalize_tool_description(name: &str, description: &str) -> Option<String> {
+    if description.trim().is_empty() {
+        Some(format!("Client-provided tool '{name}'"))
+    } else {
+        None
+    }
+}
+
+fn collect_schema_keywords(value: &serde_json::Value, counts: &mut BTreeMap<String, usize>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                match key.as_str() {
+                    "anyOf" | "oneOf" | "allOf" | "contains" | "dependentSchemas" => {
+                        *counts.entry(key.clone()).or_default() += 1;
+                    },
+                    _ => {},
+                }
+                collect_schema_keywords(child, counts);
+            }
+        },
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_schema_keywords(child, counts);
+            }
+        },
+        _ => {},
+    }
+}
+
+fn normalize_tools(
+    tools: &Option<Vec<super::types::Tool>>,
+) -> Result<ToolNormalizationResult, ConversionError> {
+    let Some(tools) = tools else {
+        return Ok((None, Vec::new(), ToolValidationSummary::default()));
+    };
+
+    let mut normalized_tools = Vec::with_capacity(tools.len());
+    let mut events = Vec::new();
+    let mut summary = ToolValidationSummary::default();
+
+    for (tool_index, tool) in tools.iter().enumerate() {
+        let name = tool.name.trim();
+        if name.is_empty() {
+            summary.empty_tool_name_count += 1;
+            return Err(invalid_request(format!("tool {tool_index} has empty name")));
+        }
+
+        let mut normalized_tool = tool.clone();
+        normalized_tool.name = name.to_string();
+
+        if let Some(description) = normalize_tool_description(name, &tool.description) {
+            normalized_tool.description = description;
+            summary.normalized_tool_description_count += 1;
+            events.push(ToolNormalizationEvent {
+                tool_index,
+                tool_name: normalized_tool.name.clone(),
+                action: "fill_tool_description",
+                reason: "empty_tool_description",
+            });
+        }
+
+        let schema =
+            serde_json::Value::Object(normalized_tool.input_schema.clone().into_iter().collect());
+        collect_schema_keywords(&schema, &mut summary.schema_keyword_counts);
+
+        normalized_tools.push(normalized_tool);
+    }
+
+    Ok((Some(normalized_tools), events, summary))
+}
+
 // Performs a conservative cleanup pass before validation/conversion.
 //
 // This stage is intentionally narrow:
@@ -394,6 +486,9 @@ pub(crate) fn normalize_request(
         message_index_map.clear();
     }
 
+    let (normalized_tools, tool_normalization_events, tool_validation_summary) =
+        normalize_tools(&req.tools)?;
+
     rewrite_duplicate_tool_use_ids(NormalizedRequest {
         request: MessagesRequest {
             model: req.model.clone(),
@@ -401,7 +496,7 @@ pub(crate) fn normalize_request(
             messages: normalized_messages,
             stream: req.stream,
             system: req.system.clone(),
-            tools: req.tools.clone(),
+            tools: normalized_tools,
             _tool_choice: req._tool_choice.clone(),
             thinking: req.thinking.clone(),
             output_config: req.output_config.clone(),
@@ -409,6 +504,8 @@ pub(crate) fn normalize_request(
         },
         tool_use_id_rewrites: Vec::new(),
         normalization_events: events,
+        tool_normalization_events,
+        tool_validation_summary,
         message_index_map,
     })
 }
@@ -1617,6 +1714,99 @@ mod tests {
                 && event.action == "drop_message"
                 && event.reason == "message_became_empty_after_normalization"
         }));
+    }
+
+    #[test]
+    fn normalize_request_fills_empty_tool_description_with_stable_placeholder() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: "demo_tool".to_string(),
+            description: "".to_string(),
+            input_schema: HashMap::from([
+                ("type".to_string(), serde_json::json!("object")),
+                ("properties".to_string(), serde_json::json!({})),
+                ("required".to_string(), serde_json::json!([])),
+                ("additionalProperties".to_string(), serde_json::json!(true)),
+            ]),
+            max_uses: None,
+        }]);
+
+        let normalized = normalize_request(&req).expect("normalization should succeed");
+        let tool = normalized
+            .request
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.first())
+            .expect("tool should exist after normalization");
+
+        assert_eq!(tool.description, "Client-provided tool 'demo_tool'");
+    }
+
+    #[test]
+    fn convert_request_rejects_tool_with_empty_name() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: "   ".to_string(),
+            description: "demo".to_string(),
+            input_schema: HashMap::from([
+                ("type".to_string(), serde_json::json!("object")),
+                ("properties".to_string(), serde_json::json!({})),
+                ("required".to_string(), serde_json::json!([])),
+                ("additionalProperties".to_string(), serde_json::json!(true)),
+            ]),
+            max_uses: None,
+        }]);
+
+        let err = convert_request(&req).expect_err("empty tool name should be rejected");
+        let message = err.to_string();
+        assert!(message.contains("tool 0 has empty name"));
+    }
+
+    #[test]
+    fn convert_request_keeps_anyof_tool_schema_intact() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: "convert_number".to_string(),
+            description: "Convert a number".to_string(),
+            input_schema: HashMap::from([
+                ("type".to_string(), serde_json::json!("object")),
+                (
+                    "properties".to_string(),
+                    serde_json::json!({
+                        "size": {
+                            "anyOf": [{"type": "integer"}, {"type": "null"}]
+                        }
+                    }),
+                ),
+                ("required".to_string(), serde_json::json!([])),
+                ("additionalProperties".to_string(), serde_json::json!(true)),
+            ]),
+            max_uses: None,
+        }]);
+
+        let result = convert_request(&req).expect("anyOf schema should remain allowed");
+        assert_eq!(
+            result
+                .conversation_state
+                .current_message
+                .user_input_message
+                .user_input_message_context
+                .tools
+                .len(),
+            1
+        );
     }
 
     #[test]

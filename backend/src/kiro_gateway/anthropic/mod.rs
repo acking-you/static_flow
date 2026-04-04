@@ -39,6 +39,7 @@ use self::{
     converter::{
         convert_normalized_request_with_validation, current_user_message_range,
         extract_tool_result_content, normalize_request, ConversionError, NormalizationEvent,
+        NormalizedRequest, ToolNormalizationEvent,
     },
     stream::{BufferedStreamContext, StreamContext},
     types::{
@@ -144,6 +145,42 @@ fn log_normalization_event(event: &NormalizationEvent, ctx: &NormalizationLogCon
         normalized_content_block_index = event.content_block_index,
         normalized_block_type = event.block_type.as_deref().unwrap_or(""),
         "normalized kiro anthropic request before validation"
+    );
+}
+
+fn log_tool_normalization_event(event: &ToolNormalizationEvent, ctx: &NormalizationLogContext<'_>) {
+    tracing::warn!(
+        key_id = %ctx.key_record.id,
+        key_name = %ctx.key_record.name,
+        route = ctx.public_path,
+        requested_model = ctx.requested_model,
+        effective_model = ctx.effective_model,
+        stream = ctx.stream,
+        buffered_for_cc = ctx.buffered_for_cc,
+        request_validation_enabled = ctx.request_validation_enabled,
+        tool_index = event.tool_index,
+        tool_name = %event.tool_name,
+        normalization_action = event.action,
+        normalization_reason = event.reason,
+        "normalized kiro tool metadata before validation"
+    );
+}
+
+fn log_tool_validation_summary(normalized: &NormalizedRequest, ctx: &NormalizationLogContext<'_>) {
+    tracing::info!(
+        key_id = %ctx.key_record.id,
+        key_name = %ctx.key_record.name,
+        route = ctx.public_path,
+        requested_model = ctx.requested_model,
+        effective_model = ctx.effective_model,
+        stream = ctx.stream,
+        buffered_for_cc = ctx.buffered_for_cc,
+        request_validation_enabled = ctx.request_validation_enabled,
+        normalized_tool_description_count =
+            normalized.tool_validation_summary.normalized_tool_description_count,
+        empty_tool_name_count = normalized.tool_validation_summary.empty_tool_name_count,
+        schema_keyword_counts = ?normalized.tool_validation_summary.schema_keyword_counts,
+        "prepared kiro tool validation summary before upstream call"
     );
 }
 
@@ -592,6 +629,10 @@ async fn handle_messages(
     for event in &normalized.normalization_events {
         log_normalization_event(event, &normalization_log_ctx);
     }
+    for event in &normalized.tool_normalization_events {
+        log_tool_normalization_event(event, &normalization_log_ctx);
+    }
+    log_tool_validation_summary(&normalized, &normalization_log_ctx);
     for rewrite in &normalized.tool_use_id_rewrites {
         tracing::warn!(
             key_id = %key_record.id,
@@ -1880,5 +1921,36 @@ mod tests {
             summary.as_deref(),
             Some("Please continue\n[tool_result:read_file] file content")
         );
+    }
+
+    #[test]
+    fn normalize_request_reports_tool_description_fill_summary() {
+        let mut payload = base_request("claude-sonnet-4-6");
+        payload.tools = Some(vec![types::Tool {
+            tool_type: None,
+            name: "demo_tool".to_string(),
+            description: "".to_string(),
+            input_schema: std::collections::HashMap::from([
+                ("type".to_string(), json!("object")),
+                ("properties".to_string(), json!({})),
+                ("required".to_string(), json!([])),
+                ("additionalProperties".to_string(), json!(true)),
+            ]),
+            max_uses: None,
+        }]);
+
+        let normalized = normalize_request(&payload).expect("tool normalization should succeed");
+
+        assert_eq!(
+            normalized
+                .tool_validation_summary
+                .normalized_tool_description_count,
+            1
+        );
+        assert_eq!(normalized.tool_validation_summary.empty_tool_name_count, 0);
+        assert_eq!(normalized.tool_normalization_events.len(), 1);
+        assert_eq!(normalized.tool_normalization_events[0].tool_index, 0);
+        assert_eq!(normalized.tool_normalization_events[0].tool_name, "demo_tool");
+        assert_eq!(normalized.tool_normalization_events[0].reason, "empty_tool_description");
     }
 }
