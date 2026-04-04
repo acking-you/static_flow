@@ -37,8 +37,8 @@ use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 
 use self::{
     converter::{
-        convert_request_with_validation, current_user_message_range, extract_tool_result_content,
-        ConversionError,
+        convert_normalized_request_with_validation, current_user_message_range,
+        extract_tool_result_content, normalize_request, ConversionError, NormalizationEvent,
     },
     stream::{BufferedStreamContext, StreamContext},
     types::{
@@ -115,6 +115,36 @@ struct KiroUpstreamLogContext {
     account_name: String,
     model: String,
     buffered_for_cc: bool,
+}
+
+struct NormalizationLogContext<'a> {
+    key_record: &'a LlmGatewayKeyRecord,
+    public_path: &'a str,
+    requested_model: &'a str,
+    effective_model: &'a str,
+    stream: bool,
+    buffered_for_cc: bool,
+    request_validation_enabled: bool,
+}
+
+fn log_normalization_event(event: &NormalizationEvent, ctx: &NormalizationLogContext<'_>) {
+    tracing::warn!(
+        key_id = %ctx.key_record.id,
+        key_name = %ctx.key_record.name,
+        route = ctx.public_path,
+        requested_model = ctx.requested_model,
+        effective_model = ctx.effective_model,
+        stream = ctx.stream,
+        buffered_for_cc = ctx.buffered_for_cc,
+        request_validation_enabled = ctx.request_validation_enabled,
+        normalized_message_index = event.message_index,
+        normalized_message_role = %event.role,
+        normalized_action = event.action,
+        normalized_reason = event.reason,
+        normalized_content_block_index = event.content_block_index,
+        normalized_block_type = event.block_type.as_deref().unwrap_or(""),
+        "normalized kiro anthropic request before validation"
+    );
 }
 
 impl KiroUpstreamLogContext {
@@ -490,7 +520,9 @@ async fn handle_messages(
         )
         .await;
     }
-    let conversion = match convert_request_with_validation(payload, request_validation_enabled) {
+    // Normalize only transport noise on a working copy before validation.
+    // The raw client payload stays untouched in event_context for auditing.
+    let normalized = match normalize_request(payload) {
         Ok(result) => result,
         Err(err) => {
             let message = match &err {
@@ -548,7 +580,19 @@ async fn handle_messages(
                 .into_response();
         },
     };
-    for rewrite in &conversion.tool_use_id_rewrites {
+    let normalization_log_ctx = NormalizationLogContext {
+        key_record: &key_record,
+        public_path,
+        requested_model: &requested_model,
+        effective_model: &payload.model,
+        stream: payload.stream,
+        buffered_for_cc,
+        request_validation_enabled,
+    };
+    for event in &normalized.normalization_events {
+        log_normalization_event(event, &normalization_log_ctx);
+    }
+    for rewrite in &normalized.tool_use_id_rewrites {
         tracing::warn!(
             key_id = %key_record.id,
             key_name = %key_record.name,
@@ -566,6 +610,67 @@ async fn handle_messages(
             "rewrote duplicate completed tool_use id before upstream call"
         );
     }
+    let conversion =
+        match convert_normalized_request_with_validation(normalized, request_validation_enabled) {
+            Ok(result) => result,
+            Err(err) => {
+                let message = match &err {
+                    ConversionError::UnsupportedModel(model) => {
+                        format!("Unsupported model: {model}")
+                    },
+                    ConversionError::EmptyMessages => "messages are empty".to_string(),
+                    ConversionError::InvalidRequest(message) => message.clone(),
+                };
+                tracing::error!(
+                    key_id = %key_record.id,
+                    key_name = %key_record.name,
+                    route = public_path,
+                    requested_model = %requested_model,
+                    effective_model = %payload.model,
+                    stream = payload.stream,
+                    buffered_for_cc,
+                    request_validation_enabled,
+                    error = %message,
+                    "rejected malformed kiro public request before upstream call"
+                );
+                let diagnostic_payload = build_failure_diagnostic_payload(
+                    DiagnosticRequestContext {
+                        event_context: &event_context,
+                        request_validation_enabled,
+                        stream: payload.stream,
+                        buffered_for_cc,
+                    },
+                    "request_validation",
+                    &message,
+                    StatusCode::BAD_REQUEST.as_u16() as i32,
+                    Some(serde_json::json!({
+                        "public_route": public_path,
+                        "requested_model": requested_model,
+                        "effective_model": payload.model,
+                    })),
+                );
+                if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
+                    &state,
+                    &key_record,
+                    &event_context,
+                    StatusCode::BAD_REQUEST.as_u16() as i32,
+                    diagnostic_payload,
+                    zero_usage_summary(),
+                    false,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "failed to persist kiro validation failure usage event: {persist_err:#}"
+                    );
+                }
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::new("invalid_request_error", message)),
+                )
+                    .into_response();
+            },
+        };
     let conversation_state = conversion.conversation_state;
     let tool_name_map = conversion.tool_name_map;
     event_context.upstream_request_body_json =

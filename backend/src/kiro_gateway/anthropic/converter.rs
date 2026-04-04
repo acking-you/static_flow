@@ -120,7 +120,16 @@ pub fn get_context_window_size(model: &str) -> i32 {
 pub struct ConversionResult {
     pub conversation_state: ConversationState,
     pub tool_name_map: HashMap<String, String>,
-    pub tool_use_id_rewrites: Vec<ToolUseIdRewrite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizationEvent {
+    pub message_index: usize,
+    pub role: String,
+    pub content_block_index: Option<usize>,
+    pub block_type: Option<String>,
+    pub action: &'static str,
+    pub reason: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,25 +196,227 @@ struct ActiveToolUse {
 }
 
 #[derive(Debug)]
-struct NormalizedRequest {
-    request: MessagesRequest,
-    tool_use_id_rewrites: Vec<ToolUseIdRewrite>,
+pub(crate) struct NormalizedRequest {
+    pub request: MessagesRequest,
+    pub tool_use_id_rewrites: Vec<ToolUseIdRewrite>,
+    pub normalization_events: Vec<NormalizationEvent>,
+    message_index_map: Vec<usize>,
 }
 
-fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, ConversionError> {
-    let mut request = req.clone();
-    if request
-        .messages
-        .last()
-        .is_some_and(|message| message.role != "user")
-    {
-        let last_user_idx = request
-            .messages
-            .iter()
-            .rposition(|message| message.role == "user")
-            .ok_or(ConversionError::EmptyMessages)?;
-        request.messages.truncate(last_user_idx + 1);
+fn push_normalization_event(
+    events: &mut Vec<NormalizationEvent>,
+    message_index: usize,
+    role: &str,
+    content_block_index: Option<usize>,
+    block_type: Option<&str>,
+    action: &'static str,
+    reason: &'static str,
+) {
+    events.push(NormalizationEvent {
+        message_index,
+        role: role.to_string(),
+        content_block_index,
+        block_type: block_type.map(str::to_string),
+        action,
+        reason,
+    });
+}
+
+fn normalize_message(
+    message: &super::types::Message,
+    message_index: usize,
+    events: &mut Vec<NormalizationEvent>,
+) -> Option<super::types::Message> {
+    match &message.content {
+        serde_json::Value::String(text) => {
+            if message.role == "assistant" && text.trim().is_empty() {
+                push_normalization_event(
+                    events,
+                    message_index,
+                    &message.role,
+                    None,
+                    None,
+                    "drop_message",
+                    "whitespace_only_string_message",
+                );
+                None
+            } else {
+                Some(message.clone())
+            }
+        },
+        serde_json::Value::Array(items) => {
+            let mut dropped_blocks = Vec::new();
+            for (block_index, item) in items.iter().enumerate() {
+                let Some(obj) = item.as_object() else {
+                    continue;
+                };
+                let Some(block_type) = obj.get("type").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+
+                let drop_reason = match block_type {
+                    "text" => obj
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| text.trim().is_empty())
+                        .then_some("whitespace_only_text_block"),
+                    "thinking" => obj
+                        .get("thinking")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|thinking| thinking.trim().is_empty())
+                        .then_some("whitespace_only_thinking_block"),
+                    _ => None,
+                };
+
+                if let Some(reason) = drop_reason {
+                    dropped_blocks.push((block_index, block_type, reason));
+                }
+            }
+
+            if dropped_blocks.is_empty() {
+                return Some(message.clone());
+            }
+
+            let retained_items = items
+                .iter()
+                .enumerate()
+                .filter(|(block_index, _)| {
+                    !dropped_blocks
+                        .iter()
+                        .any(|(dropped_index, _, _)| dropped_index == block_index)
+                })
+                .map(|(_, item)| item.clone())
+                .collect::<Vec<_>>();
+
+            // Keep user-only whitespace turns intact so the explicit
+            // request-validation toggle still controls whether those payloads
+            // are accepted. Only assistant-side no-op turns are removed here.
+            if retained_items.is_empty() && message.role != "assistant" {
+                return Some(message.clone());
+            }
+
+            for (block_index, block_type, reason) in dropped_blocks {
+                push_normalization_event(
+                    events,
+                    message_index,
+                    &message.role,
+                    Some(block_index),
+                    Some(block_type),
+                    "drop_content_block",
+                    reason,
+                );
+            }
+
+            if retained_items.is_empty() {
+                push_normalization_event(
+                    events,
+                    message_index,
+                    &message.role,
+                    None,
+                    None,
+                    "drop_message",
+                    "message_became_empty_after_normalization",
+                );
+                None
+            } else {
+                let mut normalized = message.clone();
+                normalized.content = serde_json::Value::Array(retained_items);
+                Some(normalized)
+            }
+        },
+        _ => Some(message.clone()),
     }
+}
+
+// Performs a conservative cleanup pass before validation/conversion.
+//
+// This stage is intentionally narrow:
+// - Drop trailing turns after the last user message because they can never
+//   affect the request sent upstream.
+// - Remove whitespace-only text/thinking blocks and any message that becomes an
+//   empty no-op after that cleanup.
+// - Keep malformed/unknown structures intact so the strict validator can still
+//   reject genuinely broken payloads instead of silently guessing.
+//
+// The goal is to accept harmless transport noise from upstream proxies without
+// inventing new semantics or rewriting the conversation history.
+pub(crate) fn normalize_request(
+    req: &MessagesRequest,
+) -> Result<NormalizedRequest, ConversionError> {
+    let last_user_idx = req
+        .messages
+        .iter()
+        .rposition(|message| message.role == "user")
+        .ok_or(ConversionError::EmptyMessages)?;
+    let mut events = Vec::new();
+    let mut normalized_messages = Vec::with_capacity(last_user_idx + 1);
+    let mut message_index_map = Vec::with_capacity(last_user_idx + 1);
+
+    for (message_index, message) in req.messages.iter().enumerate() {
+        if message_index > last_user_idx {
+            push_normalization_event(
+                &mut events,
+                message_index,
+                &message.role,
+                None,
+                None,
+                "drop_message",
+                "trailing_after_last_user",
+            );
+            continue;
+        }
+
+        if let Some(normalized) = normalize_message(message, message_index, &mut events) {
+            message_index_map.push(message_index);
+            normalized_messages.push(normalized);
+        }
+    }
+
+    if let Some(last_retained_user_idx) = normalized_messages
+        .iter()
+        .rposition(|message| message.role == "user")
+    {
+        for dropped_index in last_retained_user_idx + 1..normalized_messages.len() {
+            push_normalization_event(
+                &mut events,
+                message_index_map[dropped_index],
+                &normalized_messages[dropped_index].role,
+                None,
+                None,
+                "drop_message",
+                "trailing_after_last_retained_user",
+            );
+        }
+        normalized_messages.truncate(last_retained_user_idx + 1);
+        message_index_map.truncate(last_retained_user_idx + 1);
+    } else {
+        normalized_messages.clear();
+        message_index_map.clear();
+    }
+
+    rewrite_duplicate_tool_use_ids(NormalizedRequest {
+        request: MessagesRequest {
+            model: req.model.clone(),
+            _max_tokens: req._max_tokens,
+            messages: normalized_messages,
+            stream: req.stream,
+            system: req.system.clone(),
+            tools: req.tools.clone(),
+            _tool_choice: req._tool_choice.clone(),
+            thinking: req.thinking.clone(),
+            output_config: req.output_config.clone(),
+            metadata: req.metadata.clone(),
+        },
+        tool_use_id_rewrites: Vec::new(),
+        normalization_events: events,
+        message_index_map,
+    })
+}
+
+fn rewrite_duplicate_tool_use_ids(
+    mut normalized: NormalizedRequest,
+) -> Result<NormalizedRequest, ConversionError> {
+    let request = &mut normalized.request;
 
     let mut used_ids = collect_existing_tool_use_ids(&request.messages);
     let mut seen_counts = HashMap::<String, usize>::new();
@@ -213,6 +424,7 @@ fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, Co
     let mut rewrites = Vec::<ToolUseIdRewrite>::new();
 
     for (message_index, message) in request.messages.iter_mut().enumerate() {
+        let original_message_index = normalized.message_index_map[message_index];
         let Some(items) = message.content.as_array_mut() else {
             continue;
         };
@@ -236,7 +448,7 @@ fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, Co
                     };
                     if active_by_original.contains_key(&original_id) {
                         return Err(invalid_request(format!(
-                            "message {message_index} tool_use block {block_index} reuses \
+                            "message {original_message_index} tool_use block {block_index} reuses \
                              duplicate tool_use id `{original_id}` before the previous call \
                              completed"
                         )));
@@ -258,7 +470,7 @@ fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, Co
                         rewrites.push(ToolUseIdRewrite {
                             original_tool_use_id: original_id.clone(),
                             rewritten_tool_use_id: normalized_id.clone(),
-                            assistant_message_index: message_index,
+                            assistant_message_index: original_message_index,
                             content_block_index: block_index,
                             rewritten_tool_result_count: 0,
                         });
@@ -306,9 +518,9 @@ fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, Co
                         None => {
                             if seen_counts.get(&original_id).copied().unwrap_or_default() > 1 {
                                 return Err(invalid_request(format!(
-                                    "message {message_index} tool_result block {block_index} \
-                                     references duplicate tool_use id `{original_id}` after its \
-                                     rewritten call already completed"
+                                    "message {original_message_index} tool_result block \
+                                     {block_index} references duplicate tool_use id \
+                                     `{original_id}` after its rewritten call already completed"
                                 )));
                             }
                         },
@@ -319,10 +531,8 @@ fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, Co
         }
     }
 
-    Ok(NormalizedRequest {
-        request,
-        tool_use_id_rewrites: rewrites,
-    })
+    normalized.tool_use_id_rewrites = rewrites;
+    Ok(normalized)
 }
 
 fn collect_existing_tool_use_ids(messages: &[super::types::Message]) -> HashSet<String> {
@@ -463,11 +673,19 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     convert_request_with_validation(req, true)
 }
 
-pub fn convert_request_with_validation(
+#[cfg(test)]
+fn convert_request_with_validation(
     req: &MessagesRequest,
     request_validation_enabled: bool,
 ) -> Result<ConversionResult, ConversionError> {
-    let normalized = normalize_tool_use_ids(req)?;
+    let normalized = normalize_request(req)?;
+    convert_normalized_request_with_validation(normalized, request_validation_enabled)
+}
+
+pub(crate) fn convert_normalized_request_with_validation(
+    normalized: NormalizedRequest,
+    request_validation_enabled: bool,
+) -> Result<ConversionResult, ConversionError> {
     let req = &normalized.request;
     let model_id = map_model(&req.model)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
@@ -527,7 +745,6 @@ pub fn convert_request_with_validation(
             .with_current_message(CurrentMessage::new(user_input))
             .with_history(history),
         tool_name_map,
-        tool_use_id_rewrites: normalized.tool_use_id_rewrites,
     })
 }
 
@@ -1359,6 +1576,47 @@ mod tests {
             "actual current user"
         );
         assert_eq!(result.conversation_state.history.len(), 2);
+    }
+
+    #[test]
+    fn normalize_request_drops_whitespace_only_assistant_turn_and_reports_it() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("first user"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {"type": "text", "text": "\n"}
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("actual current user"),
+            },
+        ]);
+
+        let normalized = normalize_request(&req).expect("normalization should succeed");
+
+        assert_eq!(normalized.request.messages.len(), 2);
+        assert_eq!(normalized.request.messages[0].role, "user");
+        assert_eq!(normalized.request.messages[1].role, "user");
+        assert!(normalized.normalization_events.iter().any(|event| {
+            event.message_index == 1
+                && event.role == "assistant"
+                && event.content_block_index == Some(0)
+                && event.block_type.as_deref() == Some("text")
+                && event.action == "drop_content_block"
+                && event.reason == "whitespace_only_text_block"
+        }));
+        assert!(normalized.normalization_events.iter().any(|event| {
+            event.message_index == 1
+                && event.role == "assistant"
+                && event.content_block_index.is_none()
+                && event.action == "drop_message"
+                && event.reason == "message_became_empty_after_normalization"
+        }));
     }
 
     #[test]
