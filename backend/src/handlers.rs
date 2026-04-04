@@ -60,6 +60,9 @@ use crate::{
     state::{
         ApiBehaviorRuntimeConfig, AppState, CommentRuntimeConfig, CompactionRuntimeConfig,
         MusicRuntimeConfig, ViewAnalyticsRuntimeConfig, MAX_CONFIGURABLE_API_BEHAVIOR_DAYS,
+        MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE,
+        MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS,
+        MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES,
         MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS,
         MAX_CONFIGURABLE_COMMENT_CLEANUP_RETENTION_DAYS, MAX_CONFIGURABLE_COMMENT_LIST_LIMIT,
         MAX_CONFIGURABLE_COMMENT_RATE_LIMIT_SECONDS,
@@ -67,6 +70,9 @@ use crate::{
         MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
         MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS,
         MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS, MAX_CONFIGURABLE_VIEW_TREND_DAYS,
+        MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE,
+        MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS,
+        MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES,
         MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD,
         MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
         MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS,
@@ -303,6 +309,9 @@ pub struct ApiBehaviorConfigResponse {
     pub retention_days: i64,
     pub default_days: usize,
     pub max_days: usize,
+    pub flush_batch_size: usize,
+    pub flush_interval_seconds: u64,
+    pub flush_max_buffer_bytes: usize,
 }
 
 impl From<ApiBehaviorRuntimeConfig> for ApiBehaviorConfigResponse {
@@ -311,6 +320,9 @@ impl From<ApiBehaviorRuntimeConfig> for ApiBehaviorConfigResponse {
             retention_days: value.retention_days,
             default_days: value.default_days,
             max_days: value.max_days,
+            flush_batch_size: value.flush_batch_size,
+            flush_interval_seconds: value.flush_interval_seconds,
+            flush_max_buffer_bytes: value.flush_max_buffer_bytes,
         }
     }
 }
@@ -323,6 +335,12 @@ pub struct UpdateApiBehaviorConfigRequest {
     pub default_days: Option<usize>,
     #[serde(default)]
     pub max_days: Option<usize>,
+    #[serde(default)]
+    pub flush_batch_size: Option<usize>,
+    #[serde(default)]
+    pub flush_interval_seconds: Option<u64>,
+    #[serde(default)]
+    pub flush_max_buffer_bytes: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3925,6 +3943,36 @@ fn apply_api_behavior_config_update(
         next.default_days = value;
     }
 
+    if let Some(value) = request.flush_batch_size {
+        if !(MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE
+            ..=MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE)
+            .contains(&value)
+        {
+            return Err(bad_request("`flush_batch_size` must be between 1 and 16384"));
+        }
+        next.flush_batch_size = value;
+    }
+
+    if let Some(value) = request.flush_interval_seconds {
+        if !(MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS
+            ..=MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS)
+            .contains(&value)
+        {
+            return Err(bad_request("`flush_interval_seconds` must be between 1 and 3600"));
+        }
+        next.flush_interval_seconds = value;
+    }
+
+    if let Some(value) = request.flush_max_buffer_bytes {
+        if !(MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES
+            ..=MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES)
+            .contains(&value)
+        {
+            return Err(bad_request("`flush_max_buffer_bytes` must be between 1024 and 268435456"));
+        }
+        next.flush_max_buffer_bytes = value;
+    }
+
     if next.default_days > next.max_days {
         return Err(bad_request("`default_days` must be less than or equal to `max_days`"));
     }
@@ -5636,6 +5684,9 @@ mod tests {
                 retention_days: Some(0),
                 default_days: None,
                 max_days: None,
+                flush_batch_size: None,
+                flush_interval_seconds: None,
+                flush_max_buffer_bytes: None,
             },
         );
         assert!(result.is_err());
@@ -5646,9 +5697,45 @@ mod tests {
                 retention_days: Some(30),
                 default_days: Some(200),
                 max_days: Some(30),
+                flush_batch_size: None,
+                flush_interval_seconds: None,
+                flush_max_buffer_bytes: None,
             },
         );
         assert!(result.is_err());
+
+        let result = apply_api_behavior_config_update(
+            ApiBehaviorRuntimeConfig::default(),
+            UpdateApiBehaviorConfigRequest {
+                retention_days: None,
+                default_days: None,
+                max_days: None,
+                flush_batch_size: Some(0),
+                flush_interval_seconds: None,
+                flush_max_buffer_bytes: None,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_api_behavior_config_applies_flush_settings() {
+        let config = apply_api_behavior_config_update(
+            ApiBehaviorRuntimeConfig::default(),
+            UpdateApiBehaviorConfigRequest {
+                retention_days: None,
+                default_days: None,
+                max_days: None,
+                flush_batch_size: Some(512),
+                flush_interval_seconds: Some(30),
+                flush_max_buffer_bytes: Some(16 * 1024 * 1024),
+            },
+        )
+        .expect("should apply api behavior flush config update");
+
+        assert_eq!(config.flush_batch_size, 512);
+        assert_eq!(config.flush_interval_seconds, 30);
+        assert_eq!(config.flush_max_buffer_bytes, 16 * 1024 * 1024);
     }
 
     #[test]

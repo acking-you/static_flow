@@ -2200,6 +2200,75 @@ pub fn admin_page() -> Html {
                                     }}
                                 />
                             </label>
+                            <label class={classes!("block", "text-sm", "mt-2")}>
+                                { "flush_batch_size" }
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={cfg.flush_batch_size.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let behavior_config = behavior_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*behavior_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.flush_batch_size = v;
+                                                    }
+                                                    behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm", "mt-2")}>
+                                { "flush_interval_seconds" }
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={cfg.flush_interval_seconds.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let behavior_config = behavior_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<u64>() {
+                                                    let mut next = (*behavior_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.flush_interval_seconds = v;
+                                                    }
+                                                    behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm", "mt-2")}>
+                                { "flush_max_buffer_bytes" }
+                                <input
+                                    type="number"
+                                    min="1024"
+                                    value={cfg.flush_max_buffer_bytes.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let behavior_config = behavior_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*behavior_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.flush_max_buffer_bytes = v;
+                                                    }
+                                                    behavior_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
                         } else {
                             <p class={classes!("text-sm", "text-[var(--muted)]", "m-0")}>{ "Unavailable" }</p>
                         }

@@ -1168,6 +1168,9 @@ pub struct ApiBehaviorConfig {
     pub retention_days: i64,
     pub default_days: usize,
     pub max_days: usize,
+    pub flush_batch_size: usize,
+    pub flush_interval_seconds: u64,
+    pub flush_max_buffer_bytes: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1811,6 +1814,9 @@ pub async fn fetch_admin_api_behavior_config() -> Result<ApiBehaviorConfig, Stri
             retention_days: 90,
             default_days: 30,
             max_days: 180,
+            flush_batch_size: 256,
+            flush_interval_seconds: 15,
+            flush_max_buffer_bytes: 4 * 1024 * 1024,
         })
     }
 

@@ -67,6 +67,15 @@ pub const DEFAULT_API_BEHAVIOR_DEFAULT_DAYS: usize = 30;
 pub const DEFAULT_API_BEHAVIOR_MAX_DAYS: usize = 180;
 pub const MAX_CONFIGURABLE_API_BEHAVIOR_RETENTION_DAYS: i64 = 3650;
 pub const MAX_CONFIGURABLE_API_BEHAVIOR_DAYS: usize = 365;
+pub const DEFAULT_API_BEHAVIOR_FLUSH_BATCH_SIZE: usize = 256;
+pub const DEFAULT_API_BEHAVIOR_FLUSH_INTERVAL_SECS: u64 = 15;
+pub const DEFAULT_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+pub const MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE: usize = 1;
+pub const MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE: usize = 16_384;
+pub const MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS: u64 = 1;
+pub const MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS: u64 = 3_600;
+pub const MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES: usize = 1_024;
+pub const MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES: usize = 256 * 1024 * 1024;
 pub const DEFAULT_TABLE_COMPACT_ENABLED: bool = true;
 pub const DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 900;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 30;
@@ -117,6 +126,9 @@ pub struct ApiBehaviorRuntimeConfig {
     pub retention_days: i64,
     pub default_days: usize,
     pub max_days: usize,
+    pub flush_batch_size: usize,
+    pub flush_interval_seconds: u64,
+    pub flush_max_buffer_bytes: usize,
 }
 
 impl Default for ApiBehaviorRuntimeConfig {
@@ -125,6 +137,9 @@ impl Default for ApiBehaviorRuntimeConfig {
             retention_days: DEFAULT_API_BEHAVIOR_RETENTION_DAYS,
             default_days: DEFAULT_API_BEHAVIOR_DEFAULT_DAYS,
             max_days: DEFAULT_API_BEHAVIOR_MAX_DAYS,
+            flush_batch_size: DEFAULT_API_BEHAVIOR_FLUSH_BATCH_SIZE,
+            flush_interval_seconds: DEFAULT_API_BEHAVIOR_FLUSH_INTERVAL_SECS,
+            flush_max_buffer_bytes: DEFAULT_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES,
         }
     }
 }
@@ -442,7 +457,11 @@ impl AppState {
             "resolved admin access configuration"
         );
 
-        let behavior_event_tx = spawn_behavior_event_flusher(store.clone(), shutdown_rx.clone());
+        let behavior_event_tx = spawn_behavior_event_flusher(
+            store.clone(),
+            api_behavior_runtime_config.clone(),
+            shutdown_rx.clone(),
+        );
         let llm_gateway_warmup = llm_gateway.clone();
         let llm_gateway_warmup_runtime_config = llm_gateway_runtime_config.clone();
         let llm_gateway_warmup_proxy_registry = upstream_proxy_registry.clone();
@@ -622,11 +641,38 @@ fn read_api_behavior_runtime_config_from_env() -> ApiBehaviorRuntimeConfig {
         .filter(|value| *value > 0 && *value <= MAX_CONFIGURABLE_API_BEHAVIOR_DAYS)
         .unwrap_or(DEFAULT_API_BEHAVIOR_DEFAULT_DAYS)
         .min(max_days);
+    let flush_batch_size = env::var("API_BEHAVIOR_FLUSH_BATCH_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| {
+            (*value >= MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE)
+                && (*value <= MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE)
+        })
+        .unwrap_or(DEFAULT_API_BEHAVIOR_FLUSH_BATCH_SIZE);
+    let flush_interval_seconds = env::var("API_BEHAVIOR_FLUSH_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| {
+            (*value >= MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS)
+                && (*value <= MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS)
+        })
+        .unwrap_or(DEFAULT_API_BEHAVIOR_FLUSH_INTERVAL_SECS);
+    let flush_max_buffer_bytes = env::var("API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| {
+            (*value >= MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES)
+                && (*value <= MAX_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES)
+        })
+        .unwrap_or(DEFAULT_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES);
 
     ApiBehaviorRuntimeConfig {
         retention_days,
         default_days,
         max_days,
+        flush_batch_size,
+        flush_interval_seconds,
+        flush_max_buffer_bytes,
     }
 }
 
@@ -666,10 +712,22 @@ fn read_compaction_runtime_config_from_env() -> CompactionRuntimeConfig {
     }
 }
 
-const DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE: usize = 256;
-const DEFAULT_BEHAVIOR_FLUSH_INTERVAL_SECS: u64 = 15;
-const DEFAULT_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 const BEHAVIOR_CHANNEL_CAPACITY: usize = 2048;
+
+#[derive(Debug, Clone, Copy)]
+struct BehaviorFlushConfig {
+    batch_size: usize,
+    flush_interval: Duration,
+    max_buffer_bytes: usize,
+}
+
+fn behavior_flush_config(runtime_config: &ApiBehaviorRuntimeConfig) -> BehaviorFlushConfig {
+    BehaviorFlushConfig {
+        batch_size: runtime_config.flush_batch_size.max(1),
+        flush_interval: Duration::from_secs(runtime_config.flush_interval_seconds.max(1)),
+        max_buffer_bytes: runtime_config.flush_max_buffer_bytes.max(1),
+    }
+}
 
 fn estimate_behavior_event_bytes(event: &NewApiBehaviorEventInput) -> usize {
     event.client_source.len()
@@ -690,18 +748,23 @@ fn estimate_behavior_event_bytes(event: &NewApiBehaviorEventInput) -> usize {
 
 fn spawn_behavior_event_flusher(
     store: Arc<StaticFlowDataStore>,
+    runtime_config: Arc<RwLock<ApiBehaviorRuntimeConfig>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> mpsc::Sender<NewApiBehaviorEventInput> {
     let (tx, mut rx) = mpsc::channel::<NewApiBehaviorEventInput>(BEHAVIOR_CHANNEL_CAPACITY);
 
     tokio::spawn(async move {
-        let flush_interval = tokio::time::Duration::from_secs(DEFAULT_BEHAVIOR_FLUSH_INTERVAL_SECS);
-        let mut buffer = Vec::with_capacity(DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE);
+        let initial_config = behavior_flush_config(&runtime_config.read());
+        let mut buffer = Vec::with_capacity(initial_config.batch_size);
         let mut buffered_bytes = 0usize;
         let mut flush_count: u64 = 0;
 
         loop {
-            let event = tokio::select! {
+            let flush_config = {
+                let config = runtime_config.read().clone();
+                behavior_flush_config(&config)
+            };
+            tokio::select! {
                 biased;
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
@@ -716,61 +779,71 @@ fn spawn_behavior_event_flusher(
                         tracing::info!("behavior event flusher shutting down (shutdown signal)");
                         return;
                     }
-                    continue;
                 }
-                result = tokio::time::timeout(flush_interval, rx.recv()) => result,
-            };
+                maybe_event = rx.recv() => {
+                    match maybe_event {
+                        Some(input) => {
+                            buffered_bytes =
+                                buffered_bytes.saturating_add(estimate_behavior_event_bytes(&input));
+                            buffer.push(input);
+                            while buffer.len() < flush_config.batch_size
+                                && buffered_bytes < flush_config.max_buffer_bytes
+                            {
+                                match rx.try_recv() {
+                                    Ok(input) => {
+                                        buffered_bytes = buffered_bytes
+                                            .saturating_add(estimate_behavior_event_bytes(&input));
+                                        buffer.push(input);
+                                    },
+                                    Err(_) => break,
+                                }
+                            }
+                            if buffer.len() >= flush_config.batch_size
+                                || buffered_bytes >= flush_config.max_buffer_bytes
+                            {
+                                let batch = std::mem::take(&mut buffer);
+                                buffered_bytes = 0;
+                                let count = batch.len();
 
-            let should_flush = match event {
-                Ok(Some(input)) => {
-                    buffered_bytes =
-                        buffered_bytes.saturating_add(estimate_behavior_event_bytes(&input));
-                    buffer.push(input);
-                    while buffer.len() < DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE
-                        && buffered_bytes < DEFAULT_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES
-                    {
-                        match rx.try_recv() {
-                            Ok(input) => {
-                                buffered_bytes = buffered_bytes
-                                    .saturating_add(estimate_behavior_event_bytes(&input));
-                                buffer.push(input);
-                            },
-                            Err(_) => break,
+                                if let Err(err) = store.append_api_behavior_events(batch).await {
+                                    tracing::warn!("behavior event batch flush failed ({count} events): {err:#}");
+                                    continue;
+                                }
+
+                                flush_count += 1;
+                                tracing::debug!("flushed {count} behavior events (flush #{flush_count})");
+                            }
+                        },
+                        None => {
+                            if !buffer.is_empty() {
+                                if let Err(err) = store
+                                    .append_api_behavior_events(std::mem::take(&mut buffer))
+                                    .await
+                                {
+                                    tracing::warn!("final behavior event flush failed: {err:#}");
+                                }
+                            }
+                            tracing::info!("behavior event flusher shutting down");
+                            return;
                         }
                     }
-                    buffer.len() >= DEFAULT_BEHAVIOR_FLUSH_BATCH_SIZE
-                        || buffered_bytes >= DEFAULT_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES
-                },
-                Ok(None) => {
+                }
+                _ = tokio::time::sleep(flush_config.flush_interval) => {
                     if !buffer.is_empty() {
-                        if let Err(err) = store
-                            .append_api_behavior_events(std::mem::take(&mut buffer))
-                            .await
-                        {
-                            tracing::warn!("final behavior event flush failed: {err:#}");
+                        let batch = std::mem::take(&mut buffer);
+                        buffered_bytes = 0;
+                        let count = batch.len();
+
+                        if let Err(err) = store.append_api_behavior_events(batch).await {
+                            tracing::warn!("behavior event timed flush failed ({count} events): {err:#}");
+                            continue;
                         }
+
+                        flush_count += 1;
+                        tracing::debug!("flushed {count} behavior events (flush #{flush_count})");
                     }
-                    tracing::info!("behavior event flusher shutting down");
-                    return;
-                },
-                Err(_) => !buffer.is_empty(),
-            };
-
-            if !should_flush || buffer.is_empty() {
-                continue;
+                }
             }
-
-            let batch = std::mem::take(&mut buffer);
-            buffered_bytes = 0;
-            let count = batch.len();
-
-            if let Err(err) = store.append_api_behavior_events(batch).await {
-                tracing::warn!("behavior event batch flush failed ({count} events): {err:#}");
-                continue;
-            }
-
-            flush_count += 1;
-            tracing::debug!("flushed {count} behavior events (flush #{flush_count})");
         }
     });
 
