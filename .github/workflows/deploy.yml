@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - master
+    paths:
+      - 'frontend/**'
+      - 'shared/src/**'
+      - 'shared/Cargo.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
