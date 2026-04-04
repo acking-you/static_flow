@@ -107,9 +107,11 @@ impl LlmGatewayRuntimeState {
         let refresh_interval_seconds = runtime_config
             .read()
             .codex_status_refresh_max_interval_seconds;
+        let usage_event_counts = Arc::new(RwLock::new(UsageEventCountCache::default()));
         spawn_usage_event_flusher(
             store.clone(),
             runtime_config.clone(),
+            usage_event_counts.clone(),
             usage_event_rx,
             shutdown_rx,
         );
@@ -132,7 +134,7 @@ impl LlmGatewayRuntimeState {
                 buckets: Vec::new(),
             })),
             usage_rollups: Arc::new(RwLock::new(HashMap::new())),
-            usage_event_counts: Arc::new(RwLock::new(UsageEventCountCache::default())),
+            usage_event_counts,
             usage_event_tx,
         })
     }
@@ -232,18 +234,6 @@ impl LlmGatewayRuntimeState {
             apply_event_to_rollup(rollup, event);
             apply_usage_rollup(base_key, Some(rollup))
         };
-        {
-            let mut counts = self.usage_event_counts.write();
-            counts.total_event_count = counts.total_event_count.saturating_add(1);
-            *counts
-                .provider_event_counts
-                .entry(event.provider_type.clone())
-                .or_default() += 1;
-            *counts
-                .key_event_counts
-                .entry(event.key_id.clone())
-                .or_default() += 1;
-        }
         Ok(updated)
     }
 
@@ -273,6 +263,7 @@ impl LlmGatewayRuntimeState {
 fn spawn_usage_event_flusher(
     store: Arc<LlmGatewayStore>,
     runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
+    usage_event_counts: Arc<RwLock<UsageEventCountCache>>,
     mut rx: mpsc::Receiver<LlmGatewayUsageEventRecord>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
@@ -297,6 +288,7 @@ fn spawn_usage_event_flusher(
                         }
                         flush_usage_event_buffer(
                             store.as_ref(),
+                            usage_event_counts.as_ref(),
                             &mut buffer,
                             &mut buffered_bytes,
                             &mut flush_count,
@@ -330,6 +322,7 @@ fn spawn_usage_event_flusher(
                             {
                                 flush_usage_event_buffer(
                                     store.as_ref(),
+                                    usage_event_counts.as_ref(),
                                     &mut buffer,
                                     &mut buffered_bytes,
                                     &mut flush_count,
@@ -341,6 +334,7 @@ fn spawn_usage_event_flusher(
                         None => {
                             flush_usage_event_buffer(
                                 store.as_ref(),
+                                usage_event_counts.as_ref(),
                                 &mut buffer,
                                 &mut buffered_bytes,
                                 &mut flush_count,
@@ -356,6 +350,7 @@ fn spawn_usage_event_flusher(
                     if !buffer.is_empty() {
                         flush_usage_event_buffer(
                             store.as_ref(),
+                            usage_event_counts.as_ref(),
                             &mut buffer,
                             &mut buffered_bytes,
                             &mut flush_count,
@@ -371,6 +366,7 @@ fn spawn_usage_event_flusher(
 
 async fn flush_usage_event_buffer(
     store: &LlmGatewayStore,
+    usage_event_counts: &RwLock<UsageEventCountCache>,
     buffer: &mut Vec<LlmGatewayUsageEventRecord>,
     buffered_bytes: &mut usize,
     flush_count: &mut u64,
@@ -385,6 +381,7 @@ async fn flush_usage_event_buffer(
     let count = batch.len();
     match store.append_usage_events(&batch).await {
         Ok(()) => {
+            apply_persisted_usage_event_counts(usage_event_counts, &batch);
             *flush_count += 1;
             tracing::debug!("flushed {count} llm gateway usage events (flush #{flush_count})");
         },
@@ -393,6 +390,24 @@ async fn flush_usage_event_buffer(
             *buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
             *buffer = batch;
         },
+    }
+}
+
+fn apply_persisted_usage_event_counts(
+    usage_event_counts: &RwLock<UsageEventCountCache>,
+    batch: &[LlmGatewayUsageEventRecord],
+) {
+    let mut counts = usage_event_counts.write();
+    for event in batch {
+        counts.total_event_count = counts.total_event_count.saturating_add(1);
+        *counts
+            .provider_event_counts
+            .entry(event.provider_type.clone())
+            .or_default() += 1;
+        *counts
+            .key_event_counts
+            .entry(event.key_id.clone())
+            .or_default() += 1;
     }
 }
 
@@ -1018,6 +1033,9 @@ mod tests {
                 .expect("count queued usage events before flush"),
             0
         );
+        assert_eq!(runtime.total_usage_event_count(), 0);
+        assert_eq!(runtime.usage_event_count_for_provider(&key.provider_type), 0);
+        assert_eq!(runtime.usage_event_count_for_key(&key.id), 0);
 
         shutdown_tx.send(true).expect("send shutdown");
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1035,13 +1053,16 @@ mod tests {
         })
         .await
         .expect("usage event flushed on shutdown");
+        assert_eq!(runtime.total_usage_event_count(), 1);
+        assert_eq!(runtime.usage_event_count_for_provider(&key.provider_type), 1);
+        assert_eq!(runtime.usage_event_count_for_key(&key.id), 1);
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&auths_dir);
     }
 
     #[tokio::test]
-    async fn append_usage_event_updates_exact_event_counts_immediately() {
+    async fn append_usage_event_keeps_persisted_counts_stable_until_flush() {
         let dir = temp_dir("llm-gateway-usage-counts");
         let auths_dir = temp_dir("llm-gateway-auths-counts");
         fs::create_dir_all(&auths_dir).expect("create auth dir");
@@ -1051,7 +1072,12 @@ mod tests {
                 .await
                 .expect("connect llm gateway store"),
         );
-        let runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig::default()));
+        let runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
+            usage_event_flush_batch_size: 256,
+            usage_event_flush_interval_seconds: 60,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            ..LlmGatewayRuntimeConfig::default()
+        }));
         let account_pool = Arc::new(AccountPool::new(auths_dir.clone()));
         let upstream_proxy_registry = Arc::new(
             UpstreamProxyRegistry::new(store.clone())
@@ -1099,9 +1125,9 @@ mod tests {
             .await
             .expect("append usage event");
 
-        assert_eq!(runtime.total_usage_event_count(), 1);
-        assert_eq!(runtime.usage_event_count_for_provider(&key.provider_type), 1);
-        assert_eq!(runtime.usage_event_count_for_key(&key.id), 1);
+        assert_eq!(runtime.total_usage_event_count(), 0);
+        assert_eq!(runtime.usage_event_count_for_provider(&key.provider_type), 0);
+        assert_eq!(runtime.usage_event_count_for_key(&key.id), 0);
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&auths_dir);

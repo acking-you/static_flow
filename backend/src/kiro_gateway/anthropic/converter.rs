@@ -117,6 +117,16 @@ pub fn get_context_window_size(model: &str) -> i32 {
 pub struct ConversionResult {
     pub conversation_state: ConversationState,
     pub tool_name_map: HashMap<String, String>,
+    pub tool_use_id_rewrites: Vec<ToolUseIdRewrite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolUseIdRewrite {
+    pub original_tool_use_id: String,
+    pub rewritten_tool_use_id: String,
+    pub assistant_message_index: usize,
+    pub content_block_index: usize,
+    pub rewritten_tool_result_count: usize,
 }
 
 /// Errors that can occur during Anthropic-to-Kiro request conversion.
@@ -141,6 +151,192 @@ impl std::error::Error for ConversionError {}
 
 fn invalid_request(message: impl Into<String>) -> ConversionError {
     ConversionError::InvalidRequest(message.into())
+}
+
+#[derive(Debug)]
+struct ActiveToolUse {
+    normalized_id: String,
+    rewrite_index: Option<usize>,
+}
+
+#[derive(Debug)]
+struct NormalizedRequest {
+    request: MessagesRequest,
+    tool_use_id_rewrites: Vec<ToolUseIdRewrite>,
+}
+
+fn normalize_tool_use_ids(req: &MessagesRequest) -> Result<NormalizedRequest, ConversionError> {
+    let mut request = req.clone();
+    if request
+        .messages
+        .last()
+        .is_some_and(|message| message.role != "user")
+    {
+        let last_user_idx = request
+            .messages
+            .iter()
+            .rposition(|message| message.role == "user")
+            .ok_or(ConversionError::EmptyMessages)?;
+        request.messages.truncate(last_user_idx + 1);
+    }
+
+    let mut used_ids = collect_existing_tool_use_ids(&request.messages);
+    let mut seen_counts = HashMap::<String, usize>::new();
+    let mut active_by_original = HashMap::<String, ActiveToolUse>::new();
+    let mut rewrites = Vec::<ToolUseIdRewrite>::new();
+
+    for (message_index, message) in request.messages.iter_mut().enumerate() {
+        let Some(items) = message.content.as_array_mut() else {
+            continue;
+        };
+        match message.role.as_str() {
+            "assistant" => {
+                for (block_index, item) in items.iter_mut().enumerate() {
+                    let Some(obj) = item.as_object_mut() else {
+                        continue;
+                    };
+                    if obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
+                        continue;
+                    }
+                    let Some(original_id) = obj
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                    else {
+                        continue;
+                    };
+                    if active_by_original.contains_key(&original_id) {
+                        return Err(invalid_request(format!(
+                            "message {message_index} tool_use block {block_index} reuses \
+                             duplicate tool_use id `{original_id}` before the previous call \
+                             completed"
+                        )));
+                    }
+
+                    let seen_count = seen_counts.entry(original_id.clone()).or_insert(0);
+                    *seen_count += 1;
+
+                    let normalized_id = if *seen_count == 1 {
+                        original_id.clone()
+                    } else {
+                        next_rewritten_tool_use_id(&original_id, *seen_count, &used_ids)
+                    };
+                    let rewrite_index = if normalized_id != original_id {
+                        obj.insert(
+                            "id".to_string(),
+                            serde_json::Value::String(normalized_id.clone()),
+                        );
+                        rewrites.push(ToolUseIdRewrite {
+                            original_tool_use_id: original_id.clone(),
+                            rewritten_tool_use_id: normalized_id.clone(),
+                            assistant_message_index: message_index,
+                            content_block_index: block_index,
+                            rewritten_tool_result_count: 0,
+                        });
+                        Some(rewrites.len() - 1)
+                    } else {
+                        None
+                    };
+                    used_ids.insert(normalized_id.clone());
+                    active_by_original.insert(original_id, ActiveToolUse {
+                        normalized_id,
+                        rewrite_index,
+                    });
+                }
+            },
+            "user" => {
+                for (block_index, item) in items.iter_mut().enumerate() {
+                    let Some(obj) = item.as_object_mut() else {
+                        continue;
+                    };
+                    if obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_result") {
+                        continue;
+                    }
+                    let Some(original_id) = obj
+                        .get("tool_use_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                    else {
+                        continue;
+                    };
+
+                    match active_by_original.remove(&original_id) {
+                        Some(active) => {
+                            if active.normalized_id != original_id {
+                                obj.insert(
+                                    "tool_use_id".to_string(),
+                                    serde_json::Value::String(active.normalized_id),
+                                );
+                                if let Some(rewrite_index) = active.rewrite_index {
+                                    rewrites[rewrite_index].rewritten_tool_result_count += 1;
+                                }
+                            }
+                        },
+                        None => {
+                            if seen_counts.get(&original_id).copied().unwrap_or_default() > 1 {
+                                return Err(invalid_request(format!(
+                                    "message {message_index} tool_result block {block_index} \
+                                     references duplicate tool_use id `{original_id}` after its \
+                                     rewritten call already completed"
+                                )));
+                            }
+                        },
+                    }
+                }
+            },
+            _ => {},
+        }
+    }
+
+    Ok(NormalizedRequest {
+        request,
+        tool_use_id_rewrites: rewrites,
+    })
+}
+
+fn collect_existing_tool_use_ids(messages: &[super::types::Message]) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    for message in messages {
+        let Some(items) = message.content.as_array() else {
+            continue;
+        };
+        for item in items {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            if obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
+                continue;
+            }
+            if let Some(id) = obj
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+fn next_rewritten_tool_use_id(
+    original_id: &str,
+    occurrence: usize,
+    used_ids: &HashSet<String>,
+) -> String {
+    let mut suffix = occurrence;
+    loop {
+        let candidate = format!("{original_id}__sfdup{suffix}");
+        if !used_ids.contains(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 // Extracts a UUID session ID from the Anthropic `user_id` metadata field.
@@ -244,30 +440,17 @@ pub fn convert_request_with_validation(
     req: &MessagesRequest,
     request_validation_enabled: bool,
 ) -> Result<ConversionResult, ConversionError> {
+    let normalized = normalize_tool_use_ids(req)?;
+    let req = &normalized.request;
     let model_id = map_model(&req.model)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
-    if req.messages.is_empty() {
-        return Err(ConversionError::EmptyMessages);
-    }
     if request_validation_enabled {
         validate_messages_request(req)?;
     }
-    // If the last message is not from the user, truncate to the last user
-    // message — trailing assistant prefills are dropped.
-    let messages: &[_] = if req
-        .messages
-        .last()
-        .is_some_and(|message| message.role != "user")
-    {
-        let last_user_idx = req
-            .messages
-            .iter()
-            .rposition(|message| message.role == "user")
-            .ok_or(ConversionError::EmptyMessages)?;
-        &req.messages[..=last_user_idx]
-    } else {
-        &req.messages
-    };
+    let messages = req.messages.as_slice();
+    if messages.is_empty() {
+        return Err(ConversionError::EmptyMessages);
+    }
 
     // Reuse session UUID from metadata as conversation_id for continuity;
     // fall back to a fresh UUID.
@@ -322,6 +505,7 @@ pub fn convert_request_with_validation(
             .with_current_message(CurrentMessage::new(user_input))
             .with_history(history),
         tool_name_map,
+        tool_use_id_rewrites: normalized.tool_use_id_rewrites,
     })
 }
 
@@ -1521,5 +1705,127 @@ mod tests {
 
         assert!(convert_request(&req).is_err());
         assert!(convert_request_with_validation(&req, false).is_ok());
+    }
+
+    #[test]
+    fn convert_request_rewrites_duplicate_completed_tool_use_ids() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Run npm list"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "dup-tool",
+                        "name": "package_proxy",
+                        "input": {"tool_name": "termux_node:npm_list"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "dup-tool",
+                        "content": "{\"success\":true}"
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": "Run it again"
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "dup-tool",
+                        "name": "package_proxy",
+                        "input": {"tool_name": "termux_node:npm_list"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "dup-tool",
+                        "content": "{\"success\":true,\"again\":true}"
+                    }
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("duplicate completed tool_use id should rewrite");
+        let current = &result.conversation_state.current_message.user_input_message;
+        assert_eq!(current.user_input_message_context.tool_results.len(), 1);
+        let rewritten_result_id = &current.user_input_message_context.tool_results[0].tool_use_id;
+        assert_ne!(rewritten_result_id, "dup-tool");
+        assert!(rewritten_result_id.starts_with("dup-tool__sfdup"));
+
+        let last_assistant = match result.conversation_state.history.last() {
+            Some(Message::Assistant(message)) => &message.assistant_response_message,
+            other => panic!("expected last history message to be assistant, got {other:?}"),
+        };
+        let last_tool_uses = last_assistant
+            .tool_uses
+            .as_ref()
+            .expect("rewritten assistant tool_use should remain in history");
+        assert_eq!(last_tool_uses.len(), 1);
+        assert_eq!(last_tool_uses[0].tool_use_id, *rewritten_result_id);
+    }
+
+    #[test]
+    fn convert_request_rejects_ambiguous_duplicate_active_tool_use_ids() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Run two things"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "dup-tool",
+                        "name": "package_proxy",
+                        "input": {"tool_name": "termux_node:npm_list"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "dup-tool",
+                        "name": "package_proxy",
+                        "input": {"tool_name": "termux_python:pip_list"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "dup-tool",
+                        "content": "{\"success\":true}"
+                    }
+                ]),
+            },
+        ]);
+
+        let err =
+            convert_request(&req).expect_err("duplicate active tool_use id should be rejected");
+        let message = err.to_string();
+        assert!(message.contains("duplicate tool_use id `dup-tool`"));
+        assert!(message.contains("before the previous call completed"));
     }
 }

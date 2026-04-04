@@ -108,7 +108,7 @@ pub struct Metadata {
 /// Accepts the standard Anthropic fields: model, messages, system prompt,
 /// tools, thinking config, and streaming flag. The `system` field is
 /// polymorphic (string or array) via a custom deserializer.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessagesRequest {
     pub model: String,
     #[serde(rename = "max_tokens")]

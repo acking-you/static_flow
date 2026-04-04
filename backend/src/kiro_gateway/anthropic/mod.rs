@@ -543,6 +543,24 @@ async fn handle_messages(
                 .into_response();
         },
     };
+    for rewrite in &conversion.tool_use_id_rewrites {
+        tracing::warn!(
+            key_id = %key_record.id,
+            key_name = %key_record.name,
+            route = public_path,
+            requested_model = %requested_model,
+            effective_model = %payload.model,
+            stream = payload.stream,
+            buffered_for_cc,
+            request_validation_enabled,
+            original_tool_use_id = %rewrite.original_tool_use_id,
+            rewritten_tool_use_id = %rewrite.rewritten_tool_use_id,
+            assistant_message_index = rewrite.assistant_message_index,
+            content_block_index = rewrite.content_block_index,
+            rewritten_tool_result_count = rewrite.rewritten_tool_result_count,
+            "rewrote duplicate completed tool_use id before upstream call"
+        );
+    }
     let conversation_state = conversion.conversation_state;
     let tool_name_map = conversion.tool_name_map;
     event_context.upstream_request_body_json =
