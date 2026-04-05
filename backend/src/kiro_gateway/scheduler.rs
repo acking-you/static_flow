@@ -200,8 +200,8 @@ impl KiroRequestScheduler {
             .min()
     }
 
-    pub(crate) fn last_started_at(&self, account_name: &str) -> Option<Instant> {
-        self.last_started_at.lock().get(account_name).copied()
+    pub(crate) fn last_started_snapshot(&self) -> HashMap<String, Instant> {
+        self.last_started_at.lock().clone()
     }
 
     pub(crate) fn notify_config_changed(&self) {

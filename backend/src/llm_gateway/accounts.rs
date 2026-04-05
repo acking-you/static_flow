@@ -186,6 +186,17 @@ pub(crate) struct AccountSummarySnapshot {
     pub proxy_selection: AccountProxySelection,
 }
 
+#[derive(Debug, Clone)]
+struct AccountSelectionCandidate {
+    has_invalid_remaining: bool,
+    primary_remaining: f64,
+    secondary_remaining: f64,
+    routed_at_ms: i64,
+    name: String,
+    snapshot: CodexAuthSnapshot,
+    map_gpt53_codex_to_spark: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Account pool
 // ---------------------------------------------------------------------------
@@ -403,8 +414,8 @@ impl AccountPool {
 
         // Phase 1: collect eligible candidates, skipping any account where
         // either the 5h or weekly window is exhausted.
-        type Candidate = (f64, f64, i64, String, CodexAuthSnapshot, bool);
-        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut candidates: Vec<AccountSelectionCandidate> = Vec::new();
+        let mut invalid_remaining_names = Vec::new();
         for (name, entry) in account_entries {
             if let Some(allowed) = allowed_names {
                 if !allowed.contains(&name) {
@@ -415,38 +426,58 @@ impl AccountPool {
             if account.status != AccountStatus::Active {
                 continue;
             }
-            let primary_remaining = rate_limits
-                .get(&name)
-                .and_then(|rl| rl.primary_remaining_percent())
-                .unwrap_or(100.0);
-            let secondary_remaining = rate_limits
-                .get(&name)
-                .and_then(|rl| rl.secondary_remaining_percent())
-                .unwrap_or(100.0);
+            let (primary_remaining, primary_invalid) = sanitize_remaining_percent(
+                rate_limits
+                    .get(&name)
+                    .and_then(|rl| rl.primary_remaining_percent()),
+            );
+            let (secondary_remaining, secondary_invalid) = sanitize_remaining_percent(
+                rate_limits
+                    .get(&name)
+                    .and_then(|rl| rl.secondary_remaining_percent()),
+            );
+            let has_invalid_remaining = primary_invalid || secondary_invalid;
+            if has_invalid_remaining {
+                invalid_remaining_names.push(name.clone());
+            }
             // Skip accounts where either quota window is exhausted.
             if primary_remaining <= 0.0 || secondary_remaining <= 0.0 {
                 continue;
             }
             let routed_at_ms = last_routed.get(&name).copied().unwrap_or(0);
-            candidates.push((
+            candidates.push(AccountSelectionCandidate {
+                has_invalid_remaining,
                 primary_remaining,
                 secondary_remaining,
                 routed_at_ms,
                 name,
-                account.to_auth_snapshot(),
-                account.map_gpt53_codex_to_spark,
-            ));
+                snapshot: account.to_auth_snapshot(),
+                map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+            });
         }
 
         if candidates.is_empty() {
             return None;
         }
 
+        if !invalid_remaining_names.is_empty() {
+            tracing::warn!(
+                invalid_account_names = ?invalid_remaining_names,
+                allowed_names = ?allowed_names,
+                "ignoring non-finite codex rate-limit percentages during account selection"
+            );
+        }
+
         // Phase 2: partition into healthy (effective ≥ 10%) and low (< 10%).
         // Effective remaining is the tighter of the two windows.
-        let (healthy, low): (Vec<&Candidate>, Vec<&Candidate>) = candidates
-            .iter()
-            .partition(|c| c.0.min(c.1) >= LOW_QUOTA_THRESHOLD);
+        let (healthy, low): (Vec<&AccountSelectionCandidate>, Vec<&AccountSelectionCandidate>) =
+            candidates.iter().partition(|candidate| {
+                !candidate.has_invalid_remaining
+                    && candidate
+                        .primary_remaining
+                        .min(candidate.secondary_remaining)
+                        >= LOW_QUOTA_THRESHOLD
+            });
 
         // Pick the best from the healthy set; fall back to the low set only
         // when no healthy candidate exists.
@@ -459,19 +490,28 @@ impl AccountPool {
             }
         })?;
 
-        let (primary, secondary, routed_at_ms, name, snapshot, map_flag) = best.clone();
+        let AccountSelectionCandidate {
+            has_invalid_remaining,
+            primary_remaining,
+            secondary_remaining,
+            routed_at_ms,
+            name,
+            snapshot,
+            map_gpt53_codex_to_spark,
+        } = best.clone();
         tracing::info!(
             account = %name,
-            primary_remaining_percent = primary,
-            secondary_remaining_percent = secondary,
-            effective_remaining_percent = primary.min(secondary),
+            primary_remaining_percent = primary_remaining,
+            secondary_remaining_percent = secondary_remaining,
+            effective_remaining_percent = primary_remaining.min(secondary_remaining),
             last_routed_at_ms = routed_at_ms,
+            has_invalid_remaining,
             healthy_count = healthy.len(),
             low_count = low.len(),
             allowed_names = ?allowed_names,
             "selected codex account from pool"
         );
-        Some((name, snapshot, map_flag))
+        Some((name, snapshot, map_gpt53_codex_to_spark))
     }
 
     /// Record that `name` has been chosen for a routed Codex request.
@@ -757,31 +797,52 @@ fn modified_matches(left: Option<SystemTime>, right: Option<SystemTime>) -> bool
     }
 }
 
+fn sanitize_remaining_percent(value: Option<f64>) -> (f64, bool) {
+    match value {
+        Some(value) if value.is_finite() => (value, false),
+        Some(_) => (100.0, true),
+        None => (100.0, false),
+    }
+}
+
 fn account_candidate_preferred(
-    candidate: &(f64, f64, i64, String, CodexAuthSnapshot, bool),
-    current_best: &(f64, f64, i64, String, CodexAuthSnapshot, bool),
+    candidate: &AccountSelectionCandidate,
+    current_best: &AccountSelectionCandidate,
 ) -> bool {
     const EPSILON: f64 = 1e-9;
 
-    if candidate.0 > current_best.0 + EPSILON {
+    if candidate.has_invalid_remaining != current_best.has_invalid_remaining {
+        return !candidate.has_invalid_remaining;
+    }
+    if candidate.has_invalid_remaining && current_best.has_invalid_remaining {
+        if candidate.routed_at_ms < current_best.routed_at_ms {
+            return true;
+        }
+        if candidate.routed_at_ms > current_best.routed_at_ms {
+            return false;
+        }
+        return candidate.name < current_best.name;
+    }
+
+    if candidate.primary_remaining > current_best.primary_remaining + EPSILON {
         return true;
     }
-    if (candidate.0 - current_best.0).abs() > EPSILON {
+    if (candidate.primary_remaining - current_best.primary_remaining).abs() > EPSILON {
         return false;
     }
-    if candidate.1 > current_best.1 + EPSILON {
+    if candidate.secondary_remaining > current_best.secondary_remaining + EPSILON {
         return true;
     }
-    if (candidate.1 - current_best.1).abs() > EPSILON {
+    if (candidate.secondary_remaining - current_best.secondary_remaining).abs() > EPSILON {
         return false;
     }
-    if candidate.2 < current_best.2 {
+    if candidate.routed_at_ms < current_best.routed_at_ms {
         return true;
     }
-    if candidate.2 > current_best.2 {
+    if candidate.routed_at_ms > current_best.routed_at_ms {
         return false;
     }
-    candidate.3 < current_best.3
+    candidate.name < current_best.name
 }
 
 fn settings_path_for_auth_file(auth_path: &Path) -> PathBuf {
@@ -1031,6 +1092,52 @@ mod tests {
         assert!(
             selected == "alpha" || selected == "beta",
             "should pick one of the low-quota accounts"
+        );
+        let _ = std::fs::remove_dir_all(auths_dir);
+    }
+
+    #[tokio::test]
+    async fn select_best_account_deprioritizes_non_finite_primary_remaining() {
+        let auths_dir = test_auths_dir("non-finite-primary");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+        pool.insert(sample_account("beta"))
+            .await
+            .expect("insert beta");
+        pool.update_rate_limit("alpha", sample_snapshot(f64::NAN, 90.0))
+            .await;
+        pool.update_rate_limit("beta", sample_snapshot(84.0, 80.0))
+            .await;
+
+        let (selected, _, _) = pool.select_best_account(None).await.expect("best account");
+        assert_eq!(
+            selected, "beta",
+            "accounts with malformed primary remaining should not outrank healthy ones"
+        );
+        let _ = std::fs::remove_dir_all(auths_dir);
+    }
+
+    #[tokio::test]
+    async fn select_best_account_deprioritizes_non_finite_secondary_remaining() {
+        let auths_dir = test_auths_dir("non-finite-secondary");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+        pool.insert(sample_account("beta"))
+            .await
+            .expect("insert beta");
+        pool.update_rate_limit("alpha", sample_snapshot(90.0, f64::INFINITY))
+            .await;
+        pool.update_rate_limit("beta", sample_snapshot(70.0, 70.0))
+            .await;
+
+        let (selected, _, _) = pool.select_best_account(None).await.expect("best account");
+        assert_eq!(
+            selected, "beta",
+            "accounts with malformed secondary remaining should not outrank healthy ones"
         );
         let _ = std::fs::remove_dir_all(auths_dir);
     }

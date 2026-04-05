@@ -1363,13 +1363,37 @@ fn selection_ordered_accounts(
     snapshot: &KiroStatusCacheSnapshot,
     scheduler: &super::scheduler::KiroRequestScheduler,
 ) -> Vec<KiroAuthRecord> {
-    let mut sorted = auths.to_vec();
+    #[derive(Clone)]
+    struct Candidate {
+        auth: KiroAuthRecord,
+        last_started_at: Option<Instant>,
+        remaining: f64,
+    }
+
+    let last_started_snapshot = scheduler.last_started_snapshot();
+    let mut sorted = auths
+        .iter()
+        .cloned()
+        .map(|auth| {
+            let routing_identity = routing_identity_for_account(&auth, snapshot);
+            let remaining = snapshot
+                .accounts
+                .get(&auth.name)
+                .and_then(|status| status.balance.as_ref())
+                .map(|balance| balance.remaining)
+                .unwrap_or(-1.0);
+            Candidate {
+                last_started_at: last_started_snapshot.get(&routing_identity).copied(),
+                auth,
+                remaining,
+            }
+        })
+        .collect::<Vec<_>>();
     sorted.sort_by(|a, b| {
-        let identity_a = routing_identity_for_account(a, snapshot);
-        let identity_b = routing_identity_for_account(b, snapshot);
-        let last_started_a = scheduler.last_started_at(&identity_a);
-        let last_started_b = scheduler.last_started_at(&identity_b);
-        match (last_started_a, last_started_b) {
+        // Sorting must only depend on immutable data. Reading scheduler state
+        // inside the comparator makes the ordering change mid-sort under
+        // concurrent traffic, which Rust correctly treats as undefined input.
+        match (a.last_started_at, b.last_started_at) {
             (None, Some(_)) => return std::cmp::Ordering::Less,
             (Some(_), None) => return std::cmp::Ordering::Greater,
             (Some(left), Some(right)) => {
@@ -1380,24 +1404,11 @@ fn selection_ordered_accounts(
             },
             (None, None) => {},
         }
-        let remaining_a = snapshot
-            .accounts
-            .get(&a.name)
-            .and_then(|s| s.balance.as_ref())
-            .map(|bal| bal.remaining)
-            .unwrap_or(-1.0);
-        let remaining_b = snapshot
-            .accounts
-            .get(&b.name)
-            .and_then(|s| s.balance.as_ref())
-            .map(|bal| bal.remaining)
-            .unwrap_or(-1.0);
-        remaining_b
-            .partial_cmp(&remaining_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.name.cmp(&b.name))
+        b.remaining
+            .total_cmp(&a.remaining)
+            .then_with(|| a.auth.name.cmp(&b.auth.name))
     });
-    sorted
+    sorted.into_iter().map(|candidate| candidate.auth).collect()
 }
 
 fn routing_identity_for_account(
@@ -1466,6 +1477,11 @@ fn daily_request_limit_cooldown(body: &str) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
     use super::*;
     use crate::kiro_gateway::{
         status_cache::{KiroCachedAccountStatus, STATUS_QUOTA_EXHAUSTED},
@@ -1662,6 +1678,58 @@ mod tests {
         let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["beta", "alpha", "gamma"]);
+    }
+
+    #[test]
+    fn selection_ordered_remains_stable_while_scheduler_updates_concurrently() {
+        let auths = (0..32)
+            .map(|idx| auth(&format!("acct-{idx:02}")))
+            .collect::<Vec<_>>();
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: auths
+                .iter()
+                .enumerate()
+                .map(|(idx, auth)| snapshot_with_balance(&auth.name, 1000.0 - idx as f64))
+                .collect(),
+            ..Default::default()
+        };
+        let scheduler = super::super::scheduler::KiroRequestScheduler::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker_scheduler = Arc::clone(&scheduler);
+        let worker_names = auths
+            .iter()
+            .map(|auth| auth.name.clone())
+            .collect::<Vec<_>>();
+
+        let worker = std::thread::spawn(move || {
+            let queued_at = Instant::now();
+            while !worker_stop.load(Ordering::Relaxed) {
+                for name in &worker_names {
+                    let lease = worker_scheduler
+                        .try_acquire(name, 64, 0, queued_at)
+                        .expect("background acquire should succeed");
+                    drop(lease);
+                }
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for _ in 0..512 {
+                let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
+                assert_eq!(ordered.len(), auths.len());
+            }
+        }));
+
+        stop.store(true, Ordering::Relaxed);
+        worker
+            .join()
+            .expect("background scheduler worker should join");
+
+        assert!(
+            result.is_ok(),
+            "sorting should not panic while scheduler state changes concurrently"
+        );
     }
 
     #[test]
