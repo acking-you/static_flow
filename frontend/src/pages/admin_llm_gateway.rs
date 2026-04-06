@@ -1700,6 +1700,7 @@ pub fn admin_llm_gateway_page() -> Html {
     }
 
     let on_save_runtime_config = {
+        let config = config.clone();
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
         let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
@@ -1716,6 +1717,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let load_error = load_error.clone();
         let reload = reload.clone();
         Callback::from(move |_| {
+            let config = config.clone();
             let ttl = (*ttl_input).trim().parse::<u64>();
             let max_request_body_bytes = (*max_request_body_input).trim().parse::<u64>();
             let account_failure_retry_limit =
@@ -1817,6 +1819,10 @@ pub fn admin_llm_gateway_page() -> Html {
                     usage_event_flush_batch_size,
                     usage_event_flush_interval_seconds,
                     usage_event_flush_max_buffer_bytes,
+                    kiro_cache_kmodels_json: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_kmodels_json.clone())
+                        .unwrap_or_default(),
                 };
                 saving_runtime_config.set(true);
                 match update_admin_llm_gateway_config(&runtime_config).await {

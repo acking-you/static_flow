@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
 use wasm_bindgen::prelude::*;
-use web_sys::{HtmlInputElement, HtmlSelectElement};
+use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -12,13 +12,14 @@ use crate::{
     api::{
         create_admin_kiro_key, create_admin_kiro_manual_account, delete_admin_kiro_account,
         delete_admin_kiro_key, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
-        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_proxy_bindings,
-        fetch_admin_llm_gateway_proxy_configs, fetch_kiro_models, import_admin_kiro_account,
-        patch_admin_kiro_account, patch_admin_kiro_key, refresh_admin_kiro_account_balance,
+        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_config,
+        fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
+        fetch_kiro_models, import_admin_kiro_account, patch_admin_kiro_account,
+        patch_admin_kiro_key, refresh_admin_kiro_account_balance, update_admin_llm_gateway_config,
         AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
         AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateManualKiroAccountInput,
-        KiroAccountView, KiroBalanceView, KiroModelView, PatchAdminLlmGatewayKeyRequest,
-        PatchKiroAccountInput,
+        KiroAccountView, KiroBalanceView, KiroModelView, LlmGatewayRuntimeConfig,
+        PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
     },
     pages::llm_access_shared::{
         format_float2, format_ms, format_number_i64, format_number_u64, format_reset_hint,
@@ -99,6 +100,13 @@ fn format_timestamp_opt(ts: Option<i64>) -> String {
 
 fn format_float4(value: f64) -> String {
     format!("{value:.4}")
+}
+
+fn format_json_for_textarea(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or_else(|| raw.to_string())
 }
 
 fn format_cache_summary(account: &KiroAccountView) -> String {
@@ -182,6 +190,71 @@ fn build_kiro_route_patch_fields(
         return (String::new(), String::new(), Vec::new());
     }
     ("auto".to_string(), String::new(), auto_account_names.to_vec())
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct KiroKeyCandidateCreditSummary {
+    candidate_count: usize,
+    loaded_balance_count: usize,
+    missing_balance_count: usize,
+    total_limit: f64,
+    total_remaining: f64,
+}
+
+fn kiro_key_candidate_credit_summary(
+    route_strategy: &str,
+    fixed_account_name: &str,
+    auto_account_names: &[String],
+    accounts: &[KiroAccountView],
+) -> KiroKeyCandidateCreditSummary {
+    let selected_accounts = if route_strategy == "fixed" {
+        accounts
+            .iter()
+            .filter(|account| account.name == fixed_account_name)
+            .collect::<Vec<_>>()
+    } else if auto_account_names.is_empty() {
+        accounts.iter().collect::<Vec<_>>()
+    } else {
+        let allowed_names = auto_account_names.iter().collect::<HashSet<_>>();
+        accounts
+            .iter()
+            .filter(|account| allowed_names.contains(&account.name))
+            .collect::<Vec<_>>()
+    };
+
+    let mut summary = KiroKeyCandidateCreditSummary {
+        candidate_count: selected_accounts.len(),
+        ..KiroKeyCandidateCreditSummary::default()
+    };
+    for account in selected_accounts {
+        if let Some(balance) = account.balance.as_ref() {
+            summary.loaded_balance_count += 1;
+            summary.total_limit += balance.usage_limit.max(0.0);
+            summary.total_remaining += balance.remaining.max(0.0);
+        } else {
+            summary.missing_balance_count += 1;
+        }
+    }
+    summary
+}
+
+fn format_kiro_key_candidate_credit_summary(summary: &KiroKeyCandidateCreditSummary) -> String {
+    if summary.candidate_count == 0 {
+        return "候选账号额度: 当前没有命中任何账号。".to_string();
+    }
+
+    format!(
+        "候选账号额度: 剩余 {} / 总额 {} · {}/{} 已加载{}",
+        format_float4(summary.total_remaining),
+        format_float4(summary.total_limit),
+        summary.loaded_balance_count,
+        summary.candidate_count,
+        if summary.missing_balance_count == 0 {
+            String::new()
+        } else {
+            format!(" · {} 个账号余额未加载", summary.missing_balance_count)
+        }
+    )
 }
 
 #[derive(Properties, PartialEq)]
@@ -666,6 +739,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
     let kiro_request_validation_enabled =
         use_state(|| props.key_item.kiro_request_validation_enabled);
+    let route_settings_expanded = use_state(|| false);
+    let model_mapping_expanded = use_state(|| false);
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
@@ -941,12 +1016,21 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         (*fixed_account_name).as_str(),
         (*auto_account_names).as_slice(),
     );
+    let candidate_credit_summary = kiro_key_candidate_credit_summary(
+        (*route_strategy).as_str(),
+        (*fixed_account_name).as_str(),
+        (*auto_account_names).as_slice(),
+        props.accounts.as_slice(),
+    );
+    let candidate_credit_summary_text =
+        format_kiro_key_candidate_credit_summary(&candidate_credit_summary);
 
     let key_ratio = kiro_key_usage_ratio(
         props.key_item.remaining_billable,
         props.key_item.quota_billable_limit,
     );
     let key_pct = (key_ratio * 100.0).round() as i32;
+    let model_override_count = (*model_name_map).len();
     let mapping_overrides_preview = if (*model_name_map).is_empty() {
         "identity map".to_string()
     } else {
@@ -1006,6 +1090,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 <div class={classes!("mt-2", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
                     <span>{ format!("remaining {}", format_number_i64(props.key_item.remaining_billable)) }</span>
                     <span>{ format!("limit {}", format_number_u64(props.key_item.quota_billable_limit)) }</span>
+                </div>
+                <div class={classes!("mt-2", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                    { candidate_credit_summary_text }
                 </div>
             </div>
 
@@ -1092,145 +1179,178 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     <span>{ "Kiro key 不会在公开页面暴露。" }</span>
                 </div>
                 <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm", "text-[var(--muted)]", "space-y-2")}>
-                    <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
-                        <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                            <span>{ "路由" }</span>
-                                <select
-                                    key={format!("{}-route-{}", props.key_item.id, (*route_strategy).clone())}
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
-                                    onchange={{
-                                        let route_strategy = route_strategy.clone();
-                                        Callback::from(move |event: Event| {
-                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                                                route_strategy.set(target.value());
-                                            }
-                                        })
-                                    }}
-                                >
-                                <option value="auto" selected={*route_strategy == "auto"}>{ "自动 (按额度)" }</option>
-                                <option value="fixed" selected={*route_strategy == "fixed"}>{ "绑定账号" }</option>
-                            </select>
-                        </label>
-                        if *route_strategy == "fixed" {
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Route Settings" }</div>
+                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>{ route_summary.clone() }</div>
+                        </div>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "text-xs")}
+                            onclick={{
+                                let route_settings_expanded = route_settings_expanded.clone();
+                                Callback::from(move |_| route_settings_expanded.set(!*route_settings_expanded))
+                            }}
+                        >
+                            { if *route_settings_expanded { "Hide Route Settings" } else { "Show Route Settings" } }
+                        </button>
+                    </div>
+                    if *route_settings_expanded {
+                        <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
                             <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                                <span>{ "账号" }</span>
-                                <select
-                                    key={format!("{}-fixed-{}", props.key_item.id, (*fixed_account_name).clone())}
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
-                                    onchange={{
-                                        let fixed_account_name = fixed_account_name.clone();
-                                        Callback::from(move |event: Event| {
-                                            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                                                fixed_account_name.set(target.value());
-                                            }
-                                        })
-                                    }}
-                                >
-                                    <option value="" selected={(*fixed_account_name).is_empty()}>{ "-- 选择 --" }</option>
-                                    { for props.accounts.iter().map(|account| html! {
-                                        <option value={account.name.clone()} selected={*fixed_account_name == account.name}>{ account.name.clone() }</option>
-                                    }) }
+                                <span>{ "路由" }</span>
+                                    <select
+                                        key={format!("{}-route-{}", props.key_item.id, (*route_strategy).clone())}
+                                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                                        onchange={{
+                                            let route_strategy = route_strategy.clone();
+                                            Callback::from(move |event: Event| {
+                                                if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                    route_strategy.set(target.value());
+                                                }
+                                            })
+                                        }}
+                                    >
+                                    <option value="auto" selected={*route_strategy == "auto"}>{ "自动 (按额度)" }</option>
+                                    <option value="fixed" selected={*route_strategy == "fixed"}>{ "绑定账号" }</option>
                                 </select>
                             </label>
-                        } else {
-                            <div class={classes!("w-full", "space-y-2")}>
-                                <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "自动候选账号（可选，空则走全池）" }</div>
-                                if props.accounts.is_empty() {
-                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
-                                        { "当前没有可供绑定的账号。" }
-                                    </div>
-                                } else {
-                                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                                        { for props.accounts.iter().map(|account| {
-                                            let account_name = account.name.clone();
-                                            let checked = auto_account_names.iter().any(|name| name == &account.name);
-                                            let toggle_auto_account_name = toggle_auto_account_name.clone();
-                                            html! {
-                                                <label class={classes!(
-                                                    "flex", "cursor-pointer", "items-start", "gap-2", "rounded-lg", "border", "px-3", "py-2",
-                                                    if checked {
-                                                        "border-sky-500/30 bg-sky-500/8"
-                                                    } else {
-                                                        "border-[var(--border)] bg-[var(--surface-alt)]"
-                                                    }
-                                                )}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={checked}
-                                                        onchange={Callback::from(move |_| toggle_auto_account_name.emit(account_name.clone()))}
-                                                    />
-                                                    <span class={classes!("font-medium")}>{ account.name.clone() }</span>
-                                                </label>
-                                            }
+                            if *route_strategy == "fixed" {
+                                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                    <span>{ "账号" }</span>
+                                    <select
+                                        key={format!("{}-fixed-{}", props.key_item.id, (*fixed_account_name).clone())}
+                                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                                        onchange={{
+                                            let fixed_account_name = fixed_account_name.clone();
+                                            Callback::from(move |event: Event| {
+                                                if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                    fixed_account_name.set(target.value());
+                                                }
+                                            })
+                                        }}
+                                    >
+                                        <option value="" selected={(*fixed_account_name).is_empty()}>{ "-- 选择 --" }</option>
+                                        { for props.accounts.iter().map(|account| html! {
+                                            <option value={account.name.clone()} selected={*fixed_account_name == account.name}>{ account.name.clone() }</option>
                                         }) }
-                                    </div>
-                                }
-                            </div>
-                        }
-                    </div>
-                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ route_summary }</div>
+                                    </select>
+                                </label>
+                            } else {
+                                <div class={classes!("w-full", "space-y-2")}>
+                                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "自动候选账号（可选，空则走全池）" }</div>
+                                    if props.accounts.is_empty() {
+                                        <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
+                                            { "当前没有可供绑定的账号。" }
+                                        </div>
+                                    } else {
+                                        <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                            { for props.accounts.iter().map(|account| {
+                                                let account_name = account.name.clone();
+                                                let checked = auto_account_names.iter().any(|name| name == &account.name);
+                                                let toggle_auto_account_name = toggle_auto_account_name.clone();
+                                                html! {
+                                                    <label class={classes!(
+                                                        "flex", "cursor-pointer", "items-start", "gap-2", "rounded-lg", "border", "px-3", "py-2",
+                                                        if checked {
+                                                            "border-sky-500/30 bg-sky-500/8"
+                                                        } else {
+                                                            "border-[var(--border)] bg-[var(--surface-alt)]"
+                                                        }
+                                                    )}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onchange={Callback::from(move |_| toggle_auto_account_name.emit(account_name.clone()))}
+                                                        />
+                                                        <span class={classes!("font-medium")}>{ account.name.clone() }</span>
+                                                    </label>
+                                                }
+                                            }) }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
                 </div>
                 <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Model Mapping" }</div>
                             <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
-                                { "默认是 source -> source；这里只保存覆盖项。你可以把 Haiku 改写到 Sonnet 或 Opus。" }
+                                { format!("{} · overrides {}", mapping_overrides_preview, model_override_count) }
                             </div>
                         </div>
-                        <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_reset_model_map}>
-                            { "Reset To Identity" }
-                        </button>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "text-xs")}
+                                onclick={{
+                                    let model_mapping_expanded = model_mapping_expanded.clone();
+                                    Callback::from(move |_| model_mapping_expanded.set(!*model_mapping_expanded))
+                                }}
+                            >
+                                { if *model_mapping_expanded { "Hide Model Mapping" } else { "Show Model Mapping" } }
+                            </button>
+                            if *model_mapping_expanded {
+                                <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_reset_model_map}>
+                                    { "Reset To Identity" }
+                                </button>
+                            }
+                        </div>
                     </div>
-                    if props.available_models.is_empty() {
-                        <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ "当前没有加载到可用模型目录。" }</div>
-                    } else {
-                        <div class={classes!("mt-3", "space-y-2")}>
-                            { for props.available_models.iter().map(|source_model| {
-                                let source_id = source_model.id.clone();
-                                let current_target = (*model_name_map)
-                                    .get(&source_id)
-                                    .cloned()
-                                    .unwrap_or_else(|| source_id.clone());
-                                let model_name_map = model_name_map.clone();
-                                let target_models = props.available_models.clone();
-                                html! {
-                                    <div class={classes!("grid", "gap-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-3", "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]")}>
-                                        <div>
-                                            <div class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>{ source_model.display_name.clone() }</div>
-                                            <div class={classes!("mt-1", "font-mono", "text-[11px]", "break-all", "text-[var(--muted)]")}>{ source_model.id.clone() }</div>
+                    if *model_mapping_expanded {
+                        if props.available_models.is_empty() {
+                            <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ "当前没有加载到可用模型目录。" }</div>
+                        } else {
+                            <div class={classes!("mt-3", "space-y-2")}>
+                                { for props.available_models.iter().map(|source_model| {
+                                    let source_id = source_model.id.clone();
+                                    let current_target = (*model_name_map)
+                                        .get(&source_id)
+                                        .cloned()
+                                        .unwrap_or_else(|| source_id.clone());
+                                    let model_name_map = model_name_map.clone();
+                                    let target_models = props.available_models.clone();
+                                    html! {
+                                        <div class={classes!("grid", "gap-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-3", "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]")}>
+                                            <div>
+                                                <div class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>{ source_model.display_name.clone() }</div>
+                                                <div class={classes!("mt-1", "font-mono", "text-[11px]", "break-all", "text-[var(--muted)]")}>{ source_model.id.clone() }</div>
+                                            </div>
+                                            <label class={classes!("text-sm")}>
+                                                <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Map To" }</div>
+                                                <select
+                                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                                                    value={current_target}
+                                                    onchange={Callback::from(move |event: Event| {
+                                                        let input: HtmlSelectElement = event.target_unchecked_into();
+                                                        let selected = input.value();
+                                                        let mut next = (*model_name_map).clone();
+                                                        if selected == source_id {
+                                                            next.remove(&source_id);
+                                                        } else {
+                                                            next.insert(source_id.clone(), selected);
+                                                        }
+                                                        model_name_map.set(next);
+                                                    })}
+                                                >
+                                                    { for target_models.iter().map(|target_model| html! {
+                                                        <option value={target_model.id.clone()}>
+                                                            { format!("{} · {}", target_model.display_name, target_model.id) }
+                                                        </option>
+                                                    }) }
+                                                </select>
+                                            </label>
                                         </div>
-                                        <label class={classes!("text-sm")}>
-                                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Map To" }</div>
-                                            <select
-                                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
-                                                value={current_target}
-                                                onchange={Callback::from(move |event: Event| {
-                                                    let input: HtmlSelectElement = event.target_unchecked_into();
-                                                    let selected = input.value();
-                                                    let mut next = (*model_name_map).clone();
-                                                    if selected == source_id {
-                                                        next.remove(&source_id);
-                                                    } else {
-                                                        next.insert(source_id.clone(), selected);
-                                                    }
-                                                    model_name_map.set(next);
-                                                })}
-                                            >
-                                                { for target_models.iter().map(|target_model| html! {
-                                                    <option value={target_model.id.clone()}>
-                                                        { format!("{} · {}", target_model.display_name, target_model.id) }
-                                                    </option>
-                                                }) }
-                                            </select>
-                                        </label>
-                                    </div>
-                                }
-                            }) }
-                        </div>
-                        <div class={classes!("mt-3", "font-mono", "text-[11px]", "text-[var(--muted)]", "break-words")}>
-                            { format!("overrides: {}", mapping_overrides_preview) }
-                        </div>
+                                    }
+                                }) }
+                            </div>
+                            <div class={classes!("mt-3", "font-mono", "text-[11px]", "text-[var(--muted)]", "break-words")}>
+                                { format!("overrides: {}", mapping_overrides_preview) }
+                            </div>
+                        }
                     }
                 </div>
             </div>
@@ -1272,6 +1392,9 @@ pub fn admin_kiro_gateway_page() -> Html {
     let usage_error = use_state(|| None::<String>);
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
+    let runtime_config = use_state(|| None::<LlmGatewayRuntimeConfig>);
+    let kiro_cache_kmodels_json = use_state(String::new);
+    let saving_kmodel_config = use_state(|| false);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
     let flash = use_state(|| None::<String>);
@@ -1362,6 +1485,8 @@ pub fn admin_kiro_gateway_page() -> Html {
         let kiro_models = kiro_models.clone();
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
+        let runtime_config = runtime_config.clone();
+        let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
         let loading = loading.clone();
         let error = error.clone();
         use_effect_with(*refresh_tick, move |_| {
@@ -1370,18 +1495,22 @@ pub fn admin_kiro_gateway_page() -> Html {
             let kiro_models = kiro_models.clone();
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
+            let runtime_config = runtime_config.clone();
+            let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
             let loading = loading.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 loading.set(true);
                 error.set(None);
                 let (
+                    config_result,
                     accounts_result,
                     keys_result,
                     models_result,
                     proxy_configs_result,
                     proxy_bindings_result,
                 ) = futures::join!(
+                    fetch_admin_llm_gateway_config(),
                     fetch_admin_kiro_accounts(),
                     fetch_admin_kiro_keys(),
                     fetch_kiro_models(),
@@ -1389,6 +1518,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     fetch_admin_llm_gateway_proxy_bindings(),
                 );
                 match (
+                    config_result,
                     accounts_result,
                     keys_result,
                     models_result,
@@ -1396,23 +1526,28 @@ pub fn admin_kiro_gateway_page() -> Html {
                     proxy_bindings_result,
                 ) {
                     (
+                        Ok(config_resp),
                         Ok(accounts_resp),
                         Ok(keys_resp),
                         Ok(models_resp),
                         Ok(proxy_configs_resp),
                         Ok(proxy_bindings_resp),
                     ) => {
+                        kiro_cache_kmodels_json
+                            .set(format_json_for_textarea(&config_resp.kiro_cache_kmodels_json));
+                        runtime_config.set(Some(config_resp));
                         accounts.set(accounts_resp.accounts);
                         keys.set(keys_resp.keys);
                         kiro_models.set(models_resp.data);
                         proxy_configs.set(proxy_configs_resp.proxy_configs);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
                     },
-                    (Err(err), _, _, _, _)
-                    | (_, Err(err), _, _, _)
-                    | (_, _, Err(err), _, _)
-                    | (_, _, _, Err(err), _)
-                    | (_, _, _, _, Err(err)) => {
+                    (Err(err), _, _, _, _, _)
+                    | (_, Err(err), _, _, _, _)
+                    | (_, _, Err(err), _, _, _)
+                    | (_, _, _, Err(err), _, _)
+                    | (_, _, _, _, Err(err), _)
+                    | (_, _, _, _, _, Err(err)) => {
                         error.set(Some(err));
                     },
                 }
@@ -1440,6 +1575,47 @@ pub fn admin_kiro_gateway_page() -> Html {
         Callback::from(move |(label, value): (String, String)| {
             copy_text(&value);
             notify.emit((format!("Copied {} to clipboard.", label), false));
+        })
+    };
+
+    let on_save_kiro_cache_kmodels = {
+        let runtime_config = runtime_config.clone();
+        let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json.clone();
+        let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+        let saving_kmodel_config = saving_kmodel_config.clone();
+        let notify = notify.clone();
+        let error = error.clone();
+        Callback::from(move |_| {
+            let runtime_config = runtime_config.clone();
+            let kiro_cache_kmodels_json = (*kiro_cache_kmodels_json).clone();
+            let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json_input.clone();
+            let saving_kmodel_config = saving_kmodel_config.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(mut next_config) = (*runtime_config).clone() else {
+                    let message = "Kiro runtime config is not loaded yet.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                next_config.kiro_cache_kmodels_json = kiro_cache_kmodels_json;
+                saving_kmodel_config.set(true);
+                match update_admin_llm_gateway_config(&next_config).await {
+                    Ok(saved) => {
+                        error.set(None);
+                        kiro_cache_kmodels_json_input
+                            .set(format_json_for_textarea(&saved.kiro_cache_kmodels_json));
+                        runtime_config.set(Some(saved.clone()));
+                        notify.emit(("Saved Kiro cache Kmodel config.".to_string(), false));
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("Failed to save Kiro cache Kmodels.\n{err}"), true));
+                    },
+                }
+                saving_kmodel_config.set(false);
+            });
         })
     };
 
@@ -1767,6 +1943,48 @@ pub fn admin_kiro_gateway_page() -> Html {
                             </p>
                         }
                     }
+                }
+            </section>
+            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Conservative Cache Kmodels" }</h2>
+                        <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "这里的 JSON 按模型配置 Kiro cache 保守估算系数。它会直接影响对外 Anthropic usage 里的 cache_read_input_tokens；系统默认已经内置当前拟合值，只有你需要重新标定时才需要改这里。" }
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal", "btn-terminal-primary")}
+                        disabled={*saving_kmodel_config}
+                        onclick={on_save_kiro_cache_kmodels}
+                    >
+                        { if *saving_kmodel_config { "Saving..." } else { "Save Kmodels" } }
+                    </button>
+                </div>
+                <label class={classes!("mt-4", "block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Kmodel JSON" }</div>
+                    <textarea
+                        class={classes!("min-h-[18rem]", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "font-mono", "text-xs", "leading-6")}
+                        value={(*kiro_cache_kmodels_json).clone()}
+                        oninput={{
+                            let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlTextAreaElement = event.target_unchecked_into();
+                                kiro_cache_kmodels_json.set(input.value());
+                            })
+                        }}
+                    />
+                </label>
+                if let Some(config) = (*runtime_config).clone() {
+                    <div class={classes!("mt-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]", "space-y-1")}>
+                        <div class={classes!("font-mono")}>
+                            { format!("current stored bytes: {}", config.kiro_cache_kmodels_json.len()) }
+                        </div>
+                        <div>
+                            { "公式固定为保守下界反推；这里只允许改每模型 K 值，不开放额外 heuristic 参数。" }
+                        </div>
+                    </div>
                 }
             </section>
             } // end TAB_OVERVIEW
@@ -2173,9 +2391,10 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        build_kiro_route_patch_fields, kiro_key_route_summary, sanitize_kiro_auto_account_names,
-        sanitize_kiro_fixed_account_name,
+        build_kiro_route_patch_fields, kiro_key_candidate_credit_summary, kiro_key_route_summary,
+        sanitize_kiro_auto_account_names, sanitize_kiro_fixed_account_name,
     };
+    use crate::api::{KiroAccountView, KiroBalanceView, KiroCacheView};
 
     #[test]
     fn sanitize_kiro_auto_account_names_drops_unknown_and_sorts() {
@@ -2214,5 +2433,57 @@ mod tests {
         assert!(strategy.is_empty());
         assert!(fixed_account_name.is_empty());
         assert!(auto_account_names.is_empty());
+    }
+
+    #[test]
+    fn kiro_key_candidate_credit_summary_uses_auto_subset_only() {
+        let accounts = vec![
+            test_account("alpha", Some((100.0, 40.0))),
+            test_account("beta", Some((60.0, 10.0))),
+            test_account("gamma", Some((30.0, 5.0))),
+        ];
+
+        let summary =
+            kiro_key_candidate_credit_summary("auto", "", &["beta".to_string()], &accounts);
+
+        assert_eq!(summary.candidate_count, 1);
+        assert_eq!(summary.loaded_balance_count, 1);
+        assert_eq!(summary.missing_balance_count, 0);
+        assert_eq!(summary.total_limit, 60.0);
+        assert_eq!(summary.total_remaining, 10.0);
+    }
+
+    #[test]
+    fn kiro_key_candidate_credit_summary_counts_missing_balances() {
+        let accounts = vec![test_account("alpha", Some((100.0, 40.0))), test_account("beta", None)];
+
+        let summary = kiro_key_candidate_credit_summary("fixed", "beta", &[], &accounts);
+
+        assert_eq!(summary.candidate_count, 1);
+        assert_eq!(summary.loaded_balance_count, 0);
+        assert_eq!(summary.missing_balance_count, 1);
+        assert_eq!(summary.total_limit, 0.0);
+        assert_eq!(summary.total_remaining, 0.0);
+    }
+
+    fn test_account(name: &str, balance: Option<(f64, f64)>) -> KiroAccountView {
+        KiroAccountView {
+            name: name.to_string(),
+            balance: balance.map(|(usage_limit, remaining)| KiroBalanceView {
+                current_usage: (usage_limit - remaining).max(0.0),
+                usage_limit,
+                remaining,
+                next_reset_at: None,
+                subscription_title: None,
+            }),
+            cache: KiroCacheView {
+                status: "ready".to_string(),
+                refresh_interval_seconds: 300,
+                last_checked_at: None,
+                last_success_at: None,
+                error_message: None,
+            },
+            ..KiroAccountView::default()
+        }
     }
 }

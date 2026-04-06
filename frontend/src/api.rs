@@ -4645,6 +4645,7 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
+    pub kiro_cache_kmodels_json: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -5224,6 +5225,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
         })
     }
 

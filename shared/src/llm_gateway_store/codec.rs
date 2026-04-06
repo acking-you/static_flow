@@ -23,9 +23,10 @@ use super::{
         llm_gateway_token_requests_schema, llm_gateway_usage_events_schema,
     },
     types::{
-        LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-        LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
-        LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        default_kiro_cache_kmodels_json, LlmGatewayAccountContributionRequestRecord,
+        LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
+        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
+        LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
@@ -249,6 +250,7 @@ pub fn build_runtime_config_batch(
     let mut usage_event_flush_batch_size = UInt64Builder::new();
     let mut usage_event_flush_interval_seconds = UInt64Builder::new();
     let mut usage_event_flush_max_buffer_bytes = UInt64Builder::new();
+    let mut kiro_cache_kmodels_json = StringBuilder::new();
     let mut updated_at = TimestampMillisecondBuilder::new();
 
     for record in records {
@@ -273,6 +275,7 @@ pub fn build_runtime_config_batch(
         usage_event_flush_batch_size.append_value(record.usage_event_flush_batch_size);
         usage_event_flush_interval_seconds.append_value(record.usage_event_flush_interval_seconds);
         usage_event_flush_max_buffer_bytes.append_value(record.usage_event_flush_max_buffer_bytes);
+        kiro_cache_kmodels_json.append_value(&record.kiro_cache_kmodels_json);
         updated_at.append_value(record.updated_at);
     }
 
@@ -292,6 +295,7 @@ pub fn build_runtime_config_batch(
         Arc::new(usage_event_flush_batch_size.finish()),
         Arc::new(usage_event_flush_interval_seconds.finish()),
         Arc::new(usage_event_flush_max_buffer_bytes.finish()),
+        Arc::new(kiro_cache_kmodels_json.finish()),
         Arc::new(updated_at.finish()),
     ])
     .context("failed to build llm gateway runtime config batch")
@@ -864,6 +868,9 @@ pub fn batches_to_runtime_config(
         let usage_event_flush_max_buffer_bytes = batch
             .column_by_name("usage_event_flush_max_buffer_bytes")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let kiro_cache_kmodels_json = batch
+            .column_by_name("kiro_cache_kmodels_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let updated_at = required_ts_col(batch, "updated_at")?;
         for idx in 0..batch.num_rows() {
             rows.push(LlmGatewayRuntimeConfigRecord {
@@ -910,6 +917,9 @@ pub fn batches_to_runtime_config(
                 usage_event_flush_max_buffer_bytes: usage_event_flush_max_buffer_bytes
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES),
+                kiro_cache_kmodels_json: kiro_cache_kmodels_json
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(default_kiro_cache_kmodels_json),
                 updated_at: updated_at.value(idx),
             });
         }

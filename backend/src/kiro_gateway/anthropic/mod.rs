@@ -75,6 +75,13 @@ struct UsagePersistContext {
     event_context: KiroEventContext,
 }
 
+#[derive(Clone)]
+struct StreamRequestContext {
+    state: AppState,
+    event_context: KiroEventContext,
+    request_validation_enabled: bool,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct DiagnosticRequestContext<'a> {
     event_context: &'a KiroEventContext,
@@ -383,6 +390,104 @@ fn zero_usage_summary() -> KiroUsageSummary {
         output_tokens: 0,
         credit_usage: None,
         credit_usage_missing: false,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct KiroCacheEstimateInput<'a> {
+    model: &'a str,
+    request_input_tokens: i32,
+    context_input_tokens: Option<i32>,
+    output_tokens: i32,
+    credit_usage: Option<f64>,
+    kmodels: &'a std::collections::BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KiroCacheEstimate {
+    input_tokens_total: i32,
+    input_uncached_tokens: i32,
+    input_cached_tokens: i32,
+}
+
+fn normalize_kiro_kmodel_name(model: &str) -> &str {
+    match model {
+        "claude-opus-4.6" => "claude-opus-4-6",
+        _ => model,
+    }
+}
+
+fn estimate_kiro_cache_usage(input: KiroCacheEstimateInput<'_>) -> KiroCacheEstimate {
+    let request_input = input.request_input_tokens.max(0);
+    let context_input = input.context_input_tokens.unwrap_or_default().max(0);
+    let safe_input = match (request_input > 0, context_input > 0) {
+        (true, true) => request_input.min(context_input),
+        (true, false) => request_input,
+        (false, true) => context_input,
+        (false, false) => 0,
+    };
+    let output_tokens = input.output_tokens.max(0);
+    let Some(observed_credit) = input
+        .credit_usage
+        .filter(|value| value.is_finite() && *value >= 0.0)
+    else {
+        return KiroCacheEstimate {
+            input_tokens_total: safe_input,
+            input_uncached_tokens: safe_input,
+            input_cached_tokens: 0,
+        };
+    };
+    let Some(kmodel) = input
+        .kmodels
+        .get(normalize_kiro_kmodel_name(input.model))
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
+    else {
+        return KiroCacheEstimate {
+            input_tokens_total: safe_input,
+            input_uncached_tokens: safe_input,
+            input_cached_tokens: 0,
+        };
+    };
+    let safe_full_cost = kmodel * (safe_input as f64 + 5.0 * output_tokens as f64);
+    if !safe_full_cost.is_finite() || safe_full_cost <= observed_credit || safe_input <= 0 {
+        return KiroCacheEstimate {
+            input_tokens_total: safe_input,
+            input_uncached_tokens: safe_input,
+            input_cached_tokens: 0,
+        };
+    }
+    let cached = ((safe_full_cost - observed_credit) / (0.9 * kmodel)).floor();
+    let cached = cached.max(0.0).min(safe_input as f64) as i32;
+    KiroCacheEstimate {
+        input_tokens_total: safe_input,
+        input_uncached_tokens: safe_input - cached,
+        input_cached_tokens: cached,
+    }
+}
+
+fn build_kiro_usage_summary(
+    model: &str,
+    request_input_tokens: i32,
+    context_input_tokens: Option<i32>,
+    output_tokens: i32,
+    credit_usage: Option<f64>,
+    kmodels: &std::collections::BTreeMap<String, f64>,
+) -> KiroUsageSummary {
+    let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
+        model,
+        request_input_tokens,
+        context_input_tokens,
+        output_tokens,
+        credit_usage,
+        kmodels,
+    });
+    KiroUsageSummary {
+        input_uncached_tokens: estimate.input_uncached_tokens,
+        input_cached_tokens: estimate.input_cached_tokens,
+        output_tokens,
+        credit_usage,
+        credit_usage_missing: credit_usage.is_none(),
     }
 }
 
@@ -850,11 +955,14 @@ async fn handle_stream_request(
         false,
     );
     let stream = create_sse_stream(
+        StreamRequestContext {
+            state: usage_ctx.state.clone(),
+            event_context: usage_ctx.event_context.clone(),
+            request_validation_enabled,
+        },
         response,
         StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, tool_name_map),
         log_ctx,
-        usage_ctx.event_context.clone(),
-        request_validation_enabled,
         done_tx,
         usage_ctx.state.shutdown_rx.clone(),
     );
@@ -926,11 +1034,14 @@ async fn handle_stream_request_buffered(
         true,
     );
     let stream = create_buffered_sse_stream(
+        StreamRequestContext {
+            state: usage_ctx.state.clone(),
+            event_context: usage_ctx.event_context.clone(),
+            request_validation_enabled,
+        },
         response,
         BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map),
         log_ctx,
-        usage_ctx.event_context.clone(),
-        request_validation_enabled,
         done_tx,
         usage_ctx.state.shutdown_rx.clone(),
     );
@@ -1134,13 +1245,15 @@ async fn handle_non_stream_request(
     }
     content.extend(tool_uses);
     let output_tokens = token::estimate_output_tokens(&content);
-    let usage = KiroUsageSummary {
-        input_uncached_tokens: context_input_tokens.unwrap_or(request_ctx.input_tokens),
-        input_cached_tokens: 0,
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    let usage = build_kiro_usage_summary(
+        &request_ctx.model,
+        request_ctx.input_tokens,
+        context_input_tokens,
         output_tokens,
-        credit_usage: credit_usage_observed.then_some(credit_usage.max(0.0)),
-        credit_usage_missing: !credit_usage_observed,
-    };
+        credit_usage_observed.then_some(credit_usage.max(0.0)),
+        &runtime_config.kiro_cache_kmodels,
+    );
     tracing::info!(
         model = %request_ctx.model,
         stop_reason = %stop_reason,
@@ -1309,11 +1422,10 @@ fn truncate_summary(text: &str, max_chars: usize) -> String {
 }
 
 fn create_sse_stream(
+    request_ctx: StreamRequestContext,
     response: reqwest::Response,
     mut ctx: StreamContext,
     log_ctx: KiroUpstreamLogContext,
-    event_context: KiroEventContext,
-    request_validation_enabled: bool,
     done_tx: oneshot::Sender<UsagePersistOutcome>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
@@ -1376,8 +1488,9 @@ fn create_sse_stream(
                             log_kiro_stream_read_error(&log_ctx, "stream", &err);
                             failure_diagnostic_payload = Some(build_failure_diagnostic_payload(
                                 DiagnosticRequestContext {
-                                    event_context: &event_context,
-                                    request_validation_enabled,
+                                    event_context: &request_ctx.event_context,
+                                    request_validation_enabled: request_ctx
+                                        .request_validation_enabled,
                                     stream: true,
                                     buffered_for_cc: false,
                                 },
@@ -1412,13 +1525,15 @@ fn create_sse_stream(
             "finished kiro streaming response"
         );
         if let Some(sender) = done_tx.take() {
-            let summary = KiroUsageSummary {
-                input_uncached_tokens: input_tokens,
-                input_cached_tokens: 0,
+            let runtime_config = request_ctx.state.llm_gateway_runtime_config.read().clone();
+            let summary = build_kiro_usage_summary(
+                ctx.model.as_str(),
+                ctx.request_input_tokens(),
+                ctx.context_input_tokens(),
                 output_tokens,
                 credit_usage,
-                credit_usage_missing,
-            };
+                &runtime_config.kiro_cache_kmodels,
+            );
             let _ = match failure_diagnostic_payload {
                 Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
                     status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
@@ -1439,11 +1554,10 @@ fn create_sse_stream(
 }
 
 fn create_buffered_sse_stream(
+    request_ctx: StreamRequestContext,
     response: reqwest::Response,
     mut ctx: BufferedStreamContext,
     log_ctx: KiroUpstreamLogContext,
-    event_context: KiroEventContext,
-    request_validation_enabled: bool,
     done_tx: oneshot::Sender<UsagePersistOutcome>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
@@ -1509,8 +1623,9 @@ fn create_buffered_sse_stream(
                             log_kiro_stream_read_error(&log_ctx, "buffered_stream", &err);
                             failure_diagnostic_payload = Some(build_failure_diagnostic_payload(
                                 DiagnosticRequestContext {
-                                    event_context: &event_context,
-                                    request_validation_enabled,
+                                    event_context: &request_ctx.event_context,
+                                    request_validation_enabled: request_ctx
+                                        .request_validation_enabled,
                                     stream: true,
                                     buffered_for_cc: true,
                                 },
@@ -1532,9 +1647,38 @@ fn create_buffered_sse_stream(
             }
         }
 
-        let all_events = ctx.finish_and_get_all_events();
+        let mut all_events = ctx.finish_and_get_all_events();
         let (input_tokens, output_tokens) = ctx.final_usage();
         let (credit_usage, credit_usage_missing) = ctx.final_credit_usage();
+        let runtime_config = request_ctx.state.llm_gateway_runtime_config.read().clone();
+        let summary = build_kiro_usage_summary(
+            ctx.model(),
+            ctx.estimated_input_tokens(),
+            ctx.context_input_tokens(),
+            output_tokens,
+            credit_usage,
+            &runtime_config.kiro_cache_kmodels,
+        );
+        for event in &mut all_events {
+            if let Some(usage) = event
+                .data
+                .get_mut("message")
+                .and_then(|message| message.get_mut("usage"))
+            {
+                usage["input_tokens"] = serde_json::json!(
+                    summary.input_uncached_tokens + summary.input_cached_tokens
+                );
+                usage["cache_read_input_tokens"] =
+                    serde_json::json!(summary.input_cached_tokens);
+            }
+            if event.event == "message_delta" {
+                if let Some(usage) = event.data.get_mut("usage") {
+                    usage["input_tokens"] = serde_json::json!(
+                        summary.input_uncached_tokens + summary.input_cached_tokens
+                    );
+                }
+            }
+        }
         tracing::info!(
             model = %ctx.model(),
             buffered_event_count = all_events.len(),
@@ -1545,13 +1689,6 @@ fn create_buffered_sse_stream(
             "finished kiro buffered streaming response"
         );
         if let Some(sender) = done_tx.take() {
-            let summary = KiroUsageSummary {
-                input_uncached_tokens: input_tokens,
-                input_cached_tokens: 0,
-                output_tokens,
-                credit_usage,
-                credit_usage_missing,
-            };
             let _ = match failure_diagnostic_payload {
                 Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
                     status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
@@ -1621,6 +1758,8 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::json;
 
     use super::*;
@@ -1676,6 +1815,14 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
         }
+    }
+
+    fn sample_kmodels() -> BTreeMap<String, f64> {
+        BTreeMap::from([
+            ("claude-opus-4-6".to_string(), 8.061927916785985e-06),
+            ("claude-sonnet-4-6".to_string(), 5.055065250835128e-06),
+            ("claude-haiku-4-5-20251001".to_string(), 2.3681034438052206e-06),
+        ])
     }
 
     #[test]
@@ -1972,5 +2119,42 @@ mod tests {
         assert_eq!(normalized.tool_normalization_events[0].tool_index, 0);
         assert_eq!(normalized.tool_normalization_events[0].tool_name, "demo_tool");
         assert_eq!(normalized.tool_normalization_events[0].reason, "empty_tool_description");
+    }
+
+    #[test]
+    fn estimate_cache_prefers_smaller_non_zero_input_source() {
+        let kmodels = sample_kmodels();
+        let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
+            model: "claude-opus-4-6",
+            request_input_tokens: 12_000,
+            context_input_tokens: Some(9_000),
+            output_tokens: 400,
+            credit_usage: Some(0.02),
+            kmodels: &kmodels,
+        });
+
+        assert_eq!(estimate.input_tokens_total, 9_000);
+        assert!(estimate.input_cached_tokens <= 9_000);
+        assert_eq!(
+            estimate.input_uncached_tokens + estimate.input_cached_tokens,
+            estimate.input_tokens_total
+        );
+    }
+
+    #[test]
+    fn estimate_cache_returns_zero_when_credit_exceeds_safe_full_cost() {
+        let kmodels = sample_kmodels();
+        let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
+            model: "claude-sonnet-4-6",
+            request_input_tokens: 6_000,
+            context_input_tokens: Some(5_000),
+            output_tokens: 200,
+            credit_usage: Some(10.0),
+            kmodels: &kmodels,
+        });
+
+        assert_eq!(estimate.input_tokens_total, 5_000);
+        assert_eq!(estimate.input_cached_tokens, 0);
+        assert_eq!(estimate.input_uncached_tokens, 5_000);
     }
 }

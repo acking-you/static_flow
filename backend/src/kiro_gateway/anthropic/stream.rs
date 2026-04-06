@@ -278,7 +278,23 @@ impl StreamContext {
     }
 
     pub fn final_usage(&self) -> (i32, i32) {
-        (self.context_input_tokens.unwrap_or(self.input_tokens), self.output_tokens.max(1))
+        let request_input = self.input_tokens.max(0);
+        let context_input = self.context_input_tokens.unwrap_or_default().max(0);
+        let safe_input = match (request_input > 0, context_input > 0) {
+            (true, true) => request_input.min(context_input),
+            (true, false) => request_input,
+            (false, true) => context_input,
+            (false, false) => 0,
+        };
+        (safe_input, self.output_tokens.max(1))
+    }
+
+    pub fn request_input_tokens(&self) -> i32 {
+        self.input_tokens
+    }
+
+    pub fn context_input_tokens(&self) -> Option<i32> {
+        self.context_input_tokens
     }
 
     pub fn final_credit_usage(&self) -> (Option<f64>, bool) {
@@ -722,6 +738,10 @@ impl BufferedStreamContext {
         self.estimated_input_tokens
     }
 
+    pub fn context_input_tokens(&self) -> Option<i32> {
+        self.inner.context_input_tokens()
+    }
+
     /// Finalizes the stream: appends final events, patches input_tokens in
     /// `message_start`, and returns all buffered events.
     pub fn finish_and_get_all_events(&mut self) -> Vec<SseEvent> {
@@ -731,10 +751,7 @@ impl BufferedStreamContext {
             self.initial_events_generated = true;
         }
         self.event_buffer.extend(self.inner.generate_final_events());
-        let input_tokens = self
-            .inner
-            .context_input_tokens
-            .unwrap_or(self.estimated_input_tokens);
+        let (input_tokens, _) = self.inner.final_usage();
         for event in &mut self.event_buffer {
             if event.event == "message_start" {
                 if let Some(usage) = event
@@ -1095,7 +1112,7 @@ mod tests {
     }
 
     #[test]
-    fn buffered_stream_context_rewrites_message_start_input_tokens() {
+    fn buffered_stream_context_rewrites_message_start_input_tokens_conservatively() {
         let mut ctx = BufferedStreamContext::new("claude-sonnet-4-6", 123, false, HashMap::new());
         ctx.process_and_buffer(&Event::ContextUsage(ContextUsageEvent {
             context_usage_percentage: 12.5,
@@ -1106,10 +1123,7 @@ mod tests {
             .iter()
             .find(|event| event.event == "message_start")
             .expect("should have message_start");
-        assert_eq!(
-            message_start.data["message"]["usage"]["input_tokens"],
-            serde_json::json!(125_000)
-        );
+        assert_eq!(message_start.data["message"]["usage"]["input_tokens"], serde_json::json!(123));
     }
 
     #[test]

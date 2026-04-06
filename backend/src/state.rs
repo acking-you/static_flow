@@ -1,11 +1,11 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{
@@ -16,7 +16,8 @@ use static_flow_shared::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     llm_gateway_store::{
-        self, LlmGatewayStore, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        self, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, LlmGatewayStore,
+        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
@@ -202,6 +203,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
+    pub kiro_cache_kmodels_json: String,
+    pub kiro_cache_kmodels: BTreeMap<String, f64>,
 }
 
 impl Default for LlmGatewayRuntimeConfig {
@@ -228,8 +231,27 @@ impl Default for LlmGatewayRuntimeConfig {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+            kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
+            kiro_cache_kmodels: default_kiro_cache_kmodels(),
         }
     }
+}
+
+pub fn parse_kiro_cache_kmodels_json(value: &str) -> Result<BTreeMap<String, f64>> {
+    let map: BTreeMap<String, f64> =
+        serde_json::from_str(value).map_err(|err| anyhow!("invalid json: {err}"))?;
+    if map.is_empty() {
+        return Err(anyhow!("kmodel map must not be empty"));
+    }
+    for (model, coeff) in &map {
+        if model.trim().is_empty() {
+            return Err(anyhow!("kmodel entry has empty model name"));
+        }
+        if !coeff.is_finite() || *coeff <= 0.0 {
+            return Err(anyhow!("kmodel entry `{model}` must be a positive finite number"));
+        }
+    }
+    Ok(map)
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +373,15 @@ impl AppState {
             llm_gateway_runtime_config_record.usage_event_flush_interval_seconds;
         let usage_event_flush_max_buffer_bytes =
             llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
+        let kiro_cache_kmodels_json = llm_gateway_runtime_config_record.kiro_cache_kmodels_json;
+        let kiro_cache_kmodels = parse_kiro_cache_kmodels_json(&kiro_cache_kmodels_json)
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    error = %err,
+                    "invalid kiro cache kmodels json in runtime config; falling back to defaults"
+                );
+                default_kiro_cache_kmodels()
+            });
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
@@ -366,6 +397,7 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            kiro_cache_kmodels_json,
             "loaded llm gateway runtime config from storage"
         );
         let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
@@ -383,6 +415,8 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            kiro_cache_kmodels_json,
+            kiro_cache_kmodels,
         }));
         let auths_dir = crate::llm_gateway::resolve_auths_dir();
         let account_pool = Arc::new(crate::llm_gateway::AccountPool::new(auths_dir.clone()));
@@ -428,6 +462,7 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            kiro_cache_kmodels_json = %llm_gateway_runtime_config.read().kiro_cache_kmodels_json,
             "initialized llm gateway runtime state"
         );
         let comment_worker_tx = comment_worker::spawn_comment_worker(

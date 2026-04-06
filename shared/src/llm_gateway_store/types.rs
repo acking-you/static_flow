@@ -67,6 +67,9 @@ pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 256;
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
 /// Default maximum buffered usage-event payload size before a forced flush.
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_KIRO_CACHE_KMODEL_OPUS_46: f64 = 8.061927916785985e-06;
+pub const DEFAULT_KIRO_CACHE_KMODEL_SONNET_46: f64 = 5.055065250835128e-06;
+pub const DEFAULT_KIRO_CACHE_KMODEL_HAIKU_45: f64 = 2.3681034438052206e-06;
 /// Default Kiro upstream channel concurrency. `1` serializes requests to avoid
 /// bursty Claude Code traffic against the undocumented 5-minute credit window.
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
@@ -82,6 +85,19 @@ pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED: &str = "failed";
 pub const LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED: &str = "submitted";
 pub const LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT: &str = "payment_email_sent";
 pub const LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED: &str = "approved";
+
+pub fn default_kiro_cache_kmodels() -> BTreeMap<String, f64> {
+    BTreeMap::from([
+        ("claude-opus-4-6".to_string(), DEFAULT_KIRO_CACHE_KMODEL_OPUS_46),
+        ("claude-sonnet-4-6".to_string(), DEFAULT_KIRO_CACHE_KMODEL_SONNET_46),
+        ("claude-haiku-4-5-20251001".to_string(), DEFAULT_KIRO_CACHE_KMODEL_HAIKU_45),
+    ])
+}
+
+pub fn default_kiro_cache_kmodels_json() -> String {
+    serde_json::to_string(&default_kiro_cache_kmodels())
+        .expect("default kiro cache kmodels should serialize")
+}
 
 /// Persisted gateway API key row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -373,6 +389,9 @@ pub struct LlmGatewayRuntimeConfigRecord {
     pub usage_event_flush_interval_seconds: u64,
     /// Maximum buffered usage-event payload size before a forced flush.
     pub usage_event_flush_max_buffer_bytes: u64,
+    /// JSON object mapping Kiro model ids to conservative cache-estimation
+    /// coefficients.
+    pub kiro_cache_kmodels_json: String,
     pub updated_at: i64,
 }
 
@@ -401,6 +420,7 @@ impl Default for LlmGatewayRuntimeConfigRecord {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+            kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             updated_at: now_ms(),
         }
     }

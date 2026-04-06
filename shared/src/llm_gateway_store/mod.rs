@@ -26,7 +26,8 @@ use lancedb::{
 };
 
 pub use self::types::{
-    now_ms, LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+    default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, now_ms,
+    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
     LlmGatewayKeyUsageRollupRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
     LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
     LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
@@ -378,6 +379,7 @@ impl LlmGatewayStore {
                 "usage_event_flush_batch_size",
                 "usage_event_flush_interval_seconds",
                 "usage_event_flush_max_buffer_bytes",
+                "kiro_cache_kmodels_json",
                 "updated_at",
             ]))
             .execute()
@@ -1731,6 +1733,32 @@ mod tests {
         assert_eq!(loaded.usage_event_flush_batch_size, 256);
         assert_eq!(loaded.usage_event_flush_interval_seconds, 15);
         assert_eq!(loaded.usage_event_flush_max_buffer_bytes, 8 * 1024 * 1024);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_round_trip_preserves_kiro_cache_kmodels_json() {
+        let dir = temp_store_dir("runtime-config-kiro-cache-kmodels");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let config = LlmGatewayRuntimeConfigRecord {
+            kiro_cache_kmodels_json: r#"{"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&config)
+            .await
+            .expect("upsert runtime config");
+
+        let loaded = store
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(loaded.kiro_cache_kmodels_json, config.kiro_cache_kmodels_json);
 
         let _ = fs::remove_dir_all(&dir);
     }

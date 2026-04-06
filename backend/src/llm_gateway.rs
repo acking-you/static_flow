@@ -115,7 +115,7 @@ use crate::{
         build_client_fingerprint, build_submit_rate_limit_key, enforce_public_submit_rate_limit,
         extract_client_ip,
     },
-    state::{AppState, LlmGatewayRuntimeConfig},
+    state::{parse_kiro_cache_kmodels_json, AppState, LlmGatewayRuntimeConfig},
     upstream_proxy::{
         parse_account_proxy_selection_patch, validate_proxy_url, ResolvedUpstreamProxy,
     },
@@ -190,6 +190,7 @@ fn build_runtime_config_response(
         usage_event_flush_batch_size: config.usage_event_flush_batch_size,
         usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
+        kiro_cache_kmodels_json: config.kiro_cache_kmodels_json.clone(),
     }
 }
 
@@ -417,6 +418,12 @@ pub async fn update_admin_runtime_config(
     {
         return Err(bad_request("usage_event_flush_max_buffer_bytes is out of range"));
     }
+    let kiro_cache_kmodels_json = request
+        .kiro_cache_kmodels_json
+        .clone()
+        .unwrap_or_else(|| current.kiro_cache_kmodels_json.clone());
+    let kiro_cache_kmodels = parse_kiro_cache_kmodels_json(&kiro_cache_kmodels_json)
+        .map_err(|_| bad_request("kiro_cache_kmodels_json is invalid"))?;
     let config = LlmGatewayRuntimeConfigRecord {
         id: "default".to_string(),
         auth_cache_ttl_seconds: ttl,
@@ -433,6 +440,7 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
+        kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
         updated_at: now_ms(),
     };
     state
@@ -457,6 +465,8 @@ pub async fn update_admin_runtime_config(
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
+            kiro_cache_kmodels,
         };
     }
 
@@ -473,6 +483,7 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
+        kiro_cache_kmodels_json = %kiro_cache_kmodels_json,
         "Updated LLM gateway runtime config"
     );
 
@@ -5600,6 +5611,16 @@ mod tests {
 
         let err = validate_runtime_refresh_window(239, 300).expect_err("too-small min should fail");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parse_kiro_cache_kmodels_json_rejects_non_positive_entries() {
+        let err = parse_kiro_cache_kmodels_json(
+            r#"{"claude-opus-4-6":0,"claude-sonnet-4-6":5.055065250835128e-06}"#,
+        )
+        .expect_err("zero coefficient should fail");
+
+        assert!(err.to_string().contains("claude-opus-4-6"));
     }
 
     #[tokio::test(start_paused = true)]

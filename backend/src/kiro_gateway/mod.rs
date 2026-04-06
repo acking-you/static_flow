@@ -103,11 +103,11 @@ pub struct KiroEventContext {
 pub struct KiroUsageSummary {
     /// Number of input tokens billed for this request.
     pub input_uncached_tokens: i32,
-    /// Number of prompt-cache input tokens billed for this request.
+    /// Conservative lower-bound estimate of prompt-cache read tokens.
     ///
-    /// Kiro currently does not expose a cache split in the upstream event
-    /// stream, so this remains `0` unless a future upstream signal becomes
-    /// available.
+    /// Kiro does not expose cache-read token counts directly, so this value
+    /// is derived from observed credit usage plus per-model calibration
+    /// coefficients.
     pub input_cached_tokens: i32,
     /// Number of output tokens billed for this request.
     pub output_tokens: i32,
