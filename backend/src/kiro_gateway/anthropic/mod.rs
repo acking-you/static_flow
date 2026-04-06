@@ -224,9 +224,6 @@ fn maybe_recover_conversation_id_from_anchor(
     let SessionIdSource::GeneratedFallback(reason) = session_tracking.source.clone() else {
         return (conversation_state, session_tracking);
     };
-    if !matches!(simulation_config.mode, KiroCacheSimulationMode::PrefixTree) {
-        return (conversation_state, session_tracking);
-    }
     let Some(recovered_conversation_id) = state
         .kiro_gateway
         .cache_simulator
@@ -716,10 +713,15 @@ fn build_kiro_usage_summary(
             kmodels: &simulation.runtime_config.kiro_cache_kmodels,
         }),
         KiroCacheSimulationMode::PrefixTree => {
-            let cached = simulation
+            let safe_input_u64 = safe_input.max(0) as u64;
+            let projected_total = simulation.projection.projected_input_token_count.max(1);
+            let matched = simulation
                 .prefix_cache_match
                 .matched_tokens
-                .min(safe_input.max(0) as u64) as i32;
+                .min(projected_total);
+            let cached = ((u128::from(safe_input_u64) * u128::from(matched))
+                / u128::from(projected_total))
+            .min(u128::from(safe_input_u64)) as i32;
             KiroCacheEstimate {
                 input_tokens_total: safe_input,
                 input_uncached_tokens: safe_input - cached,
@@ -2089,7 +2091,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::kiro_gateway::anthropic::types::Metadata;
+    use crate::kiro_gateway::{
+        anthropic::types::Metadata,
+        wire::{
+            CurrentMessage, HistoryAssistantMessage, HistoryUserMessage, Message, UserInputMessage,
+        },
+    };
 
     fn base_request(model: &str) -> MessagesRequest {
         MessagesRequest {
@@ -2145,6 +2152,14 @@ mod tests {
         }
     }
 
+    fn history_user(content: &str) -> Message {
+        Message::User(HistoryUserMessage::new(content, "ignored-model"))
+    }
+
+    fn history_assistant(content: &str) -> Message {
+        Message::Assistant(HistoryAssistantMessage::new(content))
+    }
+
     fn sample_kmodels() -> BTreeMap<String, f64> {
         BTreeMap::from([
             ("claude-opus-4-6".to_string(), 8.061927916785985e-06),
@@ -2165,11 +2180,16 @@ mod tests {
         };
         let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
         let projection = PromptProjection::from_conversation_state(
-            &ConversationState::new("conv-1").with_current_message(
-                crate::kiro_gateway::wire::CurrentMessage::new(
-                    crate::kiro_gateway::wire::UserInputMessage::new("hello", "claude-sonnet-4.6"),
-                ),
-            ),
+            &ConversationState::new("conv-1")
+                .with_history(vec![history_user(
+                    "existing context that is intentionally long enough to span several tokens",
+                )])
+                .with_current_message(crate::kiro_gateway::wire::CurrentMessage::new(
+                    crate::kiro_gateway::wire::UserInputMessage::new(
+                        "hello current turn",
+                        "claude-sonnet-4.6",
+                    ),
+                )),
         );
         KiroSimulationRequestContext {
             runtime_config,
@@ -2605,18 +2625,107 @@ mod tests {
 
     #[test]
     fn build_usage_summary_uses_prefix_tree_match_when_enabled() {
-        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, 7_500);
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, 4);
+        let expected_cached = ((100_u128 * 4_u128)
+            / u128::from(simulation.projection.projected_input_token_count.max(1)))
+            as i32;
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
-            Some(9_000),
+            Some(100),
             400,
             Some(0.02),
             true,
             &simulation,
         );
 
-        assert_eq!(summary.input_cached_tokens, 7_500);
-        assert_eq!(summary.input_uncached_tokens, 1_500);
+        assert_eq!(summary.input_cached_tokens, expected_cached);
+        assert_eq!(summary.input_uncached_tokens, 100 - expected_cached);
+    }
+
+    #[tokio::test]
+    async fn formula_mode_still_recovers_conversation_id_from_anchor() {
+        let temp_root = std::env::temp_dir()
+            .join(format!("staticflow-kiro-anchor-test-{}", uuid::Uuid::new_v4()));
+        let content_db = temp_root.join("lancedb");
+        let comments_db = temp_root.join("lancedb-comments");
+        let music_db = temp_root.join("lancedb-music");
+        tokio::fs::create_dir_all(&content_db)
+            .await
+            .expect("content db dir should be created");
+        tokio::fs::create_dir_all(&comments_db)
+            .await
+            .expect("comments db dir should be created");
+        tokio::fs::create_dir_all(&music_db)
+            .await
+            .expect("music db dir should be created");
+
+        let state = AppState::new(
+            &content_db.to_string_lossy(),
+            &comments_db.to_string_lossy(),
+            &music_db.to_string_lossy(),
+            "<html></html>".to_string(),
+        )
+        .await
+        .expect("app state should initialize");
+
+        {
+            let mut runtime_config = state.llm_gateway_runtime_config.write();
+            runtime_config.kiro_prefix_cache_mode = "formula".to_string();
+        }
+
+        let initial_state = ConversationState::new("fallback-conv")
+            .with_history(vec![history_user("existing history"), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "continue analysis",
+                "ignored-model",
+            )));
+        let projection = PromptProjection::from_conversation_state(&initial_state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let runtime_config = state.llm_gateway_runtime_config.read().clone();
+        let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
+        let now = std::time::Instant::now();
+        state.kiro_gateway.cache_simulator.record_success(
+            &projection,
+            &assistant,
+            "real-conv",
+            simulation_config,
+            now,
+        );
+
+        let follow_up_state = ConversationState::new("new-fallback")
+            .with_history(vec![
+                history_user("existing history"),
+                history_assistant("done"),
+                Message::User(HistoryUserMessage::new("continue analysis", "ignored-model")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant.clone(),
+                }),
+            ])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next step",
+                "ignored-model",
+            )));
+        let follow_up_projection = PromptProjection::from_conversation_state(&follow_up_state);
+        let (conversation_state, session_tracking) = maybe_recover_conversation_id_from_anchor(
+            &state,
+            follow_up_state,
+            SessionTracking {
+                source: SessionIdSource::GeneratedFallback(SessionFallbackReason::MissingMetadata),
+                source_name: None,
+                source_value_preview: None,
+            },
+            &follow_up_projection,
+            simulation_config,
+            now + std::time::Duration::from_secs(1),
+        );
+
+        assert_eq!(conversation_state.conversation_id, "real-conv");
+        assert_eq!(
+            session_tracking.source,
+            SessionIdSource::RecoveredAnchor(SessionFallbackReason::MissingMetadata)
+        );
+
+        let _ = tokio::fs::remove_dir_all(&temp_root).await;
     }
 }

@@ -44,6 +44,7 @@ pub(crate) struct CanonicalTokenSpan {
 pub(crate) struct PromptProjection {
     pub lookup_anchor_hash: String,
     pub stable_prefix_spans: Vec<CanonicalTokenSpan>,
+    pub projected_input_token_count: u64,
     history_anchor_segments: Vec<String>,
     current_turn_history_segments: Vec<String>,
 }
@@ -63,12 +64,20 @@ impl PromptProjection {
                 .user_input_message_context
                 .tools,
         ));
+        let current_turn_input_spans =
+            canonicalize_current_turn_for_input(&state.current_message.user_input_message);
         let current_turn_history_segments =
             canonicalize_current_turn_as_history(&state.current_message.user_input_message);
+        let projected_input_token_count = stable_prefix_spans
+            .iter()
+            .chain(current_turn_input_spans.iter())
+            .map(|span| span.token_count)
+            .sum();
 
         Self {
             lookup_anchor_hash: hash_segments(&history_anchor_segments),
             stable_prefix_spans,
+            projected_input_token_count,
             history_anchor_segments,
             current_turn_history_segments,
         }
@@ -482,6 +491,16 @@ fn canonicalize_current_turn_as_history(message: &UserInputMessage) -> Vec<Strin
     .into_iter()
     .map(|span| span.key)
     .collect()
+}
+
+fn canonicalize_current_turn_for_input(message: &UserInputMessage) -> Vec<CanonicalTokenSpan> {
+    canonicalize_user_message("current_user", &UserMessage {
+        content: message.content.clone(),
+        images: message.images.clone(),
+        user_input_message_context: message.user_input_message_context.clone(),
+        model_id: message.model_id.clone(),
+        origin: message.origin.clone(),
+    })
 }
 
 fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<CanonicalTokenSpan> {
