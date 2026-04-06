@@ -1831,19 +1831,19 @@ pub fn admin_llm_gateway_page() -> Html {
                     kiro_prefix_cache_max_tokens: config
                         .as_ref()
                         .map(|current| current.kiro_prefix_cache_max_tokens)
-                        .unwrap_or(2_000_000),
+                        .unwrap_or(4_000_000),
                     kiro_prefix_cache_entry_ttl_seconds: config
                         .as_ref()
                         .map(|current| current.kiro_prefix_cache_entry_ttl_seconds)
-                        .unwrap_or(1_800),
+                        .unwrap_or(21_600),
                     kiro_conversation_anchor_max_entries: config
                         .as_ref()
                         .map(|current| current.kiro_conversation_anchor_max_entries)
-                        .unwrap_or(10_000),
+                        .unwrap_or(20_000),
                     kiro_conversation_anchor_ttl_seconds: config
                         .as_ref()
                         .map(|current| current.kiro_conversation_anchor_ttl_seconds)
-                        .unwrap_or(21_600),
+                        .unwrap_or(86_400),
                 };
                 saving_runtime_config.set(true);
                 match update_admin_llm_gateway_config(&runtime_config).await {
