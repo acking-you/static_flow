@@ -12,7 +12,7 @@ use std::{
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::types::{ContentBlock, MessagesRequest};
+use super::types::{ContentBlock, MessagesRequest, Metadata};
 use crate::kiro_gateway::wire::{
     AssistantMessage, ConversationState, CurrentMessage, HistoryAssistantMessage,
     HistoryUserMessage, InputSchema, KiroImage, Message, Tool, ToolResult, ToolSpecification,
@@ -120,6 +120,53 @@ pub fn get_context_window_size(model: &str) -> i32 {
 pub struct ConversionResult {
     pub conversation_state: ConversationState,
     pub tool_name_map: HashMap<String, String>,
+    pub session_tracking: SessionTracking,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTracking {
+    pub source: SessionIdSource,
+    pub source_name: Option<&'static str>,
+    pub source_value_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedConversationId {
+    pub conversation_id: String,
+    pub session_tracking: SessionTracking,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionIdSource {
+    RequestHeader,
+    MetadataJson,
+    MetadataLegacy,
+    GeneratedFallback(SessionFallbackReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionFallbackReason {
+    InvalidHeaderSessionId,
+    MissingMetadata,
+    MissingUserId,
+    MissingJsonSessionId,
+    InvalidJsonSessionId,
+    MissingLegacySessionId,
+    InvalidLegacySessionId,
+}
+
+impl SessionFallbackReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::InvalidHeaderSessionId => "invalid_header_session_id",
+            Self::MissingMetadata => "missing_metadata",
+            Self::MissingUserId => "missing_user_id",
+            Self::MissingJsonSessionId => "missing_json_session_id",
+            Self::InvalidJsonSessionId => "invalid_json_session_id",
+            Self::MissingLegacySessionId => "missing_legacy_session_id",
+            Self::InvalidLegacySessionId => "invalid_legacy_session_id",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +228,19 @@ impl std::error::Error for ConversionError {}
 
 fn invalid_request(message: impl Into<String>) -> ConversionError {
     ConversionError::InvalidRequest(message.into())
+}
+
+const SESSION_SOURCE_PREVIEW_MAX_CHARS: usize = 160;
+
+pub(crate) fn preview_session_value(value: &str) -> String {
+    let mut preview = value
+        .chars()
+        .take(SESSION_SOURCE_PREVIEW_MAX_CHARS)
+        .collect::<String>();
+    if value.chars().count() > SESSION_SOURCE_PREVIEW_MAX_CHARS {
+        preview.push_str("...[truncated]");
+    }
+    preview
 }
 
 fn trailing_user_message_start(
@@ -676,6 +736,7 @@ fn next_rewritten_tool_use_id(
 // Extracts a UUID session ID from the Anthropic `user_id` metadata field.
 // Supports either a JSON payload containing `session_id` or the legacy
 // `..._session_<uuid>...` string format.
+#[cfg(test)]
 fn extract_session_id(user_id: &str) -> Option<String> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(user_id) {
         if let Some(session_id) = value.get("session_id").and_then(|value| value.as_str()) {
@@ -697,6 +758,89 @@ fn extract_session_id(user_id: &str) -> Option<String> {
 
 fn is_valid_uuid(value: &str) -> bool {
     value.len() == 36 && value.chars().filter(|ch| *ch == '-').count() == 4
+}
+
+fn generated_fallback(
+    reason: SessionFallbackReason,
+    source_name: Option<&'static str>,
+    source_value_preview: Option<String>,
+) -> ResolvedConversationId {
+    ResolvedConversationId {
+        conversation_id: Uuid::new_v4().to_string(),
+        session_tracking: SessionTracking {
+            source: SessionIdSource::GeneratedFallback(reason),
+            source_name,
+            source_value_preview,
+        },
+    }
+}
+
+pub(crate) fn resolve_conversation_id_from_metadata(
+    metadata: Option<&Metadata>,
+) -> ResolvedConversationId {
+    let Some(metadata) = metadata else {
+        return generated_fallback(SessionFallbackReason::MissingMetadata, None, None);
+    };
+
+    let Some(user_id) = metadata.user_id.as_deref() else {
+        return generated_fallback(SessionFallbackReason::MissingUserId, None, None);
+    };
+
+    let user_id_preview = Some(preview_session_value(user_id));
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(user_id) {
+        if let Some(session_id) = value.get("session_id").and_then(|value| value.as_str()) {
+            if is_valid_uuid(session_id) {
+                return ResolvedConversationId {
+                    conversation_id: session_id.to_string(),
+                    session_tracking: SessionTracking {
+                        source: SessionIdSource::MetadataJson,
+                        source_name: None,
+                        source_value_preview: user_id_preview,
+                    },
+                };
+            }
+            return generated_fallback(
+                SessionFallbackReason::InvalidJsonSessionId,
+                None,
+                user_id_preview,
+            );
+        }
+        return generated_fallback(
+            SessionFallbackReason::MissingJsonSessionId,
+            None,
+            user_id_preview,
+        );
+    }
+
+    let Some(pos) = user_id.find("session_") else {
+        return generated_fallback(
+            SessionFallbackReason::MissingLegacySessionId,
+            None,
+            user_id_preview,
+        );
+    };
+    let session_part = &user_id[pos + 8..];
+    if session_part.len() < 36 {
+        return generated_fallback(
+            SessionFallbackReason::InvalidLegacySessionId,
+            None,
+            user_id_preview,
+        );
+    }
+
+    let uuid = &session_part[..36];
+    if is_valid_uuid(uuid) {
+        ResolvedConversationId {
+            conversation_id: uuid.to_string(),
+            session_tracking: SessionTracking {
+                source: SessionIdSource::MetadataLegacy,
+                source_name: None,
+                source_value_preview: user_id_preview,
+            },
+        }
+    } else {
+        generated_fallback(SessionFallbackReason::InvalidLegacySessionId, None, user_id_preview)
+    }
 }
 
 // Collects unique tool names from assistant messages in history, used to
@@ -779,9 +923,24 @@ fn convert_request_with_validation(
     convert_normalized_request_with_validation(normalized, request_validation_enabled)
 }
 
+#[cfg(test)]
 pub(crate) fn convert_normalized_request_with_validation(
     normalized: NormalizedRequest,
     request_validation_enabled: bool,
+) -> Result<ConversionResult, ConversionError> {
+    let resolved_conversation =
+        resolve_conversation_id_from_metadata(normalized.request.metadata.as_ref());
+    convert_normalized_request_with_resolved_session(
+        normalized,
+        request_validation_enabled,
+        resolved_conversation,
+    )
+}
+
+pub(crate) fn convert_normalized_request_with_resolved_session(
+    normalized: NormalizedRequest,
+    request_validation_enabled: bool,
+    resolved_conversation: ResolvedConversationId,
 ) -> Result<ConversionResult, ConversionError> {
     let req = &normalized.request;
     let model_id = map_model(&req.model)
@@ -796,14 +955,6 @@ pub(crate) fn convert_normalized_request_with_validation(
     let current_range = current_user_message_range(messages)?;
     let current_messages = messages[current_range.clone()].iter().collect::<Vec<_>>();
 
-    // Reuse session UUID from metadata as conversation_id for continuity;
-    // fall back to a fresh UUID.
-    let conversation_id = req
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.user_id.as_deref())
-        .and_then(extract_session_id)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let agent_continuation_id = Uuid::new_v4().to_string();
     let mut user_input = merge_current_user_messages(&current_messages, &model_id)?;
     let mut tool_name_map = HashMap::new();
@@ -836,13 +987,14 @@ pub(crate) fn convert_normalized_request_with_validation(
     user_input = user_input.with_context(context).with_origin("AI_EDITOR");
 
     Ok(ConversionResult {
-        conversation_state: ConversationState::new(conversation_id)
+        conversation_state: ConversationState::new(resolved_conversation.conversation_id)
             .with_agent_continuation_id(agent_continuation_id)
             .with_agent_task_type("vibe")
             .with_chat_trigger_type("MANUAL")
             .with_current_message(CurrentMessage::new(user_input))
             .with_history(history),
         tool_name_map,
+        session_tracking: resolved_conversation.session_tracking,
     })
 }
 
@@ -1660,6 +1812,7 @@ mod tests {
             result.conversation_state.conversation_id,
             "a0662283-7fd3-4399-a7eb-52b9a717ae88"
         );
+        assert_eq!(result.session_tracking.source, SessionIdSource::MetadataLegacy);
     }
 
     #[test]
@@ -1680,6 +1833,45 @@ mod tests {
             result.conversation_state.conversation_id,
             "c4dd850d-929f-48d1-9282-f0cfefeec16e"
         );
+        assert_eq!(result.session_tracking.source, SessionIdSource::MetadataJson);
+    }
+
+    #[test]
+    fn convert_request_marks_missing_metadata_as_session_fallback() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        assert_eq!(
+            result.session_tracking.source,
+            SessionIdSource::GeneratedFallback(SessionFallbackReason::MissingMetadata)
+        );
+        assert!(result.session_tracking.source_value_preview.is_none());
+        assert!(is_valid_uuid(&result.conversation_state.conversation_id));
+    }
+
+    #[test]
+    fn convert_request_marks_invalid_user_id_as_session_fallback() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.metadata = Some(Metadata {
+            user_id: Some(r#"{"session_id":"invalid-uuid"}"#.to_string()),
+        });
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        assert_eq!(
+            result.session_tracking.source,
+            SessionIdSource::GeneratedFallback(SessionFallbackReason::InvalidJsonSessionId)
+        );
+        assert_eq!(
+            result.session_tracking.source_value_preview.as_deref(),
+            Some(r#"{"session_id":"invalid-uuid"}"#)
+        );
+        assert!(is_valid_uuid(&result.conversation_state.conversation_id));
     }
 
     #[test]

@@ -37,13 +37,15 @@ use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 
 use self::{
     converter::{
-        convert_normalized_request_with_validation, current_user_message_range,
-        extract_tool_result_content, normalize_request, ConversionError, NormalizationEvent,
-        NormalizedRequest, ToolNormalizationEvent,
+        convert_normalized_request_with_resolved_session, current_user_message_range,
+        extract_tool_result_content, normalize_request, preview_session_value,
+        resolve_conversation_id_from_metadata, ConversionError, NormalizationEvent,
+        NormalizedRequest, ResolvedConversationId, SessionFallbackReason, SessionIdSource,
+        SessionTracking, ToolNormalizationEvent,
     },
     stream::{BufferedStreamContext, StreamContext},
     types::{
-        CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model,
+        CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Metadata, Model,
         ModelsResponse, OutputConfig, Thinking,
     },
     websearch::handle_websearch_request,
@@ -66,6 +68,25 @@ const KIRO_UPSTREAM_LOG_PREVIEW_CHARS: usize = 8_192;
 const KIRO_STREAM_FAILURE_STATUS_CODE: i32 = 599;
 const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 160;
 const KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS: usize = 1_024;
+const REQUEST_SESSION_ID_HEADERS: [&str; 8] = [
+    "x-claude-code-session-id",
+    "x-codex-session-id",
+    "x-openclaw-session-id",
+    "conversation_id",
+    "conversation-id",
+    "session_id",
+    "session-id",
+    "x-session-id",
+];
+
+fn extract_trimmed_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
 
 // Bundles the state needed to persist usage after a streaming response
 // completes.
@@ -102,6 +123,45 @@ struct NonStreamRequestContext {
     input_tokens: i32,
     tool_name_map: std::collections::HashMap<String, String>,
     request_validation_enabled: bool,
+}
+
+fn resolve_request_session(
+    headers: &HeaderMap,
+    metadata: Option<&Metadata>,
+) -> ResolvedConversationId {
+    let mut first_invalid_header: Option<(&'static str, String)> = None;
+    for header_name in REQUEST_SESSION_ID_HEADERS {
+        let Some(raw_value) = extract_trimmed_header_value(headers, header_name) else {
+            continue;
+        };
+        if uuid::Uuid::try_parse(&raw_value).is_ok() {
+            return ResolvedConversationId {
+                conversation_id: raw_value.clone(),
+                session_tracking: SessionTracking {
+                    source: SessionIdSource::RequestHeader,
+                    source_name: Some(header_name),
+                    source_value_preview: Some(preview_session_value(&raw_value)),
+                },
+            };
+        }
+        if first_invalid_header.is_none() {
+            first_invalid_header = Some((header_name, preview_session_value(&raw_value)));
+        }
+    }
+
+    let mut resolved = resolve_conversation_id_from_metadata(metadata);
+    if matches!(resolved.session_tracking.source, SessionIdSource::GeneratedFallback(_)) {
+        if let Some((header_name, preview)) = first_invalid_header {
+            resolved.session_tracking = SessionTracking {
+                source: SessionIdSource::GeneratedFallback(
+                    SessionFallbackReason::InvalidHeaderSessionId,
+                ),
+                source_name: Some(header_name),
+                source_value_preview: Some(preview),
+            };
+        }
+    }
+    resolved
 }
 
 enum UsagePersistOutcome {
@@ -783,67 +843,92 @@ async fn handle_messages(
             "rewrote duplicate completed tool_use id before upstream call"
         );
     }
-    let conversion =
-        match convert_normalized_request_with_validation(normalized, request_validation_enabled) {
-            Ok(result) => result,
-            Err(err) => {
-                let message = match &err {
-                    ConversionError::UnsupportedModel(model) => {
-                        format!("Unsupported model: {model}")
-                    },
-                    ConversionError::EmptyMessages => "messages are empty".to_string(),
-                    ConversionError::InvalidRequest(message) => message.clone(),
-                };
-                tracing::error!(
-                    key_id = %key_record.id,
-                    key_name = %key_record.name,
-                    route = public_path,
-                    requested_model = %requested_model,
-                    effective_model = %payload.model,
-                    stream = payload.stream,
-                    buffered_for_cc,
+    let resolved_session = resolve_request_session(&headers, payload.metadata.as_ref());
+    let conversion = match convert_normalized_request_with_resolved_session(
+        normalized,
+        request_validation_enabled,
+        resolved_session,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let message = match &err {
+                ConversionError::UnsupportedModel(model) => {
+                    format!("Unsupported model: {model}")
+                },
+                ConversionError::EmptyMessages => "messages are empty".to_string(),
+                ConversionError::InvalidRequest(message) => message.clone(),
+            };
+            tracing::error!(
+                key_id = %key_record.id,
+                key_name = %key_record.name,
+                route = public_path,
+                requested_model = %requested_model,
+                effective_model = %payload.model,
+                stream = payload.stream,
+                buffered_for_cc,
+                request_validation_enabled,
+                error = %message,
+                "rejected malformed kiro public request before upstream call"
+            );
+            let diagnostic_payload = build_failure_diagnostic_payload(
+                DiagnosticRequestContext {
+                    event_context: &event_context,
                     request_validation_enabled,
-                    error = %message,
-                    "rejected malformed kiro public request before upstream call"
+                    stream: payload.stream,
+                    buffered_for_cc,
+                },
+                "request_validation",
+                &message,
+                StatusCode::BAD_REQUEST.as_u16() as i32,
+                Some(serde_json::json!({
+                    "public_route": public_path,
+                    "requested_model": requested_model,
+                    "effective_model": payload.model,
+                })),
+            );
+            if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
+                &state,
+                &key_record,
+                &event_context,
+                StatusCode::BAD_REQUEST.as_u16() as i32,
+                diagnostic_payload,
+                zero_usage_summary(),
+                false,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "failed to persist kiro validation failure usage event: {persist_err:#}"
                 );
-                let diagnostic_payload = build_failure_diagnostic_payload(
-                    DiagnosticRequestContext {
-                        event_context: &event_context,
-                        request_validation_enabled,
-                        stream: payload.stream,
-                        buffered_for_cc,
-                    },
-                    "request_validation",
-                    &message,
-                    StatusCode::BAD_REQUEST.as_u16() as i32,
-                    Some(serde_json::json!({
-                        "public_route": public_path,
-                        "requested_model": requested_model,
-                        "effective_model": payload.model,
-                    })),
-                );
-                if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
-                    &state,
-                    &key_record,
-                    &event_context,
-                    StatusCode::BAD_REQUEST.as_u16() as i32,
-                    diagnostic_payload,
-                    zero_usage_summary(),
-                    false,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        "failed to persist kiro validation failure usage event: {persist_err:#}"
-                    );
-                }
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse::new("invalid_request_error", message)),
-                )
-                    .into_response();
-            },
-        };
+            }
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("invalid_request_error", message)),
+            )
+                .into_response();
+        },
+    };
+    if let SessionIdSource::GeneratedFallback(reason) = &conversion.session_tracking.source {
+        tracing::warn!(
+            key_id = %key_record.id,
+            key_name = %key_record.name,
+            route = public_path,
+            requested_model = %requested_model,
+            effective_model = %payload.model,
+            stream = payload.stream,
+            buffered_for_cc,
+            request_validation_enabled,
+            fallback_reason = reason.as_str(),
+            session_source_name = conversion.session_tracking.source_name.unwrap_or(""),
+            generated_conversation_id = %conversion.conversation_state.conversation_id,
+            session_source_preview = conversion
+                .session_tracking
+                .source_value_preview
+                .as_deref()
+                .unwrap_or(""),
+            "generated fallback kiro conversation id before upstream call because no supported request session identifier produced a valid UUID"
+        );
+    }
     let conversation_state = conversion.conversation_state;
     let tool_name_map = conversion.tool_name_map;
     event_context.upstream_request_body_json =
@@ -1784,9 +1869,11 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
 mod tests {
     use std::collections::BTreeMap;
 
+    use axum::http::{HeaderMap, HeaderValue};
     use serde_json::json;
 
     use super::*;
+    use crate::kiro_gateway::anthropic::types::Metadata;
 
     fn base_request(model: &str) -> MessagesRequest {
         MessagesRequest {
@@ -1848,6 +1935,73 @@ mod tests {
             ("claude-sonnet-4-6".to_string(), 5.055065250835128e-06),
             ("claude-haiku-4-5-20251001".to_string(), 2.3681034438052206e-06),
         ])
+    }
+
+    #[test]
+    fn resolve_request_session_prefers_explicit_claude_code_header_over_metadata() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-claude-code-session-id",
+            HeaderValue::from_static("7dbefac5-5e9f-4542-b5e2-ea6a8ccdb72d"),
+        );
+        let metadata = Metadata {
+            user_id: Some(
+                r#"{"device_id":"dev","account_uuid":"acct","session_id":"c4dd850d-929f-48d1-9282-f0cfefeec16e"}"#
+                    .to_string(),
+            ),
+        };
+
+        let resolved = resolve_request_session(&headers, Some(&metadata));
+
+        assert_eq!(resolved.conversation_id, "7dbefac5-5e9f-4542-b5e2-ea6a8ccdb72d");
+        assert_eq!(resolved.session_tracking.source, SessionIdSource::RequestHeader);
+        assert_eq!(resolved.session_tracking.source_name, Some("x-claude-code-session-id"));
+    }
+
+    #[test]
+    fn resolve_request_session_accepts_session_id_header_without_metadata() {
+        let mut headers = HeaderMap::new();
+        headers
+            .insert("session_id", HeaderValue::from_static("0c4df3fe-90fb-4fa8-b7cb-78c51409f3d5"));
+
+        let resolved = resolve_request_session(&headers, None);
+
+        assert_eq!(resolved.conversation_id, "0c4df3fe-90fb-4fa8-b7cb-78c51409f3d5");
+        assert_eq!(resolved.session_tracking.source, SessionIdSource::RequestHeader);
+        assert_eq!(resolved.session_tracking.source_name, Some("session_id"));
+    }
+
+    #[test]
+    fn resolve_request_session_falls_back_to_legacy_metadata_when_header_is_invalid() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-claude-code-session-id", HeaderValue::from_static("invalid-session"));
+        let metadata = Metadata {
+            user_id: Some(
+                r#"{"device_id":"dev","account_uuid":"acct","session_id":"c4dd850d-929f-48d1-9282-f0cfefeec16e"}"#
+                    .to_string(),
+            ),
+        };
+
+        let resolved = resolve_request_session(&headers, Some(&metadata));
+
+        assert_eq!(resolved.conversation_id, "c4dd850d-929f-48d1-9282-f0cfefeec16e");
+        assert_eq!(resolved.session_tracking.source, SessionIdSource::MetadataJson);
+        assert_eq!(resolved.session_tracking.source_name, None);
+    }
+
+    #[test]
+    fn resolve_request_session_accepts_openclaw_header_variant() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-openclaw-session-id",
+            HeaderValue::from_static("2cc1dd58-fcb2-45c3-9170-eb2d48b0a1d8"),
+        );
+
+        let resolved = resolve_request_session(&headers, None);
+
+        assert_eq!(resolved.conversation_id, "2cc1dd58-fcb2-45c3-9170-eb2d48b0a1d8");
+        assert_eq!(resolved.session_tracking.source, SessionIdSource::RequestHeader);
+        assert_eq!(resolved.session_tracking.source_name, Some("x-openclaw-session-id"));
     }
 
     #[test]
