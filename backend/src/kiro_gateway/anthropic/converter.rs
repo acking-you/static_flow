@@ -810,6 +810,7 @@ pub(crate) fn convert_normalized_request_with_validation(
     let mut tools = convert_tools(&req.tools, &mut tool_name_map);
     let mut history =
         build_history(req, &messages[..current_range.start], &model_id, &mut tool_name_map)?;
+    prune_orphaned_history_tool_results(&mut history);
     let current_tool_results = user_input.user_input_message_context.tool_results.clone();
     let (validated_tool_results, orphaned_tool_use_ids) =
         validate_tool_pairing(&history, &current_tool_results);
@@ -1228,6 +1229,45 @@ fn remove_orphaned_tool_uses(history: &mut [Message], orphaned_ids: &HashSet<Str
             }
         }
     }
+}
+
+// Drops history tool_results that do not correspond to an earlier assistant
+// tool_use in the preserved history prefix. Kiro rejects history turns that
+// contain tool results without a prior tool call, so we enforce that invariant
+// before validating the current turn.
+fn prune_orphaned_history_tool_results(history: &mut Vec<Message>) {
+    let mut pending_tool_use_ids = HashSet::<String>::new();
+    let mut retained = Vec::with_capacity(history.len());
+
+    for message in history.drain(..) {
+        match message {
+            Message::Assistant(message) => {
+                if let Some(tool_uses) = &message.assistant_response_message.tool_uses {
+                    for tool_use in tool_uses {
+                        pending_tool_use_ids.insert(tool_use.tool_use_id.clone());
+                    }
+                }
+                retained.push(Message::Assistant(message));
+            },
+            Message::User(mut message) => {
+                let context = &mut message.user_input_message.user_input_message_context;
+                if !context.tool_results.is_empty() {
+                    context
+                        .tool_results
+                        .retain(|result| pending_tool_use_ids.remove(&result.tool_use_id));
+                }
+
+                let has_content = !message.user_input_message.content.trim().is_empty();
+                let has_images = !message.user_input_message.images.is_empty();
+                let has_tool_results = !context.tool_results.is_empty();
+                if has_content || has_images || has_tool_results {
+                    retained.push(Message::User(message));
+                }
+            },
+        }
+    }
+
+    *history = retained;
 }
 
 // Converts Anthropic tool definitions to Kiro wire Tool specs.
@@ -2317,6 +2357,79 @@ mod tests {
 
         assert!(convert_request(&req).is_err());
         assert!(convert_request_with_validation(&req, false).is_ok());
+    }
+
+    #[test]
+    fn convert_request_drops_orphaned_history_tool_results_without_prior_tool_use() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "stale tool output"
+                    },
+                    {
+                        "type": "text",
+                        "text": "The previous command was interrupted."
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("No response requested."),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Please continue"),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        assert_eq!(result.conversation_state.history.len(), 2);
+        let first_user = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message,
+            other => panic!("expected first history message to stay user, got {other:?}"),
+        };
+        assert_eq!(first_user.content, "The previous command was interrupted.");
+        assert!(first_user
+            .user_input_message_context
+            .tool_results
+            .is_empty());
+    }
+
+    #[test]
+    fn convert_request_drops_empty_history_user_turn_after_orphaned_tool_results_removed() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "stale tool output"
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("No response requested."),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Please continue"),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        assert_eq!(result.conversation_state.history.len(), 1);
+        match &result.conversation_state.history[0] {
+            Message::Assistant(message) => {
+                assert_eq!(message.assistant_response_message.content, "No response requested.");
+            },
+            other => panic!("expected only assistant history message to remain, got {other:?}"),
+        }
     }
 
     #[test]

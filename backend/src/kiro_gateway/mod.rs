@@ -552,6 +552,14 @@ pub async fn patch_account(
     {
         return Err(bad_request("kiro_channel_min_start_interval_ms is out of range"));
     }
+    let minimum_remaining_credits_before_block = request
+        .minimum_remaining_credits_before_block
+        .unwrap_or_else(|| auth.effective_minimum_remaining_credits_before_block());
+    if !minimum_remaining_credits_before_block.is_finite()
+        || minimum_remaining_credits_before_block < 0.0
+    {
+        return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
+    }
     if let Some(proxy_selection) = proxy_selection.as_ref() {
         state
             .upstream_proxy_registry
@@ -562,6 +570,7 @@ pub async fn patch_account(
 
     auth.kiro_channel_max_concurrency = Some(max_concurrency);
     auth.kiro_channel_min_start_interval_ms = Some(min_start_interval_ms);
+    auth.minimum_remaining_credits_before_block = Some(minimum_remaining_credits_before_block);
     if let Some(proxy_selection) = proxy_selection {
         auth.proxy_mode = proxy_selection.proxy_mode;
         auth.proxy_config_id = proxy_selection.proxy_config_id;
@@ -577,6 +586,8 @@ pub async fn patch_account(
         account_name = %saved.name,
         kiro_channel_max_concurrency = saved.effective_kiro_channel_max_concurrency(),
         kiro_channel_min_start_interval_ms = saved.effective_kiro_channel_min_start_interval_ms(),
+        minimum_remaining_credits_before_block =
+            saved.effective_minimum_remaining_credits_before_block(),
         proxy_mode = %saved.proxy_selection().proxy_mode.as_str(),
         proxy_config_id = ?saved.proxy_selection().proxy_config_id,
         "updated Kiro account scheduler settings"
@@ -923,6 +934,14 @@ fn auth_record_from_manual_request(
     {
         return Err(bad_request("kiro_channel_min_start_interval_ms is out of range"));
     }
+    let minimum_remaining_credits_before_block = request
+        .minimum_remaining_credits_before_block
+        .unwrap_or(0.0);
+    if !minimum_remaining_credits_before_block.is_finite()
+        || minimum_remaining_credits_before_block < 0.0
+    {
+        return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
+    }
     Ok(KiroAuthRecord {
         name,
         access_token: normalize_optional_string(request.access_token),
@@ -941,6 +960,7 @@ fn auth_record_from_manual_request(
         subscription_title: normalize_optional_string(request.subscription_title),
         kiro_channel_max_concurrency: Some(kiro_channel_max_concurrency),
         kiro_channel_min_start_interval_ms: Some(kiro_channel_min_start_interval_ms),
+        minimum_remaining_credits_before_block: Some(minimum_remaining_credits_before_block),
         proxy_mode: Default::default(),
         proxy_config_id: None,
         proxy_url: None,

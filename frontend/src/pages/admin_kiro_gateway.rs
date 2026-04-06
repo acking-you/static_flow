@@ -199,6 +199,8 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
     let expanded = use_state(|| false);
     let scheduler_max = use_state(|| props.account.kiro_channel_max_concurrency.to_string());
     let scheduler_min = use_state(|| props.account.kiro_channel_min_start_interval_ms.to_string());
+    let minimum_remaining_credits_before_block =
+        use_state(|| format_float4(props.account.minimum_remaining_credits_before_block));
     let selected_proxy = use_state(|| kiro_account_proxy_select_value(&props.account));
     let feedback = use_state(|| None::<String>);
     let busy = use_state(|| false);
@@ -207,10 +209,13 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let account = props.account.clone();
         let scheduler_max = scheduler_max.clone();
         let scheduler_min = scheduler_min.clone();
+        let minimum_remaining_credits_before_block = minimum_remaining_credits_before_block.clone();
         let selected_proxy = selected_proxy.clone();
         use_effect_with(props.account.clone(), move |_| {
             scheduler_max.set(account.kiro_channel_max_concurrency.to_string());
             scheduler_min.set(account.kiro_channel_min_start_interval_ms.to_string());
+            minimum_remaining_credits_before_block
+                .set(format_float4(account.minimum_remaining_credits_before_block));
             selected_proxy.set(kiro_account_proxy_select_value(&account));
             || ()
         });
@@ -299,6 +304,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let account_name = props.account.name.clone();
         let scheduler_max = scheduler_max.clone();
         let scheduler_min = scheduler_min.clone();
+        let minimum_remaining_credits_before_block = minimum_remaining_credits_before_block.clone();
         let selected_proxy = selected_proxy.clone();
         let flash = props.flash.clone();
         let notify = props.notify.clone();
@@ -310,6 +316,8 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
             let account_name = account_name.clone();
             let scheduler_max = scheduler_max.clone();
             let scheduler_min = scheduler_min.clone();
+            let minimum_remaining_credits_before_block =
+                minimum_remaining_credits_before_block.clone();
             let selected_proxy = selected_proxy.clone();
             let flash = flash.clone();
             let notify = notify.clone();
@@ -336,6 +344,21 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                         return;
                     },
                 };
+                let parsed_minimum_remaining_credits_before_block =
+                    match (*minimum_remaining_credits_before_block)
+                        .trim()
+                        .parse::<f64>()
+                    {
+                        Ok(value) if value.is_finite() && value >= 0.0 => value,
+                        _ => {
+                            let message = "Minimum remaining credits must be a non-negative \
+                                           number."
+                                .to_string();
+                            error.set(Some(message.clone()));
+                            notify.emit((message, true));
+                            return;
+                        },
+                    };
                 busy.set(true);
                 error.set(None);
                 let (proxy_mode, proxy_config_id) = if *selected_proxy == "direct" {
@@ -348,6 +371,9 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                 match patch_admin_kiro_account(&account_name, &PatchKiroAccountInput {
                     kiro_channel_max_concurrency: Some(parsed_max),
                     kiro_channel_min_start_interval_ms: Some(parsed_min),
+                    minimum_remaining_credits_before_block: Some(
+                        parsed_minimum_remaining_credits_before_block,
+                    ),
                     proxy_mode,
                     proxy_config_id,
                 })
@@ -438,9 +464,10 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     </p>
                     <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
                         { format!(
-                            "scheduler {} in-flight · {} ms spacing",
+                            "scheduler {} in-flight · {} ms spacing · credit floor {}",
                             account.kiro_channel_max_concurrency,
-                            account.kiro_channel_min_start_interval_ms
+                            account.kiro_channel_min_start_interval_ms,
+                            format_float4(account.minimum_remaining_credits_before_block)
                         ) }
                     </p>
                     if let Some(cache_error) = account.cache.error_message.clone() {
@@ -509,7 +536,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                 </div>
                 <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
                     <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Scheduler / Proxy" }</div>
-                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-3")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-4")}>
                         <label class={classes!("text-sm")}>
                             <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Max Concurrency" }</div>
                             <input
@@ -534,6 +561,21 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                                     Callback::from(move |event: InputEvent| {
                                         let input: HtmlInputElement = event.target_unchecked_into();
                                         scheduler_min.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Min Remaining Credits" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm", "font-mono")}
+                                value={(*minimum_remaining_credits_before_block).clone()}
+                                oninput={{
+                                    let minimum_remaining_credits_before_block =
+                                        minimum_remaining_credits_before_block.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        minimum_remaining_credits_before_block.set(input.value());
                                     })
                                 }}
                             />
@@ -569,7 +611,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                             { if *busy { "Saving..." } else { "Save Account Settings" } }
                         </button>
                         <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                            { "并发、起步间隔和账号级 proxy 选择一起保存。未单独指定时，这个账号默认继承 Kiro provider 级代理绑定。" }
+                            { "并发、起步间隔、剩余积分阈值和账号级 proxy 选择一起保存。阈值为 0 表示保持原行为，只在 remaining <= 0 时停用账号。" }
                         </span>
                     </div>
                 </div>
@@ -1282,6 +1324,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let manual_subscription_title = use_state(String::new);
     let manual_scheduler_max = use_state(|| "1".to_string());
     let manual_scheduler_min = use_state(|| "0".to_string());
+    let manual_minimum_remaining_credits_before_block = use_state(|| "0".to_string());
     let manual_disabled = use_state(|| false);
 
     let new_key_name = use_state(|| "kiro-private".to_string());
@@ -1484,6 +1527,8 @@ pub fn admin_kiro_gateway_page() -> Html {
         let manual_subscription_title = manual_subscription_title.clone();
         let manual_scheduler_max = manual_scheduler_max.clone();
         let manual_scheduler_min = manual_scheduler_min.clone();
+        let manual_minimum_remaining_credits_before_block =
+            manual_minimum_remaining_credits_before_block.clone();
         let manual_disabled = manual_disabled.clone();
         let flash = flash.clone();
         let notify = notify.clone();
@@ -1514,6 +1559,21 @@ pub fn admin_kiro_gateway_page() -> Html {
                     return;
                 },
             };
+            let parsed_minimum_remaining_credits_before_block =
+                match (*manual_minimum_remaining_credits_before_block)
+                    .trim()
+                    .parse::<f64>()
+                {
+                    Ok(value) if value.is_finite() && value >= 0.0 => value,
+                    _ => {
+                        let message = "Manual account minimum remaining credits must be a \
+                                       non-negative number."
+                            .to_string();
+                        error.set(Some(message.clone()));
+                        notify.emit((message, true));
+                        return;
+                    },
+                };
             let input = CreateManualKiroAccountInput {
                 name: (*manual_name).trim().to_string(),
                 access_token: normalized_str_option(&manual_access_token),
@@ -1532,6 +1592,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                 subscription_title: normalized_str_option(&manual_subscription_title),
                 kiro_channel_max_concurrency: Some(parsed_max),
                 kiro_channel_min_start_interval_ms: Some(parsed_min),
+                minimum_remaining_credits_before_block: Some(
+                    parsed_minimum_remaining_credits_before_block,
+                ),
                 disabled: *manual_disabled,
             };
             wasm_bindgen_futures::spawn_local(async move {
@@ -1833,6 +1896,11 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { text_input("Machine ID", &manual_machine_id, None) }
                         { text_input("Max Concurrency", &manual_scheduler_max, None) }
                         { text_input("Min Start Interval Ms", &manual_scheduler_min, None) }
+                        { text_input(
+                            "Min Remaining Credits",
+                            &manual_minimum_remaining_credits_before_block,
+                            Some("0 keeps the historic zero-only behavior.")
+                        ) }
                     </div>
                     <div class={classes!("mt-4", "flex", "items-center", "gap-4", "flex-wrap", "text-sm", "text-[var(--muted)]")}>
                         <label class={classes!("inline-flex", "items-center", "gap-2")}>

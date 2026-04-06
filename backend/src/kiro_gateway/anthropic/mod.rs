@@ -314,6 +314,14 @@ fn classify_provider_error(err_text: &str) -> (StatusCode, &'static str, String)
              account."
                 .to_string(),
         )
+    } else if err_text.contains("minimum remaining credits threshold") {
+        (
+            StatusCode::PAYMENT_REQUIRED,
+            "rate_limit_error",
+            "All configured Kiro accounts are below the configured minimum remaining credits \
+             threshold."
+                .to_string(),
+        )
     } else {
         (StatusCode::BAD_GATEWAY, "api_error", format!("Kiro upstream request failed: {err_text}"))
     }
@@ -1721,6 +1729,18 @@ mod tests {
                 .map(|config| config.effort.as_str()),
             Some("high")
         );
+    }
+
+    #[test]
+    fn classify_provider_error_maps_minimum_remaining_threshold_to_payment_required() {
+        let (status, error_type, message) = classify_provider_error(
+            "all configured kiro accounts are below the configured minimum remaining credits \
+             threshold",
+        );
+
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+        assert_eq!(error_type, "rate_limit_error");
+        assert!(message.contains("minimum remaining credits threshold"));
     }
 
     #[test]

@@ -122,6 +122,7 @@ fn import_from_sqlite_blocking(
         subscription_title: None,
         kiro_channel_max_concurrency: Some(DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
         kiro_channel_min_start_interval_ms: Some(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
+        minimum_remaining_credits_before_block: Some(0.0),
         proxy_mode: Default::default(),
         proxy_config_id: None,
         proxy_url: None,

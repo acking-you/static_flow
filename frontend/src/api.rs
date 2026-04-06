@@ -6571,6 +6571,7 @@ pub struct KiroAccountView {
     pub machine_id: Option<String>,
     pub kiro_channel_max_concurrency: u64,
     pub kiro_channel_min_start_interval_ms: u64,
+    pub minimum_remaining_credits_before_block: f64,
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub effective_proxy_source: String,
@@ -6600,6 +6601,7 @@ pub struct CreateManualKiroAccountInput {
     pub subscription_title: Option<String>,
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    pub minimum_remaining_credits_before_block: Option<f64>,
     pub disabled: bool,
 }
 
@@ -6607,6 +6609,7 @@ pub struct CreateManualKiroAccountInput {
 pub struct PatchKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    pub minimum_remaining_credits_before_block: Option<f64>,
     pub proxy_mode: Option<String>,
     pub proxy_config_id: Option<String>,
 }

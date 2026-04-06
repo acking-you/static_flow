@@ -92,6 +92,11 @@ pub struct KiroAuthRecord {
     /// in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    /// Local safety floor for cached remaining credits. Requests stop routing
+    /// to this account once the cached remaining balance reaches this number
+    /// or below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_remaining_credits_before_block: Option<f64>,
     /// Account-level proxy override mode. Defaults to inheriting the Kiro
     /// provider binding.
     #[serde(default)]
@@ -147,6 +152,10 @@ impl KiroAuthRecord {
         if self.region.as_deref().is_none_or(str::is_empty) {
             self.region = Some(DEFAULT_KIRO_REGION.to_string());
         }
+        self.minimum_remaining_credits_before_block = self
+            .minimum_remaining_credits_before_block
+            .filter(|value| value.is_finite())
+            .map(|value| value.max(0.0));
         self.proxy_mode = self.proxy_selection().proxy_mode;
         self.proxy_config_id = self.proxy_selection().proxy_config_id;
         self
@@ -212,6 +221,12 @@ impl KiroAuthRecord {
     pub fn effective_kiro_channel_min_start_interval_ms(&self) -> u64 {
         self.kiro_channel_min_start_interval_ms
             .unwrap_or(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS)
+    }
+
+    /// Remaining-credits floor used for proactive local routing refusal.
+    /// Missing values preserve the historic zero-only behavior.
+    pub fn effective_minimum_remaining_credits_before_block(&self) -> f64 {
+        self.minimum_remaining_credits_before_block.unwrap_or(0.0)
     }
 
     pub fn proxy_selection(&self) -> AccountProxySelection {

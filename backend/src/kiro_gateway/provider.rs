@@ -28,8 +28,8 @@ use super::{
     runtime::{CallContext, KiroGatewayRuntimeState},
     scheduler::KiroRequestLease,
     status_cache::{
-        account_is_request_eligible, mark_account_quota_exhausted, KiroStatusCacheSnapshot,
-        STATUS_QUOTA_EXHAUSTED,
+        account_is_request_eligible, account_request_block_reason, mark_account_quota_exhausted,
+        KiroStatusCacheSnapshot, RequestEligibilityBlockReason,
     },
     wire::{ConversationState, KiroRequest},
 };
@@ -189,6 +189,7 @@ impl KiroProvider {
             let snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
+            let mut saw_minimum_remaining_threshold = false;
             let mut shortest_cooldown: Option<Duration> = None;
             let mut shortest_local_wait: Option<Duration> = None;
             let mut saw_local_limit = false;
@@ -233,21 +234,21 @@ impl KiroProvider {
                 // Skip accounts that the status cache marks as ineligible.
                 let cache_entry = snapshot.accounts.get(&auth.name);
                 if !account_is_request_eligible(&auth, cache_entry) {
-                    let quota_exhausted = !auth.disabled
-                        && cache_entry.is_some_and(|status| {
-                            status.cache.status == STATUS_QUOTA_EXHAUSTED
-                                || status
-                                    .balance
-                                    .as_ref()
-                                    .is_some_and(|balance| balance.remaining <= 0.0)
-                        });
-                    if quota_exhausted {
-                        saw_quota_exhausted = true;
-                    } else {
-                        last_error = Some(ProviderCallError::new(
-                            anyhow!("kiro account `{}` is disabled", auth.name),
-                            None,
-                        ));
+                    let block_reason = account_request_block_reason(&auth, cache_entry);
+                    let threshold = auth.effective_minimum_remaining_credits_before_block();
+                    match block_reason {
+                        Some(RequestEligibilityBlockReason::QuotaExhausted) => {
+                            saw_quota_exhausted = true;
+                        },
+                        Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold) => {
+                            saw_minimum_remaining_threshold = true;
+                        },
+                        _ => {
+                            last_error = Some(ProviderCallError::new(
+                                anyhow!("kiro account `{}` is disabled", auth.name),
+                                None,
+                            ));
+                        },
                     }
                     tracing::info!(
                     account_name = %auth.name,
@@ -255,21 +256,33 @@ impl KiroProvider {
                     cache_status = cache_entry
                         .map(|status| status.cache.status.as_str())
                         .unwrap_or("unknown"),
-                    reason = if quota_exhausted { "cached_quota_unavailable" } else { "disabled" },
+                    reason = match block_reason {
+                        Some(RequestEligibilityBlockReason::QuotaExhausted) => "cached_quota_unavailable",
+                        Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold) => "minimum_remaining_credits_threshold",
+                        _ => "disabled",
+                    },
                     "skipping kiro account before request"
                     );
                     blocked_accounts.push(format!(
-                        "{}[{}]: {} cache_status={} remaining={}",
+                        "{}[{}]: {} cache_status={} remaining={} threshold={:.4}",
                         auth.name,
                         routing_identity,
-                        if quota_exhausted { "cached_quota_unavailable" } else { "disabled" },
+                        match block_reason {
+                            Some(RequestEligibilityBlockReason::QuotaExhausted) =>
+                                "cached_quota_unavailable",
+                            Some(
+                                RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold,
+                            ) => "minimum_remaining_credits_threshold",
+                            _ => "disabled",
+                        },
                         cache_entry
                             .map(|status| status.cache.status.as_str())
                             .unwrap_or("unknown"),
                         cache_entry
                             .and_then(|status| status.balance.as_ref())
                             .map(|balance| format!("{:.4}", balance.remaining))
-                            .unwrap_or_else(|| "unknown".to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        threshold
                     ));
                     continue;
                 }
@@ -438,6 +451,16 @@ impl KiroProvider {
                     None,
                 ));
             }
+            if saw_minimum_remaining_threshold {
+                return Err(ProviderCallError::new(
+                    anyhow!(
+                        "all configured kiro accounts are below the configured minimum remaining \
+                         credits threshold; blocked_accounts={}",
+                        blocked_accounts.join(" | ")
+                    ),
+                    None,
+                ));
+            }
             let base_error = last_error.unwrap_or_else(|| {
                 ProviderCallError::new(anyhow!("no kiro account available for request"), None)
             });
@@ -464,6 +487,7 @@ impl KiroProvider {
             let snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
+            let mut saw_minimum_remaining_threshold = false;
             let mut shortest_cooldown: Option<Duration> = None;
             let mut shortest_local_wait: Option<Duration> = None;
             let mut saw_local_limit = false;
@@ -504,21 +528,21 @@ impl KiroProvider {
 
                 let cache_entry = snapshot.accounts.get(&auth.name);
                 if !account_is_request_eligible(&auth, cache_entry) {
-                    let quota_exhausted = !auth.disabled
-                        && cache_entry.is_some_and(|status| {
-                            status.cache.status == STATUS_QUOTA_EXHAUSTED
-                                || status
-                                    .balance
-                                    .as_ref()
-                                    .is_some_and(|balance| balance.remaining <= 0.0)
-                        });
-                    if quota_exhausted {
-                        saw_quota_exhausted = true;
-                    } else {
-                        last_error = Some(ProviderCallError::new(
-                            anyhow!("kiro account `{}` is disabled", auth.name),
-                            Some(request_body.to_string()),
-                        ));
+                    let block_reason = account_request_block_reason(&auth, cache_entry);
+                    let threshold = auth.effective_minimum_remaining_credits_before_block();
+                    match block_reason {
+                        Some(RequestEligibilityBlockReason::QuotaExhausted) => {
+                            saw_quota_exhausted = true;
+                        },
+                        Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold) => {
+                            saw_minimum_remaining_threshold = true;
+                        },
+                        _ => {
+                            last_error = Some(ProviderCallError::new(
+                                anyhow!("kiro account `{}` is disabled", auth.name),
+                                Some(request_body.to_string()),
+                            ));
+                        },
                     }
                     tracing::info!(
                     account_name = %auth.name,
@@ -526,21 +550,33 @@ impl KiroProvider {
                     cache_status = cache_entry
                         .map(|status| status.cache.status.as_str())
                         .unwrap_or("unknown"),
-                    reason = if quota_exhausted { "cached_quota_unavailable" } else { "disabled" },
+                    reason = match block_reason {
+                        Some(RequestEligibilityBlockReason::QuotaExhausted) => "cached_quota_unavailable",
+                        Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold) => "minimum_remaining_credits_threshold",
+                        _ => "disabled",
+                    },
                     "skipping kiro account before mcp request"
                     );
                     blocked_accounts.push(format!(
-                        "{}[{}]: {} cache_status={} remaining={}",
+                        "{}[{}]: {} cache_status={} remaining={} threshold={:.4}",
                         auth.name,
                         routing_identity,
-                        if quota_exhausted { "cached_quota_unavailable" } else { "disabled" },
+                        match block_reason {
+                            Some(RequestEligibilityBlockReason::QuotaExhausted) =>
+                                "cached_quota_unavailable",
+                            Some(
+                                RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold,
+                            ) => "minimum_remaining_credits_threshold",
+                            _ => "disabled",
+                        },
                         cache_entry
                             .map(|status| status.cache.status.as_str())
                             .unwrap_or("unknown"),
                         cache_entry
                             .and_then(|status| status.balance.as_ref())
                             .map(|balance| format!("{:.4}", balance.remaining))
-                            .unwrap_or_else(|| "unknown".to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        threshold
                     ));
                     continue;
                 }
@@ -705,6 +741,16 @@ impl KiroProvider {
                     anyhow!(
                         "all configured kiro accounts are quota exhausted for mcp request; \
                          blocked_accounts={}",
+                        blocked_accounts.join(" | ")
+                    ),
+                    Some(request_body.to_string()),
+                ));
+            }
+            if saw_minimum_remaining_threshold {
+                return Err(ProviderCallError::new(
+                    anyhow!(
+                        "all configured kiro accounts are below the configured minimum remaining \
+                         credits threshold for mcp request; blocked_accounts={}",
                         blocked_accounts.join(" | ")
                     ),
                     Some(request_body.to_string()),
@@ -1750,6 +1796,33 @@ mod tests {
                 last_checked_at: Some(1),
                 last_success_at: Some(1),
                 error_message: Some("quota exhausted".to_string()),
+            },
+        };
+
+        assert!(!account_is_request_eligible(&auth, Some(&status)));
+    }
+
+    #[test]
+    fn threshold_blocked_account_is_not_request_eligible() {
+        let auth = KiroAuthRecord {
+            minimum_remaining_credits_before_block: Some(10.0),
+            ..auth("alpha")
+        };
+        let status = KiroCachedAccountStatus {
+            balance: Some(KiroBalanceView {
+                current_usage: 93.0,
+                usage_limit: 100.0,
+                remaining: 7.0,
+                next_reset_at: None,
+                subscription_title: None,
+                user_id: None,
+            }),
+            cache: KiroCacheView {
+                status: "ready".to_string(),
+                refresh_interval_seconds: 60,
+                last_checked_at: Some(1),
+                last_success_at: Some(1),
+                error_message: None,
             },
         };
 

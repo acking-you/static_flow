@@ -27,6 +27,13 @@ pub(crate) const STATUS_DISABLED: &str = "disabled";
 pub(crate) const STATUS_EMPTY: &str = "empty";
 pub(crate) const STATUS_QUOTA_EXHAUSTED: &str = "quota_exhausted";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestEligibilityBlockReason {
+    Disabled,
+    QuotaExhausted,
+    MinimumRemainingCreditsThreshold,
+}
+
 fn next_kiro_refresh_delay(config: &crate::state::LlmGatewayRuntimeConfig) -> Duration {
     let min_seconds = config
         .kiro_status_refresh_min_interval_seconds
@@ -322,23 +329,34 @@ pub(crate) async fn mark_account_quota_exhausted(
 
 /// Determine whether an account should be considered for the next upstream
 /// request based on its disabled flag, cached status, and remaining balance.
+pub(crate) fn account_request_block_reason(
+    auth: &KiroAuthRecord,
+    entry: Option<&KiroCachedAccountStatus>,
+) -> Option<RequestEligibilityBlockReason> {
+    if auth.disabled {
+        return Some(RequestEligibilityBlockReason::Disabled);
+    }
+    let entry = entry?;
+    match entry.cache.status.as_str() {
+        STATUS_DISABLED => return Some(RequestEligibilityBlockReason::Disabled),
+        STATUS_QUOTA_EXHAUSTED => return Some(RequestEligibilityBlockReason::QuotaExhausted),
+        _ => {},
+    }
+    let balance = entry.balance.as_ref()?;
+    if balance.remaining <= 0.0 {
+        return Some(RequestEligibilityBlockReason::QuotaExhausted);
+    }
+    if balance.remaining <= auth.effective_minimum_remaining_credits_before_block() {
+        return Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold);
+    }
+    None
+}
+
 pub(crate) fn account_is_request_eligible(
     auth: &KiroAuthRecord,
     entry: Option<&KiroCachedAccountStatus>,
 ) -> bool {
-    if auth.disabled {
-        return false;
-    }
-    let Some(entry) = entry else {
-        return true;
-    };
-    if matches!(entry.cache.status.as_str(), STATUS_DISABLED | STATUS_QUOTA_EXHAUSTED) {
-        return false;
-    }
-    entry
-        .balance
-        .as_ref()
-        .is_none_or(|balance| balance.remaining > 0.0)
+    account_request_block_reason(auth, entry).is_none()
 }
 
 fn apply_snapshot_summary(
@@ -610,6 +628,64 @@ mod tests {
             "transient degraded cache entries must stay eligible so the next refresh/request can \
              recover the account"
         );
+    }
+
+    #[test]
+    fn request_eligibility_skips_account_below_configured_remaining_threshold() {
+        let auth = KiroAuthRecord {
+            name: "alpha".to_string(),
+            disabled: false,
+            minimum_remaining_credits_before_block: Some(10.0),
+            ..KiroAuthRecord::default()
+        };
+        let status = KiroCachedAccountStatus {
+            balance: Some(KiroBalanceView {
+                current_usage: 92.5,
+                usage_limit: 100.0,
+                remaining: 7.5,
+                next_reset_at: None,
+                subscription_title: None,
+                user_id: Some("user-1".to_string()),
+            }),
+            cache: KiroCacheView {
+                status: STATUS_READY.to_string(),
+                refresh_interval_seconds: 300,
+                last_checked_at: Some(100),
+                last_success_at: Some(100),
+                error_message: None,
+            },
+        };
+
+        assert!(!account_is_request_eligible(&auth, Some(&status)));
+    }
+
+    #[test]
+    fn request_eligibility_keeps_account_above_configured_remaining_threshold() {
+        let auth = KiroAuthRecord {
+            name: "alpha".to_string(),
+            disabled: false,
+            minimum_remaining_credits_before_block: Some(10.0),
+            ..KiroAuthRecord::default()
+        };
+        let status = KiroCachedAccountStatus {
+            balance: Some(KiroBalanceView {
+                current_usage: 88.0,
+                usage_limit: 100.0,
+                remaining: 12.0,
+                next_reset_at: None,
+                subscription_title: None,
+                user_id: Some("user-1".to_string()),
+            }),
+            cache: KiroCacheView {
+                status: STATUS_READY.to_string(),
+                refresh_interval_seconds: 300,
+                last_checked_at: Some(100),
+                last_success_at: Some(100),
+                error_message: None,
+            },
+        };
+
+        assert!(account_is_request_eligible(&auth, Some(&status)));
     }
 
     #[test]

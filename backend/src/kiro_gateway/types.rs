@@ -353,6 +353,7 @@ pub struct KiroAccountView {
     pub machine_id: Option<String>,
     pub kiro_channel_max_concurrency: u64,
     pub kiro_channel_min_start_interval_ms: u64,
+    pub minimum_remaining_credits_before_block: f64,
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub effective_proxy_source: String,
@@ -398,6 +399,8 @@ impl KiroAccountView {
             machine_id: auth.machine_id.clone(),
             kiro_channel_max_concurrency: auth.effective_kiro_channel_max_concurrency(),
             kiro_channel_min_start_interval_ms: auth.effective_kiro_channel_min_start_interval_ms(),
+            minimum_remaining_credits_before_block: auth
+                .effective_minimum_remaining_credits_before_block(),
             proxy_mode: auth.proxy_selection().proxy_mode.as_str().to_string(),
             proxy_config_id: auth.proxy_selection().proxy_config_id,
             effective_proxy_source,
@@ -467,6 +470,8 @@ pub struct CreateManualKiroAccountRequest {
     #[serde(default)]
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     #[serde(default)]
+    pub minimum_remaining_credits_before_block: Option<f64>,
+    #[serde(default)]
     pub disabled: bool,
 }
 
@@ -477,6 +482,8 @@ pub struct PatchKiroAccountRequest {
     pub kiro_channel_max_concurrency: Option<u64>,
     #[serde(default)]
     pub kiro_channel_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub minimum_remaining_credits_before_block: Option<f64>,
     #[serde(default)]
     pub proxy_mode: Option<String>,
     #[serde(default)]
