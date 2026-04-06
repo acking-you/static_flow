@@ -4354,6 +4354,8 @@ pub struct AdminLlmGatewayKeyView {
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
     pub kiro_request_validation_enabled: bool,
+    #[serde(default = "default_true")]
+    pub kiro_cache_estimation_enabled: bool,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -5812,6 +5814,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub kiro_request_validation_enabled: Option<bool>,
+    pub kiro_cache_estimation_enabled: Option<bool>,
     pub request_max_concurrency_unlimited: bool,
     pub request_min_start_interval_ms_unlimited: bool,
 }
@@ -5835,6 +5838,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
+            request.kiro_cache_estimation_enabled,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -5913,6 +5917,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "kiro_request_validation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_request_validation_enabled),
+            );
+        }
+        if let Some(kiro_cache_estimation_enabled) = request.kiro_cache_estimation_enabled {
+            body.insert(
+                "kiro_cache_estimation_enabled".to_string(),
+                serde_json::Value::Bool(kiro_cache_estimation_enabled),
             );
         }
         if request.request_max_concurrency_unlimited {
@@ -6781,6 +6791,7 @@ pub async fn create_admin_kiro_key(
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
         })
     }
 
@@ -6826,6 +6837,7 @@ pub async fn patch_admin_kiro_key(
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
+            request.kiro_cache_estimation_enabled,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -6892,6 +6904,12 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "kiro_request_validation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_request_validation_enabled),
+            );
+        }
+        if let Some(kiro_cache_estimation_enabled) = request.kiro_cache_estimation_enabled {
+            body.insert(
+                "kiro_cache_estimation_enabled".to_string(),
+                serde_json::Value::Bool(kiro_cache_estimation_enabled),
             );
         }
         let response = api_patch(&url)

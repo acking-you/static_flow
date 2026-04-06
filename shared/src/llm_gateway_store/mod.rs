@@ -1587,6 +1587,7 @@ mod tests {
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
         }
     }
 
@@ -1617,6 +1618,7 @@ mod tests {
         updated.request_max_concurrency = Some(2);
         updated.request_min_start_interval_ms = Some(1_250);
         updated.kiro_request_validation_enabled = false;
+        updated.kiro_cache_estimation_enabled = false;
         updated.updated_at = now_ms();
         store.upsert_key(&updated).await.expect("update key");
 
@@ -1630,6 +1632,7 @@ mod tests {
         assert_eq!(reloaded.request_max_concurrency, Some(2));
         assert_eq!(reloaded.request_min_start_interval_ms, Some(1_250));
         assert!(!reloaded.kiro_request_validation_enabled);
+        assert!(!reloaded.kiro_cache_estimation_enabled);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2130,6 +2133,8 @@ mod tests {
         assert_eq!(reloaded.protocol_family, LLM_GATEWAY_PROTOCOL_OPENAI);
         assert_eq!(reloaded.usage_credit_total, 0.0);
         assert_eq!(reloaded.usage_credit_missing_events, 0);
+        assert!(reloaded.kiro_request_validation_enabled);
+        assert!(reloaded.kiro_cache_estimation_enabled);
 
         let schema = store
             .connection()

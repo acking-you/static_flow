@@ -80,6 +80,7 @@ struct StreamRequestContext {
     state: AppState,
     event_context: KiroEventContext,
     request_validation_enabled: bool,
+    cache_estimation_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -418,14 +419,8 @@ fn normalize_kiro_kmodel_name(model: &str) -> &str {
 }
 
 fn estimate_kiro_cache_usage(input: KiroCacheEstimateInput<'_>) -> KiroCacheEstimate {
-    let request_input = input.request_input_tokens.max(0);
-    let context_input = input.context_input_tokens.unwrap_or_default().max(0);
-    let safe_input = match (request_input > 0, context_input > 0) {
-        (true, true) => request_input.min(context_input),
-        (true, false) => request_input,
-        (false, true) => context_input,
-        (false, false) => 0,
-    };
+    let safe_input =
+        select_safe_input_tokens(input.request_input_tokens, input.context_input_tokens);
     let output_tokens = input.output_tokens.max(0);
     let Some(observed_credit) = input
         .credit_usage
@@ -466,14 +461,38 @@ fn estimate_kiro_cache_usage(input: KiroCacheEstimateInput<'_>) -> KiroCacheEsti
     }
 }
 
+fn select_safe_input_tokens(request_input_tokens: i32, context_input_tokens: Option<i32>) -> i32 {
+    let request_input = request_input_tokens.max(0);
+    let context_input = context_input_tokens.unwrap_or_default().max(0);
+    match (request_input > 0, context_input > 0) {
+        (true, true) => request_input.min(context_input),
+        (true, false) => request_input,
+        (false, true) => context_input,
+        (false, false) => 0,
+    }
+}
+
 fn build_kiro_usage_summary(
     model: &str,
     request_input_tokens: i32,
     context_input_tokens: Option<i32>,
     output_tokens: i32,
     credit_usage: Option<f64>,
+    cache_estimation_enabled: bool,
     kmodels: &std::collections::BTreeMap<String, f64>,
 ) -> KiroUsageSummary {
+    if !cache_estimation_enabled {
+        return KiroUsageSummary {
+            input_uncached_tokens: select_safe_input_tokens(
+                request_input_tokens,
+                context_input_tokens,
+            ),
+            input_cached_tokens: 0,
+            output_tokens,
+            credit_usage,
+            credit_usage_missing: credit_usage.is_none(),
+        };
+    }
     let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
         model,
         request_input_tokens,
@@ -959,6 +978,7 @@ async fn handle_stream_request(
             state: usage_ctx.state.clone(),
             event_context: usage_ctx.event_context.clone(),
             request_validation_enabled,
+            cache_estimation_enabled: usage_ctx.key_record.kiro_cache_estimation_enabled,
         },
         response,
         StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, tool_name_map),
@@ -1038,6 +1058,7 @@ async fn handle_stream_request_buffered(
             state: usage_ctx.state.clone(),
             event_context: usage_ctx.event_context.clone(),
             request_validation_enabled,
+            cache_estimation_enabled: usage_ctx.key_record.kiro_cache_estimation_enabled,
         },
         response,
         BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map),
@@ -1252,6 +1273,7 @@ async fn handle_non_stream_request(
         context_input_tokens,
         output_tokens,
         credit_usage_observed.then_some(credit_usage.max(0.0)),
+        key_record.kiro_cache_estimation_enabled,
         &runtime_config.kiro_cache_kmodels,
     );
     tracing::info!(
@@ -1532,6 +1554,7 @@ fn create_sse_stream(
                 ctx.context_input_tokens(),
                 output_tokens,
                 credit_usage,
+                request_ctx.cache_estimation_enabled,
                 &runtime_config.kiro_cache_kmodels,
             );
             let _ = match failure_diagnostic_payload {
@@ -1657,6 +1680,7 @@ fn create_buffered_sse_stream(
             ctx.context_input_tokens(),
             output_tokens,
             credit_usage,
+            request_ctx.cache_estimation_enabled,
             &runtime_config.kiro_cache_kmodels,
         );
         for event in &mut all_events {
@@ -1814,6 +1838,7 @@ mod tests {
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
         }
     }
 
@@ -2156,5 +2181,25 @@ mod tests {
         assert_eq!(estimate.input_tokens_total, 5_000);
         assert_eq!(estimate.input_cached_tokens, 0);
         assert_eq!(estimate.input_uncached_tokens, 5_000);
+    }
+
+    #[test]
+    fn build_usage_summary_disables_cache_estimation_per_key() {
+        let kmodels = sample_kmodels();
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(9_000),
+            400,
+            Some(0.02),
+            false,
+            &kmodels,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 0);
+        assert_eq!(summary.input_uncached_tokens, 9_000);
+        assert_eq!(summary.output_tokens, 400);
+        assert_eq!(summary.credit_usage, Some(0.02));
+        assert!(!summary.credit_usage_missing);
     }
 }

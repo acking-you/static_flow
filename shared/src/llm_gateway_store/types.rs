@@ -148,6 +148,9 @@ pub struct LlmGatewayKeyRecord {
     /// Whether Kiro requests using this key should run strict local request
     /// validation before conversion and proxying.
     pub kiro_request_validation_enabled: bool,
+    /// Whether Kiro requests using this key should expose conservative cache
+    /// estimation in Anthropic-compatible usage fields.
+    pub kiro_cache_estimation_enabled: bool,
 }
 
 impl LlmGatewayKeyRecord {

@@ -73,6 +73,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut request_max_concurrency = UInt64Builder::new();
     let mut request_min_start_interval_ms = UInt64Builder::new();
     let mut kiro_request_validation_enabled = BooleanBuilder::new();
+    let mut kiro_cache_estimation_enabled = BooleanBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -109,6 +110,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
             record.request_min_start_interval_ms,
         );
         kiro_request_validation_enabled.append_value(record.kiro_request_validation_enabled);
+        kiro_cache_estimation_enabled.append_value(record.kiro_cache_estimation_enabled);
     }
 
     RecordBatch::try_new(schema, vec![
@@ -137,6 +139,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(request_max_concurrency.finish()),
         Arc::new(request_min_start_interval_ms.finish()),
         Arc::new(kiro_request_validation_enabled.finish()),
+        Arc::new(kiro_cache_estimation_enabled.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
@@ -614,6 +617,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let kiro_request_validation_enabled = batch
             .column_by_name("kiro_request_validation_enabled")
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
+        let kiro_cache_estimation_enabled = batch
+            .column_by_name("kiro_cache_estimation_enabled")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = usage_input_uncached_tokens
@@ -665,6 +671,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 request_min_start_interval_ms: request_min_start_interval_ms
                     .and_then(|column| value_u64_opt(column, idx)),
                 kiro_request_validation_enabled: kiro_request_validation_enabled
+                    .and_then(|column| value_bool_opt(column, idx))
+                    .unwrap_or(true),
+                kiro_cache_estimation_enabled: kiro_cache_estimation_enabled
                     .and_then(|column| value_bool_opt(column, idx))
                     .unwrap_or(true),
             });

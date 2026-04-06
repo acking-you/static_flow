@@ -739,6 +739,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
     let kiro_request_validation_enabled =
         use_state(|| props.key_item.kiro_request_validation_enabled);
+    let kiro_cache_estimation_enabled = use_state(|| props.key_item.kiro_cache_estimation_enabled);
     let route_settings_expanded = use_state(|| false);
     let model_mapping_expanded = use_state(|| false);
     let saving = use_state(|| false);
@@ -754,6 +755,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
+        let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let available_account_names = available_account_names.clone();
         use_effect_with(props.key_item.clone(), move |_| {
             name.set(key_item.name.clone());
@@ -775,6 +777,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             ));
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
+            kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
             || ()
         });
     }
@@ -806,6 +809,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
+        let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -827,6 +831,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 );
             let model_name_map_value = (*model_name_map).clone();
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
+            let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -855,6 +860,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                     kiro_request_validation_enabled: Some(kiro_request_validation_enabled_value),
+                    kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
                     request_max_concurrency_unlimited: false,
                     request_min_start_interval_ms_unlimited: false,
                 })
@@ -885,6 +891,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let fixed_account_name = fixed_account_name.clone();
         let auto_account_names = auto_account_names.clone();
         let model_name_map = model_name_map.clone();
+        let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -904,6 +911,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     auto_account_names_value.as_slice(),
                 );
             let model_name_map_value = (*model_name_map).clone();
+            let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -932,6 +940,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                     kiro_request_validation_enabled: None,
+                    kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
                     request_max_concurrency_unlimited: false,
                     request_min_start_interval_ms_unlimited: false,
                 })
@@ -1169,6 +1178,26 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         <strong>{ "请求合法性校验" }</strong>
                         <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
                             { "开启时会在转发前拦截明显坏掉的 Anthropic message 结构。空文本占位块现在会自动忽略；如果某个客户端仍被误伤，可以按 key 关闭这层校验。" }
+                        </span>
+                    </span>
+                </label>
+                <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
+                    <input
+                        type="checkbox"
+                        checked={*kiro_cache_estimation_enabled}
+                        onchange={{
+                            let kiro_cache_estimation_enabled =
+                                kiro_cache_estimation_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                kiro_cache_estimation_enabled.set(input.checked());
+                            })
+                        }}
+                    />
+                    <span>
+                        <strong>{ "Cache Token 估算" }</strong>
+                        <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                            { "开启时，这个 key 对外返回的 Anthropic usage 会暴露保守估算的 cache_read_input_tokens，同时 usage event 也会记入估算后的 cached / uncached split。关闭后这两处都会回到 cache=0。" }
                         </span>
                     </span>
                 </label>

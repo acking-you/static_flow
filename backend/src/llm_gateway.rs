@@ -845,6 +845,7 @@ async fn create_managed_key_record(
         request_max_concurrency: input.request_max_concurrency,
         request_min_start_interval_ms: input.request_min_start_interval_ms,
         kiro_request_validation_enabled: true,
+        kiro_cache_estimation_enabled: true,
     };
     state
         .llm_gateway_store
@@ -5270,6 +5271,7 @@ mod tests {
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
         }
     }
 

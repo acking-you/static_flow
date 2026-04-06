@@ -264,6 +264,7 @@ pub async fn create_admin_key(
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
         kiro_request_validation_enabled: true,
+        kiro_cache_estimation_enabled: true,
     };
     state
         .llm_gateway_store
@@ -330,6 +331,9 @@ pub async fn patch_admin_key(
     }
     if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
         key.kiro_request_validation_enabled = kiro_request_validation_enabled;
+    }
+    if let Some(kiro_cache_estimation_enabled) = request.kiro_cache_estimation_enabled {
+        key.kiro_cache_estimation_enabled = kiro_cache_estimation_enabled;
     }
     key.public_visible = false;
     key.updated_at = now_ms();
@@ -1522,6 +1526,7 @@ mod tests {
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
