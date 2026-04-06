@@ -6679,6 +6679,7 @@ dependencies = [
  "futures-util",
  "hex",
  "lettre",
+ "lru",
  "maxminddb",
  "memory-stats",
  "parking_lot",

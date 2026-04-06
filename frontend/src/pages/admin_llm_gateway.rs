@@ -1824,6 +1824,26 @@ pub fn admin_llm_gateway_page() -> Html {
                         .as_ref()
                         .map(|current| current.kiro_cache_kmodels_json.clone())
                         .unwrap_or_default(),
+                    kiro_prefix_cache_mode: config
+                        .as_ref()
+                        .map(|current| current.kiro_prefix_cache_mode.clone())
+                        .unwrap_or_else(|| "formula".to_string()),
+                    kiro_prefix_cache_max_tokens: config
+                        .as_ref()
+                        .map(|current| current.kiro_prefix_cache_max_tokens)
+                        .unwrap_or(2_000_000),
+                    kiro_prefix_cache_entry_ttl_seconds: config
+                        .as_ref()
+                        .map(|current| current.kiro_prefix_cache_entry_ttl_seconds)
+                        .unwrap_or(1_800),
+                    kiro_conversation_anchor_max_entries: config
+                        .as_ref()
+                        .map(|current| current.kiro_conversation_anchor_max_entries)
+                        .unwrap_or(10_000),
+                    kiro_conversation_anchor_ttl_seconds: config
+                        .as_ref()
+                        .map(|current| current.kiro_conversation_anchor_ttl_seconds)
+                        .unwrap_or(21_600),
                 };
                 saving_runtime_config.set(true);
                 match update_admin_llm_gateway_config(&runtime_config).await {

@@ -1424,6 +1424,11 @@ pub fn admin_kiro_gateway_page() -> Html {
     let runtime_config = use_state(|| None::<LlmGatewayRuntimeConfig>);
     let kiro_cache_kmodels_json = use_state(String::new);
     let saving_kmodel_config = use_state(|| false);
+    let kiro_prefix_cache_mode = use_state(String::new);
+    let kiro_prefix_cache_max_tokens = use_state(String::new);
+    let kiro_prefix_cache_entry_ttl_seconds = use_state(String::new);
+    let kiro_conversation_anchor_max_entries = use_state(String::new);
+    let kiro_conversation_anchor_ttl_seconds = use_state(String::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
     let flash = use_state(|| None::<String>);
@@ -1516,6 +1521,11 @@ pub fn admin_kiro_gateway_page() -> Html {
         let proxy_bindings = proxy_bindings.clone();
         let runtime_config = runtime_config.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+        let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
+        let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
+        let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
+        let kiro_conversation_anchor_max_entries = kiro_conversation_anchor_max_entries.clone();
+        let kiro_conversation_anchor_ttl_seconds = kiro_conversation_anchor_ttl_seconds.clone();
         let loading = loading.clone();
         let error = error.clone();
         use_effect_with(*refresh_tick, move |_| {
@@ -1526,6 +1536,11 @@ pub fn admin_kiro_gateway_page() -> Html {
             let proxy_bindings = proxy_bindings.clone();
             let runtime_config = runtime_config.clone();
             let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+            let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
+            let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
+            let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
+            let kiro_conversation_anchor_max_entries = kiro_conversation_anchor_max_entries.clone();
+            let kiro_conversation_anchor_ttl_seconds = kiro_conversation_anchor_ttl_seconds.clone();
             let loading = loading.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -1564,6 +1579,15 @@ pub fn admin_kiro_gateway_page() -> Html {
                     ) => {
                         kiro_cache_kmodels_json
                             .set(format_json_for_textarea(&config_resp.kiro_cache_kmodels_json));
+                        kiro_prefix_cache_mode.set(config_resp.kiro_prefix_cache_mode.clone());
+                        kiro_prefix_cache_max_tokens
+                            .set(config_resp.kiro_prefix_cache_max_tokens.to_string());
+                        kiro_prefix_cache_entry_ttl_seconds
+                            .set(config_resp.kiro_prefix_cache_entry_ttl_seconds.to_string());
+                        kiro_conversation_anchor_max_entries
+                            .set(config_resp.kiro_conversation_anchor_max_entries.to_string());
+                        kiro_conversation_anchor_ttl_seconds
+                            .set(config_resp.kiro_conversation_anchor_ttl_seconds.to_string());
                         runtime_config.set(Some(config_resp));
                         accounts.set(accounts_resp.accounts);
                         keys.set(keys_resp.keys);
@@ -1611,6 +1635,13 @@ pub fn admin_kiro_gateway_page() -> Html {
         let runtime_config = runtime_config.clone();
         let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+        let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode.clone();
+        let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens.clone();
+        let kiro_prefix_cache_entry_ttl_seconds_input = kiro_prefix_cache_entry_ttl_seconds.clone();
+        let kiro_conversation_anchor_max_entries_input =
+            kiro_conversation_anchor_max_entries.clone();
+        let kiro_conversation_anchor_ttl_seconds_input =
+            kiro_conversation_anchor_ttl_seconds.clone();
         let saving_kmodel_config = saving_kmodel_config.clone();
         let notify = notify.clone();
         let error = error.clone();
@@ -1618,6 +1649,22 @@ pub fn admin_kiro_gateway_page() -> Html {
             let runtime_config = runtime_config.clone();
             let kiro_cache_kmodels_json = (*kiro_cache_kmodels_json).clone();
             let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json_input.clone();
+            let kiro_prefix_cache_mode_value = (*kiro_prefix_cache_mode_input).clone();
+            let kiro_prefix_cache_max_tokens_value = (*kiro_prefix_cache_max_tokens_input).clone();
+            let kiro_prefix_cache_entry_ttl_seconds_value =
+                (*kiro_prefix_cache_entry_ttl_seconds_input).clone();
+            let kiro_conversation_anchor_max_entries_value =
+                (*kiro_conversation_anchor_max_entries_input).clone();
+            let kiro_conversation_anchor_ttl_seconds_value =
+                (*kiro_conversation_anchor_ttl_seconds_input).clone();
+            let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode_input.clone();
+            let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens_input.clone();
+            let kiro_prefix_cache_entry_ttl_seconds_input =
+                kiro_prefix_cache_entry_ttl_seconds_input.clone();
+            let kiro_conversation_anchor_max_entries_input =
+                kiro_conversation_anchor_max_entries_input.clone();
+            let kiro_conversation_anchor_ttl_seconds_input =
+                kiro_conversation_anchor_ttl_seconds_input.clone();
             let saving_kmodel_config = saving_kmodel_config.clone();
             let notify = notify.clone();
             let error = error.clone();
@@ -1628,19 +1675,85 @@ pub fn admin_kiro_gateway_page() -> Html {
                     notify.emit((message, true));
                     return;
                 };
+                let mode = kiro_prefix_cache_mode_value.trim();
+                if mode != "formula" && mode != "prefix_tree" {
+                    let message =
+                        "Kiro prefix cache mode must be `formula` or `prefix_tree`.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                }
+                let Ok(prefix_cache_max_tokens) =
+                    kiro_prefix_cache_max_tokens_value.trim().parse::<u64>()
+                else {
+                    let message =
+                        "Kiro prefix cache max tokens must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                let Ok(prefix_cache_entry_ttl_seconds) = kiro_prefix_cache_entry_ttl_seconds_value
+                    .trim()
+                    .parse::<u64>()
+                else {
+                    let message =
+                        "Kiro prefix cache TTL seconds must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                let Ok(conversation_anchor_max_entries) =
+                    kiro_conversation_anchor_max_entries_value
+                        .trim()
+                        .parse::<u64>()
+                else {
+                    let message =
+                        "Kiro conversation anchor max entries must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                let Ok(conversation_anchor_ttl_seconds) =
+                    kiro_conversation_anchor_ttl_seconds_value
+                        .trim()
+                        .parse::<u64>()
+                else {
+                    let message =
+                        "Kiro conversation anchor TTL seconds must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
                 next_config.kiro_cache_kmodels_json = kiro_cache_kmodels_json;
+                next_config.kiro_prefix_cache_mode = mode.to_string();
+                next_config.kiro_prefix_cache_max_tokens = prefix_cache_max_tokens;
+                next_config.kiro_prefix_cache_entry_ttl_seconds = prefix_cache_entry_ttl_seconds;
+                next_config.kiro_conversation_anchor_max_entries = conversation_anchor_max_entries;
+                next_config.kiro_conversation_anchor_ttl_seconds = conversation_anchor_ttl_seconds;
                 saving_kmodel_config.set(true);
                 match update_admin_llm_gateway_config(&next_config).await {
                     Ok(saved) => {
                         error.set(None);
                         kiro_cache_kmodels_json_input
                             .set(format_json_for_textarea(&saved.kiro_cache_kmodels_json));
+                        kiro_prefix_cache_mode_input.set(saved.kiro_prefix_cache_mode.clone());
+                        kiro_prefix_cache_max_tokens_input
+                            .set(saved.kiro_prefix_cache_max_tokens.to_string());
+                        kiro_prefix_cache_entry_ttl_seconds_input
+                            .set(saved.kiro_prefix_cache_entry_ttl_seconds.to_string());
+                        kiro_conversation_anchor_max_entries_input
+                            .set(saved.kiro_conversation_anchor_max_entries.to_string());
+                        kiro_conversation_anchor_ttl_seconds_input
+                            .set(saved.kiro_conversation_anchor_ttl_seconds.to_string());
                         runtime_config.set(Some(saved.clone()));
-                        notify.emit(("Saved Kiro cache Kmodel config.".to_string(), false));
+                        notify.emit(("Saved Kiro cache simulation config.".to_string(), false));
                     },
                     Err(err) => {
                         error.set(Some(err.clone()));
-                        notify.emit((format!("Failed to save Kiro cache Kmodels.\n{err}"), true));
+                        notify.emit((
+                            format!("Failed to save Kiro cache simulation config.\n{err}"),
+                            true,
+                        ));
                     },
                 }
                 saving_kmodel_config.set(false);
@@ -1977,9 +2090,9 @@ pub fn admin_kiro_gateway_page() -> Html {
             <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                 <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
-                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Conservative Cache Kmodels" }</h2>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Cache Simulation" }</h2>
                         <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "这里的 JSON 按模型配置 Kiro cache 保守估算系数。它会直接影响对外 Anthropic usage 里的 cache_read_input_tokens；系统默认已经内置当前拟合值，只有你需要重新标定时才需要改这里。" }
+                            { "这里统一管理 Kiro 的全局 cache 模拟模式、prefix tree 容量/TTL，以及按模型的保守 Kmodel 系数。prefix tree 模式会基于修正后的 ConversationState 做共享前缀匹配；formula 模式继续走旧的保守 credit 反推。" }
                         </p>
                     </div>
                     <button
@@ -1988,8 +2101,83 @@ pub fn admin_kiro_gateway_page() -> Html {
                         disabled={*saving_kmodel_config}
                         onclick={on_save_kiro_cache_kmodels}
                     >
-                        { if *saving_kmodel_config { "Saving..." } else { "Save Kmodels" } }
+                        { if *saving_kmodel_config { "Saving..." } else { "Save Cache Settings" } }
                     </button>
+                </div>
+                <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-2")}>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Simulation Mode" }</div>
+                        <select
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                            value={(*kiro_prefix_cache_mode).clone()}
+                            onchange={{
+                                let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
+                                Callback::from(move |event: Event| {
+                                    let input: HtmlSelectElement = event.target_unchecked_into();
+                                    kiro_prefix_cache_mode.set(input.value());
+                                })
+                            }}
+                        >
+                            <option value="formula">{ "formula" }</option>
+                            <option value="prefix_tree">{ "prefix_tree" }</option>
+                        </select>
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Prefix Tree Max Tokens" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_prefix_cache_max_tokens).clone()}
+                            oninput={{
+                                let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_prefix_cache_max_tokens.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Prefix Tree TTL Seconds" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_prefix_cache_entry_ttl_seconds).clone()}
+                            oninput={{
+                                let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_prefix_cache_entry_ttl_seconds.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Anchor Max Entries" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_conversation_anchor_max_entries).clone()}
+                            oninput={{
+                                let kiro_conversation_anchor_max_entries = kiro_conversation_anchor_max_entries.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_conversation_anchor_max_entries.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm", "lg:col-span-2")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Anchor TTL Seconds" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_conversation_anchor_ttl_seconds).clone()}
+                            oninput={{
+                                let kiro_conversation_anchor_ttl_seconds = kiro_conversation_anchor_ttl_seconds.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_conversation_anchor_ttl_seconds.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
                 </div>
                 <label class={classes!("mt-4", "block", "text-sm")}>
                     <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Kmodel JSON" }</div>
@@ -2011,7 +2199,10 @@ pub fn admin_kiro_gateway_page() -> Html {
                             { format!("current stored bytes: {}", config.kiro_cache_kmodels_json.len()) }
                         </div>
                         <div>
-                            { "公式固定为保守下界反推；这里只允许改每模型 K 值，不开放额外 heuristic 参数。" }
+                            { format!("mode={}, prefix_tree_max_tokens={}, prefix_tree_ttl_seconds={}, anchor_max_entries={}, anchor_ttl_seconds={}", config.kiro_prefix_cache_mode, config.kiro_prefix_cache_max_tokens, config.kiro_prefix_cache_entry_ttl_seconds, config.kiro_conversation_anchor_max_entries, config.kiro_conversation_anchor_ttl_seconds) }
+                        </div>
+                        <div>
+                            { "prefix_tree 模式使用修正后的 stable-prefix 做共享前缀匹配；formula 模式继续保留旧的保守下界反推。" }
                         </div>
                     </div>
                 }

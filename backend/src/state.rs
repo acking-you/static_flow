@@ -20,7 +20,10 @@ use static_flow_shared::{
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
+        DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
+        DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS, DEFAULT_KIRO_PREFIX_CACHE_MODE,
+        DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
@@ -205,6 +208,11 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_max_buffer_bytes: u64,
     pub kiro_cache_kmodels_json: String,
     pub kiro_cache_kmodels: BTreeMap<String, f64>,
+    pub kiro_prefix_cache_mode: String,
+    pub kiro_prefix_cache_max_tokens: u64,
+    pub kiro_prefix_cache_entry_ttl_seconds: u64,
+    pub kiro_conversation_anchor_max_entries: u64,
+    pub kiro_conversation_anchor_ttl_seconds: u64,
 }
 
 impl Default for LlmGatewayRuntimeConfig {
@@ -233,6 +241,11 @@ impl Default for LlmGatewayRuntimeConfig {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_cache_kmodels: default_kiro_cache_kmodels(),
+            kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
+            kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
+            kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
+            kiro_conversation_anchor_max_entries: DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
+            kiro_conversation_anchor_ttl_seconds: DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
         }
     }
 }
@@ -374,6 +387,15 @@ impl AppState {
         let usage_event_flush_max_buffer_bytes =
             llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
         let kiro_cache_kmodels_json = llm_gateway_runtime_config_record.kiro_cache_kmodels_json;
+        let kiro_prefix_cache_mode = llm_gateway_runtime_config_record.kiro_prefix_cache_mode;
+        let kiro_prefix_cache_max_tokens =
+            llm_gateway_runtime_config_record.kiro_prefix_cache_max_tokens;
+        let kiro_prefix_cache_entry_ttl_seconds =
+            llm_gateway_runtime_config_record.kiro_prefix_cache_entry_ttl_seconds;
+        let kiro_conversation_anchor_max_entries =
+            llm_gateway_runtime_config_record.kiro_conversation_anchor_max_entries;
+        let kiro_conversation_anchor_ttl_seconds =
+            llm_gateway_runtime_config_record.kiro_conversation_anchor_ttl_seconds;
         let kiro_cache_kmodels = parse_kiro_cache_kmodels_json(&kiro_cache_kmodels_json)
             .unwrap_or_else(|err| {
                 tracing::warn!(
@@ -398,6 +420,11 @@ impl AppState {
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json,
+            kiro_prefix_cache_mode,
+            kiro_prefix_cache_max_tokens,
+            kiro_prefix_cache_entry_ttl_seconds,
+            kiro_conversation_anchor_max_entries,
+            kiro_conversation_anchor_ttl_seconds,
             "loaded llm gateway runtime config from storage"
         );
         let llm_gateway_runtime_config = Arc::new(RwLock::new(LlmGatewayRuntimeConfig {
@@ -417,6 +444,11 @@ impl AppState {
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json,
             kiro_cache_kmodels,
+            kiro_prefix_cache_mode,
+            kiro_prefix_cache_max_tokens,
+            kiro_prefix_cache_entry_ttl_seconds,
+            kiro_conversation_anchor_max_entries,
+            kiro_conversation_anchor_ttl_seconds,
         }));
         let auths_dir = crate::llm_gateway::resolve_auths_dir();
         let account_pool = Arc::new(crate::llm_gateway::AccountPool::new(auths_dir.clone()));

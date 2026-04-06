@@ -37,8 +37,8 @@ use reqwest::header::{HeaderMap as ReqwestHeaderMap, HeaderValue as ReqwestHeade
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    now_ms, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
-    LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
+    is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
+    LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
     NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
     NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
     LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
@@ -191,6 +191,11 @@ fn build_runtime_config_response(
         usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json: config.kiro_cache_kmodels_json.clone(),
+        kiro_prefix_cache_mode: config.kiro_prefix_cache_mode.clone(),
+        kiro_prefix_cache_max_tokens: config.kiro_prefix_cache_max_tokens,
+        kiro_prefix_cache_entry_ttl_seconds: config.kiro_prefix_cache_entry_ttl_seconds,
+        kiro_conversation_anchor_max_entries: config.kiro_conversation_anchor_max_entries,
+        kiro_conversation_anchor_ttl_seconds: config.kiro_conversation_anchor_ttl_seconds,
     }
 }
 
@@ -208,6 +213,24 @@ fn validate_runtime_refresh_window(
     }
     if min_seconds > max_seconds {
         return Err(bad_request("refresh min interval must be less than or equal to max interval"));
+    }
+    Ok(())
+}
+
+fn validate_kiro_prefix_cache_mode(mode: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if is_valid_kiro_prefix_cache_mode(mode) {
+        Ok(())
+    } else {
+        Err(bad_request("kiro_prefix_cache_mode is invalid"))
+    }
+}
+
+fn validate_positive_u64(
+    field_name: &str,
+    value: u64,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if value == 0 {
+        return Err(bad_request(&format!("{field_name} must be positive")));
     }
     Ok(())
 }
@@ -424,6 +447,36 @@ pub async fn update_admin_runtime_config(
         .unwrap_or_else(|| current.kiro_cache_kmodels_json.clone());
     let kiro_cache_kmodels = parse_kiro_cache_kmodels_json(&kiro_cache_kmodels_json)
         .map_err(|_| bad_request("kiro_cache_kmodels_json is invalid"))?;
+    let kiro_prefix_cache_mode = request
+        .kiro_prefix_cache_mode
+        .clone()
+        .unwrap_or_else(|| current.kiro_prefix_cache_mode.clone());
+    validate_kiro_prefix_cache_mode(&kiro_prefix_cache_mode)?;
+    let kiro_prefix_cache_max_tokens = request
+        .kiro_prefix_cache_max_tokens
+        .unwrap_or(current.kiro_prefix_cache_max_tokens);
+    validate_positive_u64("kiro_prefix_cache_max_tokens", kiro_prefix_cache_max_tokens)?;
+    let kiro_prefix_cache_entry_ttl_seconds = request
+        .kiro_prefix_cache_entry_ttl_seconds
+        .unwrap_or(current.kiro_prefix_cache_entry_ttl_seconds);
+    validate_positive_u64(
+        "kiro_prefix_cache_entry_ttl_seconds",
+        kiro_prefix_cache_entry_ttl_seconds,
+    )?;
+    let kiro_conversation_anchor_max_entries = request
+        .kiro_conversation_anchor_max_entries
+        .unwrap_or(current.kiro_conversation_anchor_max_entries);
+    validate_positive_u64(
+        "kiro_conversation_anchor_max_entries",
+        kiro_conversation_anchor_max_entries,
+    )?;
+    let kiro_conversation_anchor_ttl_seconds = request
+        .kiro_conversation_anchor_ttl_seconds
+        .unwrap_or(current.kiro_conversation_anchor_ttl_seconds);
+    validate_positive_u64(
+        "kiro_conversation_anchor_ttl_seconds",
+        kiro_conversation_anchor_ttl_seconds,
+    )?;
     let config = LlmGatewayRuntimeConfigRecord {
         id: "default".to_string(),
         auth_cache_ttl_seconds: ttl,
@@ -441,6 +494,11 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
+        kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
+        kiro_prefix_cache_max_tokens,
+        kiro_prefix_cache_entry_ttl_seconds,
+        kiro_conversation_anchor_max_entries,
+        kiro_conversation_anchor_ttl_seconds,
         updated_at: now_ms(),
     };
     state
@@ -467,6 +525,11 @@ pub async fn update_admin_runtime_config(
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
             kiro_cache_kmodels,
+            kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
+            kiro_prefix_cache_max_tokens,
+            kiro_prefix_cache_entry_ttl_seconds,
+            kiro_conversation_anchor_max_entries,
+            kiro_conversation_anchor_ttl_seconds,
         };
     }
 
@@ -484,6 +547,11 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json = %kiro_cache_kmodels_json,
+        kiro_prefix_cache_mode = %kiro_prefix_cache_mode,
+        kiro_prefix_cache_max_tokens,
+        kiro_prefix_cache_entry_ttl_seconds,
+        kiro_conversation_anchor_max_entries,
+        kiro_conversation_anchor_ttl_seconds,
         "Updated LLM gateway runtime config"
     );
 
@@ -5623,6 +5691,41 @@ mod tests {
         .expect_err("zero coefficient should fail");
 
         assert!(err.to_string().contains("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn update_runtime_config_request_parses_new_kiro_prefix_cache_fields() {
+        let request: UpdateLlmGatewayRuntimeConfigRequest = serde_json::from_value(json!({
+            "kiro_prefix_cache_mode": "prefix_tree",
+            "kiro_prefix_cache_max_tokens": 4096,
+            "kiro_prefix_cache_entry_ttl_seconds": 1800,
+            "kiro_conversation_anchor_max_entries": 128,
+            "kiro_conversation_anchor_ttl_seconds": 3600
+        }))
+        .expect("parse runtime config request");
+
+        assert_eq!(request.kiro_prefix_cache_mode.as_deref(), Some("prefix_tree"));
+        assert_eq!(request.kiro_prefix_cache_max_tokens, Some(4096));
+        assert_eq!(request.kiro_prefix_cache_entry_ttl_seconds, Some(1800));
+        assert_eq!(request.kiro_conversation_anchor_max_entries, Some(128));
+        assert_eq!(request.kiro_conversation_anchor_ttl_seconds, Some(3600));
+    }
+
+    #[test]
+    fn validate_runtime_config_rejects_invalid_kiro_prefix_cache_mode() {
+        let err = validate_kiro_prefix_cache_mode("invalid").expect_err("mode should be rejected");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_runtime_config_rejects_non_positive_kiro_limits() {
+        let err = validate_positive_u64("kiro_prefix_cache_max_tokens", 0)
+            .expect_err("zero max tokens should fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+
+        let err = validate_positive_u64("kiro_conversation_anchor_max_entries", 0)
+            .expect_err("zero max entries should fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test(start_paused = true)]

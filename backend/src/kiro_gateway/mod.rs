@@ -2,6 +2,7 @@
 //! usage tracking, and admin CRUD for the Kiro provider backend.
 
 pub(crate) mod auth_file;
+pub(crate) mod cache_sim;
 mod local_import;
 pub(crate) mod machine_id;
 pub mod parser;

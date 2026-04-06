@@ -11,7 +11,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::converter::get_context_window_size;
-use crate::kiro_gateway::wire::Event;
+use crate::kiro_gateway::wire::{AssistantMessage, Event, ToolUseEntry};
 
 /// A single Server-Sent Event with an event type and JSON data payload.
 #[derive(Debug, Clone)]
@@ -45,6 +45,13 @@ struct BlockState {
     block_type: String,
     started: bool,
     stopped: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ToolUseAccumulator {
+    start_order: usize,
+    name: String,
+    input_buffer: String,
 }
 
 impl BlockState {
@@ -240,6 +247,10 @@ pub struct StreamContext {
     pub credit_usage_observed: bool,
     pub tool_block_indices: HashMap<String, i32>,
     pub tool_name_map: HashMap<String, String>,
+    assistant_content: String,
+    tool_use_accumulators: HashMap<String, ToolUseAccumulator>,
+    completed_tool_uses: Vec<(usize, ToolUseEntry)>,
+    next_tool_use_order: usize,
     pub thinking_enabled: bool,
     pub thinking_buffer: String,
     pub in_thinking_block: bool,
@@ -267,6 +278,10 @@ impl StreamContext {
             credit_usage_observed: false,
             tool_block_indices: HashMap::new(),
             tool_name_map,
+            assistant_content: String::new(),
+            tool_use_accumulators: HashMap::new(),
+            completed_tool_uses: Vec::new(),
+            next_tool_use_order: 0,
             thinking_enabled,
             thinking_buffer: String::new(),
             in_thinking_block: false,
@@ -303,6 +318,20 @@ impl StreamContext {
         } else {
             (None, true)
         }
+    }
+
+    pub fn final_assistant_message(&self) -> AssistantMessage {
+        let mut completed_tool_uses = self.completed_tool_uses.clone();
+        completed_tool_uses.sort_by_key(|(start_order, _)| *start_order);
+        let mut assistant = AssistantMessage::new(self.assistant_content.clone());
+        let tool_uses = completed_tool_uses
+            .into_iter()
+            .map(|(_, tool_use)| tool_use)
+            .collect::<Vec<_>>();
+        if !tool_uses.is_empty() {
+            assistant = assistant.with_tool_uses(tool_uses);
+        }
+        assistant
     }
 
     pub fn create_message_start_event(&self) -> serde_json::Value {
@@ -396,6 +425,7 @@ impl StreamContext {
         if content.is_empty() {
             return Vec::new();
         }
+        self.assistant_content.push_str(content);
         self.output_tokens += estimate_tokens(content);
         if self.thinking_enabled {
             return self.process_content_with_thinking(content);
@@ -591,6 +621,25 @@ impl StreamContext {
             .get(&tool_use.name)
             .cloned()
             .unwrap_or_else(|| tool_use.name.clone());
+        let accumulator = if let Some(accumulator) =
+            self.tool_use_accumulators.get_mut(&tool_use.tool_use_id)
+        {
+            accumulator
+        } else {
+            let start_order = self.next_tool_use_order;
+            self.next_tool_use_order += 1;
+            self.tool_use_accumulators
+                .insert(tool_use.tool_use_id.clone(), ToolUseAccumulator {
+                    start_order,
+                    name: original_name.clone(),
+                    input_buffer: String::new(),
+                });
+            self.tool_use_accumulators
+                .get_mut(&tool_use.tool_use_id)
+                .expect("tool use accumulator inserted")
+        };
+        accumulator.name = original_name.clone();
+        accumulator.input_buffer.push_str(&tool_use.input);
 
         events.extend(self.state_manager.handle_content_block_start(
             block_index,
@@ -607,6 +656,18 @@ impl StreamContext {
             }
         }
         if tool_use.stop {
+            if let Some(accumulator) = self.tool_use_accumulators.remove(&tool_use.tool_use_id) {
+                let input = if accumulator.input_buffer.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str(&accumulator.input_buffer).unwrap_or_else(|_| json!({}))
+                };
+                self.completed_tool_uses.push((
+                    accumulator.start_order,
+                    ToolUseEntry::new(tool_use.tool_use_id.clone(), accumulator.name)
+                        .with_input(input),
+                ));
+            }
             if let Some(event) = self.state_manager.handle_content_block_stop(block_index) {
                 events.push(event);
             }
@@ -772,6 +833,10 @@ impl BufferedStreamContext {
 
     pub fn final_credit_usage(&self) -> (Option<f64>, bool) {
         self.inner.final_credit_usage()
+    }
+
+    pub fn final_assistant_message(&self) -> AssistantMessage {
+        self.inner.final_assistant_message()
     }
 }
 

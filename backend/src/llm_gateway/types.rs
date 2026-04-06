@@ -500,6 +500,11 @@ pub struct LlmGatewayRuntimeConfigResponse {
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
     pub kiro_cache_kmodels_json: String,
+    pub kiro_prefix_cache_mode: String,
+    pub kiro_prefix_cache_max_tokens: u64,
+    pub kiro_prefix_cache_entry_ttl_seconds: u64,
+    pub kiro_conversation_anchor_max_entries: u64,
+    pub kiro_conversation_anchor_ttl_seconds: u64,
 }
 
 /// One reusable upstream proxy config managed from the admin UI.
@@ -629,6 +634,11 @@ pub struct UpdateLlmGatewayRuntimeConfigRequest {
     pub usage_event_flush_interval_seconds: Option<u64>,
     pub usage_event_flush_max_buffer_bytes: Option<u64>,
     pub kiro_cache_kmodels_json: Option<String>,
+    pub kiro_prefix_cache_mode: Option<String>,
+    pub kiro_prefix_cache_max_tokens: Option<u64>,
+    pub kiro_prefix_cache_entry_ttl_seconds: Option<u64>,
+    pub kiro_conversation_anchor_max_entries: Option<u64>,
+    pub kiro_conversation_anchor_ttl_seconds: Option<u64>,
 }
 
 /// Admin request body for creating a new externally visible gateway key.

@@ -117,6 +117,11 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         Field::new("usage_event_flush_interval_seconds", DataType::UInt64, false),
         Field::new("usage_event_flush_max_buffer_bytes", DataType::UInt64, false),
         Field::new("kiro_cache_kmodels_json", DataType::Utf8, false),
+        Field::new("kiro_prefix_cache_mode", DataType::Utf8, false),
+        Field::new("kiro_prefix_cache_max_tokens", DataType::UInt64, false),
+        Field::new("kiro_prefix_cache_entry_ttl_seconds", DataType::UInt64, false),
+        Field::new("kiro_conversation_anchor_max_entries", DataType::UInt64, false),
+        Field::new("kiro_conversation_anchor_ttl_seconds", DataType::UInt64, false),
         Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
@@ -316,6 +321,11 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
     ensure_nullable_u64_column(&table, "usage_event_flush_interval_seconds").await?;
     ensure_nullable_u64_column(&table, "usage_event_flush_max_buffer_bytes").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_kmodels_json").await?;
+    ensure_nullable_utf8_column(&table, "kiro_prefix_cache_mode").await?;
+    ensure_nullable_u64_column(&table, "kiro_prefix_cache_max_tokens").await?;
+    ensure_nullable_u64_column(&table, "kiro_prefix_cache_entry_ttl_seconds").await?;
+    ensure_nullable_u64_column(&table, "kiro_conversation_anchor_max_entries").await?;
+    ensure_nullable_u64_column(&table, "kiro_conversation_anchor_ttl_seconds").await?;
     ensure_scalar_index(&table, "id").await?;
     Ok(table)
 }

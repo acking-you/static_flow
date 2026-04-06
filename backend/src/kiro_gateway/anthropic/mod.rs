@@ -22,6 +22,9 @@ use tokio::{
 };
 
 use super::{
+    cache_sim::{
+        KiroCacheSimulationConfig, KiroCacheSimulationMode, PrefixCacheMatch, PromptProjection,
+    },
     parser::decoder::EventStreamDecoder,
     provider::{KiroProvider, ProviderCallError},
     token, AppKiroStateExt, KiroUsageSummary,
@@ -50,7 +53,10 @@ use self::{
     },
     websearch::handle_websearch_request,
 };
-use crate::{kiro_gateway::wire::Event, state::AppState};
+use crate::{
+    kiro_gateway::wire::{AssistantMessage, ConversationState, Event, ToolUseEntry},
+    state::{AppState, LlmGatewayRuntimeConfig},
+};
 
 const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
     ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
@@ -102,6 +108,7 @@ struct StreamRequestContext {
     event_context: KiroEventContext,
     request_validation_enabled: bool,
     cache_estimation_enabled: bool,
+    simulation: KiroSimulationRequestContext,
 }
 
 #[derive(Clone, Copy)]
@@ -123,6 +130,16 @@ struct NonStreamRequestContext {
     input_tokens: i32,
     tool_name_map: std::collections::HashMap<String, String>,
     request_validation_enabled: bool,
+    simulation: KiroSimulationRequestContext,
+}
+
+#[derive(Clone)]
+struct KiroSimulationRequestContext {
+    runtime_config: LlmGatewayRuntimeConfig,
+    simulation_config: KiroCacheSimulationConfig,
+    projection: PromptProjection,
+    prefix_cache_match: PrefixCacheMatch,
+    conversation_id: String,
 }
 
 fn resolve_request_session(
@@ -162,6 +179,144 @@ fn resolve_request_session(
         }
     }
     resolved
+}
+
+fn prepare_simulation_request_context(
+    state: &AppState,
+    conversation_state: ConversationState,
+    session_tracking: SessionTracking,
+) -> (ConversationState, SessionTracking, KiroSimulationRequestContext) {
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
+    let projection = PromptProjection::from_conversation_state(&conversation_state);
+    let now = std::time::Instant::now();
+    let prefix_cache_match =
+        state
+            .kiro_gateway
+            .cache_simulator
+            .match_prefix(&projection, simulation_config, now);
+    let (conversation_state, session_tracking) = maybe_recover_conversation_id_from_anchor(
+        state,
+        conversation_state,
+        session_tracking,
+        &projection,
+        simulation_config,
+        now,
+    );
+    let simulation = KiroSimulationRequestContext {
+        runtime_config,
+        simulation_config,
+        projection,
+        prefix_cache_match,
+        conversation_id: conversation_state.conversation_id.clone(),
+    };
+    (conversation_state, session_tracking, simulation)
+}
+
+fn maybe_recover_conversation_id_from_anchor(
+    state: &AppState,
+    mut conversation_state: ConversationState,
+    session_tracking: SessionTracking,
+    projection: &PromptProjection,
+    simulation_config: KiroCacheSimulationConfig,
+    now: std::time::Instant,
+) -> (ConversationState, SessionTracking) {
+    let SessionIdSource::GeneratedFallback(reason) = session_tracking.source.clone() else {
+        return (conversation_state, session_tracking);
+    };
+    if !matches!(simulation_config.mode, KiroCacheSimulationMode::PrefixTree) {
+        return (conversation_state, session_tracking);
+    }
+    let Some(recovered_conversation_id) = state
+        .kiro_gateway
+        .cache_simulator
+        .recover_conversation_id(projection, simulation_config, now)
+    else {
+        return (conversation_state, session_tracking);
+    };
+    conversation_state.conversation_id = recovered_conversation_id;
+    (conversation_state, SessionTracking {
+        source: SessionIdSource::RecoveredAnchor(reason),
+        source_name: session_tracking.source_name,
+        source_value_preview: session_tracking.source_value_preview,
+    })
+}
+
+fn log_non_header_session_resolution(
+    session_tracking: &SessionTracking,
+    conversation_id: &str,
+    projection: &PromptProjection,
+    ctx: &NormalizationLogContext<'_>,
+) {
+    match &session_tracking.source {
+        SessionIdSource::RequestHeader => {},
+        SessionIdSource::MetadataJson | SessionIdSource::MetadataLegacy => {
+            let session_resolution = match &session_tracking.source {
+                SessionIdSource::MetadataJson => "metadata_json",
+                SessionIdSource::MetadataLegacy => "metadata_legacy",
+                _ => unreachable!("non-header metadata logging only handles metadata sources"),
+            };
+            tracing::warn!(
+                key_id = %ctx.key_record.id,
+                key_name = %ctx.key_record.name,
+                route = ctx.public_path,
+                requested_model = ctx.requested_model,
+                effective_model = ctx.effective_model,
+                stream = ctx.stream,
+                buffered_for_cc = ctx.buffered_for_cc,
+                request_validation_enabled = ctx.request_validation_enabled,
+                session_resolution,
+                conversation_id,
+                session_source_name = session_tracking.source_name.unwrap_or(""),
+                session_source_preview = session_tracking
+                    .source_value_preview
+                    .as_deref()
+                    .unwrap_or(""),
+                "resolved kiro conversation id from non-header session source before upstream call"
+            );
+        },
+        SessionIdSource::RecoveredAnchor(reason) => {
+            tracing::warn!(
+                key_id = %ctx.key_record.id,
+                key_name = %ctx.key_record.name,
+                route = ctx.public_path,
+                requested_model = ctx.requested_model,
+                effective_model = ctx.effective_model,
+                stream = ctx.stream,
+                buffered_for_cc = ctx.buffered_for_cc,
+                request_validation_enabled = ctx.request_validation_enabled,
+                fallback_reason = reason.as_str(),
+                recovered_conversation_id = conversation_id,
+                lookup_anchor_preview = preview_session_value(&projection.lookup_anchor_hash),
+                session_source_name = session_tracking.source_name.unwrap_or(""),
+                session_source_preview = session_tracking
+                    .source_value_preview
+                    .as_deref()
+                    .unwrap_or(""),
+                "recovered kiro conversation id from canonical history anchor because no supported request header produced a valid session id"
+            );
+        },
+        SessionIdSource::GeneratedFallback(reason) => {
+            tracing::warn!(
+                key_id = %ctx.key_record.id,
+                key_name = %ctx.key_record.name,
+                route = ctx.public_path,
+                requested_model = ctx.requested_model,
+                effective_model = ctx.effective_model,
+                stream = ctx.stream,
+                buffered_for_cc = ctx.buffered_for_cc,
+                request_validation_enabled = ctx.request_validation_enabled,
+                fallback_reason = reason.as_str(),
+                session_source_name = session_tracking.source_name.unwrap_or(""),
+                generated_conversation_id = conversation_id,
+                session_source_preview = session_tracking
+                    .source_value_preview
+                    .as_deref()
+                    .unwrap_or(""),
+                "generated fallback kiro conversation id before upstream call because no supported request header produced a valid session id"
+            );
+        },
+    }
 }
 
 enum UsagePersistOutcome {
@@ -539,28 +694,39 @@ fn build_kiro_usage_summary(
     output_tokens: i32,
     credit_usage: Option<f64>,
     cache_estimation_enabled: bool,
-    kmodels: &std::collections::BTreeMap<String, f64>,
+    simulation: &KiroSimulationRequestContext,
 ) -> KiroUsageSummary {
+    let safe_input = select_safe_input_tokens(request_input_tokens, context_input_tokens);
     if !cache_estimation_enabled {
         return KiroUsageSummary {
-            input_uncached_tokens: select_safe_input_tokens(
-                request_input_tokens,
-                context_input_tokens,
-            ),
+            input_uncached_tokens: safe_input,
             input_cached_tokens: 0,
             output_tokens,
             credit_usage,
             credit_usage_missing: credit_usage.is_none(),
         };
     }
-    let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
-        model,
-        request_input_tokens,
-        context_input_tokens,
-        output_tokens,
-        credit_usage,
-        kmodels,
-    });
+    let estimate = match simulation.simulation_config.mode {
+        KiroCacheSimulationMode::Formula => estimate_kiro_cache_usage(KiroCacheEstimateInput {
+            model,
+            request_input_tokens,
+            context_input_tokens,
+            output_tokens,
+            credit_usage,
+            kmodels: &simulation.runtime_config.kiro_cache_kmodels,
+        }),
+        KiroCacheSimulationMode::PrefixTree => {
+            let cached = simulation
+                .prefix_cache_match
+                .matched_tokens
+                .min(safe_input.max(0) as u64) as i32;
+            KiroCacheEstimate {
+                input_tokens_total: safe_input,
+                input_uncached_tokens: safe_input - cached,
+                input_cached_tokens: cached,
+            }
+        },
+    };
     KiroUsageSummary {
         input_uncached_tokens: estimate.input_uncached_tokens,
         input_cached_tokens: estimate.input_cached_tokens,
@@ -612,6 +778,28 @@ fn build_failure_diagnostic_payload(
             serialize_err.to_string()
         )
     })
+}
+
+fn build_assistant_message(content: String, tool_uses: Vec<ToolUseEntry>) -> AssistantMessage {
+    let mut assistant = AssistantMessage::new(content);
+    if !tool_uses.is_empty() {
+        assistant = assistant.with_tool_uses(tool_uses);
+    }
+    assistant
+}
+
+fn record_successful_kiro_prefix_state(
+    state: &AppState,
+    simulation: &KiroSimulationRequestContext,
+    assistant_message: &AssistantMessage,
+) {
+    state.kiro_gateway.cache_simulator.record_success(
+        &simulation.projection,
+        assistant_message,
+        &simulation.conversation_id,
+        simulation.simulation_config,
+        std::time::Instant::now(),
+    );
 }
 
 /// Returns the list of available models for the `/v1/models` endpoint.
@@ -908,29 +1096,18 @@ async fn handle_messages(
                 .into_response();
         },
     };
-    if let SessionIdSource::GeneratedFallback(reason) = &conversion.session_tracking.source {
-        tracing::warn!(
-            key_id = %key_record.id,
-            key_name = %key_record.name,
-            route = public_path,
-            requested_model = %requested_model,
-            effective_model = %payload.model,
-            stream = payload.stream,
-            buffered_for_cc,
-            request_validation_enabled,
-            fallback_reason = reason.as_str(),
-            session_source_name = conversion.session_tracking.source_name.unwrap_or(""),
-            generated_conversation_id = %conversion.conversation_state.conversation_id,
-            session_source_preview = conversion
-                .session_tracking
-                .source_value_preview
-                .as_deref()
-                .unwrap_or(""),
-            "generated fallback kiro conversation id before upstream call because no supported request session identifier produced a valid UUID"
-        );
-    }
-    let conversation_state = conversion.conversation_state;
     let tool_name_map = conversion.tool_name_map;
+    let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
+        &state,
+        conversion.conversation_state,
+        conversion.session_tracking,
+    );
+    log_non_header_session_resolution(
+        &session_tracking,
+        &conversation_state.conversation_id,
+        &simulation.projection,
+        &normalization_log_ctx,
+    );
     event_context.upstream_request_body_json =
         serde_json::to_string(&crate::kiro_gateway::wire::KiroRequest {
             conversation_state: conversation_state.clone(),
@@ -970,6 +1147,13 @@ async fn handle_messages(
         };
         event_context.upstream_request_body_json = Some(response.request_body.clone());
         event_context.account_name = Some(response.account_name);
+        let stream_request_ctx = StreamRequestContext {
+            state: state.clone(),
+            event_context: event_context.clone(),
+            request_validation_enabled,
+            cache_estimation_enabled: key_record.kiro_cache_estimation_enabled,
+            simulation: simulation.clone(),
+        };
         if buffered_for_cc {
             return handle_stream_request_buffered(
                 UsagePersistContext {
@@ -978,11 +1162,13 @@ async fn handle_messages(
                     event_context,
                 },
                 response.response,
-                &payload.model,
-                input_tokens,
-                thinking_enabled,
-                tool_name_map,
-                request_validation_enabled,
+                stream_request_ctx,
+                BufferedStreamContext::new(
+                    &payload.model,
+                    input_tokens,
+                    thinking_enabled,
+                    tool_name_map,
+                ),
             )
             .await;
         }
@@ -993,11 +1179,13 @@ async fn handle_messages(
                 event_context,
             },
             response.response,
-            &payload.model,
-            input_tokens,
-            thinking_enabled,
-            tool_name_map,
-            request_validation_enabled,
+            stream_request_ctx,
+            StreamContext::new_with_thinking(
+                &payload.model,
+                input_tokens,
+                thinking_enabled,
+                tool_name_map,
+            ),
         )
         .await;
     }
@@ -1034,6 +1222,7 @@ async fn handle_messages(
             input_tokens,
             tool_name_map,
             request_validation_enabled,
+            simulation,
         },
     )
     .await
@@ -1045,28 +1234,20 @@ async fn handle_messages(
 async fn handle_stream_request(
     usage_ctx: UsagePersistContext,
     response: reqwest::Response,
-    model: &str,
-    input_tokens: i32,
-    thinking_enabled: bool,
-    tool_name_map: std::collections::HashMap<String, String>,
-    request_validation_enabled: bool,
+    request_ctx: StreamRequestContext,
+    ctx: StreamContext,
 ) -> Response {
     let (done_tx, done_rx) = oneshot::channel::<UsagePersistOutcome>();
     let log_ctx = KiroUpstreamLogContext::new(
         &usage_ctx.key_record,
         usage_ctx.event_context.account_name.as_deref(),
-        model,
+        &ctx.model,
         false,
     );
     let stream = create_sse_stream(
-        StreamRequestContext {
-            state: usage_ctx.state.clone(),
-            event_context: usage_ctx.event_context.clone(),
-            request_validation_enabled,
-            cache_estimation_enabled: usage_ctx.key_record.kiro_cache_estimation_enabled,
-        },
+        request_ctx,
         response,
-        StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, tool_name_map),
+        ctx,
         log_ctx,
         done_tx,
         usage_ctx.state.shutdown_rx.clone(),
@@ -1125,28 +1306,20 @@ async fn handle_stream_request(
 async fn handle_stream_request_buffered(
     usage_ctx: UsagePersistContext,
     response: reqwest::Response,
-    model: &str,
-    estimated_input_tokens: i32,
-    thinking_enabled: bool,
-    tool_name_map: std::collections::HashMap<String, String>,
-    request_validation_enabled: bool,
+    request_ctx: StreamRequestContext,
+    ctx: BufferedStreamContext,
 ) -> Response {
     let (done_tx, done_rx) = oneshot::channel::<UsagePersistOutcome>();
     let log_ctx = KiroUpstreamLogContext::new(
         &usage_ctx.key_record,
         usage_ctx.event_context.account_name.as_deref(),
-        model,
+        ctx.model(),
         true,
     );
     let stream = create_buffered_sse_stream(
-        StreamRequestContext {
-            state: usage_ctx.state.clone(),
-            event_context: usage_ctx.event_context.clone(),
-            request_validation_enabled,
-            cache_estimation_enabled: usage_ctx.key_record.kiro_cache_estimation_enabled,
-        },
+        request_ctx,
         response,
-        BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map),
+        ctx,
         log_ctx,
         done_tx,
         usage_ctx.state.shutdown_rx.clone(),
@@ -1275,11 +1448,21 @@ async fn handle_non_stream_request(
     let mut credit_usage = 0.0;
     let mut credit_usage_observed = false;
     let mut tool_json_buffers = std::collections::HashMap::<String, String>::new();
+    let mut tool_use_orders = std::collections::HashMap::<String, usize>::new();
+    let mut next_tool_use_order = 0usize;
+    let mut structured_tool_uses = Vec::<(usize, ToolUseEntry)>::new();
     for result in decoder.decode_iter() {
         match result {
             Ok(frame) => match Event::from_frame(frame) {
                 Ok(Event::AssistantResponse(event)) => text_content.push_str(&event.content),
                 Ok(Event::ToolUse(event)) => {
+                    tool_use_orders
+                        .entry(event.tool_use_id.clone())
+                        .or_insert_with(|| {
+                            let start_order = next_tool_use_order;
+                            next_tool_use_order += 1;
+                            start_order
+                        });
                     let buffer = tool_json_buffers
                         .entry(event.tool_use_id.clone())
                         .or_default();
@@ -1295,6 +1478,17 @@ async fn handle_non_stream_request(
                             .get(&event.name)
                             .cloned()
                             .unwrap_or_else(|| event.name.clone());
+                        let start_order = tool_use_orders
+                            .remove(&event.tool_use_id)
+                            .unwrap_or(next_tool_use_order);
+                        if start_order == next_tool_use_order {
+                            next_tool_use_order += 1;
+                        }
+                        structured_tool_uses.push((
+                            start_order,
+                            ToolUseEntry::new(event.tool_use_id.clone(), original_name.clone())
+                                .with_input(input.clone()),
+                        ));
                         tool_uses.push(serde_json::json!({
                             "type":"tool_use",
                             "id":event.tool_use_id,
@@ -1345,13 +1539,20 @@ async fn handle_non_stream_request(
     if !tool_uses.is_empty() && stop_reason == "end_turn" {
         stop_reason = "tool_use".to_string();
     }
+    structured_tool_uses.sort_by_key(|(start_order, _)| *start_order);
     let mut content = Vec::new();
     if !text_content.is_empty() {
-        content.push(serde_json::json!({"type":"text","text":text_content}));
+        content.push(serde_json::json!({"type":"text","text":text_content.clone()}));
     }
     content.extend(tool_uses);
+    let assistant_message = build_assistant_message(
+        text_content,
+        structured_tool_uses
+            .into_iter()
+            .map(|(_, tool_use)| tool_use)
+            .collect(),
+    );
     let output_tokens = token::estimate_output_tokens(&content);
-    let runtime_config = state.llm_gateway_runtime_config.read().clone();
     let usage = build_kiro_usage_summary(
         &request_ctx.model,
         request_ctx.input_tokens,
@@ -1359,7 +1560,7 @@ async fn handle_non_stream_request(
         output_tokens,
         credit_usage_observed.then_some(credit_usage.max(0.0)),
         key_record.kiro_cache_estimation_enabled,
-        &runtime_config.kiro_cache_kmodels,
+        &request_ctx.simulation,
     );
     tracing::info!(
         model = %request_ctx.model,
@@ -1370,6 +1571,7 @@ async fn handle_non_stream_request(
         usage_output_tokens = usage.output_tokens,
         "finished kiro non-stream request"
     );
+    record_successful_kiro_prefix_state(&state, &request_ctx.simulation, &assistant_message);
     if let Err(err) = record_messages_usage(&state, &key_record, &event_context, usage, false).await
     {
         tracing::warn!("failed to persist kiro usage event: {err:#}");
@@ -1632,7 +1834,7 @@ fn create_sse_stream(
             "finished kiro streaming response"
         );
         if let Some(sender) = done_tx.take() {
-            let runtime_config = request_ctx.state.llm_gateway_runtime_config.read().clone();
+            let assistant_message = ctx.final_assistant_message();
             let summary = build_kiro_usage_summary(
                 ctx.model.as_str(),
                 ctx.request_input_tokens(),
@@ -1640,8 +1842,15 @@ fn create_sse_stream(
                 output_tokens,
                 credit_usage,
                 request_ctx.cache_estimation_enabled,
-                &runtime_config.kiro_cache_kmodels,
+                &request_ctx.simulation,
             );
+            if failure_diagnostic_payload.is_none() {
+                record_successful_kiro_prefix_state(
+                    &request_ctx.state,
+                    &request_ctx.simulation,
+                    &assistant_message,
+                );
+            }
             let _ = match failure_diagnostic_payload {
                 Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
                     status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
@@ -1758,7 +1967,7 @@ fn create_buffered_sse_stream(
         let mut all_events = ctx.finish_and_get_all_events();
         let (input_tokens, output_tokens) = ctx.final_usage();
         let (credit_usage, credit_usage_missing) = ctx.final_credit_usage();
-        let runtime_config = request_ctx.state.llm_gateway_runtime_config.read().clone();
+        let assistant_message = ctx.final_assistant_message();
         let summary = build_kiro_usage_summary(
             ctx.model(),
             ctx.estimated_input_tokens(),
@@ -1766,7 +1975,7 @@ fn create_buffered_sse_stream(
             output_tokens,
             credit_usage,
             request_ctx.cache_estimation_enabled,
-            &runtime_config.kiro_cache_kmodels,
+            &request_ctx.simulation,
         );
         for event in &mut all_events {
             if let Some(usage) = event
@@ -1798,6 +2007,13 @@ fn create_buffered_sse_stream(
             "finished kiro buffered streaming response"
         );
         if let Some(sender) = done_tx.take() {
+            if failure_diagnostic_payload.is_none() {
+                record_successful_kiro_prefix_state(
+                    &request_ctx.state,
+                    &request_ctx.simulation,
+                    &assistant_message,
+                );
+            }
             let _ = match failure_diagnostic_payload {
                 Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
                     status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
@@ -1935,6 +2151,36 @@ mod tests {
             ("claude-sonnet-4-6".to_string(), 5.055065250835128e-06),
             ("claude-haiku-4-5-20251001".to_string(), 2.3681034438052206e-06),
         ])
+    }
+
+    fn sample_simulation(
+        mode: KiroCacheSimulationMode,
+        matched_tokens: u64,
+    ) -> KiroSimulationRequestContext {
+        let mut runtime_config = LlmGatewayRuntimeConfig::default();
+        runtime_config.kiro_cache_kmodels = sample_kmodels();
+        runtime_config.kiro_prefix_cache_mode = match mode {
+            KiroCacheSimulationMode::Formula => "formula".to_string(),
+            KiroCacheSimulationMode::PrefixTree => "prefix_tree".to_string(),
+        };
+        let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
+        let projection = PromptProjection::from_conversation_state(
+            &ConversationState::new("conv-1").with_current_message(
+                crate::kiro_gateway::wire::CurrentMessage::new(
+                    crate::kiro_gateway::wire::UserInputMessage::new("hello", "claude-sonnet-4.6"),
+                ),
+            ),
+        );
+        KiroSimulationRequestContext {
+            runtime_config,
+            simulation_config,
+            projection,
+            prefix_cache_match: PrefixCacheMatch {
+                matched_spans: usize::from(matched_tokens > 0),
+                matched_tokens,
+            },
+            conversation_id: "conv-1".to_string(),
+        }
     }
 
     #[test]
@@ -2339,7 +2585,7 @@ mod tests {
 
     #[test]
     fn build_usage_summary_disables_cache_estimation_per_key() {
-        let kmodels = sample_kmodels();
+        let simulation = sample_simulation(KiroCacheSimulationMode::Formula, 0);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
@@ -2347,7 +2593,7 @@ mod tests {
             400,
             Some(0.02),
             false,
-            &kmodels,
+            &simulation,
         );
 
         assert_eq!(summary.input_cached_tokens, 0);
@@ -2355,5 +2601,22 @@ mod tests {
         assert_eq!(summary.output_tokens, 400);
         assert_eq!(summary.credit_usage, Some(0.02));
         assert!(!summary.credit_usage_missing);
+    }
+
+    #[test]
+    fn build_usage_summary_uses_prefix_tree_match_when_enabled() {
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, 7_500);
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(9_000),
+            400,
+            Some(0.02),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 7_500);
+        assert_eq!(summary.input_uncached_tokens, 1_500);
     }
 }

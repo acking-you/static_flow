@@ -141,6 +141,7 @@ pub enum SessionIdSource {
     RequestHeader,
     MetadataJson,
     MetadataLegacy,
+    RecoveredAnchor(SessionFallbackReason),
     GeneratedFallback(SessionFallbackReason),
 }
 

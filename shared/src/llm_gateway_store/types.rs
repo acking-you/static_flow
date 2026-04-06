@@ -70,6 +70,13 @@ pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024
 pub const DEFAULT_KIRO_CACHE_KMODEL_OPUS_46: f64 = 8.061927916785985e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_SONNET_46: f64 = 5.055065250835128e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_HAIKU_45: f64 = 2.3681034438052206e-06;
+pub const KIRO_PREFIX_CACHE_MODE_FORMULA: &str = "formula";
+pub const KIRO_PREFIX_CACHE_MODE_PREFIX_TREE: &str = "prefix_tree";
+pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = KIRO_PREFIX_CACHE_MODE_FORMULA;
+pub const DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS: u64 = 4_000_000;
+pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 6 * 60 * 60;
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 20_000;
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 24 * 60 * 60;
 /// Default Kiro upstream channel concurrency. `1` serializes requests to avoid
 /// bursty Claude Code traffic against the undocumented 5-minute credit window.
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
@@ -97,6 +104,10 @@ pub fn default_kiro_cache_kmodels() -> BTreeMap<String, f64> {
 pub fn default_kiro_cache_kmodels_json() -> String {
     serde_json::to_string(&default_kiro_cache_kmodels())
         .expect("default kiro cache kmodels should serialize")
+}
+
+pub fn is_valid_kiro_prefix_cache_mode(value: &str) -> bool {
+    matches!(value, KIRO_PREFIX_CACHE_MODE_FORMULA | KIRO_PREFIX_CACHE_MODE_PREFIX_TREE)
 }
 
 /// Persisted gateway API key row.
@@ -395,6 +406,21 @@ pub struct LlmGatewayRuntimeConfigRecord {
     /// JSON object mapping Kiro model ids to conservative cache-estimation
     /// coefficients.
     pub kiro_cache_kmodels_json: String,
+    /// Runtime mode for Kiro cache estimation. `formula` keeps the legacy
+    /// conservative credit-based estimator; `prefix_tree` enables the shared
+    /// prefix-cache simulator.
+    pub kiro_prefix_cache_mode: String,
+    /// Global upper bound on retained stable-prefix tokens in the shared Kiro
+    /// prefix-cache simulator.
+    pub kiro_prefix_cache_max_tokens: u64,
+    /// Time-to-live for individual prefix-cache entries before they are
+    /// eligible for eviction.
+    pub kiro_prefix_cache_entry_ttl_seconds: u64,
+    /// Maximum number of canonical history anchors retained for conversation
+    /// recovery when explicit session ids are absent.
+    pub kiro_conversation_anchor_max_entries: u64,
+    /// Time-to-live for one conversation anchor entry before it expires.
+    pub kiro_conversation_anchor_ttl_seconds: u64,
     pub updated_at: i64,
 }
 
@@ -424,6 +450,11 @@ impl Default for LlmGatewayRuntimeConfigRecord {
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
+            kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
+            kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
+            kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
+            kiro_conversation_anchor_max_entries: DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
+            kiro_conversation_anchor_ttl_seconds: DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
             updated_at: now_ms(),
         }
     }

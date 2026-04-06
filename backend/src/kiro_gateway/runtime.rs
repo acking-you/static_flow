@@ -18,6 +18,7 @@ use super::{
         delete_auth_record, load_auth_records, resolve_auths_dir, save_auth_record, KiroAuthRecord,
         DEFAULT_KIRO_VERSION, DEFAULT_NODE_VERSION, DEFAULT_SYSTEM_VERSION,
     },
+    cache_sim::KiroCacheSimulator,
     local_import,
     provider::{build_client, KIRO_AUX_CLIENT_PROFILE},
     scheduler::KiroRequestScheduler,
@@ -61,6 +62,7 @@ pub struct KiroGatewayRuntimeState {
     pub(crate) token_manager: Arc<KiroTokenManager>,
     pub(crate) status_cache: Arc<RwLock<KiroStatusCacheSnapshot>>,
     pub(crate) request_scheduler: Arc<KiroRequestScheduler>,
+    pub(crate) cache_simulator: Arc<KiroCacheSimulator>,
     pub(crate) runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
     pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
 }
@@ -94,6 +96,7 @@ impl KiroGatewayRuntimeState {
             token_manager,
             status_cache: Arc::new(RwLock::new(KiroStatusCacheSnapshot::default())),
             request_scheduler: KiroRequestScheduler::new(),
+            cache_simulator: Arc::new(KiroCacheSimulator::default()),
             runtime_config,
             upstream_proxy_registry,
         })
