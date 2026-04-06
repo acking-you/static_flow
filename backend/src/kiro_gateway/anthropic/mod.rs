@@ -2196,7 +2196,7 @@ mod tests {
             simulation_config,
             projection,
             prefix_cache_match: PrefixCacheMatch {
-                matched_spans: usize::from(matched_tokens > 0),
+                matched_pages: usize::from(matched_tokens > 0),
                 matched_tokens,
             },
             conversation_id: "conv-1".to_string(),

@@ -5233,11 +5233,11 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
-            kiro_prefix_cache_mode: "formula".to_string(),
-            kiro_prefix_cache_max_tokens: 2_000_000,
-            kiro_prefix_cache_entry_ttl_seconds: 1_800,
-            kiro_conversation_anchor_max_entries: 10_000,
-            kiro_conversation_anchor_ttl_seconds: 21_600,
+            kiro_prefix_cache_mode: "prefix_tree".to_string(),
+            kiro_prefix_cache_max_tokens: 4_000_000,
+            kiro_prefix_cache_entry_ttl_seconds: 21_600,
+            kiro_conversation_anchor_max_entries: 20_000,
+            kiro_conversation_anchor_ttl_seconds: 86_400,
         })
     }
 

@@ -45,6 +45,8 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 uuid = { version = "1.18", features = ["v4"] }
 rand = "0.8"
 lru = "0.12"
+charabia = "0.9"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

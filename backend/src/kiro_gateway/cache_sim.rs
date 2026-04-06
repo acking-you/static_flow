@@ -15,69 +15,85 @@ use std::{
     time::{Duration, Instant},
 };
 
+use charabia::Tokenize;
 use lru::LruCache;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use xxhash_rust::xxh3::{xxh3_128, xxh3_64};
 
-use super::{
-    token::count_tokens,
-    wire::{AssistantMessage, ConversationState, Message, Tool, UserInputMessage, UserMessage},
+use super::wire::{
+    AssistantMessage, ConversationState, Message, Tool, UserInputMessage, UserMessage,
 };
 use crate::state::LlmGatewayRuntimeConfig;
 
+const PREFIX_CACHE_PAGE_SIZE: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CanonicalTokenSpan {
+struct CanonicalInputUnit {
     pub key: String,
-    pub token_count: u64,
+    pub token_atoms: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CanonicalTokenPage {
+    pub key: u128,
+    pub token_count: u16,
 }
 
 /// Canonical, source-of-truth prompt projection derived from a corrected Kiro
 /// `ConversationState`.
 ///
 /// `lookup_anchor_hash` only covers the already-known history prefix.
-/// `stable_prefix_spans` additionally includes current-turn tool definitions,
+/// `stable_prefix_pages` additionally includes current-turn tool definitions,
 /// because they influence cacheability of the current upstream call. Resume
 /// anchors intentionally exclude those tool definitions and instead append the
 /// finalized current turn as history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PromptProjection {
     pub lookup_anchor_hash: String,
-    pub stable_prefix_spans: Vec<CanonicalTokenSpan>,
+    pub stable_prefix_pages: Vec<CanonicalTokenPage>,
     pub projected_input_token_count: u64,
+    stable_prefix_segment_keys: Vec<String>,
     history_anchor_segments: Vec<String>,
     current_turn_history_segments: Vec<String>,
 }
 
 impl PromptProjection {
     pub fn from_conversation_state(state: &ConversationState) -> Self {
-        let history_spans = canonicalize_history(&state.history);
-        let history_anchor_segments = history_spans
+        let history_units = canonicalize_history(&state.history);
+        let history_anchor_segments = history_units
             .iter()
-            .map(|span| span.key.clone())
+            .map(|unit| unit.key.clone())
             .collect::<Vec<_>>();
-        let mut stable_prefix_spans = history_spans;
-        stable_prefix_spans.extend(canonicalize_tools(
+        let mut stable_prefix_units = history_units;
+        stable_prefix_units.extend(canonicalize_tools(
             &state
                 .current_message
                 .user_input_message
                 .user_input_message_context
                 .tools,
         ));
-        let current_turn_input_spans =
+        let current_turn_input_units =
             canonicalize_current_turn_for_input(&state.current_message.user_input_message);
         let current_turn_history_segments =
             canonicalize_current_turn_as_history(&state.current_message.user_input_message);
-        let projected_input_token_count = stable_prefix_spans
+        let stable_prefix_segment_keys = stable_prefix_units
             .iter()
-            .chain(current_turn_input_spans.iter())
-            .map(|span| span.token_count)
+            .map(|unit| unit.key.clone())
+            .collect::<Vec<_>>();
+        let stable_prefix_pages = build_token_pages(&stable_prefix_units);
+        let projected_input_token_count = stable_prefix_units
+            .iter()
+            .chain(current_turn_input_units.iter())
+            .map(|unit| unit.token_atoms.len() as u64)
             .sum();
 
         Self {
             lookup_anchor_hash: hash_segments(&history_anchor_segments),
-            stable_prefix_spans,
+            stable_prefix_pages,
             projected_input_token_count,
+            stable_prefix_segment_keys,
             history_anchor_segments,
             current_turn_history_segments,
         }
@@ -137,7 +153,7 @@ impl From<&LlmGatewayRuntimeConfig> for KiroCacheSimulationConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct PrefixCacheMatch {
-    pub matched_spans: usize,
+    pub matched_pages: usize,
     pub matched_tokens: u64,
 }
 
@@ -158,7 +174,7 @@ impl KiroCacheSimulator {
             return PrefixCacheMatch::default();
         }
         let mut tree = self.prefix_tree.lock();
-        tree.match_prefix(&projection.stable_prefix_spans, now, config.prefix_cache_entry_ttl)
+        tree.match_prefix(&projection.stable_prefix_pages, now, config.prefix_cache_entry_ttl)
     }
 
     pub fn recover_conversation_id(
@@ -187,7 +203,7 @@ impl KiroCacheSimulator {
         if matches!(config.mode, KiroCacheSimulationMode::PrefixTree) {
             let mut tree = self.prefix_tree.lock();
             tree.insert(
-                &projection.stable_prefix_spans,
+                &projection.stable_prefix_pages,
                 now,
                 config.prefix_cache_entry_ttl,
                 config.prefix_cache_max_tokens,
@@ -215,7 +231,7 @@ struct PrefixTree {
 struct PrefixNode {
     token_count: u64,
     last_touched_at: Instant,
-    children: HashMap<String, PrefixNode>,
+    children: HashMap<u128, PrefixNode>,
 }
 
 impl Default for PrefixNode {
@@ -241,19 +257,19 @@ impl PrefixNode {
 impl PrefixTree {
     fn match_prefix(
         &mut self,
-        spans: &[CanonicalTokenSpan],
+        pages: &[CanonicalTokenPage],
         now: Instant,
         ttl: Duration,
     ) -> PrefixCacheMatch {
         self.prune_expired(now, ttl);
         let mut current = &mut self.root;
         let mut matched = PrefixCacheMatch::default();
-        for span in spans {
-            let Some(child) = current.children.get_mut(&span.key) else {
+        for page in pages {
+            let Some(child) = current.children.get_mut(&page.key) else {
                 break;
             };
             child.last_touched_at = now;
-            matched.matched_spans += 1;
+            matched.matched_pages += 1;
             matched.matched_tokens += child.token_count;
             current = child;
         }
@@ -262,13 +278,13 @@ impl PrefixTree {
 
     fn insert(
         &mut self,
-        spans: &[CanonicalTokenSpan],
+        pages: &[CanonicalTokenPage],
         now: Instant,
         ttl: Duration,
         max_tokens: u64,
     ) {
         self.prune_expired(now, ttl);
-        let added_tokens = insert_prefix_path(&mut self.root, spans, now);
+        let added_tokens = insert_prefix_path(&mut self.root, pages, now);
         self.resident_tokens = self.resident_tokens.saturating_add(added_tokens);
         while self.resident_tokens > max_tokens {
             let Some(path) = find_coldest_leaf_path(&self.root) else {
@@ -371,13 +387,13 @@ impl ConversationAnchorIndex {
     }
 }
 
-fn insert_prefix_path(node: &mut PrefixNode, spans: &[CanonicalTokenSpan], now: Instant) -> u64 {
+fn insert_prefix_path(node: &mut PrefixNode, pages: &[CanonicalTokenPage], now: Instant) -> u64 {
     let mut added_tokens: u64 = 0;
     let mut current = node;
-    for span in spans {
-        let child = current.children.entry(span.key.clone()).or_insert_with(|| {
-            added_tokens = added_tokens.saturating_add(span.token_count);
-            PrefixNode::new(span.token_count, now)
+    for page in pages {
+        let child = current.children.entry(page.key).or_insert_with(|| {
+            added_tokens = added_tokens.saturating_add(u64::from(page.token_count));
+            PrefixNode::new(u64::from(page.token_count), now)
         });
         child.last_touched_at = now;
         current = child;
@@ -390,7 +406,7 @@ fn prune_expired_children(node: &mut PrefixNode, now: Instant, ttl: Duration) ->
         .children
         .iter()
         .filter(|(_, child)| now.duration_since(child.last_touched_at) > ttl)
-        .map(|(key, _)| key.clone())
+        .map(|(key, _)| *key)
         .collect::<Vec<_>>();
     let mut removed_tokens: u64 = 0;
     for key in expired_keys {
@@ -408,16 +424,16 @@ fn subtree_token_count(node: &PrefixNode) -> u64 {
     node.token_count + node.children.values().map(subtree_token_count).sum::<u64>()
 }
 
-fn find_coldest_leaf_path(node: &PrefixNode) -> Option<Vec<String>> {
-    let mut best: Option<(Instant, Vec<String>)> = None;
+fn find_coldest_leaf_path(node: &PrefixNode) -> Option<Vec<u128>> {
+    let mut best: Option<(Instant, Vec<u128>)> = None;
     find_coldest_leaf_path_inner(node, &mut Vec::new(), &mut best);
     best.map(|(_, path)| path)
 }
 
 fn find_coldest_leaf_path_inner(
     node: &PrefixNode,
-    path: &mut Vec<String>,
-    best: &mut Option<(Instant, Vec<String>)>,
+    path: &mut Vec<u128>,
+    best: &mut Option<(Instant, Vec<u128>)>,
 ) {
     if node.children.is_empty() {
         if !path.is_empty() {
@@ -428,18 +444,18 @@ fn find_coldest_leaf_path_inner(
         }
         return;
     }
-    for (segment, child) in &node.children {
-        path.push(segment.clone());
+    for (page_key, child) in &node.children {
+        path.push(*page_key);
         find_coldest_leaf_path_inner(child, path, best);
         path.pop();
     }
 }
 
-fn remove_leaf_path(node: &mut PrefixNode, path: &[String]) -> u64 {
+fn remove_leaf_path(node: &mut PrefixNode, path: &[u128]) -> u64 {
     remove_leaf_path_inner(node, path).1
 }
 
-fn remove_leaf_path_inner(node: &mut PrefixNode, path: &[String]) -> (bool, u64) {
+fn remove_leaf_path_inner(node: &mut PrefixNode, path: &[u128]) -> (bool, u64) {
     let Some((first, rest)) = path.split_first() else {
         return (false, 0);
     };
@@ -463,21 +479,21 @@ fn remove_leaf_path_inner(node: &mut PrefixNode, path: &[String]) -> (bool, u64)
     (false, removed)
 }
 
-fn canonicalize_history(history: &[Message]) -> Vec<CanonicalTokenSpan> {
-    let mut spans = Vec::new();
+fn canonicalize_history(history: &[Message]) -> Vec<CanonicalInputUnit> {
+    let mut units = Vec::new();
     for message in history {
         match message {
             Message::User(message) => {
-                spans
+                units
                     .extend(canonicalize_user_message("history_user", &message.user_input_message));
             },
-            Message::Assistant(message) => spans.extend(canonicalize_assistant_segments(
+            Message::Assistant(message) => units.extend(canonicalize_assistant_segments(
                 "history_assistant",
                 &message.assistant_response_message,
             )),
         }
     }
-    spans
+    units
 }
 
 fn canonicalize_current_turn_as_history(message: &UserInputMessage) -> Vec<String> {
@@ -489,11 +505,11 @@ fn canonicalize_current_turn_as_history(message: &UserInputMessage) -> Vec<Strin
         origin: message.origin.clone(),
     })
     .into_iter()
-    .map(|span| span.key)
+    .map(|unit| unit.key)
     .collect()
 }
 
-fn canonicalize_current_turn_for_input(message: &UserInputMessage) -> Vec<CanonicalTokenSpan> {
+fn canonicalize_current_turn_for_input(message: &UserInputMessage) -> Vec<CanonicalInputUnit> {
     canonicalize_user_message("current_user", &UserMessage {
         content: message.content.clone(),
         images: message.images.clone(),
@@ -503,17 +519,17 @@ fn canonicalize_current_turn_for_input(message: &UserInputMessage) -> Vec<Canoni
     })
 }
 
-fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<CanonicalTokenSpan> {
-    let mut spans = Vec::new();
+fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<CanonicalInputUnit> {
+    let mut units = Vec::new();
     let normalized_content = normalize_text(&message.content);
     if !normalized_content.is_empty() {
         let key = serialize_canonical_segment(&CanonicalTextSegment {
             kind: format!("{kind_prefix}_text"),
             text: normalized_content.clone(),
         });
-        spans.push(CanonicalTokenSpan {
+        units.push(CanonicalInputUnit {
             key,
-            token_count: count_tokens(&normalized_content),
+            token_atoms: tokenize_text_atoms(&normalized_content),
         });
     }
 
@@ -523,9 +539,9 @@ fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<Ca
             format: normalize_text(&image.format),
             digest: sha256_hex(image.source.bytes.as_bytes()),
         });
-        spans.push(CanonicalTokenSpan {
+        units.push(CanonicalInputUnit {
             key,
-            token_count: 0,
+            token_atoms: Vec::new(),
         });
     }
 
@@ -548,36 +564,36 @@ fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<Ca
             result.status.as_deref().unwrap_or_default(),
             serde_json::to_string(&canonical_content).unwrap_or_default()
         );
-        spans.push(CanonicalTokenSpan {
+        units.push(CanonicalInputUnit {
             key,
-            token_count: count_tokens(&token_source),
+            token_atoms: tokenize_text_atoms(&token_source),
         });
     }
 
-    spans
+    units
 }
 
 fn canonicalize_assistant_message(message: &AssistantMessage) -> Vec<String> {
     canonicalize_assistant_segments("history_assistant", message)
         .into_iter()
-        .map(|span| span.key)
+        .map(|unit| unit.key)
         .collect()
 }
 
 fn canonicalize_assistant_segments(
     kind_prefix: &str,
     message: &AssistantMessage,
-) -> Vec<CanonicalTokenSpan> {
-    let mut spans = Vec::new();
+) -> Vec<CanonicalInputUnit> {
+    let mut units = Vec::new();
     let normalized_content = normalize_text(&message.content);
     if !normalized_content.is_empty() {
         let key = serialize_canonical_segment(&CanonicalTextSegment {
             kind: format!("{kind_prefix}_text"),
             text: normalized_content.clone(),
         });
-        spans.push(CanonicalTokenSpan {
+        units.push(CanonicalInputUnit {
             key,
-            token_count: count_tokens(&normalized_content),
+            token_atoms: tokenize_text_atoms(&normalized_content),
         });
     }
 
@@ -595,17 +611,17 @@ fn canonicalize_assistant_segments(
             tool_use.name,
             serde_json::to_string(&canonical_input).unwrap_or_default()
         );
-        spans.push(CanonicalTokenSpan {
+        units.push(CanonicalInputUnit {
             key,
-            token_count: count_tokens(&token_source),
+            token_atoms: tokenize_text_atoms(&token_source),
         });
     }
 
-    spans
+    units
 }
 
-fn canonicalize_tools(tools: &[Tool]) -> Vec<CanonicalTokenSpan> {
-    let mut spans = Vec::with_capacity(tools.len());
+fn canonicalize_tools(tools: &[Tool]) -> Vec<CanonicalInputUnit> {
+    let mut units = Vec::with_capacity(tools.len());
     for tool in tools {
         let name = normalize_text(&tool.tool_specification.name);
         let description = normalize_text(&tool.tool_specification.description);
@@ -620,12 +636,12 @@ fn canonicalize_tools(tools: &[Tool]) -> Vec<CanonicalTokenSpan> {
             "{name}\n{description}\n{}",
             serde_json::to_string(&canonical_schema).unwrap_or_default()
         );
-        spans.push(CanonicalTokenSpan {
+        units.push(CanonicalInputUnit {
             key,
-            token_count: count_tokens(&token_source),
+            token_atoms: tokenize_text_atoms(&token_source),
         });
     }
-    spans
+    units
 }
 
 fn canonical_tool_result_content(content: &[Map<String, Value>]) -> Value {
@@ -635,6 +651,58 @@ fn canonical_tool_result_content(content: &[Map<String, Value>]) -> Value {
             .map(|item| canonicalize_json(&Value::Object(item.clone())))
             .collect(),
     )
+}
+
+fn build_token_pages(units: &[CanonicalInputUnit]) -> Vec<CanonicalTokenPage> {
+    let mut pages = Vec::new();
+    let mut current = Vec::<u64>::with_capacity(PREFIX_CACHE_PAGE_SIZE);
+    for atom in units
+        .iter()
+        .flat_map(|unit| unit.token_atoms.iter().copied())
+    {
+        current.push(atom);
+        if current.len() == PREFIX_CACHE_PAGE_SIZE {
+            pages.push(build_token_page(&current));
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        pages.push(build_token_page(&current));
+    }
+    pages
+}
+
+fn build_token_page(atoms: &[u64]) -> CanonicalTokenPage {
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(atoms));
+    for atom in atoms {
+        bytes.extend_from_slice(&atom.to_le_bytes());
+    }
+    CanonicalTokenPage {
+        key: xxh3_128(&bytes),
+        token_count: u16::try_from(atoms.len()).expect("page token count should fit in u16"),
+    }
+}
+
+fn tokenize_text_atoms(text: &str) -> Vec<u64> {
+    let mut atoms = Vec::new();
+    for token in text.tokenize() {
+        // Use the original token surface instead of the normalized lemma so
+        // prefix hits never over-merge distinct prompts that only share a
+        // language-level normalization.
+        let surface = &text[token.byte_start..token.byte_end];
+        if surface.is_empty() {
+            continue;
+        }
+        atoms.push(hash_token_atom(surface));
+    }
+    if atoms.is_empty() && !text.is_empty() {
+        atoms.push(hash_token_atom(text));
+    }
+    atoms
+}
+
+fn hash_token_atom(text: &str) -> u64 {
+    xxh3_64(text.as_bytes())
 }
 
 fn normalize_text(raw: &str) -> String {
@@ -786,9 +854,9 @@ mod tests {
 
         let projection = PromptProjection::from_conversation_state(&state);
         let stable_prefix = projection
-            .stable_prefix_spans
+            .stable_prefix_segment_keys
             .iter()
-            .map(|span| span.key.as_str())
+            .map(String::as_str)
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -838,7 +906,11 @@ mod tests {
         let right_projection = PromptProjection::from_conversation_state(&right);
 
         assert_eq!(left_projection.lookup_anchor_hash, right_projection.lookup_anchor_hash);
-        assert_eq!(left_projection.stable_prefix_spans, right_projection.stable_prefix_spans);
+        assert_eq!(left_projection.stable_prefix_pages, right_projection.stable_prefix_pages);
+        assert_ne!(
+            left_projection.projected_input_token_count,
+            right_projection.projected_input_token_count
+        );
     }
 
     #[test]
@@ -874,7 +946,10 @@ mod tests {
             projection_a.build_resume_anchor_hash(&assistant),
             projection_b.build_resume_anchor_hash(&assistant)
         );
-        assert_ne!(projection_a.stable_prefix_spans, projection_b.stable_prefix_spans);
+        assert_ne!(
+            projection_a.stable_prefix_segment_keys,
+            projection_b.stable_prefix_segment_keys
+        );
     }
 
     #[test]
@@ -905,7 +980,7 @@ mod tests {
         simulator.record_success(&projection, &assistant, "real-conv", config, now);
         let matched = simulator.match_prefix(&projection, config, now + Duration::from_secs(1));
 
-        assert_eq!(matched.matched_spans, projection.stable_prefix_spans.len());
+        assert_eq!(matched.matched_pages, projection.stable_prefix_pages.len());
         assert!(matched.matched_tokens > 0);
     }
 

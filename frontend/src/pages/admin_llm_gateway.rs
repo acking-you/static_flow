@@ -1827,7 +1827,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     kiro_prefix_cache_mode: config
                         .as_ref()
                         .map(|current| current.kiro_prefix_cache_mode.clone())
-                        .unwrap_or_else(|| "formula".to_string()),
+                        .unwrap_or_else(|| "prefix_tree".to_string()),
                     kiro_prefix_cache_max_tokens: config
                         .as_ref()
                         .map(|current| current.kiro_prefix_cache_max_tokens)
