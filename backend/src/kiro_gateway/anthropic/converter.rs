@@ -882,27 +882,78 @@ fn create_placeholder_tool(name: &str) -> Tool {
 
 const TOOL_NAME_MAX_LEN: usize = 63;
 
-fn shorten_tool_name(name: &str) -> String {
+fn truncate_tool_name_prefix(name: &str, prefix_max: usize) -> &str {
+    match name.char_indices().nth(prefix_max) {
+        Some((idx, _)) => &name[..idx],
+        None => name,
+    }
+}
+
+fn sanitize_tool_name(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len());
+    let mut previous_was_separator = false;
+
+    for ch in name.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' { ch } else { '_' };
+        if mapped == '_' {
+            if previous_was_separator {
+                continue;
+            }
+            previous_was_separator = true;
+        } else {
+            previous_was_separator = false;
+        }
+        sanitized.push(mapped);
+    }
+
+    let sanitized = sanitized.trim_matches('_');
+    if sanitized.is_empty() {
+        "tool".to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+pub(crate) fn classify_tool_name_rewrite_reason(name: &str) -> &'static str {
+    let has_unsupported_characters = name
+        .chars()
+        .any(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
+    match (has_unsupported_characters, name.len() > TOOL_NAME_MAX_LEN) {
+        (true, true) => "unsupported_characters_and_length",
+        (true, false) => "unsupported_characters",
+        (false, true) => "length_limit",
+        (false, false) => "unchanged",
+    }
+}
+
+fn make_hashed_tool_name_alias(original_name: &str, visible_base: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(name.as_bytes());
+    hasher.update(original_name.as_bytes());
     let hash_hex = format!("{:x}", hasher.finalize());
     let hash_suffix = &hash_hex[..8];
     let prefix_max = TOOL_NAME_MAX_LEN - 1 - 8;
-    let prefix = match name.char_indices().nth(prefix_max) {
-        Some((idx, _)) => &name[..idx],
-        None => name,
-    };
+    let prefix = truncate_tool_name_prefix(visible_base, prefix_max);
     format!("{prefix}_{hash_suffix}")
 }
 
+#[cfg(test)]
+fn shorten_tool_name(name: &str) -> String {
+    make_hashed_tool_name_alias(name, name)
+}
+
+// Kiro rejects certain otherwise valid Anthropic tool names, notably
+// package-style names such as `package:subtool`. We therefore normalize every
+// tool name into a Kiro-safe identifier before the request leaves our process,
+// while keeping a reverse map so responses can restore the original name.
 fn map_tool_name(name: &str, tool_name_map: &mut HashMap<String, String>) -> String {
-    if name.len() <= TOOL_NAME_MAX_LEN {
+    let sanitized = sanitize_tool_name(name);
+    if sanitized == name && name.len() <= TOOL_NAME_MAX_LEN {
         return name.to_string();
     }
 
-    let short = shorten_tool_name(name);
-    tool_name_map.insert(short.clone(), name.to_string());
-    short
+    let alias = make_hashed_tool_name_alias(name, &sanitized);
+    tool_name_map.insert(alias.clone(), name.to_string());
+    alias
 }
 
 /// Converts an Anthropic `MessagesRequest` into a Kiro `ConversationState`.
@@ -2144,6 +2195,116 @@ mod tests {
             other => panic!("expected assistant history entry, got {other:?}"),
         };
         assert_eq!(history_tool_name, short_name);
+    }
+
+    #[test]
+    fn convert_request_normalizes_unsupported_tool_name_characters_consistently() {
+        let original_name = "termux_exec:run_command";
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Run the command"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {"type": "tool_use", "id": "tool-1", "name": original_name, "input": {"command": "pwd"}}
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let (mapped_name, original) = result.tool_name_map.iter().next().unwrap();
+        assert_eq!(original, original_name);
+        assert!(!mapped_name.contains(':'));
+
+        let history_tool_name = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => message
+                .assistant_response_message
+                .tool_uses
+                .as_ref()
+                .and_then(|tool_uses| tool_uses.first())
+                .map(|entry| entry.name.as_str())
+                .expect("history tool use should exist"),
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert_eq!(history_tool_name, mapped_name);
+
+        let tools = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools;
+        assert!(tools
+            .iter()
+            .any(|tool| tool.tool_specification.name == *mapped_name));
+    }
+
+    #[test]
+    fn convert_request_normalizes_placeholder_history_tool_names() {
+        let original_name = "termux_exec:run_command";
+        let mut req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Run the command"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {"type": "tool_use", "id": "tool-1", "name": original_name, "input": {"command": "pwd"}}
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}
+                ]),
+            },
+        ]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: "read_file".to_string(),
+            description: "Read file".to_string(),
+            input_schema: HashMap::new(),
+            max_uses: None,
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let mapped_name = result
+            .tool_name_map
+            .iter()
+            .find_map(|(mapped, original)| (original == original_name).then_some(mapped.as_str()))
+            .expect("normalized tool name should be tracked");
+        assert!(!mapped_name.contains(':'));
+
+        let tools = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools;
+        assert!(tools
+            .iter()
+            .any(|tool| tool.tool_specification.name == mapped_name));
+
+        let history_tool_name = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => message
+                .assistant_response_message
+                .tool_uses
+                .as_ref()
+                .and_then(|tool_uses| tool_uses.first())
+                .map(|entry| entry.name.as_str())
+                .expect("history tool use should exist"),
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert_eq!(history_tool_name, mapped_name);
     }
 
     #[test]

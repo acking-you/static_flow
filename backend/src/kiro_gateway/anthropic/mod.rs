@@ -40,11 +40,11 @@ use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 
 use self::{
     converter::{
-        convert_normalized_request_with_resolved_session, current_user_message_range,
-        extract_tool_result_content, normalize_request, preview_session_value,
-        resolve_conversation_id_from_metadata, ConversionError, NormalizationEvent,
-        NormalizedRequest, ResolvedConversationId, SessionFallbackReason, SessionIdSource,
-        SessionTracking, ToolNormalizationEvent,
+        classify_tool_name_rewrite_reason, convert_normalized_request_with_resolved_session,
+        current_user_message_range, extract_tool_result_content, normalize_request,
+        preview_session_value, resolve_conversation_id_from_metadata, ConversionError,
+        NormalizationEvent, NormalizedRequest, ResolvedConversationId, SessionFallbackReason,
+        SessionIdSource, SessionTracking, ToolNormalizationEvent,
     },
     stream::{BufferedStreamContext, StreamContext},
     types::{
@@ -1170,6 +1170,22 @@ async fn handle_messages(
                 .into_response();
         },
     };
+    for (rewritten_tool_name, original_tool_name) in &conversion.tool_name_map {
+        tracing::warn!(
+            key_id = %key_record.id,
+            key_name = %key_record.name,
+            route = public_path,
+            requested_model = %requested_model,
+            effective_model = %payload.model,
+            stream = payload.stream,
+            buffered_for_cc,
+            request_validation_enabled,
+            original_tool_name = %original_tool_name,
+            rewritten_tool_name = %rewritten_tool_name,
+            rewrite_reason = classify_tool_name_rewrite_reason(original_tool_name),
+            "rewrote kiro tool name before upstream call"
+        );
+    }
     let tool_name_map = conversion.tool_name_map;
     let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
         &state,
