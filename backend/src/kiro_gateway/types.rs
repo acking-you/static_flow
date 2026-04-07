@@ -217,6 +217,8 @@ pub struct AdminKiroUsageEventView {
     pub ip_region: String,
     pub request_headers_json: String,
     pub last_message_content: Option<String>,
+    pub client_request_body_json: Option<String>,
+    pub upstream_request_body_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -244,6 +246,8 @@ impl From<&LlmGatewayUsageEventRecord> for AdminKiroUsageEventView {
             ip_region: value.ip_region.clone(),
             request_headers_json: value.request_headers_json.clone(),
             last_message_content: value.last_message_content.clone(),
+            client_request_body_json: value.client_request_body_json.clone(),
+            upstream_request_body_json: value.upstream_request_body_json.clone(),
             created_at: value.created_at,
         }
     }

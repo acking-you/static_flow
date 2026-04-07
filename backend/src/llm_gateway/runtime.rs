@@ -1019,6 +1019,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now_ms(),
         };
 
@@ -1118,6 +1120,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now_ms(),
         };
 
@@ -1191,6 +1195,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("1234567890".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now_ms(),
         };
         let second = LlmGatewayUsageEventRecord {
@@ -1216,6 +1222,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("abcdefghij".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now_ms() + 1,
         };
 

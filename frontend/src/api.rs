@@ -4392,6 +4392,8 @@ pub struct AdminLlmGatewayUsageEventView {
     pub ip_region: String,
     pub request_headers_json: String,
     pub last_message_content: Option<String>,
+    pub client_request_body_json: Option<String>,
+    pub upstream_request_body_json: Option<String>,
     pub created_at: i64,
 }
 

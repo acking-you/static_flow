@@ -340,6 +340,13 @@ fn pretty_headers_json(raw: &str) -> String {
         .unwrap_or_else(|| raw.to_string())
 }
 
+fn pretty_json_text(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or_else(|| raw.to_string())
+}
+
 #[derive(Properties, PartialEq)]
 struct KeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
@@ -2859,6 +2866,14 @@ pub fn admin_llm_gateway_page() -> Html {
             .clone()
             .unwrap_or_else(|| "-".to_string());
         let headers_json_for_copy = pretty_headers_json(&event.request_headers_json);
+        let client_request_json_for_copy = event
+            .client_request_body_json
+            .as_deref()
+            .map(pretty_json_text);
+        let upstream_request_json_for_copy = event
+            .upstream_request_body_json
+            .as_deref()
+            .map(pretty_json_text);
         html! {
             <div
                 class={classes!(
@@ -3032,6 +3047,72 @@ pub fn admin_llm_gateway_page() -> Html {
                             { headers_json_for_copy }
                         </pre>
                     </div>
+
+                    if let Some(client_request_json_for_copy) = client_request_json_for_copy {
+                        <div class={classes!("mt-4")}>
+                            <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Client Request" }</div>
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    onclick={{
+                                        let on_copy = on_copy.clone();
+                                        let client_request_json_for_copy = client_request_json_for_copy.clone();
+                                        Callback::from(move |_| on_copy.emit(("Client Request".to_string(), client_request_json_for_copy.clone())))
+                                    }}
+                                >
+                                    { "复制 Client Request" }
+                                </button>
+                            </div>
+                            <pre class={classes!(
+                                "max-h-[42vh]",
+                                "overflow-x-auto",
+                                "overflow-y-auto",
+                                "rounded-lg",
+                                "bg-slate-950",
+                                "p-3",
+                                "text-xs",
+                                "leading-6",
+                                "text-sky-100",
+                                "whitespace-pre-wrap",
+                                "break-words"
+                            )}>
+                                { client_request_json_for_copy }
+                            </pre>
+                        </div>
+                    }
+
+                    if let Some(upstream_request_json_for_copy) = upstream_request_json_for_copy {
+                        <div class={classes!("mt-4")}>
+                            <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Upstream Request" }</div>
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    onclick={{
+                                        let on_copy = on_copy.clone();
+                                        let upstream_request_json_for_copy = upstream_request_json_for_copy.clone();
+                                        Callback::from(move |_| on_copy.emit(("Upstream Request".to_string(), upstream_request_json_for_copy.clone())))
+                                    }}
+                                >
+                                    { "复制 Upstream Request" }
+                                </button>
+                            </div>
+                            <pre class={classes!(
+                                "max-h-[42vh]",
+                                "overflow-x-auto",
+                                "overflow-y-auto",
+                                "rounded-lg",
+                                "bg-slate-950",
+                                "p-3",
+                                "text-xs",
+                                "leading-6",
+                                "text-fuchsia-100",
+                                "whitespace-pre-wrap",
+                                "break-words"
+                            )}>
+                                { upstream_request_json_for_copy }
+                            </pre>
+                        </div>
+                    }
                 </div>
             </div>
         }

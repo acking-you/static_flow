@@ -1842,6 +1842,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some("{\"conversationState\":{}}".to_string()),
             created_at: now,
         };
         store
@@ -1932,6 +1934,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now,
         };
         store
@@ -2008,6 +2012,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now - 10_000,
         };
         store
@@ -2017,6 +2023,8 @@ mod tests {
         store
             .append_usage_event(&LlmGatewayUsageEventRecord {
                 id: "evt-created-at-2".to_string(),
+                client_request_body_json: Some("{\"messages\":[]}".to_string()),
+                upstream_request_body_json: Some("{\"conversationState\":{}}".to_string()),
                 created_at: now - 1_000,
                 ..base_event.clone()
             })
@@ -2035,6 +2043,11 @@ mod tests {
             .expect("query filtered events");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "evt-created-at-2");
+        assert_eq!(filtered[0].client_request_body_json.as_deref(), Some("{\"messages\":[]}"));
+        assert_eq!(
+            filtered[0].upstream_request_body_json.as_deref(),
+            Some("{\"conversationState\":{}}")
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2241,6 +2254,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[\"hello\"]}".to_string()),
+            upstream_request_body_json: Some("{\"conversationState\":{\"id\":1}}".to_string()),
             created_at: now,
         };
         let codex_event = LlmGatewayUsageEventRecord {
@@ -2266,6 +2281,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("world".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at: now + 1,
         };
 

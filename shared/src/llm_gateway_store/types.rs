@@ -206,6 +206,17 @@ pub struct LlmGatewayUsageEventRecord {
     pub ip_region: String,
     pub request_headers_json: String,
     pub last_message_content: Option<String>,
+    /// Full downstream request body as received by the gateway.
+    ///
+    /// Persisted only for selected diagnostic cases to avoid turning the
+    /// usage-events table into an unbounded request-body archive.
+    pub client_request_body_json: Option<String>,
+    /// Full upstream request body forwarded after local normalization and
+    /// conversion.
+    ///
+    /// Persisted alongside `client_request_body_json` for the same
+    /// diagnostic-only cases.
+    pub upstream_request_body_json: Option<String>,
     pub created_at: i64,
 }
 

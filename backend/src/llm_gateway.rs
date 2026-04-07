@@ -1770,6 +1770,8 @@ fn build_gateway_usage_event_record(
         ip_region: args.context.ip_region.clone(),
         request_headers_json: args.context.request_headers_json.clone(),
         last_message_content: args.last_message_content,
+        client_request_body_json: None,
+        upstream_request_body_json: None,
         created_at: now_ms(),
     }
 }
@@ -5367,6 +5369,8 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("secret".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
             created_at,
         }
     }

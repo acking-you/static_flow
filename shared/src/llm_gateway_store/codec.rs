@@ -176,6 +176,8 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     let mut ip_region = StringBuilder::new();
     let mut request_headers_json = StringBuilder::new();
     let mut last_message_content = StringBuilder::new();
+    let mut client_request_body_json = StringBuilder::new();
+    let mut upstream_request_body_json = StringBuilder::new();
     let mut created_at = TimestampMillisecondBuilder::new();
 
     for record in records {
@@ -201,6 +203,14 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         ip_region.append_value(&record.ip_region);
         request_headers_json.append_value(&record.request_headers_json);
         append_optional_str(&mut last_message_content, record.last_message_content.as_deref());
+        append_optional_str(
+            &mut client_request_body_json,
+            record.client_request_body_json.as_deref(),
+        );
+        append_optional_str(
+            &mut upstream_request_body_json,
+            record.upstream_request_body_json.as_deref(),
+        );
         created_at.append_value(record.created_at);
     }
 
@@ -227,6 +237,8 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(ip_region.finish()),
         Arc::new(request_headers_json.finish()),
         Arc::new(last_message_content.finish()),
+        Arc::new(client_request_body_json.finish()),
+        Arc::new(upstream_request_body_json.finish()),
         Arc::new(created_at.finish()),
     ])
     .context("failed to build llm gateway usage events batch")
@@ -788,6 +800,12 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let last_message_content = batch
             .column_by_name("last_message_content")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let client_request_body_json = batch
+            .column_by_name("client_request_body_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let upstream_request_body_json = batch
+            .column_by_name("upstream_request_body_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let created_at = required_ts_col(batch, "created_at")?;
 
         for idx in 0..batch.num_rows() {
@@ -837,6 +855,10 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| "{}".to_string()),
                 last_message_content: last_message_content
+                    .and_then(|column| value_string_opt(column, idx)),
+                client_request_body_json: client_request_body_json
+                    .and_then(|column| value_string_opt(column, idx)),
+                upstream_request_body_json: upstream_request_body_json
                     .and_then(|column| value_string_opt(column, idx)),
                 created_at: created_at.value(idx),
             });
