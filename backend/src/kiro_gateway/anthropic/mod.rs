@@ -29,7 +29,7 @@ use super::{
     provider::{KiroProvider, ProviderCallError},
     token, AppKiroStateExt, KiroUsageSummary,
 };
-use crate::kiro_gateway::{record_messages_usage, KiroEventContext};
+use crate::kiro_gateway::{is_high_credit_usage, record_messages_usage, KiroEventContext};
 
 pub mod converter;
 pub mod stream;
@@ -142,6 +142,17 @@ struct KiroSimulationRequestContext {
     conversation_id: String,
 }
 
+struct MissingUpstreamInputLogContext<'a> {
+    key_id: &'a str,
+    key_name: &'a str,
+    event_context: &'a KiroEventContext,
+    request_validation_enabled: bool,
+    cache_estimation_enabled: bool,
+    simulation: &'a KiroSimulationRequestContext,
+    request_input_tokens: i32,
+    context_input_tokens: Option<i32>,
+}
+
 fn resolve_request_session(
     headers: &HeaderMap,
     metadata: Option<&Metadata>,
@@ -251,6 +262,82 @@ fn log_simulation_request_context(
         matched_token_count = simulation.prefix_cache_match.matched_tokens,
         matched_ratio_basis_points,
         "prepared kiro cache simulation context before upstream call"
+    );
+}
+
+fn log_high_credit_usage_anomaly(
+    key_id: &str,
+    key_name: &str,
+    event_context: &KiroEventContext,
+    request_validation_enabled: bool,
+    cache_estimation_enabled: bool,
+    simulation: &KiroSimulationRequestContext,
+    usage: KiroUsageSummary,
+) {
+    let Some(credit_usage) = usage
+        .credit_usage
+        .filter(|value| value.is_finite() && *value > 0.0)
+    else {
+        return;
+    };
+    if !is_high_credit_usage(Some(credit_usage)) {
+        return;
+    }
+    let projected_total = simulation.projection.projected_input_token_count.max(1);
+    let matched_tokens = simulation
+        .prefix_cache_match
+        .matched_tokens
+        .min(projected_total);
+    let matched_ratio_basis_points =
+        ((u128::from(matched_tokens) * 10_000) / u128::from(projected_total)) as u64;
+    tracing::warn!(
+        key_id,
+        key_name,
+        account_name = event_context.account_name.as_deref().unwrap_or("unknown"),
+        request_method = %event_context.request_method,
+        request_url = %event_context.request_url,
+        endpoint = %event_context.endpoint,
+        model = event_context.model.as_deref().unwrap_or("unknown"),
+        request_validation_enabled,
+        cache_estimation_enabled,
+        cache_simulation_mode = match simulation.simulation_config.mode {
+            KiroCacheSimulationMode::Formula => "formula",
+            KiroCacheSimulationMode::PrefixTree => "prefix_tree",
+        },
+        conversation_id = event_context.conversation_id.as_deref().unwrap_or("unknown"),
+        session_resolution = event_context.session_resolution.as_deref().unwrap_or("unknown"),
+        session_source_name = event_context.session_source_name.as_deref().unwrap_or("unknown"),
+        session_source_preview =
+            event_context.session_source_value_preview.as_deref().unwrap_or(""),
+        credit_usage,
+        input_uncached_tokens = usage.input_uncached_tokens,
+        input_cached_tokens = usage.input_cached_tokens,
+        output_tokens = usage.output_tokens,
+        billable_tokens = usage.input_uncached_tokens.max(0)
+            + usage.input_cached_tokens.max(0)
+            + usage.output_tokens.max(0),
+        stable_prefix_page_count = simulation.projection.stable_prefix_pages.len(),
+        stable_prefix_token_count = simulation.projection.stable_prefix_token_count(),
+        projected_input_token_count = simulation.projection.projected_input_token_count,
+        matched_page_count = simulation.prefix_cache_match.matched_pages,
+        matched_token_count = simulation.prefix_cache_match.matched_tokens,
+        matched_ratio_basis_points,
+        client_request_body_bytes = event_context
+            .client_request_body_json
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or_default(),
+        upstream_request_body_bytes = event_context
+            .upstream_request_body_json
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or_default(),
+        last_message_content_preview = event_context
+            .last_message_content
+            .as_deref()
+            .map(|value| compact_preview(value, KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS))
+            .unwrap_or_default(),
+        "observed unusually high kiro credit usage; full request bodies will be persisted for diagnostics"
     );
 }
 
@@ -660,8 +747,7 @@ fn zero_usage_summary() -> KiroUsageSummary {
 #[derive(Debug, Clone)]
 struct KiroCacheEstimateInput<'a> {
     model: &'a str,
-    request_input_tokens: i32,
-    context_input_tokens: Option<i32>,
+    input_tokens_total: i32,
     output_tokens: i32,
     credit_usage: Option<f64>,
     kmodels: &'a std::collections::BTreeMap<String, f64>,
@@ -674,6 +760,12 @@ struct KiroCacheEstimate {
     input_cached_tokens: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KiroInputTokenSource {
+    UpstreamContextUsage,
+    LocalRequestEstimateFallback,
+}
+
 fn normalize_kiro_kmodel_name(model: &str) -> &str {
     match model {
         "claude-opus-4.6" => "claude-opus-4-6",
@@ -682,8 +774,7 @@ fn normalize_kiro_kmodel_name(model: &str) -> &str {
 }
 
 fn estimate_kiro_cache_usage(input: KiroCacheEstimateInput<'_>) -> KiroCacheEstimate {
-    let safe_input =
-        select_safe_input_tokens(input.request_input_tokens, input.context_input_tokens);
+    let safe_input = input.input_tokens_total.max(0);
     let output_tokens = input.output_tokens.max(0);
     let Some(observed_credit) = input
         .credit_usage
@@ -724,14 +815,16 @@ fn estimate_kiro_cache_usage(input: KiroCacheEstimateInput<'_>) -> KiroCacheEsti
     }
 }
 
-fn select_safe_input_tokens(request_input_tokens: i32, context_input_tokens: Option<i32>) -> i32 {
+pub(super) fn resolve_input_tokens(
+    request_input_tokens: i32,
+    context_input_tokens: Option<i32>,
+) -> (i32, KiroInputTokenSource) {
     let request_input = request_input_tokens.max(0);
     let context_input = context_input_tokens.unwrap_or_default().max(0);
-    match (request_input > 0, context_input > 0) {
-        (true, true) => request_input.min(context_input),
-        (true, false) => request_input,
-        (false, true) => context_input,
-        (false, false) => 0,
+    if context_input > 0 {
+        (context_input, KiroInputTokenSource::UpstreamContextUsage)
+    } else {
+        (request_input, KiroInputTokenSource::LocalRequestEstimateFallback)
     }
 }
 
@@ -744,10 +837,11 @@ fn build_kiro_usage_summary(
     cache_estimation_enabled: bool,
     simulation: &KiroSimulationRequestContext,
 ) -> KiroUsageSummary {
-    let safe_input = select_safe_input_tokens(request_input_tokens, context_input_tokens);
+    let (authoritative_input_tokens, _) =
+        resolve_input_tokens(request_input_tokens, context_input_tokens);
     if !cache_estimation_enabled {
         return KiroUsageSummary {
-            input_uncached_tokens: safe_input,
+            input_uncached_tokens: authoritative_input_tokens,
             input_cached_tokens: 0,
             output_tokens,
             credit_usage,
@@ -757,29 +851,28 @@ fn build_kiro_usage_summary(
     let estimate = match simulation.simulation_config.mode {
         KiroCacheSimulationMode::Formula => estimate_kiro_cache_usage(KiroCacheEstimateInput {
             model,
-            request_input_tokens,
-            context_input_tokens,
+            input_tokens_total: authoritative_input_tokens,
             output_tokens,
             credit_usage,
             kmodels: &simulation.runtime_config.kiro_cache_kmodels,
         }),
         KiroCacheSimulationMode::PrefixTree => {
             // Prefix-tree mode computes a conservative cache-hit ratio from the
-            // corrected prompt projection, then applies that ratio to the safer
-            // request-wide input estimate instead of trusting local page counts
-            // as an absolute upstream token total.
-            let safe_input_u64 = safe_input.max(0) as u64;
+            // corrected prompt projection, then applies that ratio to the
+            // authoritative upstream-reported input total. Local parsing only
+            // provides the ratio basis and never overrides upstream totals.
+            let authoritative_input_u64 = authoritative_input_tokens.max(0) as u64;
             let projected_total = simulation.projection.projected_input_token_count.max(1);
             let matched = simulation
                 .prefix_cache_match
                 .matched_tokens
                 .min(projected_total);
-            let cached = ((u128::from(safe_input_u64) * u128::from(matched))
+            let cached = ((u128::from(authoritative_input_u64) * u128::from(matched))
                 / u128::from(projected_total))
-            .min(u128::from(safe_input_u64)) as i32;
+            .min(u128::from(authoritative_input_u64)) as i32;
             KiroCacheEstimate {
-                input_tokens_total: safe_input,
-                input_uncached_tokens: safe_input - cached,
+                input_tokens_total: authoritative_input_tokens,
+                input_uncached_tokens: authoritative_input_tokens - cached,
                 input_cached_tokens: cached,
             }
         },
@@ -791,6 +884,35 @@ fn build_kiro_usage_summary(
         credit_usage,
         credit_usage_missing: credit_usage.is_none(),
     }
+}
+
+fn log_missing_upstream_input_tokens(ctx: MissingUpstreamInputLogContext<'_>) {
+    let (_, source) = resolve_input_tokens(ctx.request_input_tokens, ctx.context_input_tokens);
+    if source != KiroInputTokenSource::LocalRequestEstimateFallback {
+        return;
+    }
+
+    tracing::error!(
+        key_id = ctx.key_id,
+        key_name = ctx.key_name,
+        account_name = ctx.event_context.account_name.as_deref().unwrap_or("unknown"),
+        request_method = %ctx.event_context.request_method,
+        request_url = %ctx.event_context.request_url,
+        endpoint = %ctx.event_context.endpoint,
+        model = ctx.event_context.model.as_deref().unwrap_or("unknown"),
+        request_validation_enabled = ctx.request_validation_enabled,
+        cache_estimation_enabled = ctx.cache_estimation_enabled,
+        cache_simulation_mode = match ctx.simulation.simulation_config.mode {
+            KiroCacheSimulationMode::Formula => "formula",
+            KiroCacheSimulationMode::PrefixTree => "prefix_tree",
+        },
+        conversation_id = ctx.event_context.conversation_id.as_deref().unwrap_or("unknown"),
+        session_resolution = ctx.event_context.session_resolution.as_deref().unwrap_or("unknown"),
+        session_source_name = ctx.event_context.session_source_name.as_deref().unwrap_or("unknown"),
+        request_input_tokens = ctx.request_input_tokens,
+        context_input_tokens = ctx.context_input_tokens.unwrap_or_default(),
+        "kiro request completed without authoritative upstream input token usage; falling back to local request token estimate"
+    );
 }
 
 fn maybe_parse_json_text(raw: Option<&str>) -> serde_json::Value {
@@ -817,6 +939,10 @@ fn build_failure_diagnostic_payload(
         "endpoint": ctx.event_context.endpoint,
         "model": ctx.event_context.model,
         "account_name": ctx.event_context.account_name,
+        "conversation_id": ctx.event_context.conversation_id,
+        "session_resolution": ctx.event_context.session_resolution,
+        "session_source_name": ctx.event_context.session_source_name,
+        "session_source_value_preview": ctx.event_context.session_source_value_preview,
         "original_last_message_content": ctx.event_context.last_message_content,
         "request_validation_enabled": ctx.request_validation_enabled,
         "stream": ctx.stream,
@@ -1192,6 +1318,11 @@ async fn handle_messages(
         conversion.conversation_state,
         conversion.session_tracking,
     );
+    event_context.conversation_id = Some(conversation_state.conversation_id.clone());
+    event_context.session_resolution =
+        Some(session_resolution_label(&session_tracking.source).to_string());
+    event_context.session_source_name = session_tracking.source_name.map(str::to_string);
+    event_context.session_source_value_preview = session_tracking.source_value_preview.clone();
     log_non_header_session_resolution(
         &session_tracking,
         &conversation_state.conversation_id,
@@ -1650,6 +1781,16 @@ async fn handle_non_stream_request(
             .collect(),
     );
     let output_tokens = token::estimate_output_tokens(&content);
+    log_missing_upstream_input_tokens(MissingUpstreamInputLogContext {
+        key_id: &key_record.id,
+        key_name: &key_record.name,
+        event_context: &event_context,
+        request_validation_enabled: request_ctx.request_validation_enabled,
+        cache_estimation_enabled: key_record.kiro_cache_estimation_enabled,
+        simulation: &request_ctx.simulation,
+        request_input_tokens: request_ctx.input_tokens,
+        context_input_tokens,
+    });
     let usage = build_kiro_usage_summary(
         &request_ctx.model,
         request_ctx.input_tokens,
@@ -1658,6 +1799,15 @@ async fn handle_non_stream_request(
         credit_usage_observed.then_some(credit_usage.max(0.0)),
         key_record.kiro_cache_estimation_enabled,
         &request_ctx.simulation,
+    );
+    log_high_credit_usage_anomaly(
+        &key_record.id,
+        &key_record.name,
+        &event_context,
+        request_ctx.request_validation_enabled,
+        key_record.kiro_cache_estimation_enabled,
+        &request_ctx.simulation,
+        usage,
     );
     tracing::info!(
         model = %request_ctx.model,
@@ -1932,6 +2082,16 @@ fn create_sse_stream(
         );
         if let Some(sender) = done_tx.take() {
             let assistant_message = ctx.final_assistant_message();
+            log_missing_upstream_input_tokens(MissingUpstreamInputLogContext {
+                key_id: &log_ctx.key_id,
+                key_name: &log_ctx.key_name,
+                event_context: &request_ctx.event_context,
+                request_validation_enabled: request_ctx.request_validation_enabled,
+                cache_estimation_enabled: request_ctx.cache_estimation_enabled,
+                simulation: &request_ctx.simulation,
+                request_input_tokens: ctx.request_input_tokens(),
+                context_input_tokens: ctx.context_input_tokens(),
+            });
             let summary = build_kiro_usage_summary(
                 ctx.model.as_str(),
                 ctx.request_input_tokens(),
@@ -1940,6 +2100,15 @@ fn create_sse_stream(
                 credit_usage,
                 request_ctx.cache_estimation_enabled,
                 &request_ctx.simulation,
+            );
+            log_high_credit_usage_anomaly(
+                &log_ctx.key_id,
+                &log_ctx.key_name,
+                &request_ctx.event_context,
+                request_ctx.request_validation_enabled,
+                request_ctx.cache_estimation_enabled,
+                &request_ctx.simulation,
+                summary,
             );
             if failure_diagnostic_payload.is_none() {
                 record_successful_kiro_prefix_state(
@@ -2065,6 +2234,16 @@ fn create_buffered_sse_stream(
         let (input_tokens, output_tokens) = ctx.final_usage();
         let (credit_usage, credit_usage_missing) = ctx.final_credit_usage();
         let assistant_message = ctx.final_assistant_message();
+        log_missing_upstream_input_tokens(MissingUpstreamInputLogContext {
+            key_id: &log_ctx.key_id,
+            key_name: &log_ctx.key_name,
+            event_context: &request_ctx.event_context,
+            request_validation_enabled: request_ctx.request_validation_enabled,
+            cache_estimation_enabled: request_ctx.cache_estimation_enabled,
+            simulation: &request_ctx.simulation,
+            request_input_tokens: ctx.estimated_input_tokens(),
+            context_input_tokens: ctx.context_input_tokens(),
+        });
         let summary = build_kiro_usage_summary(
             ctx.model(),
             ctx.estimated_input_tokens(),
@@ -2073,6 +2252,15 @@ fn create_buffered_sse_stream(
             credit_usage,
             request_ctx.cache_estimation_enabled,
             &request_ctx.simulation,
+        );
+        log_high_credit_usage_anomaly(
+            &log_ctx.key_id,
+            &log_ctx.key_name,
+            &request_ctx.event_context,
+            request_ctx.request_validation_enabled,
+            request_ctx.cache_estimation_enabled,
+            &request_ctx.simulation,
+            summary,
         );
         for event in &mut all_events {
             if let Some(usage) = event
@@ -2474,6 +2662,10 @@ mod tests {
             upstream_request_body_json: Some(
                 r#"{"conversationState":{"conversationId":"conv-1"}}"#.to_string(),
             ),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("request_header".to_string()),
+            session_source_name: Some("x-claude-code-session-id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
             started_at: std::time::Instant::now(),
         };
         let payload = build_failure_diagnostic_payload(
@@ -2662,12 +2854,11 @@ mod tests {
     }
 
     #[test]
-    fn estimate_cache_prefers_smaller_non_zero_input_source() {
+    fn estimate_cache_uses_provided_input_total() {
         let kmodels = sample_kmodels();
         let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
             model: "claude-opus-4-6",
-            request_input_tokens: 12_000,
-            context_input_tokens: Some(9_000),
+            input_tokens_total: 9_000,
             output_tokens: 400,
             credit_usage: Some(0.02),
             kmodels: &kmodels,
@@ -2686,8 +2877,7 @@ mod tests {
         let kmodels = sample_kmodels();
         let estimate = estimate_kiro_cache_usage(KiroCacheEstimateInput {
             model: "claude-sonnet-4-6",
-            request_input_tokens: 6_000,
-            context_input_tokens: Some(5_000),
+            input_tokens_total: 5_000,
             output_tokens: 200,
             credit_usage: Some(10.0),
             kmodels: &kmodels,
@@ -2704,7 +2894,7 @@ mod tests {
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
-            Some(9_000),
+            Some(90_000),
             400,
             Some(0.02),
             false,
@@ -2712,22 +2902,39 @@ mod tests {
         );
 
         assert_eq!(summary.input_cached_tokens, 0);
-        assert_eq!(summary.input_uncached_tokens, 9_000);
+        assert_eq!(summary.input_uncached_tokens, 90_000);
         assert_eq!(summary.output_tokens, 400);
         assert_eq!(summary.credit_usage, Some(0.02));
         assert!(!summary.credit_usage_missing);
     }
 
     #[test]
+    fn build_usage_summary_formula_mode_uses_upstream_input_total() {
+        let simulation = sample_simulation(KiroCacheSimulationMode::Formula, 0);
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(90_000),
+            400,
+            Some(0.02),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_uncached_tokens + summary.input_cached_tokens, 90_000);
+        assert!(summary.input_cached_tokens <= 90_000);
+    }
+
+    #[test]
     fn build_usage_summary_uses_prefix_tree_match_when_enabled() {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, 4);
-        let expected_cached = ((100_u128 * 4_u128)
+        let expected_cached = ((100_000_u128 * 4_u128)
             / u128::from(simulation.projection.projected_input_token_count.max(1)))
             as i32;
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
-            Some(100),
+            Some(100_000),
             400,
             Some(0.02),
             true,
@@ -2735,7 +2942,7 @@ mod tests {
         );
 
         assert_eq!(summary.input_cached_tokens, expected_cached);
-        assert_eq!(summary.input_uncached_tokens, 100 - expected_cached);
+        assert_eq!(summary.input_uncached_tokens, 100_000 - expected_cached);
     }
 
     #[tokio::test]

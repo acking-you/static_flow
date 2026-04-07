@@ -63,6 +63,7 @@ const MIN_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 const MAX_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 16;
 const MIN_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 const MAX_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 60_000;
+pub(crate) const KIRO_HIGH_CREDIT_DIAGNOSTIC_THRESHOLD: f64 = 2.0;
 type KiroAdminResult<T> = Result<T, (StatusCode, Json<ErrorResponse>)>;
 
 /// Per-request context captured at authentication time and carried through
@@ -93,6 +94,15 @@ pub struct KiroEventContext {
     pub client_request_body_json: Option<String>,
     /// Full upstream Kiro request body prepared for diagnostics.
     pub upstream_request_body_json: Option<String>,
+    /// Final conversation identifier sent to Kiro after request conversion.
+    pub conversation_id: Option<String>,
+    /// Human-readable session resolution path (e.g. `request_header`,
+    /// `metadata_json`, `generated_fallback`).
+    pub session_resolution: Option<String>,
+    /// Header / metadata field name used to source the session identifier.
+    pub session_source_name: Option<String>,
+    /// Short preview of the session identifier source value for debugging.
+    pub session_source_value_preview: Option<String>,
     /// Wall-clock instant when authentication started; used for latency.
     pub started_at: Instant,
 }
@@ -102,7 +112,9 @@ pub struct KiroEventContext {
 /// events.
 #[derive(Debug, Clone, Copy)]
 pub struct KiroUsageSummary {
-    /// Number of input tokens billed for this request.
+    /// Reported input tokens for this request after splitting the
+    /// authoritative upstream total into uncached and simulated cache-read
+    /// portions.
     pub input_uncached_tokens: i32,
     /// Conservative lower-bound estimate of prompt-cache read tokens.
     ///
@@ -178,9 +190,18 @@ impl AppKiroStateExt for AppState {
             last_message_content: None,
             client_request_body_json: None,
             upstream_request_body_json: None,
+            conversation_id: None,
+            session_resolution: None,
+            session_source_name: None,
+            session_source_value_preview: None,
             started_at: Instant::now(),
         }))
     }
+}
+
+pub(crate) fn is_high_credit_usage(credit_usage: Option<f64>) -> bool {
+    credit_usage
+        .is_some_and(|value| value.is_finite() && value > KIRO_HIGH_CREDIT_DIAGNOSTIC_THRESHOLD)
 }
 
 /// Returns the public Kiro gateway access info (base URL, auth cache TTL,
@@ -829,6 +850,8 @@ pub async fn record_messages_usage(
         billable_tokens = event.billable_tokens,
         credit_usage = event.credit_usage.unwrap_or_default(),
         credit_usage_missing = event.credit_usage_missing,
+        captured_full_request =
+            event.client_request_body_json.is_some() && event.upstream_request_body_json.is_some(),
         "persisted kiro usage event"
     );
     Ok(())
@@ -888,6 +911,7 @@ fn build_kiro_usage_event_record(
     usage_missing: bool,
     last_message_content: Option<String>,
 ) -> LlmGatewayUsageEventRecord {
+    let capture_full_requests = is_high_credit_usage(usage.credit_usage);
     LlmGatewayUsageEventRecord {
         id: generate_task_id("kiro-usage"),
         key_id: current.id.clone(),
@@ -913,6 +937,12 @@ fn build_kiro_usage_event_record(
         ip_region: event_context.ip_region.clone(),
         request_headers_json: event_context.request_headers_json.clone(),
         last_message_content,
+        client_request_body_json: capture_full_requests
+            .then(|| event_context.client_request_body_json.clone())
+            .flatten(),
+        upstream_request_body_json: capture_full_requests
+            .then(|| event_context.upstream_request_body_json.clone())
+            .flatten(),
         created_at: now_ms(),
     }
 }
@@ -1541,6 +1571,10 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("request_header".to_string()),
+            session_source_name: Some("x-claude-code-session-id".to_string()),
+            session_source_value_preview: Some("1234...".to_string()),
             started_at: std::time::Instant::now(),
         };
         let diagnostic = r#"{"kind":"kiro_failure_diagnostic","error":"boom"}"#.to_string();
@@ -1565,5 +1599,152 @@ mod tests {
         assert_eq!(record.last_message_content.as_deref(), Some(diagnostic.as_str()));
         assert_eq!(record.account_name.as_deref(), Some("acct-a"));
         assert_eq!(record.billable_tokens, 0);
+        assert!(record.client_request_body_json.is_none());
+        assert!(record.upstream_request_body_json.is_none());
+    }
+
+    #[test]
+    fn build_kiro_success_usage_event_captures_full_request_for_high_credit() {
+        let key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+        };
+        let event_context = KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some(
+                "{\"conversationState\":{\"conversationId\":\"conv-1\"}}".to_string(),
+            ),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("metadata_json".to_string()),
+            session_source_name: Some("session_id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
+            started_at: std::time::Instant::now(),
+        };
+
+        let record = build_kiro_usage_event_record(
+            &key,
+            &event_context,
+            42,
+            200,
+            KiroUsageSummary {
+                input_uncached_tokens: 50_049,
+                input_cached_tokens: 0,
+                output_tokens: 926,
+                credit_usage: Some(2.5598),
+                credit_usage_missing: false,
+            },
+            false,
+            event_context.last_message_content.clone(),
+        );
+
+        assert_eq!(record.client_request_body_json.as_deref(), Some("{\"messages\":[]}"));
+        assert_eq!(
+            record.upstream_request_body_json.as_deref(),
+            Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
+        );
+    }
+
+    #[test]
+    fn build_kiro_success_usage_event_skips_full_request_for_normal_credit() {
+        let key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+        };
+        let event_context = KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some(
+                "{\"conversationState\":{\"conversationId\":\"conv-1\"}}".to_string(),
+            ),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("metadata_json".to_string()),
+            session_source_name: Some("session_id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
+            started_at: std::time::Instant::now(),
+        };
+
+        let record = build_kiro_usage_event_record(
+            &key,
+            &event_context,
+            42,
+            200,
+            KiroUsageSummary {
+                input_uncached_tokens: 50_049,
+                input_cached_tokens: 0,
+                output_tokens: 926,
+                credit_usage: Some(1.9999),
+                credit_usage_missing: false,
+            },
+            false,
+            event_context.last_message_content.clone(),
+        );
+
+        assert!(record.client_request_body_json.is_none());
+        assert!(record.upstream_request_body_json.is_none());
     }
 }

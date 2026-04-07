@@ -293,15 +293,9 @@ impl StreamContext {
     }
 
     pub fn final_usage(&self) -> (i32, i32) {
-        let request_input = self.input_tokens.max(0);
-        let context_input = self.context_input_tokens.unwrap_or_default().max(0);
-        let safe_input = match (request_input > 0, context_input > 0) {
-            (true, true) => request_input.min(context_input),
-            (true, false) => request_input,
-            (false, true) => context_input,
-            (false, false) => 0,
-        };
-        (safe_input, self.output_tokens.max(1))
+        let (input_tokens, _) =
+            super::resolve_input_tokens(self.input_tokens, self.context_input_tokens);
+        (input_tokens, self.output_tokens.max(1))
     }
 
     pub fn request_input_tokens(&self) -> i32 {
@@ -1177,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn buffered_stream_context_rewrites_message_start_input_tokens_conservatively() {
+    fn buffered_stream_context_rewrites_message_start_input_tokens_from_upstream_context_usage() {
         let mut ctx = BufferedStreamContext::new("claude-sonnet-4-6", 123, false, HashMap::new());
         ctx.process_and_buffer(&Event::ContextUsage(ContextUsageEvent {
             context_usage_percentage: 12.5,
@@ -1188,7 +1182,10 @@ mod tests {
             .iter()
             .find(|event| event.event == "message_start")
             .expect("should have message_start");
-        assert_eq!(message_start.data["message"]["usage"]["input_tokens"], serde_json::json!(123));
+        assert_eq!(
+            message_start.data["message"]["usage"]["input_tokens"],
+            serde_json::json!(125000)
+        );
     }
 
     #[test]
