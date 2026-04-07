@@ -30,12 +30,18 @@ use crate::state::LlmGatewayRuntimeConfig;
 const PREFIX_CACHE_PAGE_SIZE: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// A canonical unit is the smallest semantic fragment we retain before packing
+// it into fixed-size cache pages. We keep the stable string key for anchor/hash
+// construction, while token atoms feed the page-based prefix tree.
 struct CanonicalInputUnit {
     pub key: String,
     pub token_atoms: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Prefix-cache matching operates on fixed-size token pages instead of single
+// tokens so the shared trie stays compact even when the global request volume
+// grows.
 pub(crate) struct CanonicalTokenPage {
     pub key: u128,
     pub token_count: u16,
@@ -108,6 +114,13 @@ impl PromptProjection {
         segments.extend(canonicalize_assistant_message(assistant_message));
         hash_segments(&segments)
     }
+
+    pub fn stable_prefix_token_count(&self) -> u64 {
+        self.stable_prefix_pages
+            .iter()
+            .map(|page| u64::from(page.token_count))
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +177,10 @@ pub(crate) struct KiroCacheSimulator {
 }
 
 impl KiroCacheSimulator {
+    // Match against the global shared prefix tree. The caller is expected to
+    // provide a prompt projection built from the corrected `ConversationState`,
+    // not the raw client JSON, so cache simulation follows the actual upstream
+    // request shape.
     pub fn match_prefix(
         &self,
         projection: &PromptProjection,
@@ -255,6 +272,8 @@ impl PrefixNode {
 }
 
 impl PrefixTree {
+    // Matching only counts full pages. Partial-page matches are ignored on
+    // purpose so the reported cache hit stays conservative.
     fn match_prefix(
         &mut self,
         pages: &[CanonicalTokenPage],
@@ -672,6 +691,9 @@ fn build_token_pages(units: &[CanonicalInputUnit]) -> Vec<CanonicalTokenPage> {
     pages
 }
 
+// A page key is the hash of the packed token atom stream. The tree stores only
+// this compact page identity plus token count; it does not retain the original
+// strings or token vectors per node.
 fn build_token_page(atoms: &[u64]) -> CanonicalTokenPage {
     let mut bytes = Vec::with_capacity(std::mem::size_of_val(atoms));
     for atom in atoms {

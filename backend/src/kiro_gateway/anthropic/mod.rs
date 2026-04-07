@@ -213,6 +213,47 @@ fn prepare_simulation_request_context(
     (conversation_state, session_tracking, simulation)
 }
 
+fn log_simulation_request_context(
+    key_record: &LlmGatewayKeyRecord,
+    ctx: &NormalizationLogContext<'_>,
+    cache_estimation_enabled: bool,
+    session_tracking: &SessionTracking,
+    simulation: &KiroSimulationRequestContext,
+) {
+    let projected_total = simulation.projection.projected_input_token_count.max(1);
+    let matched_tokens = simulation
+        .prefix_cache_match
+        .matched_tokens
+        .min(projected_total);
+    let matched_ratio_basis_points =
+        ((u128::from(matched_tokens) * 10_000) / u128::from(projected_total)) as u64;
+    tracing::info!(
+        key_id = %key_record.id,
+        key_name = %key_record.name,
+        route = ctx.public_path,
+        requested_model = ctx.requested_model,
+        effective_model = ctx.effective_model,
+        stream = ctx.stream,
+        buffered_for_cc = ctx.buffered_for_cc,
+        request_validation_enabled = ctx.request_validation_enabled,
+        cache_estimation_enabled,
+        cache_simulation_mode = match simulation.simulation_config.mode {
+            KiroCacheSimulationMode::Formula => "formula",
+            KiroCacheSimulationMode::PrefixTree => "prefix_tree",
+        },
+        session_resolution = session_resolution_label(&session_tracking.source),
+        conversation_id = %simulation.conversation_id,
+        lookup_anchor_preview = preview_session_value(&simulation.projection.lookup_anchor_hash),
+        stable_prefix_page_count = simulation.projection.stable_prefix_pages.len(),
+        stable_prefix_token_count = simulation.projection.stable_prefix_token_count(),
+        projected_input_token_count = simulation.projection.projected_input_token_count,
+        matched_page_count = simulation.prefix_cache_match.matched_pages,
+        matched_token_count = simulation.prefix_cache_match.matched_tokens,
+        matched_ratio_basis_points,
+        "prepared kiro cache simulation context before upstream call"
+    );
+}
+
 fn maybe_recover_conversation_id_from_anchor(
     state: &AppState,
     mut conversation_state: ConversationState,
@@ -346,6 +387,16 @@ struct NormalizationLogContext<'a> {
     stream: bool,
     buffered_for_cc: bool,
     request_validation_enabled: bool,
+}
+
+fn session_resolution_label(source: &SessionIdSource) -> &'static str {
+    match source {
+        SessionIdSource::RequestHeader => "request_header",
+        SessionIdSource::MetadataJson => "metadata_json",
+        SessionIdSource::MetadataLegacy => "metadata_legacy",
+        SessionIdSource::RecoveredAnchor(_) => "recovered_anchor",
+        SessionIdSource::GeneratedFallback(_) => "generated_fallback",
+    }
 }
 
 fn log_normalization_event(event: &NormalizationEvent, ctx: &NormalizationLogContext<'_>) {
@@ -713,6 +764,10 @@ fn build_kiro_usage_summary(
             kmodels: &simulation.runtime_config.kiro_cache_kmodels,
         }),
         KiroCacheSimulationMode::PrefixTree => {
+            // Prefix-tree mode computes a conservative cache-hit ratio from the
+            // corrected prompt projection, then applies that ratio to the safer
+            // request-wide input estimate instead of trusting local page counts
+            // as an absolute upstream token total.
             let safe_input_u64 = safe_input.max(0) as u64;
             let projected_total = simulation.projection.projected_input_token_count.max(1);
             let matched = simulation
@@ -795,6 +850,23 @@ fn record_successful_kiro_prefix_state(
     simulation: &KiroSimulationRequestContext,
     assistant_message: &AssistantMessage,
 ) {
+    let resume_anchor_hash = simulation
+        .projection
+        .build_resume_anchor_hash(assistant_message);
+    tracing::info!(
+        cache_simulation_mode = match simulation.simulation_config.mode {
+            KiroCacheSimulationMode::Formula => "formula",
+            KiroCacheSimulationMode::PrefixTree => "prefix_tree",
+        },
+        conversation_id = %simulation.conversation_id,
+        stable_prefix_page_count = simulation.projection.stable_prefix_pages.len(),
+        stable_prefix_token_count = simulation.projection.stable_prefix_token_count(),
+        projected_input_token_count = simulation.projection.projected_input_token_count,
+        prefix_tree_write_enabled =
+            matches!(simulation.simulation_config.mode, KiroCacheSimulationMode::PrefixTree),
+        resume_anchor_preview = preview_session_value(&resume_anchor_hash),
+        "recording successful kiro prefix state into shared cache simulator"
+    );
     state.kiro_gateway.cache_simulator.record_success(
         &simulation.projection,
         assistant_message,
@@ -1109,6 +1181,13 @@ async fn handle_messages(
         &conversation_state.conversation_id,
         &simulation.projection,
         &normalization_log_ctx,
+    );
+    log_simulation_request_context(
+        &key_record,
+        &normalization_log_ctx,
+        key_record.kiro_cache_estimation_enabled,
+        &session_tracking,
+        &simulation,
     );
     event_context.upstream_request_body_json =
         serde_json::to_string(&crate::kiro_gateway::wire::KiroRequest {
