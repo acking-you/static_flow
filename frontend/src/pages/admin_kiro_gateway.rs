@@ -22,8 +22,9 @@ use crate::{
         PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
     },
     pages::llm_access_shared::{
-        format_float2, format_ms, format_number_i64, format_number_u64, format_reset_hint,
-        kiro_credit_ratio, kiro_key_usage_ratio, MaskedSecretCode,
+        format_float2, format_kiro_disabled_reason, format_ms, format_number_i64,
+        format_number_u64, format_reset_hint, kiro_credit_ratio, kiro_key_usage_ratio,
+        MaskedSecretCode,
     },
     router::Route,
 };
@@ -513,6 +514,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         .clone()
         .unwrap_or_else(|| "-".to_string());
     let last_imported = format_timestamp_opt(account.last_imported_at);
+    let disabled_reason = format_kiro_disabled_reason(account.disabled_reason.as_deref());
 
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
@@ -546,6 +548,11 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     if let Some(cache_error) = account.cache.error_message.clone() {
                         <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-amber-700", "dark:text-amber-200")}>
                             { cache_error }
+                        </p>
+                    }
+                    if let Some(disabled_reason) = disabled_reason {
+                        <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-amber-700", "dark:text-amber-200")}>
+                            { disabled_reason }
                         </p>
                     }
                 </div>

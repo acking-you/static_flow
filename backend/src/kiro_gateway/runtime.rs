@@ -4,7 +4,12 @@
 //! account-backed status/runtime caches that sit beneath the
 //! Anthropic-compatible HTTP handlers.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -33,6 +38,23 @@ const REFRESH_EARLY_MINUTES: i64 = 10;
 const KIRO_USAGE_AWS_SDK_VERSION: &str = "1.0.0";
 const KIRO_IDC_AWS_SDK_VERSION: &str = "3.980.0";
 const KIRO_IDC_AMZ_SDK_REQUEST: &str = "attempt=1; max=4";
+
+/// Permanent refresh-token failure returned by the upstream OAuth/OIDC
+/// endpoints. Unlike transient refresh errors, this means the stored
+/// credential can no longer mint new access tokens and should be disabled
+/// immediately instead of being retried on every request.
+#[derive(Debug)]
+struct RefreshTokenInvalidGrantError {
+    message: String,
+}
+
+impl fmt::Display for RefreshTokenInvalidGrantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RefreshTokenInvalidGrantError {}
 
 /// Holds the authenticated identity and resolved access token for a single Kiro
 /// API call.
@@ -259,7 +281,31 @@ impl KiroTokenManager {
             expires_at = ?latest.expires_at,
             "refreshing kiro access token"
         );
-        let refreshed = refresh_auth(self.upstream_proxy_registry.as_ref(), &latest).await?;
+        let refreshed = match refresh_auth(self.upstream_proxy_registry.as_ref(), &latest).await {
+            Ok(refreshed) => refreshed,
+            Err(err) => {
+                let invalid_refresh_message = err
+                    .downcast_ref::<RefreshTokenInvalidGrantError>()
+                    .map(|value| value.to_string());
+                if let Some(message) = invalid_refresh_message {
+                    tracing::error!(
+                        account_name = %latest.name,
+                        auth_method = latest.auth_method(),
+                        error = %message,
+                        "kiro refresh token is permanently invalid; disabling account"
+                    );
+                    disable_auth_for_invalid_refresh_token(&self.auths_dir, &latest)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "disable kiro account `{}` after invalid refresh token",
+                                latest.name
+                            )
+                        })?;
+                }
+                return Err(err);
+            },
+        };
         self.persist_refreshed_auth(&refreshed).await?;
         tracing::info!(
             account_name = %refreshed.name,
@@ -441,6 +487,19 @@ async fn refresh_social(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if is_invalid_refresh_token_grant(status.as_u16(), &body) {
+            tracing::error!(
+                account_name = %auth.name,
+                auth_method = auth.auth_method(),
+                status = %status,
+                body_preview = %summarize_refresh_error_body(&body),
+                "kiro social refresh token returned invalid_grant"
+            );
+            return Err(RefreshTokenInvalidGrantError {
+                message: format!("kiro social refresh token is invalid: {status} {body}"),
+            }
+            .into());
+        }
         bail!("kiro social token refresh failed: {status} {body}");
     }
     let payload: RefreshResponse = response.json().await.context("parse refresh response")?;
@@ -497,6 +556,19 @@ async fn refresh_idc(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if is_invalid_refresh_token_grant(status.as_u16(), &body) {
+            tracing::error!(
+                account_name = %auth.name,
+                auth_method = auth.auth_method(),
+                status = %status,
+                body_preview = %summarize_refresh_error_body(&body),
+                "kiro idc refresh token returned invalid_grant"
+            );
+            return Err(RefreshTokenInvalidGrantError {
+                message: format!("kiro idc refresh token is invalid: {status} {body}"),
+            }
+            .into());
+        }
         bail!("kiro idc token refresh failed: {status} {body}");
     }
     let payload: IdcRefreshResponse = response.json().await.context("parse idc refresh")?;
@@ -521,6 +593,39 @@ fn derive_refreshed_expires_at(
         return Some((Utc::now() + Duration::seconds(expires_in)).to_rfc3339());
     }
     access_token.and_then(jwt_exp_to_rfc3339)
+}
+
+fn is_invalid_refresh_token_grant(status: u16, body: &str) -> bool {
+    status == 400
+        && body.contains("\"invalid_grant\"")
+        && body.contains("Invalid refresh token provided")
+}
+
+async fn disable_auth_for_invalid_refresh_token(dir: &Path, auth: &KiroAuthRecord) -> Result<()> {
+    if auth.disabled {
+        return Ok(());
+    }
+    let mut next = auth.clone();
+    next.disabled = true;
+    next.disabled_reason = Some("invalid_refresh_token".to_string());
+    save_auth_record(dir, &next).await?;
+    tracing::warn!(
+        account_name = %next.name,
+        auth_method = next.auth_method(),
+        disabled_reason = %next.disabled_reason.as_deref().unwrap_or("unknown"),
+        "persisted kiro account as disabled after invalid refresh token"
+    );
+    Ok(())
+}
+
+fn summarize_refresh_error_body(body: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 240;
+    let total_chars = body.chars().count();
+    if total_chars <= MAX_PREVIEW_CHARS {
+        return body.to_string();
+    }
+    let preview = body.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
+    format!("{preview}...[truncated,total_chars={total_chars}]")
 }
 
 fn social_refresh_user_agent(machine_id: &str) -> String {
@@ -576,6 +681,8 @@ fn parse_jwt_exp(token: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
     use crate::kiro_gateway::auth_file::KiroAuthRecord;
 
@@ -631,5 +738,48 @@ mod tests {
         )));
         assert!(user_agent.contains("api/sso-oidc#3.980.0"));
         assert_eq!(KIRO_IDC_AMZ_SDK_REQUEST, "attempt=1; max=4");
+    }
+
+    #[test]
+    fn invalid_refresh_grant_detection_matches_upstream_contract() {
+        let body =
+            r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
+        assert!(is_invalid_refresh_token_grant(400, body));
+        assert!(!is_invalid_refresh_token_grant(401, body));
+        assert!(!is_invalid_refresh_token_grant(400, r#"{"error":"invalid_client"}"#));
+    }
+
+    #[tokio::test]
+    async fn disable_auth_for_invalid_refresh_token_persists_disabled_flag() {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+        let dir = std::env::temp_dir().join(format!(
+            "staticflow-kiro-runtime-test-{}",
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .expect("create temp auth dir");
+
+        let auth = KiroAuthRecord {
+            name: "alpha".to_string(),
+            refresh_token: Some("r".repeat(128)),
+            disabled: false,
+            ..KiroAuthRecord::default()
+        };
+        save_auth_record(&dir, &auth)
+            .await
+            .expect("persist seed auth record");
+
+        disable_auth_for_invalid_refresh_token(&dir, &auth)
+            .await
+            .expect("disable invalid refresh token account");
+
+        let persisted = load_auth_records(&dir).await.expect("load persisted auths");
+        assert_eq!(persisted.len(), 1);
+        assert!(persisted[0].disabled);
+        assert_eq!(persisted[0].disabled_reason.as_deref(), Some("invalid_refresh_token"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

@@ -7,7 +7,7 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{fetch_kiro_access, KiroAccessResponse},
-    pages::llm_access_shared::{format_reset_hint, kiro_credit_ratio},
+    pages::llm_access_shared::{format_kiro_disabled_reason, format_reset_hint, kiro_credit_ratio},
     router::Route,
 };
 
@@ -203,6 +203,7 @@ pub fn kiro_access_page() -> Html {
                                     let pct = (ratio * 100.0).round() as i32;
                                     let remaining_text = status.remaining.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
                                     let limit_text = status.usage_limit.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
+                                    let disabled_reason = format_kiro_disabled_reason(status.disabled_reason.as_deref());
                                     html! {
                                         <article class={classes!(
                                             "group", "overflow-hidden", "rounded-lg", "border", "border-[var(--border)]",
@@ -223,6 +224,11 @@ pub fn kiro_access_page() -> Html {
                                                     </span>
                                                 }
                                             </div>
+                                            if let Some(disabled_reason) = disabled_reason {
+                                                <p class={classes!("mt-2", "mb-0", "font-mono", "text-[11px]", "text-amber-700", "dark:text-amber-200")}>
+                                                    { disabled_reason }
+                                                </p>
+                                            }
                                             <div class={classes!("mt-4", "grid", "gap-3", "grid-cols-2")}>
                                                 <div>
                                                     <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余" }</div>

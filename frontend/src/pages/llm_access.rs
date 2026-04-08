@@ -18,9 +18,10 @@ use crate::{
         SubmitLlmGatewaySponsorInput, API_BASE,
     },
     pages::llm_access_shared::{
-        format_ms, format_number_i64, format_number_u64, format_percent, format_reset_hint,
-        format_window_label, kiro_credit_ratio, pretty_limit_name, resolved_base_url, usage_ratio,
-        MaskedSecretCode, REMOTE_COMPACT_ARTICLE_ID,
+        format_kiro_disabled_reason, format_ms, format_number_i64, format_number_u64,
+        format_percent, format_reset_hint, format_window_label, kiro_credit_ratio,
+        pretty_limit_name, resolved_base_url, usage_ratio, MaskedSecretCode,
+        REMOTE_COMPACT_ARTICLE_ID,
     },
     router::Route,
 };
@@ -1142,6 +1143,7 @@ pub fn llm_access_page() -> Html {
                                 let pct = (ratio * 100.0).round() as i32;
                                 let remaining_text = acct.remaining.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
                                 let limit_text = acct.usage_limit.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
+                                let disabled_reason = format_kiro_disabled_reason(acct.disabled_reason.as_deref());
                                 html! {
                                     <div class={classes!(
                                         "mt-4", "rounded-lg", "border", "border-[var(--border)]",
@@ -1170,6 +1172,11 @@ pub fn llm_access_page() -> Html {
                                                 style={format!("width: {}%;", pct.clamp(0, 100))}
                                             />
                                         </div>
+                                        if let Some(disabled_reason) = disabled_reason {
+                                            <div class={classes!("mt-1.5", "font-mono", "text-[10px]", "text-amber-700", "dark:text-amber-200")}>
+                                                { disabled_reason }
+                                            </div>
+                                        }
                                         <div class={classes!("mt-1.5", "flex", "items-center", "gap-3", "font-mono", "text-[10px]", "text-[var(--muted)]")}>
                                             <span>{ acct.subscription_title.unwrap_or_else(|| "-".to_string()) }</span>
                                             <span class={classes!("ml-auto")}>{ format_reset_hint(acct.next_reset_at) }</span>

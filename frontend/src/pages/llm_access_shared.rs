@@ -133,6 +133,15 @@ pub fn format_reset_hint(ts_secs: Option<i64>) -> String {
     }
 }
 
+pub fn format_kiro_disabled_reason(reason: Option<&str>) -> Option<String> {
+    match reason.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("invalid_refresh_token") => Some("Disabled: invalid refresh token".to_string()),
+        Some("manual") => Some("Disabled: manual".to_string()),
+        Some(other) => Some(format!("Disabled: {other}")),
+        None => None,
+    }
+}
+
 pub fn pretty_limit_name(raw: &str) -> String {
     let cleaned = raw.replace(['_', '-'], " ");
     let trimmed = if cleaned.len() >= 5 && cleaned[..5].eq_ignore_ascii_case("codex") {
@@ -179,6 +188,29 @@ pub fn resolved_base_url(access: &LlmGatewayAccessResponse) -> String {
         access.base_url.clone()
     } else {
         format!("{origin}{}", access.gateway_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_kiro_disabled_reason;
+
+    #[test]
+    fn format_kiro_disabled_reason_maps_known_codes() {
+        assert_eq!(
+            format_kiro_disabled_reason(Some("invalid_refresh_token")).as_deref(),
+            Some("Disabled: invalid refresh token")
+        );
+        assert_eq!(
+            format_kiro_disabled_reason(Some("manual")).as_deref(),
+            Some("Disabled: manual")
+        );
+    }
+
+    #[test]
+    fn format_kiro_disabled_reason_ignores_empty_values() {
+        assert!(format_kiro_disabled_reason(None).is_none());
+        assert!(format_kiro_disabled_reason(Some("   ")).is_none());
     }
 }
 

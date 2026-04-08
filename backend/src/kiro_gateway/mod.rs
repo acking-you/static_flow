@@ -1002,6 +1002,7 @@ fn auth_record_from_manual_request(
         proxy_username: None,
         proxy_password: None,
         disabled: request.disabled,
+        disabled_reason: request.disabled.then(|| "manual".to_string()),
         source: Some("manual".to_string()),
         source_db_path: None,
         last_imported_at: Some(Utc::now().timestamp_millis()),

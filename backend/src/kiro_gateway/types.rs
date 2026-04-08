@@ -61,6 +61,9 @@ pub struct KiroPublicStatusView {
     pub provider: Option<String>,
     /// Admin-set kill switch; `true` means the account is disabled.
     pub disabled: bool,
+    /// Optional structured explanation for why the account is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
     /// Subscription tier label from the upstream balance API.
     pub subscription_title: Option<String>,
     /// Credits already consumed in the current billing period.
@@ -90,6 +93,7 @@ impl KiroPublicStatusView {
             name: auth.name.clone(),
             provider: auth.provider.clone(),
             disabled: auth.disabled,
+            disabled_reason: auth.disabled_reason.clone(),
             subscription_title: balance
                 .and_then(|value| value.subscription_title.clone())
                 .or_else(|| auth.subscription_title.clone()),
@@ -351,6 +355,8 @@ pub struct KiroAccountView {
     pub profile_arn: Option<String>,
     pub has_refresh_token: bool,
     pub disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
     pub source: Option<String>,
     pub source_db_path: Option<String>,
     pub last_imported_at: Option<i64>,
@@ -397,6 +403,7 @@ impl KiroAccountView {
             profile_arn: auth.profile_arn.clone(),
             has_refresh_token: auth.has_refresh_token(),
             disabled: auth.disabled,
+            disabled_reason: auth.disabled_reason.clone(),
             source: auth.source.clone(),
             source_db_path: auth.source_db_path.clone(),
             last_imported_at: auth.last_imported_at,
@@ -418,6 +425,30 @@ impl KiroAccountView {
             balance,
             cache,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_view_surfaces_disabled_reason() {
+        let auth = KiroAuthRecord {
+            name: "alpha".to_string(),
+            disabled: true,
+            disabled_reason: Some("invalid_refresh_token".to_string()),
+            ..KiroAuthRecord::default()
+        };
+        let view = KiroAccountView::from_auth(
+            &auth,
+            "direct".to_string(),
+            None,
+            None,
+            None,
+            KiroCacheView::default(),
+        );
+        assert_eq!(view.disabled_reason.as_deref(), Some("invalid_refresh_token"));
     }
 }
 

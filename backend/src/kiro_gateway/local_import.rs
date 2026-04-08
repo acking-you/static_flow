@@ -129,6 +129,7 @@ fn import_from_sqlite_blocking(
         proxy_username: None,
         proxy_password: None,
         disabled: false,
+        disabled_reason: None,
         source: Some("kiro-cli".to_string()),
         source_db_path: Some(path.display().to_string()),
         last_imported_at: Some(Utc::now().timestamp_millis()),

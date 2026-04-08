@@ -116,6 +116,11 @@ pub struct KiroAuthRecord {
     /// Whether this account is disabled and should be skipped during selection.
     #[serde(default)]
     pub disabled: bool,
+    /// Structured reason describing why this account is disabled. `None`
+    /// means the account is enabled, or the disable action predates reason
+    /// tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
     /// Origin label indicating where this record was imported from (e.g.
     /// `"llm_gateway"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,6 +161,9 @@ impl KiroAuthRecord {
             .minimum_remaining_credits_before_block
             .filter(|value| value.is_finite())
             .map(|value| value.max(0.0));
+        if !self.disabled {
+            self.disabled_reason = None;
+        }
         self.proxy_mode = self.proxy_selection().proxy_mode;
         self.proxy_config_id = self.proxy_selection().proxy_config_id;
         self
