@@ -2483,11 +2483,13 @@ mod tests {
         mode: KiroCacheSimulationMode,
         matched_tokens: u64,
     ) -> KiroSimulationRequestContext {
-        let mut runtime_config = LlmGatewayRuntimeConfig::default();
-        runtime_config.kiro_cache_kmodels = sample_kmodels();
-        runtime_config.kiro_prefix_cache_mode = match mode {
-            KiroCacheSimulationMode::Formula => "formula".to_string(),
-            KiroCacheSimulationMode::PrefixTree => "prefix_tree".to_string(),
+        let runtime_config = LlmGatewayRuntimeConfig {
+            kiro_cache_kmodels: sample_kmodels(),
+            kiro_prefix_cache_mode: match mode {
+                KiroCacheSimulationMode::Formula => "formula".to_string(),
+                KiroCacheSimulationMode::PrefixTree => "prefix_tree".to_string(),
+            },
+            ..LlmGatewayRuntimeConfig::default()
         };
         let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
         let projection = PromptProjection::from_conversation_state(
