@@ -262,6 +262,20 @@ impl Default for PrefixNode {
     }
 }
 
+impl Drop for PrefixNode {
+    fn drop(&mut self) {
+        // Deep prefix paths can legitimately reach tens of thousands of pages.
+        // Clearing children iteratively prevents subtree destruction from
+        // recursing on the thread stack when a large branch is evicted.
+        let mut stack = std::mem::take(&mut self.children)
+            .into_values()
+            .collect::<Vec<_>>();
+        while let Some(mut child) = stack.pop() {
+            stack.extend(std::mem::take(&mut child.children).into_values());
+        }
+    }
+}
+
 impl PrefixNode {
     fn new(token_count: u64, now: Instant) -> Self {
         Self {
@@ -422,81 +436,167 @@ fn insert_prefix_path(node: &mut PrefixNode, pages: &[CanonicalTokenPage], now: 
 }
 
 fn prune_expired_children(node: &mut PrefixNode, now: Instant, ttl: Duration) -> u64 {
-    let expired_keys = node
-        .children
-        .iter()
-        .filter(|(_, child)| now.duration_since(child.last_touched_at) > ttl)
-        .map(|(key, _)| *key)
-        .collect::<Vec<_>>();
     let mut removed_tokens: u64 = 0;
-    for key in expired_keys {
-        if let Some(child) = node.children.remove(&key) {
-            removed_tokens = removed_tokens.saturating_add(subtree_token_count(&child));
+    let mut stack = vec![(node as *mut PrefixNode, false)];
+
+    // We use an explicit DFS stack so prefix paths with tens of thousands of
+    // pages never recurse on the thread stack. The raw pointers all originate
+    // from the unique mutable borrow of `node`, and a node is only removed
+    // after its children have already been processed.
+    // SAFETY: every pointer in `stack` comes from the unique mutable borrow of
+    // `node`. A node is only detached from its parent after all of its
+    // descendants have already been processed, so no queued pointer can dangle.
+    unsafe {
+        while let Some((node_ptr, visited_children)) = stack.pop() {
+            let current = &mut *node_ptr;
+            if !visited_children {
+                stack.push((node_ptr, true));
+                for child in current.children.values_mut() {
+                    stack.push((child as *mut PrefixNode, false));
+                }
+                continue;
+            }
+
+            let expired_keys = current
+                .children
+                .iter()
+                .filter(|(_, child)| now.duration_since(child.last_touched_at) > ttl)
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>();
+            for key in expired_keys {
+                if let Some(child) = current.children.remove(&key) {
+                    removed_tokens = removed_tokens.saturating_add(subtree_token_count(&child));
+                }
+            }
         }
     }
-    for child in node.children.values_mut() {
-        removed_tokens = removed_tokens.saturating_add(prune_expired_children(child, now, ttl));
-    }
+
     removed_tokens
 }
 
 fn subtree_token_count(node: &PrefixNode) -> u64 {
-    node.token_count + node.children.values().map(subtree_token_count).sum::<u64>()
+    let mut total: u64 = 0;
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        total = total.saturating_add(current.token_count);
+        stack.extend(current.children.values());
+    }
+    total
 }
 
 fn find_coldest_leaf_path(node: &PrefixNode) -> Option<Vec<u128>> {
+    struct Frame<'a> {
+        node: &'a PrefixNode,
+        child_keys: Vec<u128>,
+        next_child: usize,
+    }
+
     let mut best: Option<(Instant, Vec<u128>)> = None;
-    find_coldest_leaf_path_inner(node, &mut Vec::new(), &mut best);
+    let mut path = Vec::<u128>::new();
+    let mut stack = vec![Frame {
+        node,
+        child_keys: node.children.keys().copied().collect(),
+        next_child: 0,
+    }];
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.child_keys.is_empty() {
+            if !path.is_empty() {
+                match &best {
+                    Some((current_oldest, _)) if frame.node.last_touched_at >= *current_oldest => {
+                    },
+                    _ => best = Some((frame.node.last_touched_at, path.clone())),
+                }
+            }
+            stack.pop();
+            if !path.is_empty() {
+                path.pop();
+            }
+            continue;
+        }
+
+        if frame.next_child >= frame.child_keys.len() {
+            stack.pop();
+            if !path.is_empty() {
+                path.pop();
+            }
+            continue;
+        }
+
+        let page_key = frame.child_keys[frame.next_child];
+        frame.next_child += 1;
+        let child = frame
+            .node
+            .children
+            .get(&page_key)
+            .expect("frame child key should resolve");
+        path.push(page_key);
+        stack.push(Frame {
+            node: child,
+            child_keys: child.children.keys().copied().collect(),
+            next_child: 0,
+        });
+    }
+
     best.map(|(_, path)| path)
 }
 
-fn find_coldest_leaf_path_inner(
-    node: &PrefixNode,
-    path: &mut Vec<u128>,
-    best: &mut Option<(Instant, Vec<u128>)>,
-) {
-    if node.children.is_empty() {
-        if !path.is_empty() {
-            match best {
-                Some((current_oldest, _)) if node.last_touched_at >= *current_oldest => {},
-                _ => *best = Some((node.last_touched_at, path.clone())),
-            }
-        }
-        return;
-    }
-    for (page_key, child) in &node.children {
-        path.push(*page_key);
-        find_coldest_leaf_path_inner(child, path, best);
-        path.pop();
-    }
-}
-
 fn remove_leaf_path(node: &mut PrefixNode, path: &[u128]) -> u64 {
-    remove_leaf_path_inner(node, path).1
-}
+    if path.is_empty() {
+        return 0;
+    }
 
-fn remove_leaf_path_inner(node: &mut PrefixNode, path: &[u128]) -> (bool, u64) {
-    let Some((first, rest)) = path.split_first() else {
-        return (false, 0);
-    };
-    let Some(child) = node.children.get_mut(first) else {
-        return (false, 0);
-    };
-    if rest.is_empty() {
-        let removed = subtree_token_count(child);
-        node.children.remove(first);
-        return (node.children.is_empty(), removed);
+    let mut lineage = Vec::with_capacity(path.len());
+    let mut current_ptr = node as *mut PrefixNode;
+
+    // The lineage stores each parent pointer plus the child key used to descend
+    // one level. This lets us prune empty ancestors iteratively on the way back
+    // up without recursive calls.
+    // SAFETY: `lineage` stores parent pointers discovered by walking the tree
+    // from the exclusive mutable root borrow. We only remove descendants while
+    // walking back up that exact lineage, so each pointer remains valid until
+    // the moment its corresponding child entry is removed.
+    unsafe {
+        for key in path {
+            let current = &mut *current_ptr;
+            let Some(child) = current.children.get_mut(key) else {
+                return 0;
+            };
+            lineage.push((current_ptr, *key));
+            current_ptr = child as *mut PrefixNode;
+        }
+
+        let removed_subtree_tokens = subtree_token_count(&*current_ptr);
+        if removed_subtree_tokens == 0 {
+            return 0;
+        }
+
+        let (leaf_parent_ptr, leaf_key) = *lineage
+            .last()
+            .expect("non-empty path should always record one lineage entry");
+        let leaf_parent = &mut *leaf_parent_ptr;
+        if leaf_parent.children.remove(&leaf_key).is_none() {
+            return 0;
+        }
+
+        let mut removed_tokens = removed_subtree_tokens;
+        for &(parent_ptr, child_key) in lineage[..lineage.len().saturating_sub(1)].iter().rev() {
+            let parent = &mut *parent_ptr;
+            let Some(child) = parent.children.get(&child_key) else {
+                break;
+            };
+            if !child.children.is_empty() {
+                break;
+            }
+            let ancestor_token_count = child.token_count;
+            if parent.children.remove(&child_key).is_none() {
+                break;
+            }
+            removed_tokens = removed_tokens.saturating_add(ancestor_token_count);
+        }
+
+        removed_tokens
     }
-    let (prune_child, removed) = remove_leaf_path_inner(child, rest);
-    if prune_child {
-        let child_removed = node
-            .children
-            .remove(first)
-            .map(|child| child.token_count)
-            .unwrap_or_default();
-        return (node.children.is_empty(), removed.saturating_add(child_removed));
-    }
-    (false, removed)
 }
 
 fn canonicalize_history(history: &[Message]) -> Vec<CanonicalInputUnit> {
@@ -1100,5 +1200,28 @@ mod tests {
             ),
             Some("real-conv".to_string())
         );
+    }
+
+    #[test]
+    fn prefix_tree_handles_deep_paths_without_recursive_helpers() {
+        let depth = 20_000usize;
+        let pages = (0..depth)
+            .map(|index| CanonicalTokenPage {
+                key: index as u128 + 1,
+                token_count: 64,
+            })
+            .collect::<Vec<_>>();
+        let mut tree = PrefixTree::default();
+        let now = Instant::now();
+        let ttl = Duration::from_secs(300);
+
+        tree.insert(&pages, now, ttl, u64::MAX);
+        let matched = tree.match_prefix(&pages, now + Duration::from_secs(1), ttl);
+        assert_eq!(matched.matched_pages, depth);
+        assert_eq!(matched.matched_tokens, depth as u64 * 64);
+
+        tree.prune_expired(now + ttl + Duration::from_secs(2), ttl);
+        assert_eq!(tree.resident_tokens, 0);
+        assert!(tree.root.children.is_empty());
     }
 }
