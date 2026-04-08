@@ -214,10 +214,11 @@ impl KiroCacheSimulator {
         projection: &PromptProjection,
         assistant_message: &AssistantMessage,
         conversation_id: &str,
+        record_prefix_tree: bool,
         config: KiroCacheSimulationConfig,
         now: Instant,
     ) {
-        if matches!(config.mode, KiroCacheSimulationMode::PrefixTree) {
+        if record_prefix_tree && matches!(config.mode, KiroCacheSimulationMode::PrefixTree) {
             let mut tree = self.prefix_tree.lock();
             tree.insert(
                 &projection.stable_prefix_pages,
@@ -999,7 +1000,7 @@ mod tests {
         };
         let now = Instant::now();
 
-        simulator.record_success(&projection, &assistant, "real-conv", config, now);
+        simulator.record_success(&projection, &assistant, "real-conv", true, config, now);
         let matched = simulator.match_prefix(&projection, config, now + Duration::from_secs(1));
 
         assert_eq!(matched.matched_pages, projection.stable_prefix_pages.len());
@@ -1025,7 +1026,7 @@ mod tests {
             conversation_anchor_ttl: Duration::from_secs(300),
         };
         let now = Instant::now();
-        simulator.record_success(&projection, &assistant, "real-conv", config, now);
+        simulator.record_success(&projection, &assistant, "real-conv", true, config, now);
 
         let follow_up_state = ConversationState::new("new-fallback")
             .with_history(vec![
@@ -1042,6 +1043,55 @@ mod tests {
             )));
         let follow_up_projection = PromptProjection::from_conversation_state(&follow_up_state);
 
+        assert_eq!(
+            simulator.recover_conversation_id(
+                &follow_up_projection,
+                config,
+                now + Duration::from_secs(1)
+            ),
+            Some("real-conv".to_string())
+        );
+    }
+
+    #[test]
+    fn cache_simulator_can_record_anchor_without_warming_prefix_tree() {
+        let initial_state = ConversationState::new("fallback-conv")
+            .with_history(vec![history_user("existing history"), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "continue analysis",
+                "ignored-model",
+            )));
+        let projection = PromptProjection::from_conversation_state(&initial_state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let simulator = KiroCacheSimulator::default();
+        let config = KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::PrefixTree,
+            prefix_cache_max_tokens: 100_000,
+            prefix_cache_entry_ttl: Duration::from_secs(300),
+            conversation_anchor_max_entries: 32,
+            conversation_anchor_ttl: Duration::from_secs(300),
+        };
+        let now = Instant::now();
+
+        simulator.record_success(&projection, &assistant, "real-conv", false, config, now);
+
+        let matched = simulator.match_prefix(&projection, config, now + Duration::from_secs(1));
+        assert_eq!(matched, PrefixCacheMatch::default());
+
+        let follow_up_state = ConversationState::new("new-fallback")
+            .with_history(vec![
+                history_user("existing history"),
+                history_assistant("done"),
+                Message::User(HistoryUserMessage::new("continue analysis", "ignored-model")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant.clone(),
+                }),
+            ])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next step",
+                "ignored-model",
+            )));
+        let follow_up_projection = PromptProjection::from_conversation_state(&follow_up_state);
         assert_eq!(
             simulator.recover_conversation_id(
                 &follow_up_projection,

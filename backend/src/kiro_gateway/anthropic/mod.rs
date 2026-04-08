@@ -196,16 +196,12 @@ fn prepare_simulation_request_context(
     state: &AppState,
     conversation_state: ConversationState,
     session_tracking: SessionTracking,
+    cache_estimation_enabled: bool,
 ) -> (ConversationState, SessionTracking, KiroSimulationRequestContext) {
     let runtime_config = state.llm_gateway_runtime_config.read().clone();
     let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
     let projection = PromptProjection::from_conversation_state(&conversation_state);
     let now = std::time::Instant::now();
-    let prefix_cache_match =
-        state
-            .kiro_gateway
-            .cache_simulator
-            .match_prefix(&projection, simulation_config, now);
     let (conversation_state, session_tracking) = maybe_recover_conversation_id_from_anchor(
         state,
         conversation_state,
@@ -214,6 +210,15 @@ fn prepare_simulation_request_context(
         simulation_config,
         now,
     );
+    let prefix_cache_match =
+        if should_run_prefix_cache_match(cache_estimation_enabled, simulation_config.mode) {
+            state
+                .kiro_gateway
+                .cache_simulator
+                .match_prefix(&projection, simulation_config, now)
+        } else {
+            PrefixCacheMatch::default()
+        };
     let simulation = KiroSimulationRequestContext {
         runtime_config,
         simulation_config,
@@ -222,6 +227,13 @@ fn prepare_simulation_request_context(
         conversation_id: conversation_state.conversation_id.clone(),
     };
     (conversation_state, session_tracking, simulation)
+}
+
+fn should_run_prefix_cache_match(
+    cache_estimation_enabled: bool,
+    simulation_mode: KiroCacheSimulationMode,
+) -> bool {
+    cache_estimation_enabled && matches!(simulation_mode, KiroCacheSimulationMode::PrefixTree)
 }
 
 fn log_simulation_request_context(
@@ -238,6 +250,8 @@ fn log_simulation_request_context(
         .min(projected_total);
     let matched_ratio_basis_points =
         ((u128::from(matched_tokens) * 10_000) / u128::from(projected_total)) as u64;
+    let prefix_cache_active =
+        should_run_prefix_cache_match(cache_estimation_enabled, simulation.simulation_config.mode);
     tracing::info!(
         key_id = %key_record.id,
         key_name = %key_record.name,
@@ -248,6 +262,7 @@ fn log_simulation_request_context(
         buffered_for_cc = ctx.buffered_for_cc,
         request_validation_enabled = ctx.request_validation_enabled,
         cache_estimation_enabled,
+        prefix_cache_active,
         cache_simulation_mode = match simulation.simulation_config.mode {
             KiroCacheSimulationMode::Formula => "formula",
             KiroCacheSimulationMode::PrefixTree => "prefix_tree",
@@ -261,7 +276,7 @@ fn log_simulation_request_context(
         matched_page_count = simulation.prefix_cache_match.matched_pages,
         matched_token_count = simulation.prefix_cache_match.matched_tokens,
         matched_ratio_basis_points,
-        "prepared kiro cache simulation context before upstream call"
+        "prepared kiro request context before upstream call"
     );
 }
 
@@ -974,11 +989,14 @@ fn build_assistant_message(content: String, tool_uses: Vec<ToolUseEntry>) -> Ass
 fn record_successful_kiro_prefix_state(
     state: &AppState,
     simulation: &KiroSimulationRequestContext,
+    cache_estimation_enabled: bool,
     assistant_message: &AssistantMessage,
 ) {
     let resume_anchor_hash = simulation
         .projection
         .build_resume_anchor_hash(assistant_message);
+    let prefix_tree_write_enabled =
+        should_run_prefix_cache_match(cache_estimation_enabled, simulation.simulation_config.mode);
     tracing::info!(
         cache_simulation_mode = match simulation.simulation_config.mode {
             KiroCacheSimulationMode::Formula => "formula",
@@ -988,15 +1006,17 @@ fn record_successful_kiro_prefix_state(
         stable_prefix_page_count = simulation.projection.stable_prefix_pages.len(),
         stable_prefix_token_count = simulation.projection.stable_prefix_token_count(),
         projected_input_token_count = simulation.projection.projected_input_token_count,
-        prefix_tree_write_enabled =
-            matches!(simulation.simulation_config.mode, KiroCacheSimulationMode::PrefixTree),
+        cache_estimation_enabled,
+        prefix_tree_write_enabled,
+        anchor_write_enabled = true,
         resume_anchor_preview = preview_session_value(&resume_anchor_hash),
-        "recording successful kiro prefix state into shared cache simulator"
+        "recording successful kiro request state into shared session/cache stores"
     );
     state.kiro_gateway.cache_simulator.record_success(
         &simulation.projection,
         assistant_message,
         &simulation.conversation_id,
+        prefix_tree_write_enabled,
         simulation.simulation_config,
         std::time::Instant::now(),
     );
@@ -1317,6 +1337,7 @@ async fn handle_messages(
         &state,
         conversion.conversation_state,
         conversion.session_tracking,
+        key_record.kiro_cache_estimation_enabled,
     );
     event_context.conversation_id = Some(conversation_state.conversation_id.clone());
     event_context.session_resolution =
@@ -1818,7 +1839,12 @@ async fn handle_non_stream_request(
         usage_output_tokens = usage.output_tokens,
         "finished kiro non-stream request"
     );
-    record_successful_kiro_prefix_state(&state, &request_ctx.simulation, &assistant_message);
+    record_successful_kiro_prefix_state(
+        &state,
+        &request_ctx.simulation,
+        key_record.kiro_cache_estimation_enabled,
+        &assistant_message,
+    );
     if let Err(err) = record_messages_usage(&state, &key_record, &event_context, usage, false).await
     {
         tracing::warn!("failed to persist kiro usage event: {err:#}");
@@ -2114,6 +2140,7 @@ fn create_sse_stream(
                 record_successful_kiro_prefix_state(
                     &request_ctx.state,
                     &request_ctx.simulation,
+                    request_ctx.cache_estimation_enabled,
                     &assistant_message,
                 );
             }
@@ -2296,6 +2323,7 @@ fn create_buffered_sse_stream(
                 record_successful_kiro_prefix_state(
                     &request_ctx.state,
                     &request_ctx.simulation,
+                    request_ctx.cache_estimation_enabled,
                     &assistant_message,
                 );
             }
@@ -2991,6 +3019,7 @@ mod tests {
             &projection,
             &assistant,
             "real-conv",
+            true,
             simulation_config,
             now,
         );
@@ -3027,6 +3056,91 @@ mod tests {
             session_tracking.source,
             SessionIdSource::RecoveredAnchor(SessionFallbackReason::MissingMetadata)
         );
+
+        let _ = tokio::fs::remove_dir_all(&temp_root).await;
+    }
+
+    #[tokio::test]
+    async fn disabled_cache_estimation_skips_prefix_match_but_keeps_anchor_recovery() {
+        let temp_root = std::env::temp_dir()
+            .join(format!("staticflow-kiro-disabled-cache-test-{}", uuid::Uuid::new_v4()));
+        let content_db = temp_root.join("lancedb");
+        let comments_db = temp_root.join("lancedb-comments");
+        let music_db = temp_root.join("lancedb-music");
+        tokio::fs::create_dir_all(&content_db)
+            .await
+            .expect("content db dir should be created");
+        tokio::fs::create_dir_all(&comments_db)
+            .await
+            .expect("comments db dir should be created");
+        tokio::fs::create_dir_all(&music_db)
+            .await
+            .expect("music db dir should be created");
+
+        let state = AppState::new(
+            &content_db.to_string_lossy(),
+            &comments_db.to_string_lossy(),
+            &music_db.to_string_lossy(),
+            "<html></html>".to_string(),
+        )
+        .await
+        .expect("app state should initialize");
+
+        {
+            let mut runtime_config = state.llm_gateway_runtime_config.write();
+            runtime_config.kiro_prefix_cache_mode = "prefix_tree".to_string();
+        }
+
+        let initial_state = ConversationState::new("fallback-conv")
+            .with_history(vec![history_user("existing history"), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "continue analysis",
+                "ignored-model",
+            )));
+        let projection = PromptProjection::from_conversation_state(&initial_state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let runtime_config = state.llm_gateway_runtime_config.read().clone();
+        let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
+        let now = std::time::Instant::now();
+        state.kiro_gateway.cache_simulator.record_success(
+            &projection,
+            &assistant,
+            "real-conv",
+            false,
+            simulation_config,
+            now,
+        );
+
+        let follow_up_state = ConversationState::new("new-fallback")
+            .with_history(vec![
+                history_user("existing history"),
+                history_assistant("done"),
+                Message::User(HistoryUserMessage::new("continue analysis", "ignored-model")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant.clone(),
+                }),
+            ])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next step",
+                "ignored-model",
+            )));
+        let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
+            &state,
+            follow_up_state,
+            SessionTracking {
+                source: SessionIdSource::GeneratedFallback(SessionFallbackReason::MissingMetadata),
+                source_name: None,
+                source_value_preview: None,
+            },
+            false,
+        );
+
+        assert_eq!(conversation_state.conversation_id, "real-conv");
+        assert_eq!(
+            session_tracking.source,
+            SessionIdSource::RecoveredAnchor(SessionFallbackReason::MissingMetadata)
+        );
+        assert_eq!(simulation.prefix_cache_match, PrefixCacheMatch::default());
 
         let _ = tokio::fs::remove_dir_all(&temp_root).await;
     }
