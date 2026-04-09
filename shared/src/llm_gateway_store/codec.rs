@@ -17,16 +17,18 @@ use arrow_array::{
 
 use super::{
     schema::{
-        llm_gateway_account_contribution_requests_schema, llm_gateway_keys_schema,
-        llm_gateway_proxy_bindings_schema, llm_gateway_proxy_configs_schema,
-        llm_gateway_runtime_config_schema, llm_gateway_sponsor_requests_schema,
-        llm_gateway_token_requests_schema, llm_gateway_usage_events_schema,
+        llm_gateway_account_contribution_requests_schema, llm_gateway_account_groups_schema,
+        llm_gateway_keys_schema, llm_gateway_proxy_bindings_schema,
+        llm_gateway_proxy_configs_schema, llm_gateway_runtime_config_schema,
+        llm_gateway_sponsor_requests_schema, llm_gateway_token_requests_schema,
+        llm_gateway_usage_events_schema,
     },
     types::{
         compute_billable_tokens, default_kiro_cache_kmodels_json,
-        LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-        LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
-        LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        LlmGatewayAccountContributionRequestRecord, LlmGatewayAccountGroupRecord,
+        LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
+        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
+        LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
@@ -72,6 +74,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut route_strategy = StringBuilder::new();
     let mut fixed_account_name = StringBuilder::new();
     let mut auto_account_names_json = StringBuilder::new();
+    let mut account_group_id = StringBuilder::new();
     let mut model_name_map_json = StringBuilder::new();
     let mut request_max_concurrency = UInt64Builder::new();
     let mut request_min_start_interval_ms = UInt64Builder::new();
@@ -103,6 +106,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
             &mut auto_account_names_json,
             serialize_string_vec_json(record.auto_account_names.as_deref())?.as_deref(),
         );
+        append_optional_str(&mut account_group_id, record.account_group_id.as_deref());
         append_optional_str(
             &mut model_name_map_json,
             serialize_string_map_json(record.model_name_map.as_ref())?.as_deref(),
@@ -138,6 +142,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(route_strategy.finish()),
         Arc::new(fixed_account_name.finish()),
         Arc::new(auto_account_names_json.finish()),
+        Arc::new(account_group_id.finish()),
         Arc::new(model_name_map_json.finish()),
         Arc::new(request_max_concurrency.finish()),
         Arc::new(request_min_start_interval_ms.finish()),
@@ -245,6 +250,40 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(created_at.finish()),
     ])
     .context("failed to build llm gateway usage events batch")
+}
+
+/// Serialize a slice of [`LlmGatewayAccountGroupRecord`] into an Arrow
+/// [`RecordBatch`].
+pub fn build_account_groups_batch(records: &[LlmGatewayAccountGroupRecord]) -> Result<RecordBatch> {
+    let schema = llm_gateway_account_groups_schema();
+    let mut id = StringBuilder::new();
+    let mut provider_type = StringBuilder::new();
+    let mut name = StringBuilder::new();
+    let mut account_names_json = StringBuilder::new();
+    let mut created_at = TimestampMillisecondBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        id.append_value(&record.id);
+        provider_type.append_value(&record.provider_type);
+        name.append_value(&record.name);
+        account_names_json.append_value(
+            serde_json::to_string(&record.account_names)
+                .context("failed to serialize llm gateway account group members")?,
+        );
+        created_at.append_value(record.created_at);
+        updated_at.append_value(record.updated_at);
+    }
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(id.finish()) as ArrayRef,
+        Arc::new(provider_type.finish()),
+        Arc::new(name.finish()),
+        Arc::new(account_names_json.finish()),
+        Arc::new(created_at.finish()),
+        Arc::new(updated_at.finish()),
+    ])
+    .context("failed to build llm gateway account groups batch")
 }
 
 /// Serialize a slice of [`LlmGatewayRuntimeConfigRecord`] into an Arrow
@@ -641,6 +680,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let auto_account_names_json = batch
             .column_by_name("auto_account_names_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let account_group_id = batch
+            .column_by_name("account_group_id")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let model_name_map_json = batch
             .column_by_name("model_name_map_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -699,6 +741,7 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                         .and_then(|col| value_string_opt(col, idx))
                         .as_deref(),
                 )?,
+                account_group_id: account_group_id.and_then(|col| value_string_opt(col, idx)),
                 model_name_map: parse_string_map_json_opt(
                     model_name_map_json
                         .and_then(|col| value_string_opt(col, idx))
@@ -714,6 +757,36 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 kiro_cache_estimation_enabled: kiro_cache_estimation_enabled
                     .and_then(|column| value_bool_opt(column, idx))
                     .unwrap_or(true),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Decode Arrow [`RecordBatch`]es back into [`LlmGatewayAccountGroupRecord`]
+/// rows.
+pub fn batches_to_account_groups(
+    batches: &[RecordBatch],
+) -> Result<Vec<LlmGatewayAccountGroupRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let id = required_str_col(batch, "id")?;
+        let provider_type = required_str_col(batch, "provider_type")?;
+        let name = required_str_col(batch, "name")?;
+        let account_names_json = required_str_col(batch, "account_names_json")?;
+        let created_at = required_ts_col(batch, "created_at")?;
+        let updated_at = required_ts_col(batch, "updated_at")?;
+
+        for idx in 0..batch.num_rows() {
+            let account_names: Vec<String> = serde_json::from_str(account_names_json.value(idx))
+                .context("failed to decode llm gateway account group members")?;
+            rows.push(LlmGatewayAccountGroupRecord {
+                id: id.value(idx).to_string(),
+                provider_type: provider_type.value(idx).to_string(),
+                name: name.value(idx).to_string(),
+                account_names,
+                created_at: created_at.value(idx),
+                updated_at: updated_at.value(idx),
             });
         }
     }

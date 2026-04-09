@@ -4347,6 +4347,7 @@ pub struct AdminLlmGatewayKeyView {
     pub created_at: i64,
     pub updated_at: i64,
     pub route_strategy: Option<String>,
+    pub account_group_id: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
     pub model_name_map: Option<BTreeMap<String, String>>,
@@ -4364,6 +4365,24 @@ pub struct AdminLlmGatewayKeyView {
 pub struct AdminLlmGatewayKeysResponse {
     pub keys: Vec<AdminLlmGatewayKeyView>,
     pub auth_cache_ttl_seconds: u64,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminAccountGroupView {
+    pub id: String,
+    pub provider_type: String,
+    pub name: String,
+    pub account_names: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminAccountGroupsResponse {
+    pub groups: Vec<AdminAccountGroupView>,
     pub generated_at: i64,
 }
 
@@ -5604,6 +5623,165 @@ pub async fn fetch_admin_llm_gateway_keys() -> Result<AdminLlmGatewayKeysRespons
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct CreateAdminAccountGroupInput<'a> {
+    pub name: &'a str,
+    pub account_names: &'a [String],
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PatchAdminAccountGroupInput<'a> {
+    pub name: Option<&'a str>,
+    pub account_names: Option<&'a [String]>,
+}
+
+pub async fn fetch_admin_llm_gateway_account_groups() -> Result<AdminAccountGroupsResponse, String>
+{
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAccountGroupsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/account-groups", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn create_admin_llm_gateway_account_group(
+    input: CreateAdminAccountGroupInput<'_>,
+) -> Result<AdminAccountGroupView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAccountGroupView {
+            id: "mock-group".to_string(),
+            provider_type: "codex".to_string(),
+            name: input.name.to_string(),
+            account_names: input.account_names.to_vec(),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/account-groups", admin_base());
+        let response = api_post(&url)
+            .json(&serde_json::json!({
+                "name": input.name,
+                "account_names": input.account_names,
+            }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_llm_gateway_account_group(
+    group_id: &str,
+    input: PatchAdminAccountGroupInput<'_>,
+) -> Result<AdminAccountGroupView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAccountGroupView {
+            id: group_id.to_string(),
+            provider_type: "codex".to_string(),
+            name: input.name.unwrap_or("mock").to_string(),
+            account_names: input
+                .account_names
+                .map(|value| value.to_vec())
+                .unwrap_or_default(),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/account-groups/{}",
+            admin_base(),
+            urlencoding::encode(group_id)
+        );
+        let mut body = serde_json::Map::new();
+        if let Some(name) = input.name.map(str::trim).filter(|value| !value.is_empty()) {
+            body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+        }
+        if let Some(account_names) = input.account_names {
+            body.insert(
+                "account_names".to_string(),
+                serde_json::Value::Array(
+                    account_names
+                        .iter()
+                        .map(|value| serde_json::Value::String(value.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        let response = api_patch(&url)
+            .json(&serde_json::Value::Object(body))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_llm_gateway_account_group(group_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = group_id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/account-groups/{}",
+            admin_base(),
+            urlencoding::encode(group_id)
+        );
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
 /// Fetch admin token wishes for review / issuance.
 pub async fn fetch_admin_llm_gateway_token_requests(
     query: &AdminLlmGatewayTokenRequestsQuery,
@@ -5780,6 +5958,7 @@ pub async fn create_admin_llm_gateway_key(
             created_at: 0,
             updated_at: 0,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -5823,6 +6002,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub public_visible: Option<bool>,
     pub quota_billable_limit: Option<u64>,
     pub route_strategy: Option<&'a str>,
+    pub account_group_id: Option<&'a str>,
     pub fixed_account_name: Option<&'a str>,
     pub auto_account_names: Option<&'a [String]>,
     pub model_name_map: Option<&'a BTreeMap<String, String>>,
@@ -5847,6 +6027,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.public_visible,
             request.quota_billable_limit,
             request.route_strategy,
+            request.account_group_id,
             request.fixed_account_name,
             request.auto_account_names,
             request.model_name_map,
@@ -5892,6 +6073,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "route_strategy".to_string(),
                 serde_json::Value::String(strategy.to_string()),
+            );
+        }
+        if let Some(group_id) = request.account_group_id {
+            body.insert(
+                "account_group_id".to_string(),
+                serde_json::Value::String(group_id.to_string()),
             );
         }
         if let Some(account_name) = request.fixed_account_name {
@@ -6779,6 +6966,152 @@ pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, Stri
     }
 }
 
+pub async fn fetch_admin_kiro_account_groups() -> Result<AdminAccountGroupsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAccountGroupsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/account-groups", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn create_admin_kiro_account_group(
+    input: CreateAdminAccountGroupInput<'_>,
+) -> Result<AdminAccountGroupView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAccountGroupView {
+            id: "mock-kiro-group".to_string(),
+            provider_type: "kiro".to_string(),
+            name: input.name.to_string(),
+            account_names: input.account_names.to_vec(),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/account-groups", admin_base());
+        let response = api_post(&url)
+            .json(&serde_json::json!({
+                "name": input.name,
+                "account_names": input.account_names,
+            }))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_kiro_account_group(
+    group_id: &str,
+    input: PatchAdminAccountGroupInput<'_>,
+) -> Result<AdminAccountGroupView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAccountGroupView {
+            id: group_id.to_string(),
+            provider_type: "kiro".to_string(),
+            name: input.name.unwrap_or("mock").to_string(),
+            account_names: input
+                .account_names
+                .map(|value| value.to_vec())
+                .unwrap_or_default(),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/account-groups/{}",
+            admin_base(),
+            urlencoding::encode(group_id)
+        );
+        let mut body = serde_json::Map::new();
+        if let Some(name) = input.name.map(str::trim).filter(|value| !value.is_empty()) {
+            body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+        }
+        if let Some(account_names) = input.account_names {
+            body.insert(
+                "account_names".to_string(),
+                serde_json::Value::Array(
+                    account_names
+                        .iter()
+                        .map(|value| serde_json::Value::String(value.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        let response = api_patch(&url)
+            .json(&serde_json::Value::Object(body))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_kiro_account_group(group_id: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = group_id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/account-groups/{}",
+            admin_base(),
+            urlencoding::encode(group_id)
+        );
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
 pub async fn create_admin_kiro_key(
     name: &str,
     quota_billable_limit: u64,
@@ -6804,6 +7137,7 @@ pub async fn create_admin_kiro_key(
             created_at: 0,
             updated_at: 0,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -6850,6 +7184,7 @@ pub async fn patch_admin_kiro_key(
             request.public_visible,
             request.quota_billable_limit,
             request.route_strategy,
+            request.account_group_id,
             request.fixed_account_name,
             request.auto_account_names,
             request.model_name_map,
@@ -6895,6 +7230,12 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "route_strategy".to_string(),
                 serde_json::Value::String(strategy.to_string()),
+            );
+        }
+        if let Some(group_id) = request.account_group_id {
+            body.insert(
+                "account_group_id".to_string(),
+                serde_json::Value::String(group_id.to_string()),
             );
         }
         if let Some(account_name) = request.fixed_account_name {

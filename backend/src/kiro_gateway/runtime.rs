@@ -81,6 +81,7 @@ pub struct CallContext {
 /// state.
 #[derive(Clone)]
 pub struct KiroGatewayRuntimeState {
+    pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
     pub(crate) token_manager: Arc<KiroTokenManager>,
     pub(crate) status_cache: Arc<RwLock<KiroStatusCacheSnapshot>>,
     pub(crate) request_scheduler: Arc<KiroRequestScheduler>,
@@ -93,7 +94,7 @@ impl KiroGatewayRuntimeState {
     /// Construct the shared Kiro runtime and migrate any legacy global
     /// scheduler defaults into account-local settings.
     pub async fn new(
-        _store: Arc<LlmGatewayStore>,
+        store: Arc<LlmGatewayStore>,
         runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
         upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     ) -> Result<Self> {
@@ -115,6 +116,7 @@ impl KiroGatewayRuntimeState {
             );
         }
         Ok(Self {
+            llm_gateway_store: store,
             token_manager,
             status_cache: Arc::new(RwLock::new(KiroStatusCacheSnapshot::default())),
             request_scheduler: KiroRequestScheduler::new(),

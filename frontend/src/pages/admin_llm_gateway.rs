@@ -14,28 +14,30 @@ use crate::{
         admin_approve_llm_gateway_sponsor_request,
         admin_reject_llm_gateway_account_contribution_request,
         admin_reject_llm_gateway_token_request, check_admin_llm_gateway_proxy_config,
-        create_admin_llm_gateway_key, create_admin_llm_gateway_proxy_config,
-        delete_admin_llm_gateway_account, delete_admin_llm_gateway_key,
+        create_admin_llm_gateway_account_group, create_admin_llm_gateway_key,
+        create_admin_llm_gateway_proxy_config, delete_admin_llm_gateway_account,
+        delete_admin_llm_gateway_account_group, delete_admin_llm_gateway_key,
         delete_admin_llm_gateway_proxy_config, delete_admin_llm_gateway_sponsor_request,
-        fetch_admin_llm_gateway_account_contribution_requests, fetch_admin_llm_gateway_accounts,
+        fetch_admin_llm_gateway_account_contribution_requests,
+        fetch_admin_llm_gateway_account_groups, fetch_admin_llm_gateway_accounts,
         fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_keys,
         fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
         fetch_admin_llm_gateway_sponsor_requests, fetch_admin_llm_gateway_token_requests,
         fetch_admin_llm_gateway_usage_events, import_admin_legacy_kiro_proxy_configs,
         import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
-        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
-        refresh_admin_llm_gateway_account, update_admin_llm_gateway_config,
-        update_admin_llm_gateway_proxy_binding, AccountSummaryView,
-        AdminLlmGatewayAccountContributionRequestView,
+        patch_admin_llm_gateway_account_group, patch_admin_llm_gateway_key,
+        patch_admin_llm_gateway_proxy_config, refresh_admin_llm_gateway_account,
+        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
+        AccountSummaryView, AdminAccountGroupView, AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
         AdminUpstreamProxyBindingView, AdminUpstreamProxyCheckResponse,
         AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView,
-        CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
-        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
-        PatchAdminUpstreamProxyConfigInput,
+        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
+        PatchAdminAccountGroupInput, PatchAdminLlmGatewayAccountInput,
+        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
     },
     components::pagination::Pagination,
     pages::llm_access_shared::{format_number_i64, format_number_u64, MaskedSecretCode},
@@ -188,15 +190,27 @@ fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]
     sanitized
 }
 
-fn sanitize_fixed_account_name(value: Option<&str>, accounts: &[AccountSummaryView]) -> String {
+fn sanitize_account_group_id(
+    value: Option<&str>,
+    groups: &[AdminAccountGroupView],
+    _allow_empty: bool,
+) -> String {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return String::new();
     };
-    if accounts.iter().any(|account| account.name == value) {
+    if groups.iter().any(|group| group.id == value) {
         value.to_string()
     } else {
         String::new()
     }
+}
+
+fn group_name_for_id(groups: &[AdminAccountGroupView], group_id: &str) -> String {
+    groups
+        .iter()
+        .find(|group| group.id == group_id)
+        .map(|group| group.name.clone())
+        .unwrap_or_else(|| group_id.to_string())
 }
 
 fn format_proxy_check_target_line(target: &AdminUpstreamProxyCheckTargetView) -> String {
@@ -356,6 +370,7 @@ struct KeyEditorCardProps {
     on_flash: Callback<(String, bool)>,
     refreshing: bool,
     accounts: Vec<AccountSummaryView>,
+    account_groups: Vec<AdminAccountGroupView>,
 }
 
 #[function_component(KeyEditorCard)]
@@ -372,14 +387,8 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             .clone()
             .unwrap_or_else(|| "auto".to_string())
     });
-    let fixed_account_name = use_state(|| {
-        sanitize_fixed_account_name(key_item.fixed_account_name.as_deref(), &props.accounts)
-    });
-    let auto_account_names = use_state(|| {
-        sanitize_auto_account_names(
-            key_item.auto_account_names.as_deref().unwrap_or(&[]),
-            &props.accounts,
-        )
+    let account_group_id = use_state(|| {
+        sanitize_account_group_id(key_item.account_group_id.as_deref(), &props.account_groups, true)
     });
     let request_max_concurrency = use_state(|| {
         key_item
@@ -399,17 +408,16 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
     {
         // Reset editor controls whenever the parent list refreshes this card.
         let key_item = props.key_item.clone();
-        let accounts = props.accounts.clone();
+        let account_groups = props.account_groups.clone();
         let name = name.clone();
         let quota = quota.clone();
         let public_visible = public_visible.clone();
         let status = status.clone();
         let route_strategy = route_strategy.clone();
-        let fixed_account_name = fixed_account_name.clone();
-        let auto_account_names = auto_account_names.clone();
+        let account_group_id = account_group_id.clone();
         let request_max_concurrency = request_max_concurrency.clone();
         let request_min_start_interval_ms = request_min_start_interval_ms.clone();
-        use_effect_with((props.key_item.clone(), props.accounts.clone()), move |_| {
+        use_effect_with((props.key_item.clone(), props.account_groups.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
             public_visible.set(key_item.public_visible);
@@ -420,13 +428,10 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     .clone()
                     .unwrap_or_else(|| "auto".to_string()),
             );
-            fixed_account_name.set(sanitize_fixed_account_name(
-                key_item.fixed_account_name.as_deref(),
-                &accounts,
-            ));
-            auto_account_names.set(sanitize_auto_account_names(
-                key_item.auto_account_names.as_deref().unwrap_or(&[]),
-                &accounts,
+            account_group_id.set(sanitize_account_group_id(
+                key_item.account_group_id.as_deref(),
+                &account_groups,
+                true,
             ));
             request_max_concurrency.set(
                 key_item
@@ -499,8 +504,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let public_visible = public_visible.clone();
         let status = status.clone();
         let route_strategy = route_strategy.clone();
-        let fixed_account_name = fixed_account_name.clone();
-        let auto_account_names = auto_account_names.clone();
+        let account_group_id = account_group_id.clone();
         let request_max_concurrency = request_max_concurrency.clone();
         let request_min_start_interval_ms = request_min_start_interval_ms.clone();
         let saving = saving.clone();
@@ -516,8 +520,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             let public_visible_value = *public_visible;
             let status_value = (*status).clone();
             let route_strategy_value = (*route_strategy).clone();
-            let fixed_account_name_value = (*fixed_account_name).clone();
-            let auto_account_names_value = (*auto_account_names).clone();
+            let account_group_id_value = (*account_group_id).clone();
             let request_max_concurrency_value = (*request_max_concurrency).trim().to_string();
             let request_min_start_interval_ms_value =
                 (*request_min_start_interval_ms).trim().to_string();
@@ -569,8 +572,9 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     public_visible: Some(public_visible_value),
                     quota_billable_limit: Some(quota_value),
                     route_strategy: Some(&route_strategy_value),
-                    fixed_account_name: Some(&fixed_account_name_value),
-                    auto_account_names: Some(auto_account_names_value.as_slice()),
+                    account_group_id: Some(&account_group_id_value),
+                    fixed_account_name: None,
+                    auto_account_names: None,
                     model_name_map: None,
                     request_max_concurrency: request_max_concurrency_value,
                     request_min_start_interval_ms: request_min_start_interval_ms_value,
@@ -594,20 +598,6 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 }
                 saving.set(false);
             });
-        })
-    };
-
-    let toggle_auto_account_name = {
-        let auto_account_names = auto_account_names.clone();
-        Callback::from(move |account_name: String| {
-            let mut names = (*auto_account_names).clone();
-            if let Some(idx) = names.iter().position(|name| name == &account_name) {
-                names.remove(idx);
-            } else {
-                names.push(account_name);
-                names.sort();
-            }
-            auto_account_names.set(names);
         })
     };
 
@@ -651,6 +641,27 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 saving.set(false);
             });
         })
+    };
+
+    let fixed_route_groups = props
+        .account_groups
+        .iter()
+        .filter(|group| group.account_names.len() == 1)
+        .cloned()
+        .collect::<Vec<_>>();
+    let current_route_summary = if *route_strategy == "fixed" {
+        if (*account_group_id).is_empty() {
+            "固定组：未选择".to_string()
+        } else {
+            format!(
+                "固定组：{}",
+                group_name_for_id(&props.account_groups, (*account_group_id).as_str())
+            )
+        }
+    } else if (*account_group_id).is_empty() {
+        "自动：全账号池".to_string()
+    } else {
+        format!("自动：{}", group_name_for_id(&props.account_groups, (*account_group_id).as_str()))
     };
 
     html! {
@@ -836,85 +847,49 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 </label>
                 if *route_strategy == "fixed" {
                     <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                        <span class={classes!("text-[var(--muted)]")}>{ "账号" }</span>
+                        <span class={classes!("text-[var(--muted)]")}>{ "单账号组" }</span>
                         <select
-                            key={format!("{}-fixed-{}", key_item.id, (*fixed_account_name).clone())}
+                            key={format!("{}-group-fixed-{}", key_item.id, (*account_group_id).clone())}
                             class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
                             onchange={{
-                                let fixed_account_name = fixed_account_name.clone();
+                                let account_group_id = account_group_id.clone();
                                 Callback::from(move |event: Event| {
                                     if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                                        fixed_account_name.set(target.value());
+                                        account_group_id.set(target.value());
                                     }
                                 })
                             }}
                         >
-                            <option value="" selected={(*fixed_account_name).is_empty()}>{ "-- 选择 --" }</option>
-                            { for props.accounts.iter().map(|account| html! {
-                                <option value={account.name.clone()} selected={*fixed_account_name == account.name}>{ account.name.clone() }</option>
+                            <option value="" selected={(*account_group_id).is_empty()}>{ "-- 选择组 --" }</option>
+                            { for fixed_route_groups.iter().map(|group| html! {
+                                <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({})", group.name, group.account_names.join(", ")) }</option>
                             }) }
                         </select>
                     </label>
                 } else {
-                    <div class={classes!("w-full", "space-y-2")}>
-                        <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "自动候选账号" }</div>
-                        if props.accounts.is_empty() {
-                            <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-sm", "text-[var(--muted)]")}>
-                                { "当前没有可供绑定的账号。" }
-                            </div>
-                        } else {
-                            <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                                { for props.accounts.iter().map(|account| {
-                                    let account_name = account.name.clone();
-                                    let checked = auto_account_names.iter().any(|name| name == &account.name);
-                                    let toggle_auto_account_name = toggle_auto_account_name.clone();
-                                    html! {
-                                        <label class={classes!(
-                                            "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
-                                            if checked {
-                                                "border-sky-500/30 bg-sky-500/8"
-                                            } else {
-                                                "border-[var(--border)] bg-[var(--surface-alt)]"
-                                            }
-                                        )}>
-                                            <input
-                                                type="checkbox"
-                                                checked={checked}
-                                                onchange={Callback::from(move |_| toggle_auto_account_name.emit(account_name.clone()))}
-                                            />
-                                            <div class={classes!("min-w-0", "flex-1")}>
-                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                    <span class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</span>
-                                                    <span class={key_status_badge(&account.status)}>{ account.status.clone() }</span>
-                                                    if let Some(plan_type) = account.plan_type.clone() {
-                                                        <span class={classes!("rounded-full", "bg-sky-500/12", "px-2", "py-0.5", "text-[11px]", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
-                                                            { plan_type }
-                                                        </span>
-                                                    }
-                                                </div>
-                                                <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                    { format!(
-                                                        "5h {} / wk {}",
-                                                        account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
-                                                        account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
-                                                    ) }
-                                                </div>
-                                            </div>
-                                        </label>
+                    <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                        <span class={classes!("text-[var(--muted)]")}>{ "账号组" }</span>
+                        <select
+                            key={format!("{}-group-auto-{}", key_item.id, (*account_group_id).clone())}
+                            class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                            onchange={{
+                                let account_group_id = account_group_id.clone();
+                                Callback::from(move |event: Event| {
+                                    if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                        account_group_id.set(target.value());
                                     }
-                                }) }
-                            </div>
-                        }
-                    </div>
+                                })
+                            }}
+                        >
+                            <option value="" selected={(*account_group_id).is_empty()}>{ "全账号池" }</option>
+                            { for props.account_groups.iter().map(|group| html! {
+                                <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({} 个账号)", group.name, group.account_names.len()) }</option>
+                            }) }
+                        </select>
+                    </label>
                 }
                 <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                    { if *route_strategy == "fixed" {
-                        format!("绑定: {}", if (*fixed_account_name).is_empty() { "未选择" } else { &*fixed_account_name })
-                    } else if auto_account_names.is_empty() {
-                        "全账号池自动择优；如果某个账号不可用，会继续尝试其他账号。".to_string()
-                    } else {
-                        format!("仅在这些账号中自动择优: {}；如果子集里没有可用账号，请求会直接报错。", auto_account_names.join(", "))
-                    }}
+                    { current_route_summary }
                 </span>
             </div>
 
@@ -935,6 +910,213 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 if key_item.usage_credit_missing_events > 0 {
                     <span>{ format!("partial {}", key_item.usage_credit_missing_events) }</span>
                 }
+            </div>
+
+            if let Some(feedback) = (*feedback).clone() {
+                <p class={classes!("mt-2", "m-0", "text-xs", "text-[var(--muted)]")}>{ feedback }</p>
+            }
+        </article>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct AccountGroupEditorCardProps {
+    group_item: AdminAccountGroupView,
+    accounts: Vec<AccountSummaryView>,
+    on_changed: Callback<()>,
+    on_flash: Callback<(String, bool)>,
+}
+
+#[function_component(AccountGroupEditorCard)]
+fn account_group_editor_card(props: &AccountGroupEditorCardProps) -> Html {
+    let name = use_state(|| props.group_item.name.clone());
+    let account_names =
+        use_state(|| sanitize_auto_account_names(&props.group_item.account_names, &props.accounts));
+    let saving = use_state(|| false);
+    let feedback = use_state(|| None::<String>);
+
+    {
+        let group_item = props.group_item.clone();
+        let accounts = props.accounts.clone();
+        let name = name.clone();
+        let account_names = account_names.clone();
+        use_effect_with((props.group_item.clone(), props.accounts.clone()), move |_| {
+            name.set(group_item.name.clone());
+            account_names.set(sanitize_auto_account_names(&group_item.account_names, &accounts));
+            || ()
+        });
+    }
+
+    let on_toggle_account = {
+        let account_names = account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*account_names).clone();
+            if let Some(index) = names.iter().position(|name| name == &account_name) {
+                names.remove(index);
+            } else {
+                names.push(account_name);
+                names.sort();
+            }
+            account_names.set(names);
+        })
+    };
+
+    let on_save = {
+        let group_id = props.group_item.id.clone();
+        let name = name.clone();
+        let account_names = account_names.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_changed = props.on_changed.clone();
+        Callback::from(move |_| {
+            if *saving {
+                return;
+            }
+            let group_id = group_id.clone();
+            let name_value = (*name).trim().to_string();
+            let account_names_value = (*account_names).clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_changed = on_changed.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                match patch_admin_llm_gateway_account_group(
+                    &group_id,
+                    PatchAdminAccountGroupInput {
+                        name: Some(&name_value),
+                        account_names: Some(account_names_value.as_slice()),
+                    },
+                )
+                .await
+                {
+                    Ok(_) => {
+                        feedback.set(Some("已保存".to_string()));
+                        on_flash.emit((format!("已保存账号组 `{}`", name_value), false));
+                        on_changed.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((format!("保存账号组失败\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_delete = {
+        let group_id = props.group_item.id.clone();
+        let group_name = props.group_item.name.clone();
+        let on_changed = props.on_changed.clone();
+        let on_flash = props.on_flash.clone();
+        let saving = saving.clone();
+        Callback::from(move |_| {
+            let Some(window) = window() else {
+                return;
+            };
+            if !window
+                .confirm_with_message("确认删除这个账号组？")
+                .ok()
+                .unwrap_or(false)
+            {
+                return;
+            }
+            let group_id = group_id.clone();
+            let group_name = group_name.clone();
+            let on_changed = on_changed.clone();
+            let on_flash = on_flash.clone();
+            let saving = saving.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                match delete_admin_llm_gateway_account_group(&group_id).await {
+                    Ok(_) => {
+                        on_flash.emit((format!("已删除账号组 `{}`", group_name), false));
+                        on_changed.emit(());
+                    },
+                    Err(err) => {
+                        on_flash.emit((format!("删除账号组失败\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    html! {
+        <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                <h3 class={classes!("m-0", "text-base", "font-bold")}>{ props.group_item.name.clone() }</h3>
+                <div class={classes!("flex", "items-center", "gap-2")}>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} 个账号", props.group_item.account_names.len()) }</span>
+                    <button class={classes!("btn-terminal", "text-red-600", "dark:text-red-300")} onclick={on_delete} disabled={*saving}>
+                        { "删除" }
+                    </button>
+                </div>
+            </div>
+
+            <label class={classes!("mt-3", "block", "text-sm")}>
+                <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
+                <input
+                    type="text"
+                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                    value={(*name).clone()}
+                    oninput={{
+                        let name = name.clone();
+                        Callback::from(move |event: InputEvent| {
+                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                name.set(target.value());
+                            }
+                        })
+                    }}
+                />
+            </label>
+
+            <div class={classes!("mt-3", "space-y-2")}>
+                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                    { for props.accounts.iter().map(|account| {
+                        let checked = account_names.iter().any(|name| name == &account.name);
+                        let account_name = account.name.clone();
+                        let on_toggle_account = on_toggle_account.clone();
+                        html! {
+                            <label class={classes!(
+                                "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                if checked {
+                                    "border-sky-500/30 bg-sky-500/8"
+                                } else {
+                                    "border-[var(--border)] bg-[var(--surface-alt)]"
+                                }
+                            )}>
+                                <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
+                                />
+                                <div class={classes!("min-w-0", "flex-1")}>
+                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                    <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                        { format!(
+                                            "5h {} / wk {}",
+                                            account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
+                                            account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
+                                        ) }
+                                    </div>
+                                </div>
+                            </label>
+                        }
+                    }) }
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3")}>
+                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                    { format!("当前成员: {}", if account_names.is_empty() { "无".to_string() } else { account_names.join(", ") }) }
+                </span>
+                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
+                    { if *saving { "保存中..." } else { "保存账号组" } }
+                </button>
             </div>
 
             if let Some(feedback) = (*feedback).clone() {
@@ -1275,6 +1457,7 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
 pub fn admin_llm_gateway_page() -> Html {
     let config = use_state(|| None::<LlmGatewayRuntimeConfig>);
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
+    let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_total = use_state(|| 0_usize);
     let usage_page = use_state(|| 1_usize);
@@ -1338,6 +1521,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let create_request_max_concurrency = use_state(String::new);
     let create_request_min_start_interval_ms = use_state(String::new);
     let creating = use_state(|| false);
+    let create_account_group_name = use_state(String::new);
+    let create_account_group_account_names = use_state(Vec::<String>::new);
+    let creating_account_group = use_state(|| false);
     let refreshing_key_id = use_state(|| None::<String>);
     let toast = use_state(|| None::<(String, bool)>);
     let toast_timeout = use_mut_ref(|| None::<Timeout>);
@@ -1546,6 +1732,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let keys = keys.clone();
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
+        let account_groups = account_groups.clone();
         let loading = loading.clone();
         let load_error = load_error.clone();
         let ttl_input = ttl_input.clone();
@@ -1572,6 +1759,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let keys = keys.clone();
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
+            let account_groups = account_groups.clone();
             let loading = loading.clone();
             let load_error = load_error.clone();
             let ttl_input = ttl_input.clone();
@@ -1601,18 +1789,21 @@ pub fn admin_llm_gateway_page() -> Html {
                     let (
                         cfg_result,
                         keys_result,
+                        account_groups_result,
                         proxy_configs_result,
                         proxy_bindings_result,
                         accounts_result,
                     ) = futures::join!(
                         fetch_admin_llm_gateway_config(),
                         fetch_admin_llm_gateway_keys(),
+                        fetch_admin_llm_gateway_account_groups(),
                         fetch_admin_llm_gateway_proxy_configs(),
                         fetch_admin_llm_gateway_proxy_bindings(),
                         fetch_admin_llm_gateway_accounts(),
                     );
                     let cfg = cfg_result?;
                     let keys_resp = keys_result?;
+                    let account_groups_resp = account_groups_result?;
                     let proxy_configs_resp = proxy_configs_result?;
                     let proxy_bindings_resp = proxy_bindings_result?;
                     let accounts_resp = accounts_result?;
@@ -1629,6 +1820,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     Ok::<_, String>((
                         cfg,
                         keys_resp.keys,
+                        account_groups_resp.groups,
                         proxy_configs_resp.proxy_configs,
                         proxy_bindings_resp.bindings,
                         effective_key_filter,
@@ -1641,6 +1833,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     Ok((
                         cfg,
                         key_items,
+                        account_group_items,
                         proxy_config_items,
                         proxy_binding_items,
                         effective_key_filter,
@@ -1671,6 +1864,7 @@ pub fn admin_llm_gateway_page() -> Html {
                             .set(cfg.usage_event_flush_max_buffer_bytes.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
+                        account_groups.set(account_group_items);
                         let codex_bound = proxy_binding_items
                             .iter()
                             .find(|item| item.provider_type == "codex")
@@ -2117,6 +2311,77 @@ pub fn admin_llm_gateway_page() -> Html {
                     },
                 }
                 creating.set(false);
+            });
+        })
+    };
+
+    let on_toggle_create_account_group_member = {
+        let create_account_group_account_names = create_account_group_account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*create_account_group_account_names).clone();
+            if let Some(index) = names.iter().position(|name| name == &account_name) {
+                names.remove(index);
+            } else {
+                names.push(account_name);
+                names.sort();
+                names.dedup();
+            }
+            create_account_group_account_names.set(names);
+        })
+    };
+
+    let on_create_account_group = {
+        let create_account_group_name = create_account_group_name.clone();
+        let create_account_group_account_names = create_account_group_account_names.clone();
+        let creating_account_group = creating_account_group.clone();
+        let flash = flash.clone();
+        let load_error = load_error.clone();
+        let reload = reload.clone();
+        Callback::from(move |_| {
+            if *creating_account_group {
+                return;
+            }
+            let group_name = (*create_account_group_name).trim().to_string();
+            let account_names = (*create_account_group_account_names).clone();
+            let create_account_group_name = create_account_group_name.clone();
+            let create_account_group_account_names = create_account_group_account_names.clone();
+            let creating_account_group = creating_account_group.clone();
+            let flash = flash.clone();
+            let load_error = load_error.clone();
+            let reload = reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if group_name.is_empty() {
+                    let message = "账号组名称不能为空".to_string();
+                    load_error.set(Some(message.clone()));
+                    flash.emit((message, true));
+                    return;
+                }
+                if account_names.is_empty() {
+                    let message = "账号组至少需要选择一个账号".to_string();
+                    load_error.set(Some(message.clone()));
+                    flash.emit((message, true));
+                    return;
+                }
+                creating_account_group.set(true);
+                match create_admin_llm_gateway_account_group(CreateAdminAccountGroupInput {
+                    name: &group_name,
+                    account_names: account_names.as_slice(),
+                })
+                .await
+                {
+                    Ok(_) => {
+                        create_account_group_name.set(String::new());
+                        create_account_group_account_names.set(Vec::new());
+                        load_error.set(None);
+                        flash.emit((format!("已创建账号组 `{group_name}`"), false));
+                        reload.emit(());
+                    },
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((format!("创建账号组失败\n{err}"), true));
+                    },
+                }
+                creating_account_group.set(false);
             });
         })
     };
@@ -3869,6 +4134,130 @@ pub fn admin_llm_gateway_page() -> Html {
                 // ── Keys Tab ──
                 if *active_tab == TAB_KEYS {
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Account Groups" }</h2>
+                            <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                                { "先为账号分组，再让 key 选择组而不是直接勾账号。固定路由请选择单账号组；自动路由可以选任意组，留空则继续使用全账号池。" }
+                            </p>
+                        </div>
+                        <button
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let reload = reload.clone();
+                                Callback::from(move |_| reload.emit(()))
+                            }}
+                            disabled={*loading}
+                        >
+                            { if *loading { "刷新中..." } else { "刷新账号组" } }
+                        </button>
+                    </div>
+
+                    <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <div class={classes!("grid", "gap-3")}>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*create_account_group_name).clone()}
+                                    oninput={{
+                                        let create_account_group_name = create_account_group_name.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                create_account_group_name.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("space-y-2")}>
+                                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                                if accounts.is_empty() {
+                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
+                                        { "当前没有可加入账号组的账号。" }
+                                    </div>
+                                } else {
+                                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                        { for accounts.iter().map(|account| {
+                                            let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
+                                            let account_name = account.name.clone();
+                                            let on_toggle_create_account_group_member =
+                                                on_toggle_create_account_group_member.clone();
+                                            html! {
+                                                <label class={classes!(
+                                                    "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                                    if checked {
+                                                        "border-sky-500/30 bg-sky-500/8"
+                                                    } else {
+                                                        "border-[var(--border)] bg-[var(--surface)]"
+                                                    }
+                                                )}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onchange={Callback::from(move |_| {
+                                                            on_toggle_create_account_group_member.emit(account_name.clone())
+                                                        })}
+                                                    />
+                                                    <div class={classes!("min-w-0", "flex-1")}>
+                                                        <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                                        <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                            { format!(
+                                                                "5h {} / wk {}",
+                                                                account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
+                                                                account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
+                                                            ) }
+                                                        </div>
+                                                    </div>
+                                                </label>
+                                            }
+                                        }) }
+                                    </div>
+                                }
+                            </div>
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                    { format!(
+                                        "当前成员: {}",
+                                        if create_account_group_account_names.is_empty() {
+                                            "无".to_string()
+                                        } else {
+                                            create_account_group_account_names.join(", ")
+                                        }
+                                    ) }
+                                </span>
+                                <button
+                                    class={classes!("btn-terminal", "btn-terminal-primary")}
+                                    onclick={on_create_account_group}
+                                    disabled={*creating_account_group}
+                                >
+                                    { if *creating_account_group { "创建中..." } else { "创建账号组" } }
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
+                        if account_groups.is_empty() && !*loading {
+                            <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                                { "当前还没有账号组。" }
+                            </div>
+                        } else {
+                            { for account_groups.iter().map(|group_item| html! {
+                                <AccountGroupEditorCard
+                                    key={group_item.id.clone()}
+                                    group_item={group_item.clone()}
+                                    accounts={(*accounts).clone()}
+                                    on_changed={reload.clone()}
+                                    on_flash={flash.clone()}
+                                />
+                            }) }
+                        }
+                    </div>
+                </section>
+
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                         <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Key Inventory" }</h2>
                             <button class={classes!("btn-terminal")} onclick={{
@@ -3894,6 +4283,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                         on_flash={flash.clone()}
                                         refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
                                         accounts={(*accounts).clone()}
+                                        account_groups={(*account_groups).clone()}
                                     />
                                 }) }
                             }

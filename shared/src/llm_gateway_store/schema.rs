@@ -17,8 +17,8 @@ use lancedb::{
 };
 
 use super::types::{
-    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_KEYS_TABLE,
-    LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
+    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_ACCOUNT_GROUPS_TABLE,
+    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
@@ -53,11 +53,24 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("route_strategy", DataType::Utf8, true),
         Field::new("fixed_account_name", DataType::Utf8, true),
         Field::new("auto_account_names_json", DataType::Utf8, true),
+        Field::new("account_group_id", DataType::Utf8, true),
         Field::new("model_name_map_json", DataType::Utf8, true),
         Field::new("request_max_concurrency", DataType::UInt64, true),
         Field::new("request_min_start_interval_ms", DataType::UInt64, true),
         Field::new("kiro_request_validation_enabled", DataType::Boolean, true),
         Field::new("kiro_cache_estimation_enabled", DataType::Boolean, true),
+    ]))
+}
+
+/// Canonical schema for reusable provider-scoped account groups.
+pub fn llm_gateway_account_groups_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("provider_type", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("account_names_json", DataType::Utf8, false),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
 
@@ -259,6 +272,7 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "route_strategy").await?;
     ensure_nullable_utf8_column(&table, "fixed_account_name").await?;
     ensure_nullable_utf8_column(&table, "auto_account_names_json").await?;
+    ensure_nullable_utf8_column(&table, "account_group_id").await?;
     ensure_nullable_utf8_column(&table, "model_name_map_json").await?;
     ensure_nullable_u64_column(&table, "request_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "request_min_start_interval_ms").await?;
@@ -268,6 +282,19 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_scalar_index(&table, "key_hash").await?;
     ensure_scalar_index(&table, "status").await?;
     ensure_scalar_index(&table, "public_visible").await?;
+    Ok(table)
+}
+
+/// Create or migrate the reusable account-groups table.
+pub async fn ensure_account_groups_table(db: &Connection) -> Result<Table> {
+    let table =
+        ensure_table(db, LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, llm_gateway_account_groups_schema(), &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ])
+        .await?;
+    ensure_scalar_index(&table, "id").await?;
+    ensure_scalar_index(&table, "provider_type").await?;
     Ok(table)
 }
 
@@ -614,7 +641,7 @@ async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
 }
 
 /// Ordered projection used when reading key rows back from LanceDB.
-pub fn key_columns() -> [&'static str; 26] {
+pub fn key_columns() -> [&'static str; 27] {
     [
         "id",
         "name",
@@ -637,12 +664,18 @@ pub fn key_columns() -> [&'static str; 26] {
         "route_strategy",
         "fixed_account_name",
         "auto_account_names_json",
+        "account_group_id",
         "model_name_map_json",
         "request_max_concurrency",
         "request_min_start_interval_ms",
         "kiro_request_validation_enabled",
         "kiro_cache_estimation_enabled",
     ]
+}
+
+/// Ordered projection used when reading account-group rows back from LanceDB.
+pub fn account_group_columns() -> [&'static str; 6] {
+    ["id", "provider_type", "name", "account_names_json", "created_at", "updated_at"]
 }
 
 /// Ordered projection used when reading usage-event rows back from LanceDB.

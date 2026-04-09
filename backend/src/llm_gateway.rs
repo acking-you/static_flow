@@ -38,11 +38,12 @@ use reqwest::header::{HeaderMap as ReqwestHeaderMap, HeaderValue as ReqwestHeade
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
-    LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
-    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
-    NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
+    is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord,
+    LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
+    LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
+    NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
+    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_OPENAI,
+    LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
@@ -76,8 +77,8 @@ use self::{
         CodexAuthSnapshot, CodexKeyRequestLease, CodexKeyRequestLimitRejection,
     },
     types::{
-        AccountListResponse, AccountSummaryView, AdminLegacyKiroProxyMigrationResponse,
-        AdminLlmGatewayAccountContributionRequestQuery,
+        AccountListResponse, AccountSummaryView, AdminAccountGroupView, AdminAccountGroupsResponse,
+        AdminLegacyKiroProxyMigrationResponse, AdminLlmGatewayAccountContributionRequestQuery,
         AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsResponse, AdminLlmGatewayKeyView,
         AdminLlmGatewayKeysResponse, AdminLlmGatewaySponsorRequestQuery,
@@ -88,18 +89,19 @@ use self::{
         AdminUpstreamProxyBindingView, AdminUpstreamProxyBindingsResponse,
         AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
         AdminUpstreamProxyConfigView, AdminUpstreamProxyConfigsResponse,
-        CreateAdminUpstreamProxyConfigRequest, CreateLlmGatewayKeyRequest, GatewayResponseAdapter,
-        ImportAccountRequest, LlmGatewayAccessResponse, LlmGatewayCreditsView,
-        LlmGatewayEventContext, LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView,
-        LlmGatewayRateLimitBucketView, LlmGatewayRateLimitStatusResponse,
-        LlmGatewayRateLimitWindowView, LlmGatewayRuntimeConfigResponse,
-        LlmGatewaySupportConfigView, PatchAccountSettingsRequest,
-        PatchAdminUpstreamProxyConfigRequest, PatchLlmGatewayKeyRequest, PreparedGatewayRequest,
-        PublicLlmGatewayAccountContributionView, PublicLlmGatewayAccountContributionsResponse,
-        PublicLlmGatewaySponsorView, PublicLlmGatewaySponsorsResponse,
-        PublicLlmGatewayUsageChartPointView, PublicLlmGatewayUsageEventView,
-        PublicLlmGatewayUsageKeyView, PublicLlmGatewayUsageLookupRequest,
-        PublicLlmGatewayUsageLookupResponse, SubmitLlmGatewayAccountContributionRequest,
+        CreateAdminAccountGroupRequest, CreateAdminUpstreamProxyConfigRequest,
+        CreateLlmGatewayKeyRequest, GatewayResponseAdapter, ImportAccountRequest,
+        LlmGatewayAccessResponse, LlmGatewayCreditsView, LlmGatewayEventContext,
+        LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
+        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
+        LlmGatewayRuntimeConfigResponse, LlmGatewaySupportConfigView, PatchAccountSettingsRequest,
+        PatchAdminAccountGroupRequest, PatchAdminUpstreamProxyConfigRequest,
+        PatchLlmGatewayKeyRequest, PreparedGatewayRequest, PublicLlmGatewayAccountContributionView,
+        PublicLlmGatewayAccountContributionsResponse, PublicLlmGatewaySponsorView,
+        PublicLlmGatewaySponsorsResponse, PublicLlmGatewayUsageChartPointView,
+        PublicLlmGatewayUsageEventView, PublicLlmGatewayUsageKeyView,
+        PublicLlmGatewayUsageLookupRequest, PublicLlmGatewayUsageLookupResponse,
+        SubmitLlmGatewayAccountContributionRequest,
         SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewaySponsorRequest,
         SubmitLlmGatewaySponsorRequestResponse, SubmitLlmGatewayTokenRequest,
         SubmitLlmGatewayTokenRequestResponse, UpdateAdminUpstreamProxyBindingRequest,
@@ -833,6 +835,106 @@ pub async fn list_admin_keys(
     }))
 }
 
+/// List reusable Codex account-pool groups for the admin UI.
+pub async fn list_admin_account_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AdminAccountGroupsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let groups = state
+        .llm_gateway_store
+        .list_account_groups_for_provider(LLM_GATEWAY_PROVIDER_CODEX)
+        .await
+        .map_err(|err| internal_error("Failed to list Codex account groups", err))?;
+    Ok(Json(AdminAccountGroupsResponse {
+        groups: groups.iter().map(AdminAccountGroupView::from).collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Create a reusable Codex account-pool group.
+pub async fn create_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAdminAccountGroupRequest>,
+) -> Result<Json<AdminAccountGroupView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let name = normalize_name(&request.name)?;
+    let account_names =
+        normalize_codex_account_group_members(&state, request.account_names).await?;
+    let now = now_ms();
+    let record = LlmGatewayAccountGroupRecord {
+        id: generate_id("llm-group"),
+        provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+        name,
+        account_names,
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .llm_gateway_store
+        .create_account_group(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create Codex account group", err))?;
+    Ok(Json(AdminAccountGroupView::from(&record)))
+}
+
+/// Update one reusable Codex account-pool group.
+pub async fn patch_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(group_id): axum::extract::Path<String>,
+    Json(request): Json<PatchAdminAccountGroupRequest>,
+) -> Result<Json<AdminAccountGroupView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let mut group =
+        load_account_group_for_provider(&state, LLM_GATEWAY_PROVIDER_CODEX, &group_id).await?;
+    if let Some(name) = request.name.as_deref() {
+        group.name = normalize_name(name)?;
+    }
+    if let Some(account_names) = request.account_names {
+        group.account_names = normalize_codex_account_group_members(&state, account_names).await?;
+    }
+    group.updated_at = now_ms();
+    state
+        .llm_gateway_store
+        .replace_account_group(&group)
+        .await
+        .map_err(|err| internal_error("Failed to update Codex account group", err))?;
+    Ok(Json(AdminAccountGroupView::from(&group)))
+}
+
+/// Delete one reusable Codex account-pool group if no key still references it.
+pub async fn delete_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(group_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let group =
+        load_account_group_for_provider(&state, LLM_GATEWAY_PROVIDER_CODEX, &group_id).await?;
+    let keys = state
+        .llm_gateway_store
+        .list_keys_for_provider(LLM_GATEWAY_PROVIDER_CODEX)
+        .await
+        .map_err(|err| internal_error("Failed to inspect Codex keys before group delete", err))?;
+    if let Some(key) = keys
+        .iter()
+        .find(|key| key.account_group_id.as_deref() == Some(group_id.as_str()))
+    {
+        return Err(bad_request(&format!(
+            "account group is still referenced by key `{}`",
+            key.name
+        )));
+    }
+    state
+        .llm_gateway_store
+        .delete_account_group(&group.id)
+        .await
+        .map_err(|err| internal_error("Failed to delete Codex account group", err))?;
+    Ok(Json(json!({ "deleted": true, "id": group.id })))
+}
+
 /// Create a new admin-managed key and warm it into the in-memory auth cache.
 pub async fn create_admin_key(
     State(state): State<AppState>,
@@ -850,6 +952,7 @@ pub async fn create_admin_key(
         quota_billable_limit: request.quota_billable_limit,
         public_visible: request.public_visible,
         route_strategy: None,
+        account_group_id: None,
         fixed_account_name: None,
         auto_account_names: None,
         model_name_map: None,
@@ -874,6 +977,7 @@ struct ManagedKeyCreateInput {
     quota_billable_limit: u64,
     public_visible: bool,
     route_strategy: Option<String>,
+    account_group_id: Option<String>,
     fixed_account_name: Option<String>,
     auto_account_names: Option<Vec<String>>,
     model_name_map: Option<std::collections::BTreeMap<String, String>>,
@@ -908,6 +1012,7 @@ async fn create_managed_key_record(
         created_at: now,
         updated_at: now,
         route_strategy: input.route_strategy,
+        account_group_id: input.account_group_id,
         fixed_account_name: input.fixed_account_name,
         auto_account_names: input.auto_account_names,
         model_name_map: input.model_name_map,
@@ -964,6 +1069,10 @@ pub async fn patch_admin_key(
         key.route_strategy = normalize_route_strategy_input(Some(strategy))
             .map_err(|err| bad_request_with_detail("invalid route_strategy", err))?;
     }
+    if let Some(group_id) = request.account_group_id.as_deref() {
+        key.account_group_id = normalize_optional_account_group_id_input(Some(group_id))
+            .map_err(|err| bad_request_with_detail("invalid account_group_id", err))?;
+    }
     if let Some(account_name) = request.fixed_account_name.as_deref() {
         key.fixed_account_name = normalize_optional_account_name_input(Some(account_name))
             .map_err(|err| bad_request_with_detail("invalid fixed_account_name", err))?;
@@ -991,48 +1100,8 @@ pub async fn patch_admin_key(
         key.request_min_start_interval_ms,
     )?;
 
-    match key.route_strategy.as_deref().unwrap_or("auto") {
-        "fixed" => {
-            let fixed_account_name = key
-                .fixed_account_name
-                .clone()
-                .ok_or_else(|| bad_request("fixed route_strategy requires fixed_account_name"))?;
-            validate_account_names_exist(&state.llm_gateway.account_pool, &[fixed_account_name])
-                .await?;
-            key.auto_account_names = None;
-        },
-        "auto" => {
-            key.fixed_account_name = None;
-            if let Some(ref auto_account_names) = key.auto_account_names {
-                let (existing_account_names, missing_account_names) =
-                    partition_existing_account_names(
-                        &state.llm_gateway.account_pool,
-                        auto_account_names,
-                    )
-                    .await;
-                if existing_account_names.is_empty() {
-                    return Err(bad_request_with_detail(
-                        "invalid auto_account_names",
-                        anyhow!(
-                            "none of the configured auto accounts exist anymore: {}",
-                            missing_account_names.join(", ")
-                        ),
-                    ));
-                }
-                if !missing_account_names.is_empty() {
-                    tracing::warn!(
-                        key_id = %key.id,
-                        key_name = %key.name,
-                        missing_auto_account_names = ?missing_account_names,
-                        effective_auto_account_names = ?existing_account_names,
-                        "dropping unknown codex auto account names while saving key"
-                    );
-                }
-                key.auto_account_names = Some(existing_account_names);
-            }
-        },
-        _ => return Err(bad_request("route_strategy must be `auto` or `fixed`")),
-    }
+    materialize_legacy_codex_route_group_if_needed(&state, &mut key).await?;
+    validate_codex_key_group_config(&state, &mut key).await?;
     key.updated_at = now_ms();
     state
         .llm_gateway_store
@@ -1380,6 +1449,15 @@ fn normalize_optional_account_name_input(value: Option<&str>) -> Result<Option<S
         .map_err(anyhow::Error::msg)
 }
 
+pub(crate) fn normalize_optional_account_group_id_input(
+    value: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(trimmed) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(trimmed.to_string()))
+}
+
 fn normalize_auto_account_names_input(value: Option<Vec<String>>) -> Result<Option<Vec<String>>> {
     let Some(values) = value else {
         return Ok(None);
@@ -1398,6 +1476,172 @@ fn normalize_auto_account_names_input(value: Option<Vec<String>>) -> Result<Opti
         return Ok(None);
     }
     Ok(Some(names))
+}
+
+async fn normalize_codex_account_group_members(
+    state: &AppState,
+    account_names: Vec<String>,
+) -> Result<Vec<String>, (StatusCode, Json<ErrorResponse>)> {
+    let names = normalize_auto_account_names_input(Some(account_names))
+        .map_err(|err| bad_request_with_detail("invalid account_names", err))?
+        .ok_or_else(|| bad_request("account_names must not be empty"))?;
+    validate_account_names_exist(&state.llm_gateway.account_pool, &names).await?;
+    Ok(names)
+}
+
+async fn load_account_group_for_provider(
+    state: &AppState,
+    provider_type: &str,
+    group_id: &str,
+) -> Result<LlmGatewayAccountGroupRecord, (StatusCode, Json<ErrorResponse>)> {
+    let group = state
+        .llm_gateway_store
+        .get_account_group_by_id(group_id)
+        .await
+        .map_err(|err| internal_error("Failed to load account group", err))?
+        .ok_or_else(|| bad_request("account_group_id does not exist"))?;
+    if group.provider_type != provider_type {
+        return Err(bad_request("account_group_id belongs to a different provider"));
+    }
+    Ok(group)
+}
+
+async fn validate_codex_key_group_config(
+    state: &AppState,
+    key: &mut LlmGatewayKeyRecord,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    match key.route_strategy.as_deref().unwrap_or("auto") {
+        "fixed" => {
+            let group_id = key
+                .account_group_id
+                .as_deref()
+                .ok_or_else(|| bad_request("fixed route_strategy requires account_group_id"))?;
+            let group =
+                load_account_group_for_provider(state, LLM_GATEWAY_PROVIDER_CODEX, group_id)
+                    .await?;
+            if group.account_names.len() != 1 {
+                return Err(bad_request(
+                    "fixed route_strategy requires an account group with exactly one account",
+                ));
+            }
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        "auto" => {
+            if let Some(group_id) = key.account_group_id.as_deref() {
+                let _ =
+                    load_account_group_for_provider(state, LLM_GATEWAY_PROVIDER_CODEX, group_id)
+                        .await?;
+            }
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        _ => Err(bad_request("route_strategy must be `auto` or `fixed`")),
+    }
+}
+
+async fn create_single_account_group_for_key(
+    state: &AppState,
+    provider_type: &str,
+    key_name: &str,
+    key_id: &str,
+    account_name: &str,
+) -> Result<LlmGatewayAccountGroupRecord, (StatusCode, Json<ErrorResponse>)> {
+    let now = now_ms();
+    let record = LlmGatewayAccountGroupRecord {
+        id: generate_id("llm-group"),
+        provider_type: provider_type.to_string(),
+        name: format!("Migrated {} {}", key_name, &key_id[..key_id.len().min(8)]),
+        account_names: vec![account_name.to_string()],
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .llm_gateway_store
+        .create_account_group(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create account group", err))?;
+    Ok(record)
+}
+
+async fn create_account_group_for_key_subset(
+    state: &AppState,
+    provider_type: &str,
+    key_name: &str,
+    key_id: &str,
+    account_names: Vec<String>,
+) -> Result<LlmGatewayAccountGroupRecord, (StatusCode, Json<ErrorResponse>)> {
+    let now = now_ms();
+    let record = LlmGatewayAccountGroupRecord {
+        id: generate_id("llm-group"),
+        provider_type: provider_type.to_string(),
+        name: format!("Migrated {} {}", key_name, &key_id[..key_id.len().min(8)]),
+        account_names,
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .llm_gateway_store
+        .create_account_group(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create account group", err))?;
+    Ok(record)
+}
+
+async fn materialize_legacy_codex_route_group_if_needed(
+    state: &AppState,
+    key: &mut LlmGatewayKeyRecord,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if key.account_group_id.is_some() {
+        key.fixed_account_name = None;
+        key.auto_account_names = None;
+        return Ok(());
+    }
+    match key.route_strategy.as_deref().unwrap_or("auto") {
+        "fixed" => {
+            let Some(account_name) = key.fixed_account_name.clone() else {
+                return Ok(());
+            };
+            validate_account_names_exist(
+                &state.llm_gateway.account_pool,
+                std::slice::from_ref(&account_name),
+            )
+            .await?;
+            let group = create_single_account_group_for_key(
+                state,
+                LLM_GATEWAY_PROVIDER_CODEX,
+                &key.name,
+                &key.id,
+                &account_name,
+            )
+            .await?;
+            key.account_group_id = Some(group.id);
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        "auto" => {
+            let Some(account_names) = key.auto_account_names.clone() else {
+                return Ok(());
+            };
+            let account_names = normalize_codex_account_group_members(state, account_names).await?;
+            let group = create_account_group_for_key_subset(
+                state,
+                LLM_GATEWAY_PROVIDER_CODEX,
+                &key.name,
+                &key.id,
+                account_names,
+            )
+            .await?;
+            key.account_group_id = Some(group.id);
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        _ => Ok(()),
+    }
 }
 
 fn validate_codex_key_request_limit_inputs(
@@ -2393,6 +2637,7 @@ pub async fn approve_and_issue_token_request(
             quota_billable_limit: token_request.requested_quota_billable_limit,
             public_visible: false,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -2721,12 +2966,21 @@ pub async fn approve_and_issue_account_contribution_request(
             None => {
                 let key_name =
                     normalize_name(&format!("contrib-{}", contribution_request.request_id))?;
+                let issued_group = create_single_account_group_for_key(
+                    &state,
+                    LLM_GATEWAY_PROVIDER_CODEX,
+                    &key_name,
+                    existing_key_id,
+                    &imported_account_name,
+                )
+                .await?;
                 create_managed_key_record(&state, ManagedKeyCreateInput {
                     name: key_name,
                     quota_billable_limit: 100_000_000_000,
                     public_visible: false,
                     route_strategy: Some("fixed".to_string()),
-                    fixed_account_name: Some(imported_account_name.clone()),
+                    account_group_id: Some(issued_group.id.clone()),
+                    fixed_account_name: None,
                     auto_account_names: None,
                     model_name_map: None,
                     request_max_concurrency: None,
@@ -2737,12 +2991,21 @@ pub async fn approve_and_issue_account_contribution_request(
         }
     } else {
         let key_name = normalize_name(&format!("contrib-{}", contribution_request.request_id))?;
+        let issued_group = create_single_account_group_for_key(
+            &state,
+            LLM_GATEWAY_PROVIDER_CODEX,
+            &key_name,
+            &contribution_request.request_id,
+            &imported_account_name,
+        )
+        .await?;
         create_managed_key_record(&state, ManagedKeyCreateInput {
             name: key_name,
             quota_billable_limit: 100_000_000_000,
             public_visible: false,
             route_strategy: Some("fixed".to_string()),
-            fixed_account_name: Some(imported_account_name.clone()),
+            account_group_id: Some(issued_group.id.clone()),
+            fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
             request_max_concurrency: None,
@@ -3506,15 +3769,9 @@ fn validate_cached_key(key: &LlmGatewayKeyRecord) -> Result<(), (StatusCode, Jso
 
 /// Select the upstream auth snapshot based on the key's routing strategy.
 ///
-/// Routing order:
-/// 1. `fixed` + `fixed_account_name` → use that specific account from the pool.
-/// 2. `auto` + `auto_account_names` → pick the best active account only from
-///    that subset. If none of the configured subset accounts are usable, fail
-///    the request instead of widening the routing scope.
-/// 3. `auto` without a subset → pick the best active account from the full
-///    pool.
-/// 4. Fallback → if the pool is empty, use the legacy single-file
-///    `CodexAuthSource`.
+/// Group-based routing is the new source of truth. Legacy per-key account
+/// fields remain as a compatibility input only until startup migration has
+/// rewritten older rows.
 async fn resolve_auth_for_key(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
@@ -3525,38 +3782,70 @@ async fn resolve_auth_for_key(
 
     match strategy {
         "fixed" => {
-            let name = key.fixed_account_name.as_deref().unwrap_or("");
-            if name.is_empty() {
-                return Err(bad_request("fixed route_strategy requires fixed_account_name"));
-            }
+            let resolved_name = if let Some(group_id) = key.account_group_id.as_deref() {
+                let group =
+                    load_account_group_for_provider(state, LLM_GATEWAY_PROVIDER_CODEX, group_id)
+                        .await?;
+                if group.account_names.len() != 1 {
+                    return Err(bad_request(
+                        "fixed route_strategy requires an account group with exactly one account",
+                    ));
+                }
+                group.account_names[0].clone()
+            } else {
+                let name = key.fixed_account_name.as_deref().unwrap_or("");
+                if name.is_empty() {
+                    return Err(bad_request("fixed route_strategy requires account_group_id"));
+                }
+                name.to_string()
+            };
             let selected = pool
-                .get_account(name)
+                .get_account(&resolved_name)
                 .await
                 .map(|(snapshot, map_gpt53_codex_to_spark)| {
-                    (snapshot, Some(name.to_string()), map_gpt53_codex_to_spark)
+                    (snapshot, Some(resolved_name.clone()), map_gpt53_codex_to_spark)
                 })
                 .ok_or_else(|| {
                     auth_error(
                         StatusCode::SERVICE_UNAVAILABLE,
-                        &format!("bound account `{name}` is unavailable"),
+                        &format!("bound account `{resolved_name}` is unavailable"),
                     )
                 })?;
             if record_route_selection {
-                pool.record_route_selection(name).await;
+                pool.record_route_selection(&resolved_name).await;
             }
             tracing::info!(
                 key_id = %key.id,
                 key_name = %key.name,
                 strategy = "fixed",
-                account = name,
+                account = %resolved_name,
                 "resolved codex upstream account for key"
             );
             Ok(selected)
         },
         "auto" => {
-            let subset_resolution = if let Some(names) = key.auto_account_names.as_ref() {
+            let subset_resolution = if let Some(group_id) = key.account_group_id.as_deref() {
+                let group =
+                    load_account_group_for_provider(state, LLM_GATEWAY_PROVIDER_CODEX, group_id)
+                        .await?;
+                let configured_account_names = group.account_names.clone();
                 let (existing_account_names, missing_account_names) =
-                    partition_existing_account_names(pool, names).await;
+                    partition_existing_account_names(pool, &configured_account_names).await;
+                if !missing_account_names.is_empty() {
+                    tracing::warn!(
+                        key_id = %key.id,
+                        key_name = %key.name,
+                        account_group_id = %group.id,
+                        missing_group_account_names = ?missing_account_names,
+                        effective_group_account_names = ?existing_account_names,
+                        "ignoring unknown codex group account names during request routing"
+                    );
+                }
+                Some((existing_account_names, missing_account_names, configured_account_names))
+            } else if let Some(names) = key.auto_account_names.as_ref() {
+                let configured_account_names = names.clone();
+                let (existing_account_names, missing_account_names) =
+                    partition_existing_account_names(pool, &configured_account_names).await;
                 if !missing_account_names.is_empty() {
                     tracing::warn!(
                         key_id = %key.id,
@@ -3566,35 +3855,38 @@ async fn resolve_auth_for_key(
                         "ignoring unknown codex auto account names during request routing"
                     );
                 }
-                Some((existing_account_names, missing_account_names))
+                Some((existing_account_names, missing_account_names, configured_account_names))
             } else {
                 None
             };
 
-            if let Some((existing_account_names, configured_missing_names)) =
-                subset_resolution.as_ref()
+            if let Some((
+                existing_account_names,
+                configured_missing_names,
+                configured_account_names,
+            )) = subset_resolution.as_ref()
             {
                 if existing_account_names.is_empty() {
-                    let configured_subset = key.auto_account_names.clone().unwrap_or_default();
                     tracing::warn!(
                         key_id = %key.id,
                         key_name = %key.name,
-                        auto_account_names = ?configured_subset,
+                        account_group_id = ?key.account_group_id,
+                        auto_account_names = ?configured_account_names,
                         missing_auto_account_names = ?configured_missing_names,
                         "configured codex auto account subset has no existing accounts"
                     );
                     return Err(auth_error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         &format!(
-                            "configured auto account subset has no existing accounts: {}",
-                            configured_subset.join(", ")
+                            "configured account group has no existing accounts: {}",
+                            configured_account_names.join(", ")
                         ),
                     ));
                 }
             }
 
             let auto_account_filter = subset_resolution.as_ref().and_then(
-                |(existing_account_names, _configured_missing_names)| {
+                |(existing_account_names, _configured_missing_names, _configured_account_names)| {
                     (!existing_account_names.is_empty()).then(|| {
                         existing_account_names
                             .iter()
@@ -3614,8 +3906,9 @@ async fn resolve_auth_for_key(
                     tracing::info!(
                         key_id = %key.id,
                         key_name = %key.name,
-                        strategy = "auto_subset",
+                        strategy = if key.account_group_id.is_some() { "auto_group" } else { "auto_subset" },
                         selected_account = %name,
+                        account_group_id = ?key.account_group_id,
                         auto_account_names = ?key.auto_account_names,
                         "resolved codex upstream account for key"
                     );
@@ -3623,18 +3916,21 @@ async fn resolve_auth_for_key(
                 }
                 let configured_subset = subset_resolution
                     .as_ref()
-                    .map(|(existing_account_names, _)| existing_account_names.clone())
+                    .map(|(_existing_account_names, _missing_names, configured_account_names)| {
+                        configured_account_names.clone()
+                    })
                     .unwrap_or_default();
                 tracing::warn!(
                     key_id = %key.id,
                     key_name = %key.name,
+                    account_group_id = ?key.account_group_id,
                     auto_account_names = ?configured_subset,
-                    "configured codex auto account subset had no usable accounts"
+                    "configured codex account group had no usable accounts"
                 );
                 return Err(auth_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     &format!(
-                        "configured auto account subset has no usable accounts: {}",
+                        "configured account group has no usable accounts: {}",
                         configured_subset.join(", ")
                     ),
                 ));

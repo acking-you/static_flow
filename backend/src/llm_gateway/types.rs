@@ -4,9 +4,9 @@ use axum::{http::Method, response::Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use static_flow_shared::llm_gateway_store::{
-    compute_billable_tokens, LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-    LlmGatewayProxyConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
-    LlmGatewayUsageEventRecord,
+    compute_billable_tokens, LlmGatewayAccountContributionRequestRecord,
+    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyConfigRecord,
+    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
 };
 
 use crate::handlers::ErrorResponse;
@@ -208,6 +208,7 @@ pub struct AdminLlmGatewayKeyView {
     pub created_at: i64,
     pub updated_at: i64,
     pub route_strategy: Option<String>,
+    pub account_group_id: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
     pub model_name_map: Option<BTreeMap<String, String>>,
@@ -225,6 +226,36 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub current_rpm: u32,
     pub current_in_flight: u32,
     pub events: Vec<AdminLlmGatewayUsageEventView>,
+    pub generated_at: i64,
+}
+
+/// Admin-facing reusable account-pool group shared by keys of one provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAccountGroupView {
+    pub id: String,
+    pub provider_type: String,
+    pub name: String,
+    pub account_names: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl From<&LlmGatewayAccountGroupRecord> for AdminAccountGroupView {
+    fn from(value: &LlmGatewayAccountGroupRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            provider_type: value.provider_type.clone(),
+            name: value.name.clone(),
+            account_names: value.account_names.clone(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAccountGroupsResponse {
+    pub groups: Vec<AdminAccountGroupView>,
     pub generated_at: i64,
 }
 
@@ -668,6 +699,7 @@ pub struct PatchLlmGatewayKeyRequest {
     pub public_visible: Option<bool>,
     pub quota_billable_limit: Option<u64>,
     pub route_strategy: Option<String>,
+    pub account_group_id: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
     pub model_name_map: Option<BTreeMap<String, String>>,
@@ -679,6 +711,18 @@ pub struct PatchLlmGatewayKeyRequest {
     pub request_max_concurrency_unlimited: bool,
     #[serde(default)]
     pub request_min_start_interval_ms_unlimited: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateAdminAccountGroupRequest {
+    pub name: String,
+    pub account_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchAdminAccountGroupRequest {
+    pub name: Option<String>,
+    pub account_names: Option<Vec<String>>,
 }
 
 /// Admin query parameters for usage-event filtering and pagination.
@@ -870,6 +914,7 @@ impl From<&LlmGatewayKeyRecord> for AdminLlmGatewayKeyView {
             created_at: value.created_at,
             updated_at: value.updated_at,
             route_strategy: value.route_strategy.clone(),
+            account_group_id: value.account_group_id.clone(),
             fixed_account_name: value.fixed_account_name.clone(),
             auto_account_names: value.auto_account_names.clone(),
             model_name_map: value.model_name_map.clone(),

@@ -31,10 +31,10 @@ pub(crate) use runtime::KiroGatewayRuntimeState;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    compute_billable_tokens, now_ms, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
-    DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
-    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
-    LLM_GATEWAY_PROVIDER_KIRO,
+    compute_billable_tokens, now_ms, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord,
+    LlmGatewayUsageEventRecord, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+    DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, LLM_GATEWAY_KEY_STATUS_ACTIVE,
+    LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROVIDER_KIRO,
 };
 pub(crate) use status_cache::{refresh_cached_status, spawn_status_refresher};
 
@@ -46,15 +46,17 @@ use self::{
         KiroCachedAccountStatus,
     },
     types::{
-        AdminKiroAccountsResponse, AdminKiroKeyView, AdminKiroKeysResponse,
-        AdminKiroUsageEventView, AdminKiroUsageEventsResponse, AdminKiroUsageQuery,
+        AdminKiroAccountGroupView, AdminKiroAccountGroupsResponse, AdminKiroAccountsResponse,
+        AdminKiroKeyView, AdminKiroKeysResponse, AdminKiroUsageEventView,
+        AdminKiroUsageEventsResponse, AdminKiroUsageQuery, CreateKiroAccountGroupRequest,
         CreateKiroKeyRequest, CreateManualKiroAccountRequest, ImportLocalKiroAccountRequest,
         KiroAccessResponse, KiroAccountView, KiroBalanceView, KiroCacheView, KiroPublicStatusView,
-        PatchKiroAccountRequest, PatchKiroKeyRequest,
+        PatchKiroAccountGroupRequest, PatchKiroAccountRequest, PatchKiroKeyRequest,
     },
 };
 use crate::{
     handlers::{ensure_admin_access, generate_task_id, ErrorResponse},
+    llm_gateway::normalize_optional_account_group_id_input,
     public_submit_guard::extract_client_ip,
     state::AppState,
     upstream_proxy::parse_account_proxy_selection_patch,
@@ -251,6 +253,103 @@ pub async fn list_admin_keys(
     }))
 }
 
+/// List reusable Kiro account-pool groups for the admin UI.
+pub async fn list_admin_account_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AdminKiroAccountGroupsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let groups = state
+        .llm_gateway_store
+        .list_account_groups_for_provider(LLM_GATEWAY_PROVIDER_KIRO)
+        .await
+        .map_err(|err| internal_error("Failed to list Kiro account groups", err))?;
+    Ok(Json(AdminKiroAccountGroupsResponse {
+        groups: groups.iter().map(AdminKiroAccountGroupView::from).collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+/// Create a reusable Kiro account-pool group.
+pub async fn create_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateKiroAccountGroupRequest>,
+) -> Result<Json<AdminKiroAccountGroupView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let name = normalize_name(&request.name)?;
+    let account_names = normalize_kiro_account_group_members(&state, request.account_names).await?;
+    let now = now_ms();
+    let record = LlmGatewayAccountGroupRecord {
+        id: generate_task_id("kiro-group"),
+        provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+        name,
+        account_names,
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .llm_gateway_store
+        .create_account_group(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create Kiro account group", err))?;
+    Ok(Json(AdminKiroAccountGroupView::from(&record)))
+}
+
+/// Update one reusable Kiro account-pool group.
+pub async fn patch_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<PatchKiroAccountGroupRequest>,
+) -> Result<Json<AdminKiroAccountGroupView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let mut group = load_kiro_account_group(&state, &group_id).await?;
+    if let Some(name) = request.name.as_deref() {
+        group.name = normalize_name(name)?;
+    }
+    if let Some(account_names) = request.account_names {
+        group.account_names = normalize_kiro_account_group_members(&state, account_names).await?;
+    }
+    group.updated_at = now_ms();
+    state
+        .llm_gateway_store
+        .replace_account_group(&group)
+        .await
+        .map_err(|err| internal_error("Failed to update Kiro account group", err))?;
+    Ok(Json(AdminKiroAccountGroupView::from(&group)))
+}
+
+/// Delete one Kiro account-pool group if no key still references it.
+pub async fn delete_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let group = load_kiro_account_group(&state, &group_id).await?;
+    let keys = state
+        .llm_gateway_store
+        .list_keys_for_provider(LLM_GATEWAY_PROVIDER_KIRO)
+        .await
+        .map_err(|err| internal_error("Failed to inspect Kiro keys before group delete", err))?;
+    if let Some(key) = keys
+        .iter()
+        .find(|key| key.account_group_id.as_deref() == Some(group_id.as_str()))
+    {
+        return Err(bad_request(&format!(
+            "account group is still referenced by key `{}`",
+            key.name
+        )));
+    }
+    state
+        .llm_gateway_store
+        .delete_account_group(&group.id)
+        .await
+        .map_err(|err| internal_error("Failed to delete Kiro account group", err))?;
+    Ok(Json(json!({"deleted": true, "id": group.id})))
+}
+
 /// Create a new Kiro API key with the given name and billable token quota.
 pub async fn create_admin_key(
     State(state): State<AppState>,
@@ -281,6 +380,7 @@ pub async fn create_admin_key(
         created_at: now,
         updated_at: now,
         route_strategy: None,
+        account_group_id: None,
         fixed_account_name: None,
         auto_account_names: None,
         model_name_map: None,
@@ -321,6 +421,10 @@ pub async fn patch_admin_key(
     if let Some(limit) = request.quota_billable_limit {
         key.quota_billable_limit = limit;
     }
+    if let Some(group_id) = request.account_group_id.as_deref() {
+        key.account_group_id = normalize_optional_account_group_id_input(Some(group_id))
+            .map_err(|err| bad_request(&err.to_string()))?;
+    }
     if request.route_strategy.is_some()
         || request.fixed_account_name.is_some()
         || request.auto_account_names.is_some()
@@ -359,6 +463,8 @@ pub async fn patch_admin_key(
         key.kiro_cache_estimation_enabled = kiro_cache_estimation_enabled;
     }
     key.public_visible = false;
+    materialize_legacy_kiro_route_group_if_needed(&state, &mut key).await?;
+    validate_kiro_key_group_config(&state, &mut key).await?;
     key.updated_at = now_ms();
     state
         .llm_gateway_store
@@ -1081,6 +1187,22 @@ fn normalize_optional_account_name_input(value: Option<&str>) -> anyhow::Result<
         .map_err(anyhow::Error::msg)
 }
 
+async fn load_kiro_account_group(
+    state: &AppState,
+    group_id: &str,
+) -> KiroAdminResult<LlmGatewayAccountGroupRecord> {
+    let group = state
+        .llm_gateway_store
+        .get_account_group_by_id(group_id)
+        .await
+        .map_err(|err| internal_error("Failed to load Kiro account group", err))?
+        .ok_or_else(|| bad_request("account_group_id does not exist"))?;
+    if group.provider_type != LLM_GATEWAY_PROVIDER_KIRO {
+        return Err(bad_request("account_group_id belongs to a different provider"));
+    }
+    Ok(group)
+}
+
 type NormalizedKiroKeyRouteConfig = (Option<String>, Option<String>, Option<Vec<String>>);
 
 fn normalize_auto_account_names_input(
@@ -1104,6 +1226,125 @@ fn normalize_auto_account_names_input(
         return Ok(None);
     }
     Ok(Some(names))
+}
+
+async fn normalize_kiro_account_group_members(
+    state: &AppState,
+    account_names: Vec<String>,
+) -> KiroAdminResult<Vec<String>> {
+    let names = normalize_auto_account_names_input(Some(account_names))
+        .map_err(|err| bad_request(&err.to_string()))?
+        .ok_or_else(|| bad_request("account_names must not be empty"))?;
+    let existing_account_names = state
+        .kiro_gateway
+        .token_manager
+        .list_auths()
+        .await
+        .map_err(|err| internal_error("Failed to load Kiro accounts", err))?
+        .into_iter()
+        .map(|auth| auth.name)
+        .collect::<BTreeSet<_>>();
+    for name in &names {
+        if !existing_account_names.contains(name) {
+            return Err(bad_request(&format!("unknown account `{name}`")));
+        }
+    }
+    Ok(names)
+}
+
+async fn create_kiro_account_group_for_key_subset(
+    state: &AppState,
+    key_name: &str,
+    key_id: &str,
+    account_names: Vec<String>,
+) -> KiroAdminResult<LlmGatewayAccountGroupRecord> {
+    let now = now_ms();
+    let record = LlmGatewayAccountGroupRecord {
+        id: generate_task_id("kiro-group"),
+        provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+        name: format!("Migrated {} {}", key_name, &key_id[..key_id.len().min(8)]),
+        account_names,
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .llm_gateway_store
+        .create_account_group(&record)
+        .await
+        .map_err(|err| internal_error("Failed to create Kiro account group", err))?;
+    Ok(record)
+}
+
+async fn materialize_legacy_kiro_route_group_if_needed(
+    state: &AppState,
+    key: &mut LlmGatewayKeyRecord,
+) -> KiroAdminResult<()> {
+    if key.account_group_id.is_some() {
+        key.fixed_account_name = None;
+        key.auto_account_names = None;
+        return Ok(());
+    }
+    match key.route_strategy.as_deref().unwrap_or("auto") {
+        "fixed" => {
+            let Some(account_name) = key.fixed_account_name.clone() else {
+                return Ok(());
+            };
+            let group = create_kiro_account_group_for_key_subset(state, &key.name, &key.id, vec![
+                account_name,
+            ])
+            .await?;
+            key.account_group_id = Some(group.id);
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        "auto" => {
+            let Some(account_names) = key.auto_account_names.clone() else {
+                return Ok(());
+            };
+            let account_names = normalize_kiro_account_group_members(state, account_names).await?;
+            let group =
+                create_kiro_account_group_for_key_subset(state, &key.name, &key.id, account_names)
+                    .await?;
+            key.account_group_id = Some(group.id);
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        _ => Ok(()),
+    }
+}
+
+async fn validate_kiro_key_group_config(
+    state: &AppState,
+    key: &mut LlmGatewayKeyRecord,
+) -> KiroAdminResult<()> {
+    match key.route_strategy.as_deref().unwrap_or("auto") {
+        "fixed" => {
+            let group_id = key
+                .account_group_id
+                .as_deref()
+                .ok_or_else(|| bad_request("fixed route_strategy requires account_group_id"))?;
+            let group = load_kiro_account_group(state, group_id).await?;
+            if group.account_names.len() != 1 {
+                return Err(bad_request(
+                    "fixed route_strategy requires an account group with exactly one account",
+                ));
+            }
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        "auto" => {
+            if let Some(group_id) = key.account_group_id.as_deref() {
+                let _ = load_kiro_account_group(state, group_id).await?;
+            }
+            key.fixed_account_name = None;
+            key.auto_account_names = None;
+            Ok(())
+        },
+        _ => Err(bad_request("route_strategy must be `auto` or `fixed`")),
+    }
 }
 
 fn filter_known_auto_account_names(

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub const LLM_GATEWAY_KEYS_TABLE: &str = "llm_gateway_keys";
 pub const LLM_GATEWAY_USAGE_EVENTS_TABLE: &str = "llm_gateway_usage_events";
 pub const LLM_GATEWAY_RUNTIME_CONFIG_TABLE: &str = "llm_gateway_runtime_config";
+pub const LLM_GATEWAY_ACCOUNT_GROUPS_TABLE: &str = "llm_gateway_account_groups";
 pub const LLM_GATEWAY_PROXY_CONFIGS_TABLE: &str = "llm_gateway_proxy_configs";
 pub const LLM_GATEWAY_PROXY_BINDINGS_TABLE: &str = "llm_gateway_proxy_bindings";
 pub const LLM_GATEWAY_TOKEN_REQUESTS_TABLE: &str = "llm_gateway_token_requests";
@@ -23,6 +24,7 @@ pub const LLM_GATEWAY_TABLE_NAMES: &[&str] = &[
     LLM_GATEWAY_KEYS_TABLE,
     LLM_GATEWAY_USAGE_EVENTS_TABLE,
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
+    LLM_GATEWAY_ACCOUNT_GROUPS_TABLE,
     LLM_GATEWAY_PROXY_CONFIGS_TABLE,
     LLM_GATEWAY_PROXY_BINDINGS_TABLE,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
@@ -156,6 +158,11 @@ pub struct LlmGatewayKeyRecord {
     pub route_strategy: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    /// Reusable account-pool group used as the routing source of truth.
+    ///
+    /// `None` means the key routes against the full provider pool when the
+    /// strategy allows it.
+    pub account_group_id: Option<String>,
     /// Optional per-key model rewrite map.
     ///
     /// When present, a request asking for model `key` is rewritten to model
@@ -177,6 +184,17 @@ pub struct LlmGatewayKeyRecord {
     /// Whether Kiro requests using this key should expose conservative cache
     /// estimation in Anthropic-compatible usage fields.
     pub kiro_cache_estimation_enabled: bool,
+}
+
+/// Persisted reusable account-pool group shared by keys of one provider.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LlmGatewayAccountGroupRecord {
+    pub id: String,
+    pub provider_type: String,
+    pub name: String,
+    pub account_names: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 impl LlmGatewayKeyRecord {

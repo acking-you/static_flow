@@ -16,7 +16,8 @@ use static_flow_shared::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     llm_gateway_store::{
-        self, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, LlmGatewayStore,
+        self, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, now_ms,
+        LlmGatewayAccountGroupRecord, LlmGatewayStore,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
@@ -345,6 +346,7 @@ impl AppState {
         let article_request_store = Arc::new(ArticleRequestStore::connect(content_db_uri).await?);
         let interactive_store = Arc::new(InteractivePageStore::connect(content_db_uri).await?);
         let llm_gateway_store = Arc::new(LlmGatewayStore::connect(content_db_uri).await?);
+        migrate_legacy_key_account_groups(llm_gateway_store.as_ref()).await?;
         let upstream_proxy_registry =
             Arc::new(UpstreamProxyRegistry::new(llm_gateway_store.clone()).await?);
         let geoip = GeoIpResolver::from_env()?;
@@ -648,6 +650,80 @@ impl AppState {
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
     }
+}
+
+fn generate_account_group_id(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn migrated_group_name(key_name: &str, key_id: &str) -> String {
+    format!("Migrated {} {}", key_name, &key_id[..key_id.len().min(8)])
+}
+
+async fn migrate_legacy_key_account_groups(store: &LlmGatewayStore) -> Result<()> {
+    let keys = store.list_keys().await?;
+    let mut migrated_count = 0usize;
+    let mut cleaned_count = 0usize;
+
+    for mut key in keys {
+        let had_legacy_fields =
+            key.fixed_account_name.is_some() || key.auto_account_names.is_some();
+
+        if key.account_group_id.is_some() {
+            if had_legacy_fields {
+                key.fixed_account_name = None;
+                key.auto_account_names = None;
+                key.updated_at = now_ms();
+                store.replace_key(&key).await?;
+                cleaned_count += 1;
+            }
+            continue;
+        }
+
+        let account_names = match key.route_strategy.as_deref() {
+            Some("fixed") => key
+                .fixed_account_name
+                .as_ref()
+                .map(|name| vec![name.clone()])
+                .filter(|names| !names.is_empty()),
+            Some("auto") | None => key
+                .auto_account_names
+                .clone()
+                .filter(|names| !names.is_empty()),
+            Some(_) => None,
+        };
+
+        let Some(account_names) = account_names else {
+            continue;
+        };
+
+        let now = now_ms();
+        let group = LlmGatewayAccountGroupRecord {
+            id: generate_account_group_id("llm-group"),
+            provider_type: key.provider_type.clone(),
+            name: migrated_group_name(&key.name, &key.id),
+            account_names,
+            created_at: now,
+            updated_at: now,
+        };
+        store.create_account_group(&group).await?;
+        key.account_group_id = Some(group.id);
+        key.fixed_account_name = None;
+        key.auto_account_names = None;
+        key.updated_at = now;
+        store.replace_key(&key).await?;
+        migrated_count += 1;
+    }
+
+    if migrated_count > 0 || cleaned_count > 0 {
+        tracing::info!(
+            migrated_count,
+            cleaned_count,
+            "migrated legacy llm gateway key account selections into account groups"
+        );
+    }
+
+    Ok(())
 }
 
 /// Parse common boolean environment variable spellings with a fallback value.

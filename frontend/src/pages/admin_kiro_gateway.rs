@@ -10,16 +10,19 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        create_admin_kiro_key, create_admin_kiro_manual_account, delete_admin_kiro_account,
-        delete_admin_kiro_key, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
+        create_admin_kiro_account_group, create_admin_kiro_key, create_admin_kiro_manual_account,
+        delete_admin_kiro_account, delete_admin_kiro_account_group, delete_admin_kiro_key,
+        fetch_admin_kiro_account_groups, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
         fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_config,
         fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
         fetch_kiro_models, import_admin_kiro_account, patch_admin_kiro_account,
-        patch_admin_kiro_key, refresh_admin_kiro_account_balance, update_admin_llm_gateway_config,
-        AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
-        AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateManualKiroAccountInput,
-        KiroAccountView, KiroBalanceView, KiroModelView, LlmGatewayRuntimeConfig,
-        PatchAdminLlmGatewayKeyRequest, PatchKiroAccountInput,
+        patch_admin_kiro_account_group, patch_admin_kiro_key, refresh_admin_kiro_account_balance,
+        update_admin_llm_gateway_config, AdminAccountGroupView, AdminLlmGatewayKeyView,
+        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
+        AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateAdminAccountGroupInput,
+        CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView, KiroModelView,
+        LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput, PatchAdminLlmGatewayKeyRequest,
+        PatchKiroAccountInput,
     },
     pages::llm_access_shared::{
         format_float2, format_kiro_disabled_reason, format_ms, format_number_i64,
@@ -133,64 +136,48 @@ fn kiro_account_proxy_select_value(account: &KiroAccountView) -> String {
     }
 }
 
-fn sanitize_kiro_auto_account_names(names: &[String], available_names: &[String]) -> Vec<String> {
-    let valid_names = available_names
-        .iter()
-        .map(|name| name.as_str())
-        .collect::<HashSet<_>>();
-    let mut sanitized = names
-        .iter()
-        .filter(|name| valid_names.contains(name.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    sanitized.sort();
-    sanitized.dedup();
-    sanitized
-}
-
-fn sanitize_kiro_fixed_account_name(value: Option<&str>, available_names: &[String]) -> String {
+fn sanitize_kiro_account_group_id(
+    value: Option<&str>,
+    groups: &[AdminAccountGroupView],
+    _allow_empty: bool,
+) -> String {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return String::new();
     };
-    if available_names.iter().any(|name| name == value) {
+    if groups.iter().any(|group| group.id == value) {
         value.to_string()
     } else {
         String::new()
     }
 }
 
+fn kiro_group_name_for_id(groups: &[AdminAccountGroupView], group_id: &str) -> String {
+    groups
+        .iter()
+        .find(|group| group.id == group_id)
+        .map(|group| group.name.clone())
+        .unwrap_or_else(|| group_id.to_string())
+}
+
 fn kiro_key_route_summary(
     route_strategy: &str,
-    fixed_account_name: &str,
-    auto_account_names: &[String],
+    account_group_id: &str,
+    account_groups: &[AdminAccountGroupView],
 ) -> String {
     if route_strategy == "fixed" {
-        format!(
-            "绑定: {}",
-            if fixed_account_name.is_empty() { "未选择" } else { fixed_account_name }
-        )
-    } else if auto_account_names.is_empty() {
+        if account_group_id.is_empty() {
+            "固定组：未选择".to_string()
+        } else {
+            format!("固定组：{}", kiro_group_name_for_id(account_groups, account_group_id))
+        }
+    } else if account_group_id.is_empty() {
         "全账号池自动择优；如果某个账号不可用，会继续尝试其他账号。".to_string()
     } else {
         format!(
-            "仅在这些账号中自动择优: {}；如果子集里没有可用账号，请求会直接报错。",
-            auto_account_names.join(", ")
+            "仅在账号组 `{}` 中自动择优；如果组内没有可用账号，请求会直接报错。",
+            kiro_group_name_for_id(account_groups, account_group_id)
         )
     }
-}
-
-fn build_kiro_route_patch_fields(
-    route_strategy: &str,
-    fixed_account_name: &str,
-    auto_account_names: &[String],
-) -> (String, String, Vec<String>) {
-    if route_strategy == "fixed" {
-        return ("fixed".to_string(), fixed_account_name.trim().to_string(), Vec::new());
-    }
-    if auto_account_names.is_empty() {
-        return (String::new(), String::new(), Vec::new());
-    }
-    ("auto".to_string(), String::new(), auto_account_names.to_vec())
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -204,23 +191,36 @@ struct KiroKeyCandidateCreditSummary {
 
 fn kiro_key_candidate_credit_summary(
     route_strategy: &str,
-    fixed_account_name: &str,
-    auto_account_names: &[String],
+    account_group_id: &str,
     accounts: &[KiroAccountView],
+    account_groups: &[AdminAccountGroupView],
 ) -> KiroKeyCandidateCreditSummary {
     let selected_accounts = if route_strategy == "fixed" {
-        accounts
+        if let Some(group) = account_groups
             .iter()
-            .filter(|account| account.name == fixed_account_name)
-            .collect::<Vec<_>>()
-    } else if auto_account_names.is_empty() {
+            .find(|group| group.id == account_group_id)
+        {
+            let allowed_names = group.account_names.iter().collect::<HashSet<_>>();
+            accounts
+                .iter()
+                .filter(|account| allowed_names.contains(&account.name))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    } else if account_group_id.is_empty() {
         accounts.iter().collect::<Vec<_>>()
-    } else {
-        let allowed_names = auto_account_names.iter().collect::<HashSet<_>>();
+    } else if let Some(group) = account_groups
+        .iter()
+        .find(|group| group.id == account_group_id)
+    {
+        let allowed_names = group.account_names.iter().collect::<HashSet<_>>();
         accounts
             .iter()
             .filter(|account| allowed_names.contains(&account.name))
             .collect::<Vec<_>>()
+    } else {
+        Vec::new()
     };
 
     let mut summary = KiroKeyCandidateCreditSummary {
@@ -709,6 +709,7 @@ struct KiroKeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
     available_models: Vec<KiroModelView>,
     accounts: Vec<KiroAccountView>,
+    account_groups: Vec<AdminAccountGroupView>,
     on_reload: Callback<()>,
     on_copy: Callback<(String, String)>,
     on_flash: Callback<(String, bool)>,
@@ -716,11 +717,6 @@ struct KiroKeyEditorCardProps {
 
 #[function_component(KiroKeyEditorCard)]
 fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
-    let available_account_names = props
-        .accounts
-        .iter()
-        .map(|account| account.name.clone())
-        .collect::<Vec<_>>();
     let name = use_state(|| props.key_item.name.clone());
     let quota = use_state(|| props.key_item.quota_billable_limit.to_string());
     let status = use_state(|| props.key_item.status.clone());
@@ -731,16 +727,11 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             .clone()
             .unwrap_or_else(|| "auto".to_string())
     });
-    let fixed_account_name = use_state(|| {
-        sanitize_kiro_fixed_account_name(
-            props.key_item.fixed_account_name.as_deref(),
-            &available_account_names,
-        )
-    });
-    let auto_account_names = use_state(|| {
-        sanitize_kiro_auto_account_names(
-            props.key_item.auto_account_names.as_deref().unwrap_or(&[]),
-            &available_account_names,
+    let account_group_id = use_state(|| {
+        sanitize_kiro_account_group_id(
+            props.key_item.account_group_id.as_deref(),
+            &props.account_groups,
+            true,
         )
     });
     let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
@@ -754,17 +745,16 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
 
     {
         let key_item = props.key_item.clone();
+        let account_groups = props.account_groups.clone();
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
         let route_strategy = route_strategy.clone();
-        let fixed_account_name = fixed_account_name.clone();
-        let auto_account_names = auto_account_names.clone();
+        let account_group_id = account_group_id.clone();
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
-        let available_account_names = available_account_names.clone();
-        use_effect_with(props.key_item.clone(), move |_| {
+        use_effect_with((props.key_item.clone(), props.account_groups.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
             status.set(key_item.status.clone());
@@ -774,33 +764,14 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     .clone()
                     .unwrap_or_else(|| "auto".to_string()),
             );
-            fixed_account_name.set(sanitize_kiro_fixed_account_name(
-                key_item.fixed_account_name.as_deref(),
-                &available_account_names,
-            ));
-            auto_account_names.set(sanitize_kiro_auto_account_names(
-                key_item.auto_account_names.as_deref().unwrap_or(&[]),
-                &available_account_names,
+            account_group_id.set(sanitize_kiro_account_group_id(
+                key_item.account_group_id.as_deref(),
+                &account_groups,
+                true,
             ));
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
             kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
-            || ()
-        });
-    }
-
-    {
-        let fixed_account_name = fixed_account_name.clone();
-        let auto_account_names = auto_account_names.clone();
-        use_effect_with(available_account_names.clone(), move |available_account_names| {
-            fixed_account_name.set(sanitize_kiro_fixed_account_name(
-                Some((*fixed_account_name).as_str()),
-                available_account_names,
-            ));
-            auto_account_names.set(sanitize_kiro_auto_account_names(
-                (*auto_account_names).as_slice(),
-                available_account_names,
-            ));
             || ()
         });
     }
@@ -812,8 +783,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let quota = quota.clone();
         let status = status.clone();
         let route_strategy = route_strategy.clone();
-        let fixed_account_name = fixed_account_name.clone();
-        let auto_account_names = auto_account_names.clone();
+        let account_group_id = account_group_id.clone();
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
@@ -828,14 +798,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let quota_value = (*quota).clone();
             let status_value = (*status).clone();
             let route_strategy_value = (*route_strategy).clone();
-            let fixed_account_name_value = (*fixed_account_name).clone();
-            let auto_account_names_value = (*auto_account_names).clone();
-            let (route_strategy_payload, fixed_account_name_payload, auto_account_names_payload) =
-                build_kiro_route_patch_fields(
-                    &route_strategy_value,
-                    &fixed_account_name_value,
-                    auto_account_names_value.as_slice(),
-                );
+            let account_group_id_value = (*account_group_id).clone();
             let model_name_map_value = (*model_name_map).clone();
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
@@ -860,9 +823,10 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     status: Some(status_value.trim()),
                     public_visible: None,
                     quota_billable_limit: Some(parsed_quota),
-                    route_strategy: Some(route_strategy_payload.as_str()),
-                    fixed_account_name: Some(fixed_account_name_payload.as_str()),
-                    auto_account_names: Some(auto_account_names_payload.as_slice()),
+                    route_strategy: Some(route_strategy_value.as_str()),
+                    account_group_id: Some(account_group_id_value.as_str()),
+                    fixed_account_name: None,
+                    auto_account_names: None,
                     model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
@@ -895,8 +859,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let name = name.clone();
         let quota = quota.clone();
         let route_strategy = route_strategy.clone();
-        let fixed_account_name = fixed_account_name.clone();
-        let auto_account_names = auto_account_names.clone();
+        let account_group_id = account_group_id.clone();
         let model_name_map = model_name_map.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let saving = saving.clone();
@@ -909,14 +872,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
             let route_strategy_value = (*route_strategy).clone();
-            let fixed_account_name_value = (*fixed_account_name).clone();
-            let auto_account_names_value = (*auto_account_names).clone();
-            let (route_strategy_payload, fixed_account_name_payload, auto_account_names_payload) =
-                build_kiro_route_patch_fields(
-                    &route_strategy_value,
-                    &fixed_account_name_value,
-                    auto_account_names_value.as_slice(),
-                );
+            let account_group_id_value = (*account_group_id).clone();
             let model_name_map_value = (*model_name_map).clone();
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let saving = saving.clone();
@@ -940,9 +896,10 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     status: Some("disabled"),
                     public_visible: None,
                     quota_billable_limit: Some(parsed_quota),
-                    route_strategy: Some(route_strategy_payload.as_str()),
-                    fixed_account_name: Some(fixed_account_name_payload.as_str()),
-                    auto_account_names: Some(auto_account_names_payload.as_slice()),
+                    route_strategy: Some(route_strategy_value.as_str()),
+                    account_group_id: Some(account_group_id_value.as_str()),
+                    fixed_account_name: None,
+                    auto_account_names: None,
                     model_name_map: Some(&model_name_map_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
@@ -1011,32 +968,22 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         Callback::from(move |_| model_name_map.set(BTreeMap::new()))
     };
-
-    let toggle_auto_account_name = {
-        let auto_account_names = auto_account_names.clone();
-        Callback::from(move |account_name: String| {
-            let mut names = (*auto_account_names).clone();
-            if let Some(idx) = names.iter().position(|name| name == &account_name) {
-                names.remove(idx);
-            } else {
-                names.push(account_name);
-                names.sort();
-                names.dedup();
-            }
-            auto_account_names.set(names);
-        })
-    };
-
+    let fixed_route_groups = props
+        .account_groups
+        .iter()
+        .filter(|group| group.account_names.len() == 1)
+        .cloned()
+        .collect::<Vec<_>>();
     let route_summary = kiro_key_route_summary(
         (*route_strategy).as_str(),
-        (*fixed_account_name).as_str(),
-        (*auto_account_names).as_slice(),
+        (*account_group_id).as_str(),
+        props.account_groups.as_slice(),
     );
     let candidate_credit_summary = kiro_key_candidate_credit_summary(
         (*route_strategy).as_str(),
-        (*fixed_account_name).as_str(),
-        (*auto_account_names).as_slice(),
+        (*account_group_id).as_str(),
         props.accounts.as_slice(),
+        props.account_groups.as_slice(),
     );
     let candidate_credit_summary_text =
         format_kiro_key_candidate_credit_summary(&candidate_credit_summary);
@@ -1253,59 +1200,46 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                             </label>
                             if *route_strategy == "fixed" {
                                 <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                                    <span>{ "账号" }</span>
+                                    <span>{ "单账号组" }</span>
                                     <select
-                                        key={format!("{}-fixed-{}", props.key_item.id, (*fixed_account_name).clone())}
+                                        key={format!("{}-group-fixed-{}", props.key_item.id, (*account_group_id).clone())}
                                         class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
                                         onchange={{
-                                            let fixed_account_name = fixed_account_name.clone();
+                                            let account_group_id = account_group_id.clone();
                                             Callback::from(move |event: Event| {
                                                 if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                                                    fixed_account_name.set(target.value());
+                                                    account_group_id.set(target.value());
                                                 }
                                             })
                                         }}
                                     >
-                                        <option value="" selected={(*fixed_account_name).is_empty()}>{ "-- 选择 --" }</option>
-                                        { for props.accounts.iter().map(|account| html! {
-                                            <option value={account.name.clone()} selected={*fixed_account_name == account.name}>{ account.name.clone() }</option>
+                                        <option value="" selected={(*account_group_id).is_empty()}>{ "-- 选择组 --" }</option>
+                                        { for fixed_route_groups.iter().map(|group| html! {
+                                            <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({})", group.name, group.account_names.join(", ")) }</option>
                                         }) }
                                     </select>
                                 </label>
                             } else {
-                                <div class={classes!("w-full", "space-y-2")}>
-                                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "自动候选账号（可选，空则走全池）" }</div>
-                                    if props.accounts.is_empty() {
-                                        <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
-                                            { "当前没有可供绑定的账号。" }
-                                        </div>
-                                    } else {
-                                        <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                                            { for props.accounts.iter().map(|account| {
-                                                let account_name = account.name.clone();
-                                                let checked = auto_account_names.iter().any(|name| name == &account.name);
-                                                let toggle_auto_account_name = toggle_auto_account_name.clone();
-                                                html! {
-                                                    <label class={classes!(
-                                                        "flex", "cursor-pointer", "items-start", "gap-2", "rounded-lg", "border", "px-3", "py-2",
-                                                        if checked {
-                                                            "border-sky-500/30 bg-sky-500/8"
-                                                        } else {
-                                                            "border-[var(--border)] bg-[var(--surface-alt)]"
-                                                        }
-                                                    )}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={checked}
-                                                            onchange={Callback::from(move |_| toggle_auto_account_name.emit(account_name.clone()))}
-                                                        />
-                                                        <span class={classes!("font-medium")}>{ account.name.clone() }</span>
-                                                    </label>
+                                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                    <span>{ "账号组" }</span>
+                                    <select
+                                        key={format!("{}-group-auto-{}", props.key_item.id, (*account_group_id).clone())}
+                                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                                        onchange={{
+                                            let account_group_id = account_group_id.clone();
+                                            Callback::from(move |event: Event| {
+                                                if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                                    account_group_id.set(target.value());
                                                 }
-                                            }) }
-                                        </div>
-                                    }
-                                </div>
+                                            })
+                                        }}
+                                    >
+                                        <option value="" selected={(*account_group_id).is_empty()}>{ "全账号池" }</option>
+                                        { for props.account_groups.iter().map(|group| html! {
+                                            <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({} 个账号)", group.name, group.account_names.len()) }</option>
+                                        }) }
+                                    </select>
+                                </label>
                             }
                         </div>
                     }
@@ -1414,6 +1348,255 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     }
 }
 
+#[derive(Properties, PartialEq)]
+struct KiroAccountGroupEditorCardProps {
+    group_item: AdminAccountGroupView,
+    accounts: Vec<KiroAccountView>,
+    on_reload: Callback<()>,
+    on_flash: Callback<(String, bool)>,
+}
+
+#[function_component(KiroAccountGroupEditorCard)]
+fn kiro_account_group_editor_card(props: &KiroAccountGroupEditorCardProps) -> Html {
+    let name = use_state(|| props.group_item.name.clone());
+    let account_names = use_state(|| {
+        let valid_names = props
+            .accounts
+            .iter()
+            .map(|account| account.name.as_str())
+            .collect::<HashSet<_>>();
+        let mut names = props
+            .group_item
+            .account_names
+            .iter()
+            .filter(|name| valid_names.contains(name.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        names
+    });
+    let saving = use_state(|| false);
+    let feedback = use_state(|| None::<String>);
+
+    {
+        let group_item = props.group_item.clone();
+        let accounts = props.accounts.clone();
+        let name = name.clone();
+        let account_names = account_names.clone();
+        use_effect_with((props.group_item.clone(), props.accounts.clone()), move |_| {
+            let valid_names = accounts
+                .iter()
+                .map(|account| account.name.as_str())
+                .collect::<HashSet<_>>();
+            let mut names = group_item
+                .account_names
+                .iter()
+                .filter(|member| valid_names.contains(member.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            names.sort();
+            names.dedup();
+            name.set(group_item.name.clone());
+            account_names.set(names);
+            || ()
+        });
+    }
+
+    let on_toggle_account = {
+        let account_names = account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*account_names).clone();
+            if let Some(index) = names.iter().position(|name| name == &account_name) {
+                names.remove(index);
+            } else {
+                names.push(account_name);
+                names.sort();
+                names.dedup();
+            }
+            account_names.set(names);
+        })
+    };
+
+    let on_save = {
+        let group_id = props.group_item.id.clone();
+        let name = name.clone();
+        let account_names = account_names.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            if *saving {
+                return;
+            }
+            let group_id = group_id.clone();
+            let name_value = (*name).trim().to_string();
+            let account_names_value = (*account_names).clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if name_value.is_empty() {
+                    let message = "组名不能为空".to_string();
+                    feedback.set(Some(message.clone()));
+                    on_flash.emit((message, true));
+                    return;
+                }
+                if account_names_value.is_empty() {
+                    let message = "账号组至少需要选择一个账号".to_string();
+                    feedback.set(Some(message.clone()));
+                    on_flash.emit((message, true));
+                    return;
+                }
+                saving.set(true);
+                match patch_admin_kiro_account_group(&group_id, PatchAdminAccountGroupInput {
+                    name: Some(&name_value),
+                    account_names: Some(account_names_value.as_slice()),
+                })
+                .await
+                {
+                    Ok(_) => {
+                        feedback.set(Some("Saved.".to_string()));
+                        on_flash.emit((format!("已保存 Kiro 账号组 `{name_value}`"), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((format!("保存 Kiro 账号组失败\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_delete = {
+        let group_id = props.group_item.id.clone();
+        let group_name = props.group_item.name.clone();
+        let saving = saving.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            if !window
+                .confirm_with_message("确认删除这个 Kiro 账号组？")
+                .ok()
+                .unwrap_or(false)
+            {
+                return;
+            }
+            let group_id = group_id.clone();
+            let group_name = group_name.clone();
+            let saving = saving.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                match delete_admin_kiro_account_group(&group_id).await {
+                    Ok(_) => {
+                        on_flash.emit((format!("已删除 Kiro 账号组 `{group_name}`"), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        on_flash.emit((format!("删除 Kiro 账号组失败\n{err}"), true));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    html! {
+        <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.group_item.name.clone() }</h3>
+                <div class={classes!("flex", "items-center", "gap-2")}>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} 个账号", props.group_item.account_names.len()) }</span>
+                    <button class={classes!("btn-terminal", "text-red-600", "dark:text-red-300")} onclick={on_delete} disabled={*saving}>
+                        { "删除" }
+                    </button>
+                </div>
+            </div>
+
+            <label class={classes!("mt-3", "block", "text-sm")}>
+                <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
+                <input
+                    type="text"
+                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
+                    value={(*name).clone()}
+                    oninput={{
+                        let name = name.clone();
+                        Callback::from(move |event: InputEvent| {
+                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                name.set(target.value());
+                            }
+                        })
+                    }}
+                />
+            </label>
+
+            <div class={classes!("mt-3", "space-y-2")}>
+                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                    { for props.accounts.iter().map(|account| {
+                        let checked = account_names.iter().any(|name| name == &account.name);
+                        let account_name = account.name.clone();
+                        let on_toggle_account = on_toggle_account.clone();
+                        let balance_hint = account
+                            .balance
+                            .as_ref()
+                            .map(|balance| format!(
+                                "remaining {} / {}",
+                                format_float2(balance.remaining),
+                                format_float2(balance.usage_limit)
+                            ))
+                            .unwrap_or_else(|| "balance loading".to_string());
+                        html! {
+                            <label class={classes!(
+                                "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                if checked {
+                                    "border-sky-500/30 bg-sky-500/8"
+                                } else {
+                                    "border-[var(--border)] bg-[var(--surface-alt)]"
+                                }
+                            )}>
+                                <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
+                                />
+                                <div class={classes!("min-w-0", "flex-1")}>
+                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                    <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                        { balance_hint }
+                                    </div>
+                                </div>
+                            </label>
+                        }
+                    }) }
+                </div>
+            </div>
+
+            <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3")}>
+                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                    { format!("当前成员: {}", if account_names.is_empty() { "无".to_string() } else { account_names.join(", ") }) }
+                </span>
+                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
+                    { if *saving { "保存中..." } else { "保存账号组" } }
+                </button>
+            </div>
+
+            if let Some(feedback) = (*feedback).clone() {
+                <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ feedback }</div>
+            }
+        </article>
+    }
+}
+
 #[function_component(AdminKiroGatewayPage)]
 /// Render the Kiro-specific admin surface.
 ///
@@ -1422,6 +1605,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
 pub fn admin_kiro_gateway_page() -> Html {
     let accounts = use_state(Vec::<KiroAccountView>::new);
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
+    let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
     let kiro_models = use_state(Vec::<KiroModelView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_loading = use_state(|| false);
@@ -1493,6 +1677,9 @@ pub fn admin_kiro_gateway_page() -> Html {
 
     let new_key_name = use_state(|| "kiro-private".to_string());
     let new_key_quota = use_state(|| "1000000".to_string());
+    let create_account_group_name = use_state(String::new);
+    let create_account_group_account_names = use_state(Vec::<String>::new);
+    let creating_account_group = use_state(|| false);
 
     let reload_usage = {
         let usage_events = usage_events.clone();
@@ -1523,6 +1710,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     {
         let accounts = accounts.clone();
         let keys = keys.clone();
+        let account_groups = account_groups.clone();
         let kiro_models = kiro_models.clone();
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
@@ -1538,6 +1726,7 @@ pub fn admin_kiro_gateway_page() -> Html {
         use_effect_with(*refresh_tick, move |_| {
             let accounts = accounts.clone();
             let keys = keys.clone();
+            let account_groups = account_groups.clone();
             let kiro_models = kiro_models.clone();
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
@@ -1557,6 +1746,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     config_result,
                     accounts_result,
                     keys_result,
+                    account_groups_result,
                     models_result,
                     proxy_configs_result,
                     proxy_bindings_result,
@@ -1564,6 +1754,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     fetch_admin_llm_gateway_config(),
                     fetch_admin_kiro_accounts(),
                     fetch_admin_kiro_keys(),
+                    fetch_admin_kiro_account_groups(),
                     fetch_kiro_models(),
                     fetch_admin_llm_gateway_proxy_configs(),
                     fetch_admin_llm_gateway_proxy_bindings(),
@@ -1572,6 +1763,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     config_result,
                     accounts_result,
                     keys_result,
+                    account_groups_result,
                     models_result,
                     proxy_configs_result,
                     proxy_bindings_result,
@@ -1580,6 +1772,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         Ok(config_resp),
                         Ok(accounts_resp),
                         Ok(keys_resp),
+                        Ok(account_groups_resp),
                         Ok(models_resp),
                         Ok(proxy_configs_resp),
                         Ok(proxy_bindings_resp),
@@ -1598,16 +1791,18 @@ pub fn admin_kiro_gateway_page() -> Html {
                         runtime_config.set(Some(config_resp));
                         accounts.set(accounts_resp.accounts);
                         keys.set(keys_resp.keys);
+                        account_groups.set(account_groups_resp.groups);
                         kiro_models.set(models_resp.data);
                         proxy_configs.set(proxy_configs_resp.proxy_configs);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
                     },
-                    (Err(err), _, _, _, _, _)
-                    | (_, Err(err), _, _, _, _)
-                    | (_, _, Err(err), _, _, _)
-                    | (_, _, _, Err(err), _, _)
-                    | (_, _, _, _, Err(err), _)
-                    | (_, _, _, _, _, Err(err)) => {
+                    (Err(err), _, _, _, _, _, _)
+                    | (_, Err(err), _, _, _, _, _)
+                    | (_, _, Err(err), _, _, _, _)
+                    | (_, _, _, Err(err), _, _, _)
+                    | (_, _, _, _, Err(err), _, _)
+                    | (_, _, _, _, _, Err(err), _)
+                    | (_, _, _, _, _, _, Err(err)) => {
                         error.set(Some(err));
                     },
                 }
@@ -1977,6 +2172,77 @@ pub fn admin_kiro_gateway_page() -> Html {
                         notify.emit((format!("Failed to create Kiro key.\n{err}"), true));
                     },
                 }
+            });
+        })
+    };
+
+    let on_toggle_create_account_group_member = {
+        let create_account_group_account_names = create_account_group_account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*create_account_group_account_names).clone();
+            if let Some(index) = names.iter().position(|name| name == &account_name) {
+                names.remove(index);
+            } else {
+                names.push(account_name);
+                names.sort();
+                names.dedup();
+            }
+            create_account_group_account_names.set(names);
+        })
+    };
+
+    let on_create_account_group = {
+        let create_account_group_name = create_account_group_name.clone();
+        let create_account_group_account_names = create_account_group_account_names.clone();
+        let creating_account_group = creating_account_group.clone();
+        let notify = notify.clone();
+        let error = error.clone();
+        let on_reload = on_reload.clone();
+        Callback::from(move |_| {
+            if *creating_account_group {
+                return;
+            }
+            let group_name = (*create_account_group_name).trim().to_string();
+            let account_names = (*create_account_group_account_names).clone();
+            let create_account_group_name = create_account_group_name.clone();
+            let create_account_group_account_names = create_account_group_account_names.clone();
+            let creating_account_group = creating_account_group.clone();
+            let notify = notify.clone();
+            let error = error.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if group_name.is_empty() {
+                    let message = "账号组名称不能为空".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                }
+                if account_names.is_empty() {
+                    let message = "账号组至少需要选择一个账号".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                }
+                creating_account_group.set(true);
+                match create_admin_kiro_account_group(CreateAdminAccountGroupInput {
+                    name: &group_name,
+                    account_names: account_names.as_slice(),
+                })
+                .await
+                {
+                    Ok(_) => {
+                        error.set(None);
+                        create_account_group_name.set(String::new());
+                        create_account_group_account_names.set(Vec::new());
+                        notify.emit((format!("已创建 Kiro 账号组 `{group_name}`"), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        error.set(Some(err.clone()));
+                        notify.emit((format!("创建 Kiro 账号组失败\n{err}"), true));
+                    },
+                }
+                creating_account_group.set(false);
             });
         })
     };
@@ -2445,6 +2711,140 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </article>
             </section>
 
+            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Account Groups" }</h2>
+                        <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "先维护账号组，再让 key 选择组。固定路由请选择单账号组；自动路由可以选任意组，留空则继续使用全账号池。" }
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal")}
+                        onclick={{
+                            let on_reload = on_reload.clone();
+                            Callback::from(move |_| on_reload.emit(()))
+                        }}
+                    >
+                        { if *loading { "Refreshing..." } else { "Refresh Groups" } }
+                    </button>
+                </div>
+
+                <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                    <div class={classes!("grid", "gap-3")}>
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Group Name" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
+                                value={(*create_account_group_name).clone()}
+                                oninput={{
+                                    let create_account_group_name = create_account_group_name.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        create_account_group_name.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <div class={classes!("space-y-2")}>
+                            <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                            if accounts.is_empty() {
+                                <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
+                                    { "当前没有可加入账号组的 Kiro 账号。" }
+                                </div>
+                            } else {
+                                <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                    { for accounts.iter().map(|account| {
+                                        let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
+                                        let account_name = account.name.clone();
+                                        let on_toggle_create_account_group_member =
+                                            on_toggle_create_account_group_member.clone();
+                                        let balance_hint = account
+                                            .balance
+                                            .as_ref()
+                                            .map(|balance| format!(
+                                                "remaining {} / {}",
+                                                format_float2(balance.remaining),
+                                                format_float2(balance.usage_limit)
+                                            ))
+                                            .unwrap_or_else(|| "balance loading".to_string());
+                                        html! {
+                                            <label class={classes!(
+                                                "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                                if checked {
+                                                    "border-sky-500/30 bg-sky-500/8"
+                                                } else {
+                                                    "border-[var(--border)] bg-[var(--surface)]"
+                                                }
+                                            )}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onchange={Callback::from(move |_| {
+                                                        on_toggle_create_account_group_member.emit(account_name.clone())
+                                                    })}
+                                                />
+                                                <div class={classes!("min-w-0", "flex-1")}>
+                                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                                    <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                        { balance_hint }
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        }
+                                    }) }
+                                </div>
+                            }
+                        </div>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                { format!(
+                                    "当前成员: {}",
+                                    if create_account_group_account_names.is_empty() {
+                                        "无".to_string()
+                                    } else {
+                                        create_account_group_account_names.join(", ")
+                                    }
+                                ) }
+                            </span>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "btn-terminal-primary")}
+                                onclick={on_create_account_group}
+                                disabled={*creating_account_group}
+                            >
+                                { if *creating_account_group { "Creating..." } else { "Create Group" } }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
+                    {
+                        if (*account_groups).is_empty() {
+                            html! {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                                    { "当前还没有 Kiro 账号组。" }
+                                </div>
+                            }
+                        } else {
+                            html! {
+                                for (*account_groups).iter().map(|group_item| html! {
+                                    <KiroAccountGroupEditorCard
+                                        key={group_item.id.clone()}
+                                        group_item={group_item.clone()}
+                                        accounts={(*accounts).clone()}
+                                        on_reload={on_reload.clone()}
+                                        on_flash={notify.clone()}
+                                    />
+                                })
+                            }
+                        }
+                    }
+                </div>
+            </section>
+
             <section>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
@@ -2477,6 +2877,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                         key_item={key_item.clone()}
                                         available_models={(*kiro_models).clone()}
                                         accounts={(*accounts).clone()}
+                                        account_groups={(*account_groups).clone()}
                                         on_reload={on_reload.clone()}
                                         on_copy={on_copy.clone()}
                                         on_flash={notify.clone()}
@@ -2618,60 +3019,38 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        build_kiro_route_patch_fields, kiro_key_candidate_credit_summary, kiro_key_route_summary,
-        sanitize_kiro_auto_account_names, sanitize_kiro_fixed_account_name,
+        kiro_key_candidate_credit_summary, kiro_key_route_summary, sanitize_kiro_account_group_id,
     };
-    use crate::api::{KiroAccountView, KiroBalanceView, KiroCacheView};
+    use crate::api::{AdminAccountGroupView, KiroAccountView, KiroBalanceView, KiroCacheView};
 
     #[test]
-    fn sanitize_kiro_auto_account_names_drops_unknown_and_sorts() {
-        let available = vec!["beta".to_string(), "alpha".to_string()];
-        let configured = vec![
-            "beta".to_string(),
-            "missing".to_string(),
-            "alpha".to_string(),
-            "beta".to_string(),
-        ];
+    fn sanitize_kiro_account_group_id_drops_unknown_value() {
+        let groups =
+            vec![test_group("group-alpha", &["alpha"]), test_group("group-beta", &["beta"])];
 
-        assert_eq!(sanitize_kiro_auto_account_names(&configured, &available), vec![
-            "alpha".to_string(),
-            "beta".to_string()
-        ]);
+        assert_eq!(sanitize_kiro_account_group_id(Some("missing"), &groups, true), "");
+        assert_eq!(
+            sanitize_kiro_account_group_id(Some(" group-beta "), &groups, true),
+            "group-beta"
+        );
     }
 
     #[test]
-    fn sanitize_kiro_fixed_account_name_drops_unknown_value() {
-        let available = vec!["alpha".to_string(), "beta".to_string()];
-
-        assert_eq!(sanitize_kiro_fixed_account_name(Some("missing"), &available), "");
-        assert_eq!(sanitize_kiro_fixed_account_name(Some(" beta "), &available), "beta");
-    }
-
-    #[test]
-    fn kiro_key_route_summary_uses_full_pool_text_when_subset_is_empty() {
+    fn kiro_key_route_summary_uses_full_pool_text_when_group_is_empty() {
         let summary = kiro_key_route_summary("auto", "", &[]);
         assert!(summary.contains("全账号池自动择优"));
     }
 
     #[test]
-    fn build_kiro_route_patch_fields_uses_default_route_when_auto_subset_is_empty() {
-        let (strategy, fixed_account_name, auto_account_names) =
-            build_kiro_route_patch_fields("auto", "alpha", &[]);
-        assert!(strategy.is_empty());
-        assert!(fixed_account_name.is_empty());
-        assert!(auto_account_names.is_empty());
-    }
-
-    #[test]
-    fn kiro_key_candidate_credit_summary_uses_auto_subset_only() {
+    fn kiro_key_candidate_credit_summary_uses_auto_group_only() {
         let accounts = vec![
             test_account("alpha", Some((100.0, 40.0))),
             test_account("beta", Some((60.0, 10.0))),
             test_account("gamma", Some((30.0, 5.0))),
         ];
+        let groups = vec![test_group("group-beta", &["beta"])];
 
-        let summary =
-            kiro_key_candidate_credit_summary("auto", "", &["beta".to_string()], &accounts);
+        let summary = kiro_key_candidate_credit_summary("auto", "group-beta", &accounts, &groups);
 
         assert_eq!(summary.candidate_count, 1);
         assert_eq!(summary.loaded_balance_count, 1);
@@ -2683,8 +3062,9 @@ mod tests {
     #[test]
     fn kiro_key_candidate_credit_summary_counts_missing_balances() {
         let accounts = vec![test_account("alpha", Some((100.0, 40.0))), test_account("beta", None)];
+        let groups = vec![test_group("group-beta", &["beta"])];
 
-        let summary = kiro_key_candidate_credit_summary("fixed", "beta", &[], &accounts);
+        let summary = kiro_key_candidate_credit_summary("fixed", "group-beta", &accounts, &groups);
 
         assert_eq!(summary.candidate_count, 1);
         assert_eq!(summary.loaded_balance_count, 0);
@@ -2711,6 +3091,20 @@ mod tests {
                 error_message: None,
             },
             ..KiroAccountView::default()
+        }
+    }
+
+    fn test_group(id: &str, account_names: &[&str]) -> AdminAccountGroupView {
+        AdminAccountGroupView {
+            id: id.to_string(),
+            provider_type: "kiro".to_string(),
+            name: id.to_string(),
+            account_names: account_names
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            created_at: 0,
+            updated_at: 0,
         }
     }
 }

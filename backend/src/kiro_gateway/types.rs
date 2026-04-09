@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LlmGatewayUsageEventRecord};
+use static_flow_shared::llm_gateway_store::{
+    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
+};
 
 use super::{auth_file::KiroAuthRecord, wire::UsageLimitsResponse};
 
@@ -148,6 +150,8 @@ pub struct AdminKiroKeyView {
     pub updated_at: i64,
     /// Routing strategy: `"fixed"`, `"auto"`, or `None` (default round-robin).
     pub route_strategy: Option<String>,
+    /// Reusable provider-scoped account-pool group selected by this key.
+    pub account_group_id: Option<String>,
     /// Account name used when `route_strategy` is `"fixed"`.
     pub fixed_account_name: Option<String>,
     /// Candidate account names when `route_strategy` is `"auto"`.
@@ -180,6 +184,7 @@ impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
             created_at: value.created_at,
             updated_at: value.updated_at,
             route_strategy: value.route_strategy.clone(),
+            account_group_id: value.account_group_id.clone(),
             fixed_account_name: value.fixed_account_name.clone(),
             auto_account_names: value.auto_account_names.clone(),
             model_name_map: value.model_name_map.clone(),
@@ -194,6 +199,35 @@ impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
 pub struct AdminKiroKeysResponse {
     pub keys: Vec<AdminKiroKeyView>,
     pub auth_cache_ttl_seconds: u64,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminKiroAccountGroupView {
+    pub id: String,
+    pub provider_type: String,
+    pub name: String,
+    pub account_names: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl From<&LlmGatewayAccountGroupRecord> for AdminKiroAccountGroupView {
+    fn from(value: &LlmGatewayAccountGroupRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            provider_type: value.provider_type.clone(),
+            name: value.name.clone(),
+            account_names: value.account_names.clone(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminKiroAccountGroupsResponse {
+    pub groups: Vec<AdminKiroAccountGroupView>,
     pub generated_at: i64,
 }
 
@@ -297,6 +331,8 @@ pub struct PatchKiroKeyRequest {
     #[serde(default)]
     pub route_strategy: Option<String>,
     #[serde(default)]
+    pub account_group_id: Option<String>,
+    #[serde(default)]
     pub fixed_account_name: Option<String>,
     #[serde(default)]
     pub auto_account_names: Option<Vec<String>>,
@@ -306,6 +342,20 @@ pub struct PatchKiroKeyRequest {
     pub kiro_request_validation_enabled: Option<bool>,
     #[serde(default)]
     pub kiro_cache_estimation_enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateKiroAccountGroupRequest {
+    pub name: String,
+    pub account_names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchKiroAccountGroupRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub account_names: Option<Vec<String>>,
 }
 
 /// Normalized account-balance snapshot derived from Kiro `getUsageLimits`.

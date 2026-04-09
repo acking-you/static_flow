@@ -28,9 +28,9 @@ use lancedb::{
 pub use self::types::{
     compute_billable_tokens, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
     is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountContributionRequestRecord,
-    LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord, LlmGatewayProxyBindingRecord,
-    LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
-    LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord,
+    LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
+    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
     NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
     NewLlmGatewayTokenRequestInput, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
     DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
@@ -46,11 +46,11 @@ pub use self::types::{
     DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
     DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES, KIRO_PREFIX_CACHE_MODE_FORMULA,
     KIRO_PREFIX_CACHE_MODE_PREFIX_TREE, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
-    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
-    LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
-    LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
-    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+    LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE,
+    LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI,
+    LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE,
+    LLM_GATEWAY_PROXY_CONFIGS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
+    LLM_GATEWAY_SPONSOR_REQUESTS_TABLE, LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED, LLM_GATEWAY_TABLE_NAMES,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
@@ -59,19 +59,20 @@ pub use self::types::{
 };
 use self::{
     codec::{
-        batches_to_account_contribution_requests, batches_to_keys, batches_to_proxy_bindings,
-        batches_to_proxy_configs, batches_to_runtime_config, batches_to_sponsor_requests,
-        batches_to_token_requests, batches_to_usage_events,
-        build_account_contribution_requests_batch, build_keys_batch, build_proxy_bindings_batch,
-        build_proxy_configs_batch, build_runtime_config_batch, build_sponsor_requests_batch,
-        build_token_requests_batch, build_usage_events_batch,
+        batches_to_account_contribution_requests, batches_to_account_groups, batches_to_keys,
+        batches_to_proxy_bindings, batches_to_proxy_configs, batches_to_runtime_config,
+        batches_to_sponsor_requests, batches_to_token_requests, batches_to_usage_events,
+        build_account_contribution_requests_batch, build_account_groups_batch, build_keys_batch,
+        build_proxy_bindings_batch, build_proxy_configs_batch, build_runtime_config_batch,
+        build_sponsor_requests_batch, build_token_requests_batch, build_usage_events_batch,
     },
     schema::{
-        account_contribution_request_columns, ensure_account_contribution_requests_table,
-        ensure_keys_table, ensure_proxy_bindings_table, ensure_proxy_configs_table,
-        ensure_runtime_config_table, ensure_sponsor_requests_table, ensure_token_requests_table,
-        ensure_usage_events_table, escape_literal, key_columns, proxy_binding_columns,
-        proxy_config_columns, sponsor_request_columns, token_request_columns, usage_event_columns,
+        account_contribution_request_columns, account_group_columns,
+        ensure_account_contribution_requests_table, ensure_account_groups_table, ensure_keys_table,
+        ensure_proxy_bindings_table, ensure_proxy_configs_table, ensure_runtime_config_table,
+        ensure_sponsor_requests_table, ensure_token_requests_table, ensure_usage_events_table,
+        escape_literal, key_columns, proxy_binding_columns, proxy_config_columns,
+        sponsor_request_columns, token_request_columns, usage_event_columns,
     },
 };
 use crate::optimize::compact_table_with_fallback;
@@ -129,6 +130,7 @@ impl LlmGatewayStore {
         ensure_keys_table(&self.db).await?;
         ensure_usage_events_table(&self.db).await?;
         ensure_runtime_config_table(&self.db).await?;
+        ensure_account_groups_table(&self.db).await?;
         ensure_proxy_configs_table(&self.db).await?;
         ensure_proxy_bindings_table(&self.db).await?;
         ensure_token_requests_table(&self.db).await?;
@@ -155,6 +157,10 @@ impl LlmGatewayStore {
 
     async fn runtime_config_table(&self) -> Result<Table> {
         self.open_table(LLM_GATEWAY_RUNTIME_CONFIG_TABLE).await
+    }
+
+    async fn account_groups_table(&self) -> Result<Table> {
+        self.open_table(LLM_GATEWAY_ACCOUNT_GROUPS_TABLE).await
     }
 
     async fn proxy_configs_table(&self) -> Result<Table> {
@@ -418,6 +424,107 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway runtime config")?;
+        Ok(())
+    }
+
+    /// Insert a new reusable account group.
+    pub async fn create_account_group(&self, record: &LlmGatewayAccountGroupRecord) -> Result<()> {
+        let table = self.account_groups_table().await?;
+        let batch = build_account_groups_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        table
+            .add(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .execute()
+            .await
+            .context("failed to create llm gateway account group")?;
+        Ok(())
+    }
+
+    /// Upsert an account group by `id`.
+    pub async fn upsert_account_group(&self, record: &LlmGatewayAccountGroupRecord) -> Result<()> {
+        let table = self.account_groups_table().await?;
+        let batch = build_account_groups_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        let mut merge = table.merge_insert(&["id"]);
+        merge.when_matched_update_all(None);
+        merge.when_not_matched_insert_all();
+        merge
+            .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .await
+            .context("failed to upsert llm gateway account group")?;
+        Ok(())
+    }
+
+    /// Replace an account group exactly, allowing callers to clear or reorder
+    /// membership.
+    pub async fn replace_account_group(&self, record: &LlmGatewayAccountGroupRecord) -> Result<()> {
+        self.delete_account_group(&record.id).await?;
+        self.create_account_group(record).await
+    }
+
+    /// Look up one account group by id.
+    pub async fn get_account_group_by_id(
+        &self,
+        group_id: &str,
+    ) -> Result<Option<LlmGatewayAccountGroupRecord>> {
+        let table = self.account_groups_table().await?;
+        let escaped = escape_literal(group_id);
+        let batches = table
+            .query()
+            .only_if(format!("id = '{escaped}'"))
+            .limit(1)
+            .select(Select::columns(&account_group_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_account_groups(&batch_list).map(|mut rows| rows.pop())
+    }
+
+    /// List all account groups sorted by provider then display name.
+    pub async fn list_account_groups(&self) -> Result<Vec<LlmGatewayAccountGroupRecord>> {
+        let table = self.account_groups_table().await?;
+        let batches = table
+            .query()
+            .select(Select::columns(&account_group_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let mut rows = batches_to_account_groups(&batch_list)?;
+        rows.sort_by_cached_key(|row| {
+            (row.provider_type.to_ascii_lowercase(), row.name.to_ascii_lowercase())
+        });
+        Ok(rows)
+    }
+
+    /// List all account groups for one provider sorted by display name.
+    pub async fn list_account_groups_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Result<Vec<LlmGatewayAccountGroupRecord>> {
+        let table = self.account_groups_table().await?;
+        let escaped_provider = escape_literal(provider_type);
+        let batches = table
+            .query()
+            .only_if(format!("provider_type = '{escaped_provider}'"))
+            .select(Select::columns(&account_group_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        let mut rows = batches_to_account_groups(&batch_list)?;
+        rows.sort_by_cached_key(|row| row.name.to_ascii_lowercase());
+        Ok(rows)
+    }
+
+    /// Delete one account group by id.
+    pub async fn delete_account_group(&self, group_id: &str) -> Result<()> {
+        let table = self.account_groups_table().await?;
+        let escaped = escape_literal(group_id);
+        table
+            .delete(&format!("id = '{escaped}'"))
+            .await
+            .with_context(|| format!("failed to delete llm gateway account group `{group_id}`"))?;
         Ok(())
     }
 
@@ -1591,11 +1698,32 @@ mod tests {
             route_strategy: None,
             fixed_account_name: None,
             auto_account_names: None,
+            account_group_id: None,
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+        }
+    }
+
+    fn sample_account_group_record(
+        id: &str,
+        provider_type: &str,
+        name: &str,
+        account_names: &[&str],
+    ) -> LlmGatewayAccountGroupRecord {
+        let now = now_ms();
+        LlmGatewayAccountGroupRecord {
+            id: id.to_string(),
+            provider_type: provider_type.to_string(),
+            name: name.to_string(),
+            account_names: account_names
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -1676,6 +1804,75 @@ mod tests {
         assert_eq!(reloaded.model_name_map, None);
         assert_eq!(reloaded.request_max_concurrency, None);
         assert_eq!(reloaded.request_min_start_interval_ms, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn create_and_list_account_groups_round_trip() {
+        let dir = temp_store_dir("account-group-roundtrip");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let record = sample_account_group_record(
+            "group-codex-team-a",
+            LLM_GATEWAY_PROVIDER_CODEX,
+            "Codex Team A",
+            &["alpha", "beta"],
+        );
+        store
+            .create_account_group(&record)
+            .await
+            .expect("create account group");
+
+        let loaded = store
+            .get_account_group_by_id(&record.id)
+            .await
+            .expect("load account group")
+            .expect("created account group exists");
+        assert_eq!(loaded.name, "Codex Team A");
+        assert_eq!(loaded.provider_type, LLM_GATEWAY_PROVIDER_CODEX);
+        assert_eq!(loaded.account_names, vec!["alpha".to_string(), "beta".to_string()]);
+
+        let listed = store
+            .list_account_groups_for_provider(LLM_GATEWAY_PROVIDER_CODEX)
+            .await
+            .expect("list codex account groups");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, record.id);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn key_round_trip_preserves_account_group_id() {
+        let dir = temp_store_dir("key-account-group-id");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let group = sample_account_group_record(
+            "group-kiro-migrated",
+            LLM_GATEWAY_PROVIDER_KIRO,
+            "Migrated Kiro Pool",
+            &["kiro-a", "kiro-b"],
+        );
+        store
+            .create_account_group(&group)
+            .await
+            .expect("create account group");
+
+        let mut key = sample_key_record("test-key-group", "Grouped Key");
+        key.account_group_id = Some(group.id.clone());
+        store.create_key(&key).await.expect("create key");
+
+        let loaded = store
+            .get_key_by_id(&key.id)
+            .await
+            .expect("load key")
+            .expect("grouped key exists");
+        assert_eq!(loaded.account_group_id.as_deref(), Some(group.id.as_str()));
 
         let _ = fs::remove_dir_all(&dir);
     }

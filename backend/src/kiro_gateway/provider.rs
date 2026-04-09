@@ -185,7 +185,12 @@ impl KiroProvider {
             if auths.is_empty() {
                 return Err(anyhow!("no kiro account available for request").into());
             }
-            let auths = filter_auths_for_key_route(&auths, key_record)?;
+            let auths = filter_auths_for_key_route(
+                self.runtime.llm_gateway_store.as_ref(),
+                &auths,
+                key_record,
+            )
+            .await?;
             let snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
@@ -483,7 +488,12 @@ impl KiroProvider {
             if auths.is_empty() {
                 return Err(anyhow!("no kiro account available for mcp request").into());
             }
-            let auths = filter_auths_for_key_route(&auths, key_record)?;
+            let auths = filter_auths_for_key_route(
+                self.runtime.llm_gateway_store.as_ref(),
+                &auths,
+                key_record,
+            )
+            .await?;
             let snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
@@ -1359,17 +1369,35 @@ fn build_mcp_headers(ctx: &CallContext) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-fn filter_auths_for_key_route(
+async fn filter_auths_for_key_route(
+    store: &static_flow_shared::llm_gateway_store::LlmGatewayStore,
     auths: &[KiroAuthRecord],
     key_record: &LlmGatewayKeyRecord,
 ) -> anyhow::Result<Vec<KiroAuthRecord>> {
     match key_record.route_strategy.as_deref() {
         None => Ok(auths.to_vec()),
         Some("fixed") => {
-            let account_name = key_record
-                .fixed_account_name
-                .as_deref()
-                .ok_or_else(|| anyhow!("fixed route_strategy requires fixed_account_name"))?;
+            let account_name = if let Some(group_id) = key_record.account_group_id.as_deref() {
+                let group = store
+                    .get_account_group_by_id(group_id)
+                    .await?
+                    .ok_or_else(|| anyhow!("configured account_group_id does not exist"))?;
+                if group.provider_type != LLM_GATEWAY_PROVIDER_KIRO {
+                    anyhow::bail!("configured account_group_id belongs to a different provider");
+                }
+                if group.account_names.len() != 1 {
+                    anyhow::bail!(
+                        "fixed route_strategy requires an account group with exactly one account"
+                    );
+                }
+                group.account_names[0].clone()
+            } else {
+                key_record
+                    .fixed_account_name
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("fixed route_strategy requires account_group_id"))?
+                    .to_string()
+            };
             let matched = auths
                 .iter()
                 .filter(|auth| auth.name == account_name)
@@ -1381,7 +1409,20 @@ fn filter_auths_for_key_route(
             Ok(matched)
         },
         Some("auto") => {
-            let Some(auto_account_names) = key_record.auto_account_names.as_deref() else {
+            let auto_account_names = if let Some(group_id) = key_record.account_group_id.as_deref()
+            {
+                let group = store
+                    .get_account_group_by_id(group_id)
+                    .await?
+                    .ok_or_else(|| anyhow!("configured account_group_id does not exist"))?;
+                if group.provider_type != LLM_GATEWAY_PROVIDER_KIRO {
+                    anyhow::bail!("configured account_group_id belongs to a different provider");
+                }
+                Some(group.account_names)
+            } else {
+                key_record.auto_account_names.clone()
+            };
+            let Some(auto_account_names) = auto_account_names.as_deref() else {
                 return Ok(auths.to_vec());
             };
             let matched = auths

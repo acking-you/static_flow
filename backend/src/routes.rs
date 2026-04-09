@@ -211,6 +211,16 @@ pub fn create_router(state: AppState) -> Router {
             post(llm_gateway::update_admin_proxy_binding),
         )
         .route(
+            "/admin/llm-gateway/account-groups",
+            get(llm_gateway::list_admin_account_groups)
+                .post(llm_gateway::create_admin_account_group),
+        )
+        .route(
+            "/admin/llm-gateway/account-groups/:group_id",
+            patch(llm_gateway::patch_admin_account_group)
+                .delete(llm_gateway::delete_admin_account_group),
+        )
+        .route(
             "/admin/llm-gateway/keys",
             get(llm_gateway::list_admin_keys).post(llm_gateway::create_admin_key),
         )
@@ -266,6 +276,16 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/llm-gateway/accounts/:name/refresh",
             post(llm_gateway::refresh_account),
+        )
+        .route(
+            "/admin/kiro-gateway/account-groups",
+            get(kiro_gateway::list_admin_account_groups)
+                .post(kiro_gateway::create_admin_account_group),
+        )
+        .route(
+            "/admin/kiro-gateway/account-groups/:group_id",
+            patch(kiro_gateway::patch_admin_account_group)
+                .delete(kiro_gateway::delete_admin_account_group),
         )
         .route(
             "/admin/kiro-gateway/keys",
