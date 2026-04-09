@@ -4,8 +4,9 @@ use axum::{http::Method, response::Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use static_flow_shared::llm_gateway_store::{
-    LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord, LlmGatewayProxyConfigRecord,
-    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+    compute_billable_tokens, LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+    LlmGatewayProxyConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
+    LlmGatewayUsageEventRecord,
 };
 
 use crate::handlers::ErrorResponse;
@@ -699,8 +700,11 @@ pub(crate) struct UsageBreakdown {
 
 impl UsageBreakdown {
     pub fn billable_tokens(&self) -> u64 {
-        self.input_uncached_tokens
-            .saturating_add(self.output_tokens)
+        compute_billable_tokens(
+            self.input_uncached_tokens,
+            self.input_cached_tokens,
+            self.output_tokens,
+        )
     }
 
     pub fn billable_tokens_with_multiplier(&self, multiplier: u64) -> u64 {

@@ -1011,7 +1011,7 @@ mod tests {
             input_uncached_tokens: 2,
             input_cached_tokens: 0,
             output_tokens: 1,
-            billable_tokens: 3,
+            billable_tokens: 7,
             usage_missing: false,
             credit_usage: None,
             credit_usage_missing: false,
@@ -1028,7 +1028,7 @@ mod tests {
             .append_usage_event(&key, &event)
             .await
             .expect("append usage event");
-        assert_eq!(updated.usage_billable_tokens, 3);
+        assert_eq!(updated.usage_billable_tokens, 7);
         assert_eq!(
             store
                 .count_usage_events(Some(&key.id))
@@ -1112,7 +1112,7 @@ mod tests {
             input_uncached_tokens: 2,
             input_cached_tokens: 0,
             output_tokens: 1,
-            billable_tokens: 3,
+            billable_tokens: 7,
             usage_missing: false,
             credit_usage: None,
             credit_usage_missing: false,
@@ -1187,7 +1187,7 @@ mod tests {
             input_uncached_tokens: 2,
             input_cached_tokens: 0,
             output_tokens: 1,
-            billable_tokens: 3,
+            billable_tokens: 7,
             usage_missing: false,
             credit_usage: None,
             credit_usage_missing: false,
@@ -1214,7 +1214,7 @@ mod tests {
             input_uncached_tokens: 2,
             input_cached_tokens: 0,
             output_tokens: 1,
-            billable_tokens: 3,
+            billable_tokens: 7,
             usage_missing: false,
             credit_usage: None,
             credit_usage_missing: false,

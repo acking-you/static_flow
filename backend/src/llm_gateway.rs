@@ -5658,6 +5658,31 @@ mod tests {
     }
 
     #[test]
+    fn build_codex_usage_event_uses_weighted_billable_formula() {
+        let key = sample_public_lookup_key();
+        let prepared = sample_prepared_gateway_request();
+        let context = sample_gateway_event_context();
+
+        let event = build_gateway_usage_event_record(GatewayUsageEventBuild {
+            current: &key,
+            prepared: &prepared,
+            context: &context,
+            latency_ms: 10,
+            status_code: 200,
+            usage: UsageBreakdown {
+                input_uncached_tokens: 100,
+                input_cached_tokens: 35,
+                output_tokens: 7,
+                usage_missing: false,
+            },
+            last_message_content: Some("hello".to_string()),
+            selected_account_name: Some("acct-a"),
+        });
+
+        assert_eq!(event.billable_tokens, 138);
+    }
+
+    #[test]
     fn build_codex_failure_diagnostic_payload_preserves_stream_failure_status() {
         let mut prepared = sample_prepared_gateway_request();
         prepared.wants_stream = true;

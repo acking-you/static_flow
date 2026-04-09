@@ -85,6 +85,21 @@ pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 /// We intentionally default to `0` and rely on channel serialization first,
 /// because Kiro does not publish a stable RPM/TPM contract for Student plans.
 pub const DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
+
+/// Shared billable-token weighting used for gateway accounting.
+///
+/// Cached input is billed at one tenth of uncached input, while output tokens
+/// are billed at five times input cost.
+pub fn compute_billable_tokens(
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
+) -> u64 {
+    input_uncached_tokens
+        .saturating_add(input_cached_tokens / 10)
+        .saturating_add(output_tokens.saturating_mul(5))
+}
+
 pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
 pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED: &str = "issued";
 pub const LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED: &str = "rejected";

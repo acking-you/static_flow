@@ -31,9 +31,10 @@ pub(crate) use runtime::KiroGatewayRuntimeState;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    now_ms, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-    DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, LLM_GATEWAY_KEY_STATUS_ACTIVE,
-    LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROVIDER_KIRO,
+    compute_billable_tokens, now_ms, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
+    DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
+    LLM_GATEWAY_PROVIDER_KIRO,
 };
 pub(crate) use status_cache::{refresh_cached_status, spawn_status_refresher};
 
@@ -927,9 +928,11 @@ fn build_kiro_usage_event_record(
         input_uncached_tokens: usage.input_uncached_tokens.max(0) as u64,
         input_cached_tokens: usage.input_cached_tokens.max(0) as u64,
         output_tokens: usage.output_tokens.max(0) as u64,
-        billable_tokens: (usage.input_uncached_tokens.max(0)
-            + usage.input_cached_tokens.max(0)
-            + usage.output_tokens.max(0)) as u64,
+        billable_tokens: compute_billable_tokens(
+            usage.input_uncached_tokens.max(0) as u64,
+            usage.input_cached_tokens.max(0) as u64,
+            usage.output_tokens.max(0) as u64,
+        ),
         usage_missing,
         credit_usage: usage.credit_usage,
         credit_usage_missing: usage.credit_usage_missing,
@@ -1676,6 +1679,7 @@ mod tests {
             record.upstream_request_body_json.as_deref(),
             Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
         );
+        assert_eq!(record.billable_tokens, 54_679);
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub mod stream;
 pub mod types;
 pub mod websearch;
 
-use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
+use static_flow_shared::llm_gateway_store::{compute_billable_tokens, LlmGatewayKeyRecord};
 
 use self::{
     converter::{
@@ -338,9 +338,11 @@ fn log_high_credit_usage_anomaly(
         input_uncached_tokens = usage.input_uncached_tokens,
         input_cached_tokens = usage.input_cached_tokens,
         output_tokens = usage.output_tokens,
-        billable_tokens = usage.input_uncached_tokens.max(0)
-            + usage.input_cached_tokens.max(0)
-            + usage.output_tokens.max(0),
+        billable_tokens = compute_billable_tokens(
+            usage.input_uncached_tokens.max(0) as u64,
+            usage.input_cached_tokens.max(0) as u64,
+            usage.output_tokens.max(0) as u64,
+        ),
         stable_prefix_page_count = simulation.projection.stable_prefix_pages.len(),
         stable_prefix_token_count = simulation.projection.stable_prefix_token_count(),
         projected_input_token_count = simulation.projection.projected_input_token_count,

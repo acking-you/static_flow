@@ -23,10 +23,10 @@ use super::{
         llm_gateway_token_requests_schema, llm_gateway_usage_events_schema,
     },
     types::{
-        default_kiro_cache_kmodels_json, LlmGatewayAccountContributionRequestRecord,
-        LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
-        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
-        LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        compute_billable_tokens, default_kiro_cache_kmodels_json,
+        LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
+        LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
+        LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
@@ -655,9 +655,11 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
 
         for idx in 0..batch.num_rows() {
-            let raw_billable_tokens = usage_input_uncached_tokens
-                .value(idx)
-                .saturating_add(usage_output_tokens.value(idx));
+            let raw_billable_tokens = compute_billable_tokens(
+                usage_input_uncached_tokens.value(idx),
+                usage_input_cached_tokens.value(idx),
+                usage_output_tokens.value(idx),
+            );
             rows.push(LlmGatewayKeyRecord {
                 id: id.value(idx).to_string(),
                 name: name.value(idx).to_string(),
