@@ -35,6 +35,7 @@ use crate::{
 const TAB_OVERVIEW: &str = "overview";
 const TAB_ACCOUNTS: &str = "accounts";
 const TAB_KEYS: &str = "keys";
+const TAB_GROUPS: &str = "groups";
 const TAB_USAGE: &str = "usage";
 
 /// Shared Tailwind classes for the dark "Kiro" pill badge.
@@ -1359,6 +1360,7 @@ struct KiroAccountGroupEditorCardProps {
 #[function_component(KiroAccountGroupEditorCard)]
 fn kiro_account_group_editor_card(props: &KiroAccountGroupEditorCardProps) -> Html {
     let name = use_state(|| props.group_item.name.clone());
+    let expanded = use_state(|| false);
     let account_names = use_state(|| {
         let valid_names = props
             .accounts
@@ -1513,85 +1515,108 @@ fn kiro_account_group_editor_card(props: &KiroAccountGroupEditorCardProps) -> Ht
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
             <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.group_item.name.clone() }</h3>
+                <div>
+                    <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.group_item.name.clone() }</h3>
+                    <p class={classes!("mt-1", "mb-0", "text-xs", "text-[var(--muted)]")}>
+                        {
+                            if props.group_item.account_names.is_empty() {
+                                "没有成员账号".to_string()
+                            } else {
+                                format!("成员: {}", props.group_item.account_names.join(", "))
+                            }
+                        }
+                    </p>
+                </div>
                 <div class={classes!("flex", "items-center", "gap-2")}>
                     <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} 个账号", props.group_item.account_names.len()) }</span>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal")}
+                        onclick={{
+                            let expanded = expanded.clone();
+                            Callback::from(move |_| expanded.set(!*expanded))
+                        }}
+                    >
+                        { if *expanded { "收起 ▲" } else { "展开 ▼" } }
+                    </button>
                     <button class={classes!("btn-terminal", "text-red-600", "dark:text-red-300")} onclick={on_delete} disabled={*saving}>
                         { "删除" }
                     </button>
                 </div>
             </div>
 
-            <label class={classes!("mt-3", "block", "text-sm")}>
-                <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
-                <input
-                    type="text"
-                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
-                    value={(*name).clone()}
-                    oninput={{
-                        let name = name.clone();
-                        Callback::from(move |event: InputEvent| {
-                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                name.set(target.value());
-                            }
-                        })
-                    }}
-                />
-            </label>
-
-            <div class={classes!("mt-3", "space-y-2")}>
-                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
-                <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                    { for props.accounts.iter().map(|account| {
-                        let checked = account_names.iter().any(|name| name == &account.name);
-                        let account_name = account.name.clone();
-                        let on_toggle_account = on_toggle_account.clone();
-                        let balance_hint = account
-                            .balance
-                            .as_ref()
-                            .map(|balance| format!(
-                                "remaining {} / {}",
-                                format_float2(balance.remaining),
-                                format_float2(balance.usage_limit)
-                            ))
-                            .unwrap_or_else(|| "balance loading".to_string());
-                        html! {
-                            <label class={classes!(
-                                "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
-                                if checked {
-                                    "border-sky-500/30 bg-sky-500/8"
-                                } else {
-                                    "border-[var(--border)] bg-[var(--surface-alt)]"
+            if *expanded {
+                <label class={classes!("mt-3", "block", "text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
+                    <input
+                        type="text"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
+                        value={(*name).clone()}
+                        oninput={{
+                            let name = name.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    name.set(target.value());
                                 }
-                            )}>
-                                <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
-                                />
-                                <div class={classes!("min-w-0", "flex-1")}>
-                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
-                                    <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                        { balance_hint }
+                            })
+                        }}
+                    />
+                </label>
+
+                <div class={classes!("mt-3", "space-y-2")}>
+                    <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                        { for props.accounts.iter().map(|account| {
+                            let checked = account_names.iter().any(|name| name == &account.name);
+                            let account_name = account.name.clone();
+                            let on_toggle_account = on_toggle_account.clone();
+                            let balance_hint = account
+                                .balance
+                                .as_ref()
+                                .map(|balance| format!(
+                                    "remaining {} / {}",
+                                    format_float2(balance.remaining),
+                                    format_float2(balance.usage_limit)
+                                ))
+                                .unwrap_or_else(|| "balance loading".to_string());
+                            html! {
+                                <label class={classes!(
+                                    "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                    if checked {
+                                        "border-sky-500/30 bg-sky-500/8"
+                                    } else {
+                                        "border-[var(--border)] bg-[var(--surface-alt)]"
+                                    }
+                                )}>
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
+                                    />
+                                    <div class={classes!("min-w-0", "flex-1")}>
+                                        <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                        <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                            { balance_hint }
+                                        </div>
                                     </div>
-                                </div>
-                            </label>
-                        }
-                    }) }
+                                </label>
+                            }
+                        }) }
+                    </div>
                 </div>
-            </div>
 
-            <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3")}>
-                <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                    { format!("当前成员: {}", if account_names.is_empty() { "无".to_string() } else { account_names.join(", ") }) }
-                </span>
-                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
-                    { if *saving { "保存中..." } else { "保存账号组" } }
-                </button>
-            </div>
+                <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3")}>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                        { format!("当前成员: {}", if account_names.is_empty() { "无".to_string() } else { account_names.join(", ") }) }
+                    </span>
+                    <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
+                        { if *saving { "保存中..." } else { "保存账号组" } }
+                    </button>
+                </div>
 
-            if let Some(feedback) = (*feedback).clone() {
-                <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ feedback }</div>
+                if let Some(feedback) = (*feedback).clone() {
+                    <div class={classes!("mt-3", "text-sm", "text-[var(--muted)]")}>{ feedback }</div>
+                }
             }
         </article>
     }
@@ -1680,6 +1705,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let create_account_group_name = use_state(String::new);
     let create_account_group_account_names = use_state(Vec::<String>::new);
     let creating_account_group = use_state(|| false);
+    let account_group_form_expanded = use_state(|| false);
 
     let reload_usage = {
         let usage_events = usage_events.clone();
@@ -2321,6 +2347,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 (TAB_OVERVIEW, "Overview"),
                 (TAB_ACCOUNTS, "Accounts"),
                 (TAB_KEYS, "Keys"),
+                (TAB_GROUPS, "Groups"),
                 (TAB_USAGE, "Usage"),
             ], &on_tab_click) }
 
@@ -2711,140 +2738,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </article>
             </section>
 
-            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
-                    <div>
-                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Account Groups" }</h2>
-                        <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "先维护账号组，再让 key 选择组。固定路由请选择单账号组；自动路由可以选任意组，留空则继续使用全账号池。" }
-                        </p>
-                    </div>
-                    <button
-                        type="button"
-                        class={classes!("btn-terminal")}
-                        onclick={{
-                            let on_reload = on_reload.clone();
-                            Callback::from(move |_| on_reload.emit(()))
-                        }}
-                    >
-                        { if *loading { "Refreshing..." } else { "Refresh Groups" } }
-                    </button>
-                </div>
-
-                <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
-                    <div class={classes!("grid", "gap-3")}>
-                        <label class={classes!("text-sm")}>
-                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Group Name" }</div>
-                            <input
-                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
-                                value={(*create_account_group_name).clone()}
-                                oninput={{
-                                    let create_account_group_name = create_account_group_name.clone();
-                                    Callback::from(move |event: InputEvent| {
-                                        let input: HtmlInputElement = event.target_unchecked_into();
-                                        create_account_group_name.set(input.value());
-                                    })
-                                }}
-                            />
-                        </label>
-                        <div class={classes!("space-y-2")}>
-                            <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
-                            if accounts.is_empty() {
-                                <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
-                                    { "当前没有可加入账号组的 Kiro 账号。" }
-                                </div>
-                            } else {
-                                <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                                    { for accounts.iter().map(|account| {
-                                        let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
-                                        let account_name = account.name.clone();
-                                        let on_toggle_create_account_group_member =
-                                            on_toggle_create_account_group_member.clone();
-                                        let balance_hint = account
-                                            .balance
-                                            .as_ref()
-                                            .map(|balance| format!(
-                                                "remaining {} / {}",
-                                                format_float2(balance.remaining),
-                                                format_float2(balance.usage_limit)
-                                            ))
-                                            .unwrap_or_else(|| "balance loading".to_string());
-                                        html! {
-                                            <label class={classes!(
-                                                "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
-                                                if checked {
-                                                    "border-sky-500/30 bg-sky-500/8"
-                                                } else {
-                                                    "border-[var(--border)] bg-[var(--surface)]"
-                                                }
-                                            )}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={checked}
-                                                    onchange={Callback::from(move |_| {
-                                                        on_toggle_create_account_group_member.emit(account_name.clone())
-                                                    })}
-                                                />
-                                                <div class={classes!("min-w-0", "flex-1")}>
-                                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
-                                                    <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                        { balance_hint }
-                                                    </div>
-                                                </div>
-                                            </label>
-                                        }
-                                    }) }
-                                </div>
-                            }
-                        </div>
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                            <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                                { format!(
-                                    "当前成员: {}",
-                                    if create_account_group_account_names.is_empty() {
-                                        "无".to_string()
-                                    } else {
-                                        create_account_group_account_names.join(", ")
-                                    }
-                                ) }
-                            </span>
-                            <button
-                                type="button"
-                                class={classes!("btn-terminal", "btn-terminal-primary")}
-                                onclick={on_create_account_group}
-                                disabled={*creating_account_group}
-                            >
-                                { if *creating_account_group { "Creating..." } else { "Create Group" } }
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
-                    {
-                        if (*account_groups).is_empty() {
-                            html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                                    { "当前还没有 Kiro 账号组。" }
-                                </div>
-                            }
-                        } else {
-                            html! {
-                                for (*account_groups).iter().map(|group_item| html! {
-                                    <KiroAccountGroupEditorCard
-                                        key={group_item.id.clone()}
-                                        group_item={group_item.clone()}
-                                        accounts={(*accounts).clone()}
-                                        on_reload={on_reload.clone()}
-                                        on_flash={notify.clone()}
-                                    />
-                                })
-                            }
-                        }
-                    }
-                </div>
-            </section>
-
             <section>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
@@ -2889,6 +2782,162 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </div>
             </section>
             } // end TAB_KEYS
+
+            if *active_tab == TAB_GROUPS {
+            <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Account Groups" }</h2>
+                        <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "先维护账号组，再让 key 选择组。固定路由请选择单账号组；自动路由可以选任意组，留空则继续使用全账号池。" }
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal")}
+                        onclick={{
+                            let on_reload = on_reload.clone();
+                            Callback::from(move |_| on_reload.emit(()))
+                        }}
+                    >
+                        { if *loading { "Refreshing..." } else { "Refresh Groups" } }
+                    </button>
+                </div>
+
+                <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Create Kiro Account Group" }</h3>
+                            <p class={classes!("mt-1", "mb-0", "text-xs", "text-[var(--muted)]")}>
+                                { "默认收起，需要时再展开，不和 key 列表混在一起。" }
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal")}
+                            onclick={{
+                                let account_group_form_expanded = account_group_form_expanded.clone();
+                                Callback::from(move |_| account_group_form_expanded.set(!*account_group_form_expanded))
+                            }}
+                        >
+                            { if *account_group_form_expanded { "收起 ▲" } else { "展开 ▼" } }
+                        </button>
+                    </div>
+                    if *account_group_form_expanded {
+                        <div class={classes!("mt-4", "grid", "gap-3")}>
+                            <label class={classes!("text-sm")}>
+                                <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Group Name" }</div>
+                                <input
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
+                                    value={(*create_account_group_name).clone()}
+                                    oninput={{
+                                        let create_account_group_name = create_account_group_name.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            let input: HtmlInputElement = event.target_unchecked_into();
+                                            create_account_group_name.set(input.value());
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("space-y-2")}>
+                                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                                if accounts.is_empty() {
+                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
+                                        { "当前没有可加入账号组的 Kiro 账号。" }
+                                    </div>
+                                } else {
+                                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                        { for accounts.iter().map(|account| {
+                                            let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
+                                            let account_name = account.name.clone();
+                                            let on_toggle_create_account_group_member =
+                                                on_toggle_create_account_group_member.clone();
+                                            let balance_hint = account
+                                                .balance
+                                                .as_ref()
+                                                .map(|balance| format!(
+                                                    "remaining {} / {}",
+                                                    format_float2(balance.remaining),
+                                                    format_float2(balance.usage_limit)
+                                                ))
+                                                .unwrap_or_else(|| "balance loading".to_string());
+                                            html! {
+                                                <label class={classes!(
+                                                    "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                                    if checked {
+                                                        "border-sky-500/30 bg-sky-500/8"
+                                                    } else {
+                                                        "border-[var(--border)] bg-[var(--surface)]"
+                                                    }
+                                                )}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onchange={Callback::from(move |_| {
+                                                            on_toggle_create_account_group_member.emit(account_name.clone())
+                                                        })}
+                                                    />
+                                                    <div class={classes!("min-w-0", "flex-1")}>
+                                                        <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                                        <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                            { balance_hint }
+                                                        </div>
+                                                    </div>
+                                                </label>
+                                            }
+                                        }) }
+                                    </div>
+                                }
+                            </div>
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                    { format!(
+                                        "当前成员: {}",
+                                        if create_account_group_account_names.is_empty() {
+                                            "无".to_string()
+                                        } else {
+                                            create_account_group_account_names.join(", ")
+                                        }
+                                    ) }
+                                </span>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-terminal", "btn-terminal-primary")}
+                                    onclick={on_create_account_group}
+                                    disabled={*creating_account_group}
+                                >
+                                    { if *creating_account_group { "Creating..." } else { "Create Group" } }
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
+                    {
+                        if (*account_groups).is_empty() {
+                            html! {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                                    { "当前还没有 Kiro 账号组。" }
+                                </div>
+                            }
+                        } else {
+                            html! {
+                                for (*account_groups).iter().map(|group_item| html! {
+                                    <KiroAccountGroupEditorCard
+                                        key={group_item.id.clone()}
+                                        group_item={group_item.clone()}
+                                        accounts={(*accounts).clone()}
+                                        on_reload={on_reload.clone()}
+                                        on_flash={notify.clone()}
+                                    />
+                                })
+                            }
+                        }
+                    }
+                </div>
+            </section>
+            } // end TAB_GROUPS
 
             // ── Usage Tab ──
             if *active_tab == TAB_USAGE {

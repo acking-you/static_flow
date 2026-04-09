@@ -51,6 +51,7 @@ const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
 
 const TAB_OVERVIEW: &str = "overview";
 const TAB_KEYS: &str = "keys";
+const TAB_GROUPS: &str = "groups";
 const TAB_ACCOUNTS: &str = "accounts";
 const TAB_USAGE: &str = "usage";
 const TAB_REQUESTS: &str = "requests";
@@ -932,6 +933,7 @@ fn account_group_editor_card(props: &AccountGroupEditorCardProps) -> Html {
     let name = use_state(|| props.group_item.name.clone());
     let account_names =
         use_state(|| sanitize_auto_account_names(&props.group_item.account_names, &props.accounts));
+    let expanded = use_state(|| false);
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
@@ -1047,80 +1049,103 @@ fn account_group_editor_card(props: &AccountGroupEditorCardProps) -> Html {
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
             <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                <h3 class={classes!("m-0", "text-base", "font-bold")}>{ props.group_item.name.clone() }</h3>
+                <div>
+                    <h3 class={classes!("m-0", "text-base", "font-bold")}>{ props.group_item.name.clone() }</h3>
+                    <p class={classes!("mt-1", "mb-0", "text-xs", "text-[var(--muted)]")}>
+                        {
+                            if props.group_item.account_names.is_empty() {
+                                "没有成员账号".to_string()
+                            } else {
+                                format!("成员: {}", props.group_item.account_names.join(", "))
+                            }
+                        }
+                    </p>
+                </div>
                 <div class={classes!("flex", "items-center", "gap-2")}>
                     <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} 个账号", props.group_item.account_names.len()) }</span>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal")}
+                        onclick={{
+                            let expanded = expanded.clone();
+                            Callback::from(move |_| expanded.set(!*expanded))
+                        }}
+                    >
+                        { if *expanded { "收起 ▲" } else { "展开 ▼" } }
+                    </button>
                     <button class={classes!("btn-terminal", "text-red-600", "dark:text-red-300")} onclick={on_delete} disabled={*saving}>
                         { "删除" }
                     </button>
                 </div>
             </div>
 
-            <label class={classes!("mt-3", "block", "text-sm")}>
-                <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
-                <input
-                    type="text"
-                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                    value={(*name).clone()}
-                    oninput={{
-                        let name = name.clone();
-                        Callback::from(move |event: InputEvent| {
-                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                name.set(target.value());
-                            }
-                        })
-                    }}
-                />
-            </label>
-
-            <div class={classes!("mt-3", "space-y-2")}>
-                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
-                <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                    { for props.accounts.iter().map(|account| {
-                        let checked = account_names.iter().any(|name| name == &account.name);
-                        let account_name = account.name.clone();
-                        let on_toggle_account = on_toggle_account.clone();
-                        html! {
-                            <label class={classes!(
-                                "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
-                                if checked {
-                                    "border-sky-500/30 bg-sky-500/8"
-                                } else {
-                                    "border-[var(--border)] bg-[var(--surface-alt)]"
+            if *expanded {
+                <label class={classes!("mt-3", "block", "text-sm")}>
+                    <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
+                    <input
+                        type="text"
+                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                        value={(*name).clone()}
+                        oninput={{
+                            let name = name.clone();
+                            Callback::from(move |event: InputEvent| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    name.set(target.value());
                                 }
-                            )}>
-                                <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
-                                />
-                                <div class={classes!("min-w-0", "flex-1")}>
-                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
-                                    <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                        { format!(
-                                            "5h {} / wk {}",
-                                            account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
-                                            account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
-                                        ) }
+                            })
+                        }}
+                    />
+                </label>
+
+                <div class={classes!("mt-3", "space-y-2")}>
+                    <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                        { for props.accounts.iter().map(|account| {
+                            let checked = account_names.iter().any(|name| name == &account.name);
+                            let account_name = account.name.clone();
+                            let on_toggle_account = on_toggle_account.clone();
+                            html! {
+                                <label class={classes!(
+                                    "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                    if checked {
+                                        "border-sky-500/30 bg-sky-500/8"
+                                    } else {
+                                        "border-[var(--border)] bg-[var(--surface-alt)]"
+                                    }
+                                )}>
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
+                                    />
+                                    <div class={classes!("min-w-0", "flex-1")}>
+                                        <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                        <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                            { format!(
+                                                "5h {} / wk {}",
+                                                account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
+                                                account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
+                                            ) }
+                                        </div>
                                     </div>
-                                </div>
-                            </label>
-                        }
-                    }) }
+                                </label>
+                            }
+                        }) }
+                    </div>
                 </div>
-            </div>
 
-            <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3")}>
-                <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                    { format!("当前成员: {}", if account_names.is_empty() { "无".to_string() } else { account_names.join(", ") }) }
-                </span>
-                <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
-                    { if *saving { "保存中..." } else { "保存账号组" } }
-                </button>
-            </div>
+                <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3")}>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                        { format!("当前成员: {}", if account_names.is_empty() { "无".to_string() } else { account_names.join(", ") }) }
+                    </span>
+                    <button class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
+                        { if *saving { "保存中..." } else { "保存账号组" } }
+                    </button>
+                </div>
 
-            if let Some(feedback) = (*feedback).clone() {
-                <p class={classes!("mt-2", "m-0", "text-xs", "text-[var(--muted)]")}>{ feedback }</p>
+                if let Some(feedback) = (*feedback).clone() {
+                    <p class={classes!("mt-2", "m-0", "text-xs", "text-[var(--muted)]")}>{ feedback }</p>
+                }
             }
         </article>
     }
@@ -1524,6 +1549,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let create_account_group_name = use_state(String::new);
     let create_account_group_account_names = use_state(Vec::<String>::new);
     let creating_account_group = use_state(|| false);
+    let account_group_form_expanded = use_state(|| false);
     let refreshing_key_id = use_state(|| None::<String>);
     let toast = use_state(|| None::<(String, bool)>);
     let toast_timeout = use_mut_ref(|| None::<Timeout>);
@@ -3470,6 +3496,7 @@ pub fn admin_llm_gateway_page() -> Html {
                 { render_tab_bar(&active_tab, &[
                     (TAB_OVERVIEW, "Overview"),
                     (TAB_KEYS, "Keys"),
+                    (TAB_GROUPS, "Groups"),
                     (TAB_ACCOUNTS, "Accounts"),
                     (TAB_USAGE, "Usage"),
                     (TAB_REQUESTS, "Requests"),
@@ -4134,6 +4161,41 @@ pub fn admin_llm_gateway_page() -> Html {
                 // ── Keys Tab ──
                 if *active_tab == TAB_KEYS {
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Key Inventory" }</h2>
+                        <button class={classes!("btn-terminal")} onclick={{
+                            let reload = reload.clone();
+                            Callback::from(move |_| reload.emit(()))
+                        }}>
+                            { if *loading { "刷新中..." } else { "刷新" } }
+                        </button>
+                    </div>
+                    <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
+                        if keys.is_empty() && !*loading {
+                            <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
+                                { "当前还没有可管理的 key。" }
+                            </div>
+                        } else {
+                            { for keys.iter().map(|key_item| html! {
+                                <KeyEditorCard
+                                    key={key_item.id.clone()}
+                                    key_item={key_item.clone()}
+                                    on_changed={reload.clone()}
+                                    on_refresh={on_refresh_key.clone()}
+                                    on_copy={on_copy.clone()}
+                                    on_flash={flash.clone()}
+                                    refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
+                                    accounts={(*accounts).clone()}
+                                    account_groups={(*account_groups).clone()}
+                                />
+                            }) }
+                        }
+                    </div>
+                </section>
+                } // end TAB_KEYS
+
+                if *active_tab == TAB_GROUPS {
+                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Account Groups" }</h2>
@@ -4154,88 +4216,108 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
 
                     <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
-                        <div class={classes!("grid", "gap-3")}>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
-                                <input
-                                    type="text"
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                    value={(*create_account_group_name).clone()}
-                                    oninput={{
-                                        let create_account_group_name = create_account_group_name.clone();
-                                        Callback::from(move |event: InputEvent| {
-                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                                create_account_group_name.set(target.value());
-                                            }
-                                        })
-                                    }}
-                                />
-                            </label>
-                            <div class={classes!("space-y-2")}>
-                                <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
-                                if accounts.is_empty() {
-                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
-                                        { "当前没有可加入账号组的账号。" }
-                                    </div>
-                                } else {
-                                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
-                                        { for accounts.iter().map(|account| {
-                                            let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
-                                            let account_name = account.name.clone();
-                                            let on_toggle_create_account_group_member =
-                                                on_toggle_create_account_group_member.clone();
-                                            html! {
-                                                <label class={classes!(
-                                                    "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
-                                                    if checked {
-                                                        "border-sky-500/30 bg-sky-500/8"
-                                                    } else {
-                                                        "border-[var(--border)] bg-[var(--surface)]"
-                                                    }
-                                                )}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={checked}
-                                                        onchange={Callback::from(move |_| {
-                                                            on_toggle_create_account_group_member.emit(account_name.clone())
-                                                        })}
-                                                    />
-                                                    <div class={classes!("min-w-0", "flex-1")}>
-                                                        <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
-                                                        <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                            { format!(
-                                                                "5h {} / wk {}",
-                                                                account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
-                                                                account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
-                                                            ) }
-                                                        </div>
-                                                    </div>
-                                                </label>
-                                            }
-                                        }) }
-                                    </div>
-                                }
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <div>
+                                <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "创建账号组" }</h3>
+                                <p class={classes!("mt-1", "mb-0", "text-xs", "text-[var(--muted)]")}>
+                                    { "默认收起，只在需要新增轮询号池时展开。" }
+                                </p>
                             </div>
-                            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                                    { format!(
-                                        "当前成员: {}",
-                                        if create_account_group_account_names.is_empty() {
-                                            "无".to_string()
-                                        } else {
-                                            create_account_group_account_names.join(", ")
-                                        }
-                                    ) }
-                                </span>
-                                <button
-                                    class={classes!("btn-terminal", "btn-terminal-primary")}
-                                    onclick={on_create_account_group}
-                                    disabled={*creating_account_group}
-                                >
-                                    { if *creating_account_group { "创建中..." } else { "创建账号组" } }
-                                </button>
-                            </div>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal")}
+                                onclick={{
+                                    let account_group_form_expanded = account_group_form_expanded.clone();
+                                    Callback::from(move |_| account_group_form_expanded.set(!*account_group_form_expanded))
+                                }}
+                            >
+                                { if *account_group_form_expanded { "收起 ▲" } else { "展开 ▼" } }
+                            </button>
                         </div>
+                        if *account_group_form_expanded {
+                            <div class={classes!("mt-4", "grid", "gap-3")}>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("text-[var(--muted)]")}>{ "组名" }</span>
+                                    <input
+                                        type="text"
+                                        class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                        value={(*create_account_group_name).clone()}
+                                        oninput={{
+                                            let create_account_group_name = create_account_group_name.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                    create_account_group_name.set(target.value());
+                                                }
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <div class={classes!("space-y-2")}>
+                                    <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "成员账号" }</div>
+                                    if accounts.is_empty() {
+                                        <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
+                                            { "当前没有可加入账号组的账号。" }
+                                        </div>
+                                    } else {
+                                        <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                                            { for accounts.iter().map(|account| {
+                                                let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
+                                                let account_name = account.name.clone();
+                                                let on_toggle_create_account_group_member =
+                                                    on_toggle_create_account_group_member.clone();
+                                                html! {
+                                                    <label class={classes!(
+                                                        "flex", "cursor-pointer", "items-center", "gap-3", "rounded-lg", "border", "px-3", "py-2.5",
+                                                        if checked {
+                                                            "border-sky-500/30 bg-sky-500/8"
+                                                        } else {
+                                                            "border-[var(--border)] bg-[var(--surface)]"
+                                                        }
+                                                    )}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onchange={Callback::from(move |_| {
+                                                                on_toggle_create_account_group_member.emit(account_name.clone())
+                                                            })}
+                                                        />
+                                                        <div class={classes!("min-w-0", "flex-1")}>
+                                                            <div class={classes!("font-semibold", "text-[var(--text)]")}>{ account.name.clone() }</div>
+                                                            <div class={classes!("mt-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                                { format!(
+                                                                    "5h {} / wk {}",
+                                                                    account.primary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string()),
+                                                                    account.secondary_remaining_percent.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "-".to_string())
+                                                                ) }
+                                                            </div>
+                                                        </div>
+                                                    </label>
+                                                }
+                                            }) }
+                                        </div>
+                                    }
+                                </div>
+                                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                    <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                        { format!(
+                                            "当前成员: {}",
+                                            if create_account_group_account_names.is_empty() {
+                                                "无".to_string()
+                                            } else {
+                                                create_account_group_account_names.join(", ")
+                                            }
+                                        ) }
+                                    </span>
+                                    <button
+                                        class={classes!("btn-terminal", "btn-terminal-primary")}
+                                        onclick={on_create_account_group}
+                                        disabled={*creating_account_group}
+                                    >
+                                        { if *creating_account_group { "创建中..." } else { "创建账号组" } }
+                                    </button>
+                                </div>
+                            </div>
+                        }
                     </div>
 
                     <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
@@ -4256,40 +4338,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         }
                     </div>
                 </section>
-
-                <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
-                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Key Inventory" }</h2>
-                            <button class={classes!("btn-terminal")} onclick={{
-                                let reload = reload.clone();
-                                Callback::from(move |_| reload.emit(()))
-                            }}>
-                                { if *loading { "刷新中..." } else { "刷新" } }
-                            </button>
-                        </div>
-                        <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
-                            if keys.is_empty() && !*loading {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                                    { "当前还没有可管理的 key。" }
-                                </div>
-                            } else {
-                                { for keys.iter().map(|key_item| html! {
-                                    <KeyEditorCard
-                                        key={key_item.id.clone()}
-                                        key_item={key_item.clone()}
-                                        on_changed={reload.clone()}
-                                        on_refresh={on_refresh_key.clone()}
-                                        on_copy={on_copy.clone()}
-                                        on_flash={flash.clone()}
-                                        refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
-                                        accounts={(*accounts).clone()}
-                                        account_groups={(*account_groups).clone()}
-                                    />
-                                }) }
-                            }
-                        </div>
-                </section>
-                } // end TAB_KEYS
+                } // end TAB_GROUPS
 
                 // ── Accounts Tab ──
                 if *active_tab == TAB_ACCOUNTS {
