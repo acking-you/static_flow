@@ -874,11 +874,13 @@ fn estimate_prefix_tree_cached_tokens(
 }
 
 fn prefix_tree_credit_ratio_cap_basis_points(credit_usage: Option<f64>) -> Option<u32> {
-    let observed_credit = credit_usage.filter(|value| value.is_finite() && *value >= 0.5)?;
+    let observed_credit = credit_usage.filter(|value| value.is_finite() && *value >= 0.3)?;
     let cap_ratio = if observed_credit < 1.0 {
-        1.4 - observed_credit
+        0.2 + (1.0 - observed_credit) * (5.0 / 7.0)
+    } else if observed_credit < 2.5 {
+        (2.5 - observed_credit) * (2.0 / 15.0)
     } else {
-        (0.5 - 0.1 * observed_credit).max(0.0)
+        0.0
     };
     Some((cap_ratio.clamp(0.0, 1.0) * 10_000.0).round() as u32)
 }
@@ -933,9 +935,8 @@ fn build_kiro_usage_summary(
             // provides the ratio basis and never overrides upstream totals.
             // As upstream credit rises, the prefix-derived cache is treated as
             // a candidate and clamped by an explicit product-policy ratio cap.
-            // The cap starts at credit 0.5, ramps from 90% down to 40% before
-            // credit 1.0, then keeps shrinking by 10 percentage points per
-            // additional credit until it reaches zero.
+            // The cap starts at credit 0.3, ramps from 70% down to 20% before
+            // credit 1.0, then keeps shrinking from 20% to zero by credit 2.5.
             let prefix_cached =
                 estimate_prefix_tree_cached_tokens(authoritative_input_tokens, simulation);
             let cached = clamp_prefix_tree_cached_tokens_with_credit_ratio_cap(
@@ -3034,65 +3035,83 @@ mod tests {
     }
 
     #[test]
-    fn build_usage_summary_prefix_tree_caps_cache_with_smoothed_policy_when_credit_is_high() {
-        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
-        let summary = build_kiro_usage_summary(
-            "claude-opus-4-6",
-            12_000,
-            Some(500_000),
-            400,
-            Some(2.0),
-            true,
-            &simulation,
-        );
-
-        assert_eq!(summary.input_cached_tokens, 150_000);
-        assert_eq!(summary.input_uncached_tokens, 350_000);
-    }
-
-    #[test]
-    fn build_usage_summary_prefix_tree_scales_policy_cap_linearly_inside_bucket() {
+    fn build_usage_summary_prefix_tree_caps_cache_at_twenty_percent_when_credit_reaches_one() {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
             Some(100_000),
             400,
-            Some(1.5),
+            Some(1.0),
             true,
             &simulation,
         );
 
-        assert_eq!(summary.input_cached_tokens, 35_000);
-        assert_eq!(summary.input_uncached_tokens, 65_000);
+        assert_eq!(summary.input_cached_tokens, 20_000);
+        assert_eq!(summary.input_uncached_tokens, 80_000);
     }
 
     #[test]
-    fn build_usage_summary_prefix_tree_scales_policy_cap_inside_sub_one_band() {
+    fn build_usage_summary_prefix_tree_scales_policy_cap_inside_second_band() {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
             Some(100_000),
             400,
-            Some(0.75),
+            Some(1.75),
             true,
             &simulation,
         );
 
-        assert_eq!(summary.input_cached_tokens, 65_000);
-        assert_eq!(summary.input_uncached_tokens, 35_000);
+        assert_eq!(summary.input_cached_tokens, 10_000);
+        assert_eq!(summary.input_uncached_tokens, 90_000);
     }
 
     #[test]
-    fn build_usage_summary_prefix_tree_reports_zero_cache_when_credit_reaches_five() {
+    fn build_usage_summary_prefix_tree_scales_policy_cap_inside_first_band() {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
             Some(100_000),
             400,
-            Some(5.0),
+            Some(0.65),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 45_000);
+        assert_eq!(summary.input_uncached_tokens, 55_000);
+    }
+
+    #[test]
+    fn build_usage_summary_prefix_tree_caps_cache_at_seventy_percent_when_credit_reaches_point_three(
+    ) {
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(100_000),
+            400,
+            Some(0.3),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 70_000);
+        assert_eq!(summary.input_uncached_tokens, 30_000);
+    }
+
+    #[test]
+    fn build_usage_summary_prefix_tree_reports_zero_cache_when_credit_reaches_two_point_five() {
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(100_000),
+            400,
+            Some(2.5),
             true,
             &simulation,
         );
@@ -3102,14 +3121,14 @@ mod tests {
     }
 
     #[test]
-    fn build_usage_summary_prefix_tree_keeps_prefix_ratio_when_credit_is_below_half() {
+    fn build_usage_summary_prefix_tree_keeps_prefix_ratio_when_credit_is_below_point_three() {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
             12_000,
             Some(100_000),
             400,
-            Some(0.49),
+            Some(0.29),
             true,
             &simulation,
         );
