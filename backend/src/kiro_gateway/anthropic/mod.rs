@@ -303,6 +303,23 @@ fn log_high_credit_usage_anomaly(
         .prefix_cache_match
         .matched_tokens
         .min(projected_total);
+    let authoritative_input_tokens =
+        usage.input_uncached_tokens.max(0) + usage.input_cached_tokens.max(0);
+    let prefix_cached_tokens =
+        estimate_prefix_tree_cached_tokens(authoritative_input_tokens, simulation);
+    let credit_guard_upper_bound = usage
+        .credit_usage
+        .filter(|value| value.is_finite() && *value >= 1.0)
+        .map(|observed_credit| {
+            estimate_kiro_cache_usage(KiroCacheEstimateInput {
+                model: event_context.model.as_deref().unwrap_or("unknown"),
+                input_tokens_total: authoritative_input_tokens,
+                output_tokens: usage.output_tokens,
+                credit_usage: Some(observed_credit),
+                kmodels: &simulation.runtime_config.kiro_cache_kmodels,
+            })
+            .input_cached_tokens
+        });
     let matched_ratio_basis_points =
         ((u128::from(matched_tokens) * 10_000) / u128::from(projected_total)) as u64;
     tracing::warn!(
@@ -337,6 +354,11 @@ fn log_high_credit_usage_anomaly(
         matched_page_count = simulation.prefix_cache_match.matched_pages,
         matched_token_count = simulation.prefix_cache_match.matched_tokens,
         matched_ratio_basis_points,
+        prefix_cached_tokens,
+        credit_guard_upper_bound = credit_guard_upper_bound.unwrap_or(-1),
+        credit_guard_applied = credit_guard_upper_bound
+            .is_some_and(|upper_bound| usage.input_cached_tokens < prefix_cached_tokens
+                && usage.input_cached_tokens <= upper_bound),
         client_request_body_bytes = event_context
             .client_request_body_json
             .as_ref()
@@ -843,6 +865,43 @@ pub(super) fn resolve_input_tokens(
     }
 }
 
+fn estimate_prefix_tree_cached_tokens(
+    authoritative_input_tokens: i32,
+    simulation: &KiroSimulationRequestContext,
+) -> i32 {
+    let authoritative_input_u64 = authoritative_input_tokens.max(0) as u64;
+    let projected_total = simulation.projection.projected_input_token_count.max(1);
+    let matched = simulation
+        .prefix_cache_match
+        .matched_tokens
+        .min(projected_total);
+    ((u128::from(authoritative_input_u64) * u128::from(matched)) / u128::from(projected_total))
+        .min(u128::from(authoritative_input_u64)) as i32
+}
+
+fn clamp_prefix_tree_cached_tokens_with_credit_guard(
+    model: &str,
+    authoritative_input_tokens: i32,
+    output_tokens: i32,
+    credit_usage: Option<f64>,
+    prefix_cached_tokens: i32,
+    kmodels: &std::collections::BTreeMap<String, f64>,
+) -> i32 {
+    let Some(observed_credit) = credit_usage.filter(|value| value.is_finite() && *value >= 1.0)
+    else {
+        return prefix_cached_tokens;
+    };
+    let credit_upper_bound = estimate_kiro_cache_usage(KiroCacheEstimateInput {
+        model,
+        input_tokens_total: authoritative_input_tokens,
+        output_tokens,
+        credit_usage: Some(observed_credit),
+        kmodels,
+    })
+    .input_cached_tokens;
+    prefix_cached_tokens.min(credit_upper_bound)
+}
+
 fn build_kiro_usage_summary(
     model: &str,
     request_input_tokens: i32,
@@ -876,15 +935,20 @@ fn build_kiro_usage_summary(
             // corrected prompt projection, then applies that ratio to the
             // authoritative upstream-reported input total. Local parsing only
             // provides the ratio basis and never overrides upstream totals.
-            let authoritative_input_u64 = authoritative_input_tokens.max(0) as u64;
-            let projected_total = simulation.projection.projected_input_token_count.max(1);
-            let matched = simulation
-                .prefix_cache_match
-                .matched_tokens
-                .min(projected_total);
-            let cached = ((u128::from(authoritative_input_u64) * u128::from(matched))
-                / u128::from(projected_total))
-            .min(u128::from(authoritative_input_u64)) as i32;
+            // When upstream credit is already high, the prefix-derived cache is
+            // treated as a candidate and clamped by the credit-derived upper
+            // bound so obviously expensive requests cannot report implausibly
+            // large cache hits.
+            let prefix_cached =
+                estimate_prefix_tree_cached_tokens(authoritative_input_tokens, simulation);
+            let cached = clamp_prefix_tree_cached_tokens_with_credit_guard(
+                model,
+                authoritative_input_tokens,
+                output_tokens,
+                credit_usage,
+                prefix_cached,
+                &simulation.runtime_config.kiro_cache_kmodels,
+            );
             KiroCacheEstimate {
                 input_tokens_total: authoritative_input_tokens,
                 input_uncached_tokens: authoritative_input_tokens - cached,
@@ -2973,6 +3037,46 @@ mod tests {
 
         assert_eq!(summary.input_cached_tokens, expected_cached);
         assert_eq!(summary.input_uncached_tokens, 100_000 - expected_cached);
+    }
+
+    #[test]
+    fn build_usage_summary_prefix_tree_caps_cache_using_credit_guard_when_credit_is_high() {
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        let kmodel = sample_kmodels()["claude-opus-4-6"];
+        let safe_full_cost = kmodel * (500_000.0 + 5.0 * 400.0);
+        let expected_cached = ((safe_full_cost - 2.0) / (0.9 * kmodel))
+            .floor()
+            .max(0.0)
+            .min(500_000.0) as i32;
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(500_000),
+            400,
+            Some(2.0),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, expected_cached);
+        assert_eq!(summary.input_uncached_tokens, 500_000 - expected_cached);
+    }
+
+    #[test]
+    fn build_usage_summary_prefix_tree_keeps_prefix_ratio_when_credit_is_below_one() {
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(100_000),
+            400,
+            Some(0.5),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 100_000);
+        assert_eq!(summary.input_uncached_tokens, 0);
     }
 
     #[tokio::test]
