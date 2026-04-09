@@ -222,6 +222,8 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub offset: usize,
     pub limit: usize,
     pub has_more: bool,
+    pub current_rpm: u32,
+    pub current_in_flight: u32,
     pub events: Vec<AdminLlmGatewayUsageEventView>,
     pub generated_at: i64,
 }
@@ -481,6 +483,7 @@ pub struct AdminLlmGatewayUsageEventView {
     pub last_message_content: Option<String>,
     pub client_request_body_json: Option<String>,
     pub upstream_request_body_json: Option<String>,
+    pub full_request_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -920,6 +923,7 @@ impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventView {
             last_message_content: value.last_message_content.clone(),
             client_request_body_json: value.client_request_body_json.clone(),
             upstream_request_body_json: value.upstream_request_body_json.clone(),
+            full_request_json: value.full_request_json.clone(),
             created_at: value.created_at,
         }
     }

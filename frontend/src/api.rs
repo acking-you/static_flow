@@ -4394,6 +4394,7 @@ pub struct AdminLlmGatewayUsageEventView {
     pub last_message_content: Option<String>,
     pub client_request_body_json: Option<String>,
     pub upstream_request_body_json: Option<String>,
+    pub full_request_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -4405,6 +4406,8 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub offset: usize,
     pub limit: usize,
     pub has_more: bool,
+    pub current_rpm: u32,
+    pub current_in_flight: u32,
     pub events: Vec<AdminLlmGatewayUsageEventView>,
     pub generated_at: i64,
 }
@@ -6204,6 +6207,8 @@ pub async fn fetch_admin_llm_gateway_usage_events(
             offset: query.offset.unwrap_or(0),
             limit: query.limit.unwrap_or(50),
             has_more: false,
+            current_rpm: 0,
+            current_in_flight: 0,
             events: vec![],
             generated_at: 0,
         })
@@ -6977,6 +6982,8 @@ pub async fn fetch_admin_kiro_usage_events(
             offset: 0,
             limit: 20,
             has_more: false,
+            current_rpm: 0,
+            current_in_flight: 0,
             events: vec![],
             generated_at: 0,
         })

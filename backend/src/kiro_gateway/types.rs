@@ -223,6 +223,7 @@ pub struct AdminKiroUsageEventView {
     pub last_message_content: Option<String>,
     pub client_request_body_json: Option<String>,
     pub upstream_request_body_json: Option<String>,
+    pub full_request_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -252,6 +253,7 @@ impl From<&LlmGatewayUsageEventRecord> for AdminKiroUsageEventView {
             last_message_content: value.last_message_content.clone(),
             client_request_body_json: value.client_request_body_json.clone(),
             upstream_request_body_json: value.upstream_request_body_json.clone(),
+            full_request_json: value.full_request_json.clone(),
             created_at: value.created_at,
         }
     }

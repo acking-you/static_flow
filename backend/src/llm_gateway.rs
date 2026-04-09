@@ -5,6 +5,7 @@
 //! modules. This file owns the top-level handlers and the proxy control flow
 //! so the routing layer only needs to depend on one coherent module.
 
+mod activity;
 mod models;
 mod request;
 mod response;
@@ -1109,6 +1110,9 @@ pub async fn list_admin_usage_events(
         .as_deref()
         .map(|key_id| state.llm_gateway.usage_event_count_for_key(key_id))
         .unwrap_or_else(|| state.llm_gateway.total_usage_event_count());
+    let activity_snapshot = state
+        .llm_gateway
+        .request_activity_snapshot(query.key_id.as_deref());
     if total == 0 || offset >= total {
         tracing::debug!(
             key_id = query.key_id.as_deref().unwrap_or("all"),
@@ -1122,6 +1126,8 @@ pub async fn list_admin_usage_events(
             offset,
             limit,
             has_more: false,
+            current_rpm: activity_snapshot.rpm,
+            current_in_flight: activity_snapshot.in_flight,
             events: vec![],
             generated_at: now_ms(),
         }));
@@ -1151,6 +1157,8 @@ pub async fn list_admin_usage_events(
         offset,
         limit,
         has_more,
+        current_rpm: activity_snapshot.rpm,
+        current_in_flight: activity_snapshot.in_flight,
         events: events
             .iter()
             .map(AdminLlmGatewayUsageEventView::from)
@@ -1705,6 +1713,10 @@ fn maybe_parse_gateway_json_bytes(raw: &Bytes) -> serde_json::Value {
         .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(raw).to_string()))
 }
 
+fn maybe_raw_request_body_text(raw: &Bytes) -> Option<String> {
+    (!raw.is_empty()).then(|| String::from_utf8_lossy(raw).to_string())
+}
+
 fn default_gateway_event_context(prepared: &PreparedGatewayRequest) -> LlmGatewayEventContext {
     LlmGatewayEventContext {
         request_method: prepared.method.as_str().to_string(),
@@ -1772,6 +1784,7 @@ fn build_gateway_usage_event_record(
         last_message_content: args.last_message_content,
         client_request_body_json: None,
         upstream_request_body_json: None,
+        full_request_json: maybe_raw_request_body_text(&args.prepared.client_request_body),
         created_at: now_ms(),
     }
 }
@@ -3396,6 +3409,9 @@ pub async fn proxy_gateway_request(
             return Err(err);
         },
     };
+    let _activity_guard = state
+        .llm_gateway
+        .start_request_activity(&key_lease.record.id);
 
     let response = match send_upstream_with_retry(
         &state,
@@ -5371,6 +5387,7 @@ mod tests {
             last_message_content: Some("secret".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at,
         }
     }

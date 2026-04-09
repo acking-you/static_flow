@@ -178,6 +178,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     let mut last_message_content = StringBuilder::new();
     let mut client_request_body_json = StringBuilder::new();
     let mut upstream_request_body_json = StringBuilder::new();
+    let mut full_request_json = StringBuilder::new();
     let mut created_at = TimestampMillisecondBuilder::new();
 
     for record in records {
@@ -211,6 +212,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
             &mut upstream_request_body_json,
             record.upstream_request_body_json.as_deref(),
         );
+        append_optional_str(&mut full_request_json, record.full_request_json.as_deref());
         created_at.append_value(record.created_at);
     }
 
@@ -239,6 +241,7 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(last_message_content.finish()),
         Arc::new(client_request_body_json.finish()),
         Arc::new(upstream_request_body_json.finish()),
+        Arc::new(full_request_json.finish()),
         Arc::new(created_at.finish()),
     ])
     .context("failed to build llm gateway usage events batch")
@@ -808,6 +811,9 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let upstream_request_body_json = batch
             .column_by_name("upstream_request_body_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let full_request_json = batch
+            .column_by_name("full_request_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let created_at = required_ts_col(batch, "created_at")?;
 
         for idx in 0..batch.num_rows() {
@@ -861,6 +867,8 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
                 client_request_body_json: client_request_body_json
                     .and_then(|column| value_string_opt(column, idx)),
                 upstream_request_body_json: upstream_request_body_json
+                    .and_then(|column| value_string_opt(column, idx)),
+                full_request_json: full_request_json
                     .and_then(|column| value_string_opt(column, idx)),
                 created_at: created_at.value(idx),
             });

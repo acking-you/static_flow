@@ -1278,6 +1278,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_total = use_state(|| 0_usize);
     let usage_page = use_state(|| 1_usize);
+    let usage_current_rpm = use_state(|| 0_u32);
+    let usage_current_in_flight = use_state(|| 0_u32);
     let usage_loading = use_state(|| false);
     let usage_error = use_state(|| None::<String>);
     let usage_key_filter = use_state(String::new);
@@ -1376,6 +1378,8 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_events = usage_events.clone();
         let usage_total = usage_total.clone();
         let usage_page = usage_page.clone();
+        let usage_current_rpm = usage_current_rpm.clone();
+        let usage_current_in_flight = usage_current_in_flight.clone();
         let usage_loading = usage_loading.clone();
         let usage_error = usage_error.clone();
         let usage_key_filter = usage_key_filter.clone();
@@ -1383,6 +1387,8 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_events = usage_events.clone();
             let usage_total = usage_total.clone();
             let usage_page = usage_page.clone();
+            let usage_current_rpm = usage_current_rpm.clone();
+            let usage_current_in_flight = usage_current_in_flight.clone();
             let usage_loading = usage_loading.clone();
             let usage_error = usage_error.clone();
             let usage_key_filter = usage_key_filter.clone();
@@ -1399,10 +1405,16 @@ pub fn admin_llm_gateway_page() -> Html {
                 match fetch_admin_llm_gateway_usage_events(&query).await {
                     Ok(resp) => {
                         usage_total.set(resp.total);
+                        usage_current_rpm.set(resp.current_rpm);
+                        usage_current_in_flight.set(resp.current_in_flight);
                         usage_events.set(resp.events);
                         usage_page.set(page);
                     },
-                    Err(err) => usage_error.set(Some(err)),
+                    Err(err) => {
+                        usage_current_rpm.set(0);
+                        usage_current_in_flight.set(0);
+                        usage_error.set(Some(err));
+                    },
                 }
                 usage_loading.set(false);
             });
@@ -2870,6 +2882,10 @@ pub fn admin_llm_gateway_page() -> Html {
             .client_request_body_json
             .as_deref()
             .map(pretty_json_text);
+        let full_request_json_for_copy = event
+            .full_request_json
+            .as_deref()
+            .map(pretty_json_text);
         let upstream_request_json_for_copy = event
             .upstream_request_body_json
             .as_deref()
@@ -3077,6 +3093,39 @@ pub fn admin_llm_gateway_page() -> Html {
                                 "break-words"
                             )}>
                                 { client_request_json_for_copy }
+                            </pre>
+                        </div>
+                    }
+
+                    if let Some(full_request_json_for_copy) = full_request_json_for_copy {
+                        <div class={classes!("mt-4")}>
+                            <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Full Request" }</div>
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    onclick={{
+                                        let on_copy = on_copy.clone();
+                                        let full_request_json_for_copy = full_request_json_for_copy.clone();
+                                        Callback::from(move |_| on_copy.emit(("Full Request".to_string(), full_request_json_for_copy.clone())))
+                                    }}
+                                >
+                                    { "复制 Full Request" }
+                                </button>
+                            </div>
+                            <pre class={classes!(
+                                "max-h-[42vh]",
+                                "overflow-x-auto",
+                                "overflow-y-auto",
+                                "rounded-lg",
+                                "bg-slate-950",
+                                "p-3",
+                                "text-xs",
+                                "leading-6",
+                                "text-cyan-100",
+                                "whitespace-pre-wrap",
+                                "break-words"
+                            )}>
+                                { full_request_json_for_copy }
                             </pre>
                         </div>
                     }
@@ -4175,18 +4224,26 @@ pub fn admin_llm_gateway_page() -> Html {
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Usage Events" }</h2>
-                        <button
-                            class={classes!("btn-terminal")}
-                            title="刷新事件"
-                            aria-label="刷新事件"
-                            onclick={{
-                                let reload_usage = reload_usage.clone();
-                                Callback::from(move |_| reload_usage.emit((None, None)))
-                            }}
-                            disabled={*usage_loading}
-                        >
-                            <i class={classes!("fas", if *usage_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
-                        </button>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                { format!("RPM {}", *usage_current_rpm) }
+                            </span>
+                            <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                { format!("In Flight {}", *usage_current_in_flight) }
+                            </span>
+                            <button
+                                class={classes!("btn-terminal")}
+                                title="刷新事件"
+                                aria-label="刷新事件"
+                                onclick={{
+                                    let reload_usage = reload_usage.clone();
+                                    Callback::from(move |_| reload_usage.emit((None, None)))
+                                }}
+                                disabled={*usage_loading}
+                            >
+                                <i class={classes!("fas", if *usage_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                            </button>
+                        </div>
                     </div>
 
                     <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_auto_auto]", "items-end")}>

@@ -874,7 +874,7 @@ fn adjust_input_tokens_for_cache_creation_cost(
     else {
         return authoritative_input_tokens;
     };
-    let progress = ((observed_credit - 1.0) / 1.5).clamp(0.0, 1.0);
+    let progress = ((observed_credit - 1.0) / 0.8).clamp(0.0, 1.0);
     let boosted = authoritative_input_tokens as f64
         + (100_000 - authoritative_input_tokens) as f64 * progress;
     boosted.round() as i32
@@ -1232,6 +1232,7 @@ async fn handle_messages(
     let provider = KiroProvider::new(state.kiro_gateway.clone());
     if pure_web_search {
         event_context.endpoint = "/mcp".to_string();
+        let _activity_guard = state.llm_gateway.start_request_activity(&key_record.id);
         return handle_websearch_request(
             state,
             key_record,
@@ -1454,6 +1455,7 @@ async fn handle_messages(
         .map(Thinking::is_enabled)
         .unwrap_or(false);
     event_context.endpoint = "/generateAssistantResponse".to_string();
+    let _activity_guard = state.llm_gateway.start_request_activity(&key_record.id);
 
     if payload.stream {
         let response = match provider
@@ -3046,18 +3048,18 @@ mod tests {
     }
 
     #[test]
-    fn effective_input_total_moves_halfway_toward_hundred_k_at_credit_one_point_seven_five() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.75), true), 75_000);
+    fn effective_input_total_moves_halfway_toward_hundred_k_at_credit_one_point_four() {
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.4), true), 75_000);
     }
 
     #[test]
-    fn effective_input_total_caps_at_hundred_k_when_credit_reaches_two_point_five() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(2.5), true), 100_000);
+    fn effective_input_total_caps_at_hundred_k_when_credit_reaches_one_point_eight() {
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.8), true), 100_000);
     }
 
     #[test]
     fn effective_input_total_keeps_large_authoritative_total_unchanged() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(120_000, Some(2.5), true), 120_000);
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(120_000, Some(1.8), true), 120_000);
     }
 
     #[test]
@@ -3093,8 +3095,16 @@ mod tests {
             &simulation,
         );
 
-        assert_eq!(summary.input_cached_tokens, 7_500);
-        assert_eq!(summary.input_uncached_tokens, 67_500);
+        let authoritative_input_tokens =
+            adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.75), true);
+        let cap_basis_points =
+            prefix_tree_credit_ratio_cap_basis_points(Some(1.75)).expect("cap basis points");
+        let expected_cached = ((u128::from(authoritative_input_tokens as u64)
+            * u128::from(cap_basis_points))
+            / 10_000_u128) as i32;
+
+        assert_eq!(summary.input_cached_tokens, expected_cached);
+        assert_eq!(summary.input_uncached_tokens, authoritative_input_tokens - expected_cached);
     }
 
     #[test]

@@ -851,8 +851,7 @@ pub async fn record_messages_usage(
         billable_tokens = event.billable_tokens,
         credit_usage = event.credit_usage.unwrap_or_default(),
         credit_usage_missing = event.credit_usage_missing,
-        captured_full_request =
-            event.client_request_body_json.is_some() && event.upstream_request_body_json.is_some(),
+        captured_full_request = event.full_request_json.is_some(),
         "persisted kiro usage event"
     );
     Ok(())
@@ -946,6 +945,7 @@ fn build_kiro_usage_event_record(
         upstream_request_body_json: capture_full_requests
             .then(|| event_context.upstream_request_body_json.clone())
             .flatten(),
+        full_request_json: event_context.client_request_body_json.clone(),
         created_at: now_ms(),
     }
 }
@@ -1605,6 +1605,7 @@ mod tests {
         assert_eq!(record.billable_tokens, 0);
         assert!(record.client_request_body_json.is_none());
         assert!(record.upstream_request_body_json.is_none());
+        assert!(record.full_request_json.is_none());
     }
 
     #[test]
@@ -1679,6 +1680,7 @@ mod tests {
             record.upstream_request_body_json.as_deref(),
             Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
         );
+        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
         assert_eq!(record.billable_tokens, 54_679);
     }
 
@@ -1751,5 +1753,6 @@ mod tests {
 
         assert!(record.client_request_body_json.is_none());
         assert!(record.upstream_request_body_json.is_none());
+        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
     }
 }

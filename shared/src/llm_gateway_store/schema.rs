@@ -90,6 +90,7 @@ pub fn llm_gateway_usage_events_schema() -> Arc<Schema> {
         Field::new("last_message_content", DataType::Utf8, true),
         Field::new("client_request_body_json", DataType::Utf8, true),
         Field::new("upstream_request_body_json", DataType::Utf8, true),
+        Field::new("full_request_json", DataType::Utf8, true),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
@@ -294,6 +295,7 @@ pub async fn ensure_usage_events_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "last_message_content").await?;
     ensure_nullable_utf8_column(&table, "client_request_body_json").await?;
     ensure_nullable_utf8_column(&table, "upstream_request_body_json").await?;
+    ensure_nullable_utf8_column(&table, "full_request_json").await?;
     ensure_scalar_index(&table, "id").await?;
     ensure_scalar_index(&table, "key_id").await?;
     ensure_scalar_index(&table, "provider_type").await?;
@@ -644,7 +646,7 @@ pub fn key_columns() -> [&'static str; 26] {
 }
 
 /// Ordered projection used when reading usage-event rows back from LanceDB.
-pub fn usage_event_columns() -> [&'static str; 25] {
+pub fn usage_event_columns() -> [&'static str; 26] {
     [
         "id",
         "key_id",
@@ -670,6 +672,7 @@ pub fn usage_event_columns() -> [&'static str; 25] {
         "last_message_content",
         "client_request_body_json",
         "upstream_request_body_json",
+        "full_request_json",
         "created_at",
     ]
 }

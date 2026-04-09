@@ -232,6 +232,12 @@ pub struct LlmGatewayUsageEventRecord {
     /// Persisted alongside `client_request_body_json` for the same
     /// diagnostic-only cases.
     pub upstream_request_body_json: Option<String>,
+    /// Canonical full raw request body as received from the client.
+    ///
+    /// Unlike the diagnostic-only request body fields above, this field is
+    /// intended to persist the entire original request JSON for every new
+    /// usage event whenever the caller supplied a JSON body.
+    pub full_request_json: Option<String>,
     pub created_at: i64,
 }
 

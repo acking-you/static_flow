@@ -24,7 +24,11 @@ use tokio::{
     time::MissedTickBehavior,
 };
 
-use super::{accounts::AccountPool, types::LlmGatewayRateLimitStatusResponse};
+use super::{
+    accounts::AccountPool,
+    activity::{RequestActivityGuard, RequestActivitySnapshot, RequestActivityTracker},
+    types::LlmGatewayRateLimitStatusResponse,
+};
 use crate::{
     state::LlmGatewayRuntimeConfig,
     upstream_proxy::{
@@ -73,6 +77,15 @@ fn estimate_usage_event_bytes(event: &LlmGatewayUsageEventRecord) -> usize {
         + event.ip_region.len()
         + event.request_headers_json.len()
         + event.last_message_content.as_deref().map_or(0, str::len)
+        + event
+            .client_request_body_json
+            .as_deref()
+            .map_or(0, str::len)
+        + event
+            .upstream_request_body_json
+            .as_deref()
+            .map_or(0, str::len)
+        + event.full_request_json.as_deref().map_or(0, str::len)
 }
 
 /// Long-lived runtime state shared by all gateway handlers.
@@ -90,6 +103,7 @@ pub struct LlmGatewayRuntimeState {
     /// Rebuilt on startup and incrementally updated on each new event.
     pub(crate) usage_rollups: Arc<RwLock<HashMap<String, LlmGatewayKeyUsageRollupRecord>>>,
     pub(crate) usage_event_counts: Arc<RwLock<UsageEventCountCache>>,
+    pub(crate) activity_tracker: Arc<RequestActivityTracker>,
     pub(crate) usage_event_tx: mpsc::Sender<LlmGatewayUsageEventRecord>,
 }
 
@@ -135,6 +149,7 @@ impl LlmGatewayRuntimeState {
             })),
             usage_rollups: Arc::new(RwLock::new(HashMap::new())),
             usage_event_counts,
+            activity_tracker: Arc::new(RequestActivityTracker::new()),
             usage_event_tx,
         })
     }
@@ -257,6 +272,17 @@ impl LlmGatewayRuntimeState {
             .get(key_id)
             .copied()
             .unwrap_or(0)
+    }
+
+    pub(crate) fn start_request_activity(&self, key_id: &str) -> RequestActivityGuard {
+        self.activity_tracker.start(key_id)
+    }
+
+    pub(crate) fn request_activity_snapshot(
+        &self,
+        key_id: Option<&str>,
+    ) -> RequestActivitySnapshot {
+        self.activity_tracker.snapshot(key_id)
     }
 }
 
@@ -1021,6 +1047,7 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now_ms(),
         };
 
@@ -1122,6 +1149,7 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now_ms(),
         };
 
@@ -1197,6 +1225,7 @@ mod tests {
             last_message_content: Some("1234567890".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now_ms(),
         };
         let second = LlmGatewayUsageEventRecord {
@@ -1224,6 +1253,7 @@ mod tests {
             last_message_content: Some("abcdefghij".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now_ms() + 1,
         };
 

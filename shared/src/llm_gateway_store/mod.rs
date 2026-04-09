@@ -1844,6 +1844,7 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: Some("{\"messages\":[]}".to_string()),
             upstream_request_body_json: Some("{\"conversationState\":{}}".to_string()),
+            full_request_json: Some("{\"messages\":[]}".to_string()),
             created_at: now,
         };
         store
@@ -1936,6 +1937,7 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now,
         };
         store
@@ -2014,6 +2016,7 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now - 10_000,
         };
         store
@@ -2025,6 +2028,7 @@ mod tests {
                 id: "evt-created-at-2".to_string(),
                 client_request_body_json: Some("{\"messages\":[]}".to_string()),
                 upstream_request_body_json: Some("{\"conversationState\":{}}".to_string()),
+                full_request_json: Some("{\"messages\":[]}".to_string()),
                 created_at: now - 1_000,
                 ..base_event.clone()
             })
@@ -2048,6 +2052,64 @@ mod tests {
             filtered[0].upstream_request_body_json.as_deref(),
             Some("{\"conversationState\":{}}")
         );
+        assert_eq!(filtered[0].full_request_json.as_deref(), Some("{\"messages\":[]}"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn usage_event_round_trip_preserves_full_request_json() {
+        let dir = temp_store_dir("usage-full-request-json");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let key = sample_key_record("test-key-full-request", "Full Request Key");
+        store.create_key(&key).await.expect("create key");
+
+        let record = LlmGatewayUsageEventRecord {
+            id: "evt-full-request".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 25,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 12,
+            input_cached_tokens: 3,
+            output_tokens: 5,
+            billable_tokens: 40,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: Some(
+                "{\"model\":\"gpt-5\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
+                    .to_string(),
+            ),
+            created_at: now_ms(),
+        };
+
+        store
+            .append_usage_event(&record)
+            .await
+            .expect("append usage event");
+        let loaded = store
+            .list_usage_events(Some(&key.id), Some(1))
+            .await
+            .expect("list usage events");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].full_request_json, record.full_request_json);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2256,6 +2318,7 @@ mod tests {
             last_message_content: Some("hello".to_string()),
             client_request_body_json: Some("{\"messages\":[\"hello\"]}".to_string()),
             upstream_request_body_json: Some("{\"conversationState\":{\"id\":1}}".to_string()),
+            full_request_json: Some("{\"messages\":[\"hello\"]}".to_string()),
             created_at: now,
         };
         let codex_event = LlmGatewayUsageEventRecord {
@@ -2283,6 +2346,7 @@ mod tests {
             last_message_content: Some("world".to_string()),
             client_request_body_json: None,
             upstream_request_body_json: None,
+            full_request_json: None,
             created_at: now + 1,
         };
 
