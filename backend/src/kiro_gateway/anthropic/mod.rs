@@ -859,6 +859,25 @@ pub(super) fn resolve_input_tokens(
     }
 }
 
+fn adjust_input_tokens_for_cache_creation_cost(
+    authoritative_input_tokens: i32,
+    credit_usage: Option<f64>,
+    cache_estimation_enabled: bool,
+) -> i32 {
+    let authoritative_input_tokens = authoritative_input_tokens.max(0);
+    if !cache_estimation_enabled || authoritative_input_tokens >= 100_000 {
+        return authoritative_input_tokens;
+    }
+    let Some(observed_credit) = credit_usage.filter(|value| value.is_finite() && *value > 1.0)
+    else {
+        return authoritative_input_tokens;
+    };
+    let progress = ((observed_credit - 1.0) / 1.5).clamp(0.0, 1.0);
+    let boosted = authoritative_input_tokens as f64
+        + (100_000 - authoritative_input_tokens) as f64 * progress;
+    boosted.round() as i32
+}
+
 fn estimate_prefix_tree_cached_tokens(
     authoritative_input_tokens: i32,
     simulation: &KiroSimulationRequestContext,
@@ -909,17 +928,22 @@ fn build_kiro_usage_summary(
     cache_estimation_enabled: bool,
     simulation: &KiroSimulationRequestContext,
 ) -> KiroUsageSummary {
-    let (authoritative_input_tokens, _) =
+    let (resolved_input_tokens, _) =
         resolve_input_tokens(request_input_tokens, context_input_tokens);
     if !cache_estimation_enabled {
         return KiroUsageSummary {
-            input_uncached_tokens: authoritative_input_tokens,
+            input_uncached_tokens: resolved_input_tokens,
             input_cached_tokens: 0,
             output_tokens,
             credit_usage,
             credit_usage_missing: credit_usage.is_none(),
         };
     }
+    let authoritative_input_tokens = adjust_input_tokens_for_cache_creation_cost(
+        resolved_input_tokens,
+        credit_usage,
+        cache_estimation_enabled,
+    );
     let estimate = match simulation.simulation_config.mode {
         KiroCacheSimulationMode::Formula => estimate_kiro_cache_usage(KiroCacheEstimateInput {
             model,
@@ -3015,6 +3039,26 @@ mod tests {
     }
 
     #[test]
+    fn effective_input_total_keeps_authoritative_total_when_credit_is_not_above_one() {
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.0), true), 50_000);
+    }
+
+    #[test]
+    fn effective_input_total_moves_halfway_toward_hundred_k_at_credit_one_point_seven_five() {
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.75), true), 75_000);
+    }
+
+    #[test]
+    fn effective_input_total_caps_at_hundred_k_when_credit_reaches_two_point_five() {
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(2.5), true), 100_000);
+    }
+
+    #[test]
+    fn effective_input_total_keeps_large_authoritative_total_unchanged() {
+        assert_eq!(adjust_input_tokens_for_cache_creation_cost(120_000, Some(2.5), true), 120_000);
+    }
+
+    #[test]
     fn build_usage_summary_uses_prefix_tree_match_when_enabled() {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, 4);
         let expected_cached = ((100_000_u128 * 4_u128)
@@ -3032,6 +3076,23 @@ mod tests {
 
         assert_eq!(summary.input_cached_tokens, expected_cached);
         assert_eq!(summary.input_uncached_tokens, 100_000 - expected_cached);
+    }
+
+    #[test]
+    fn build_usage_summary_prefix_tree_applies_cache_creation_floor_before_ratio_split() {
+        let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(50_000),
+            400,
+            Some(1.75),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 7_500);
+        assert_eq!(summary.input_uncached_tokens, 67_500);
     }
 
     #[test]
