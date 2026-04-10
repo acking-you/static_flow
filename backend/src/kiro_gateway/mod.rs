@@ -2,6 +2,7 @@
 //! usage tracking, and admin CRUD for the Kiro provider backend.
 
 pub(crate) mod auth_file;
+mod cache_policy;
 pub(crate) mod cache_sim;
 mod local_import;
 pub(crate) mod machine_id;
@@ -31,16 +32,21 @@ pub(crate) use runtime::KiroGatewayRuntimeState;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    compute_billable_tokens, now_ms, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord,
-    LlmGatewayUsageEventRecord, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-    DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, LLM_GATEWAY_KEY_STATUS_ACTIVE,
-    LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROVIDER_KIRO,
+    compute_billable_tokens, now_ms, parse_kiro_cache_policy_override_json,
+    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
+    DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
+    LLM_GATEWAY_PROVIDER_KIRO,
 };
 pub(crate) use status_cache::{refresh_cached_status, spawn_status_refresher};
 
 use self::{
     anthropic::supported_model_ids,
     auth_file::KiroAuthRecord,
+    cache_policy::{
+        resolve_effective_kiro_cache_policy, should_capture_full_kiro_request_bodies,
+        uses_global_kiro_cache_policy,
+    },
     status_cache::{
         refresh_cached_status_for_account, remove_cached_status_for_account,
         KiroCachedAccountStatus,
@@ -66,7 +72,6 @@ const MIN_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 const MAX_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 16;
 const MIN_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 const MAX_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 60_000;
-pub(crate) const KIRO_HIGH_CREDIT_DIAGNOSTIC_THRESHOLD: f64 = 2.0;
 type KiroAdminResult<T> = Result<T, (StatusCode, Json<ErrorResponse>)>;
 
 /// Per-request context captured at authentication time and carried through
@@ -202,9 +207,29 @@ impl AppKiroStateExt for AppState {
     }
 }
 
-pub(crate) fn is_high_credit_usage(credit_usage: Option<f64>) -> bool {
-    credit_usage
-        .is_some_and(|value| value.is_finite() && value > KIRO_HIGH_CREDIT_DIAGNOSTIC_THRESHOLD)
+fn build_admin_kiro_key_view(
+    runtime_config: &crate::state::LlmGatewayRuntimeConfig,
+    key: &LlmGatewayKeyRecord,
+) -> KiroAdminResult<AdminKiroKeyView> {
+    let effective_policy = resolve_effective_kiro_cache_policy(runtime_config, key)
+        .map_err(|err| internal_error("Failed to resolve effective Kiro cache policy", err))?;
+    Ok(AdminKiroKeyView::from_key_and_effective_policy(
+        key,
+        &effective_policy,
+        uses_global_kiro_cache_policy(key),
+    ))
+}
+
+fn validate_kiro_cache_policy_override_update(
+    runtime_config: &crate::state::LlmGatewayRuntimeConfig,
+    key: &LlmGatewayKeyRecord,
+    override_json: Option<&str>,
+) -> KiroAdminResult<()> {
+    let mut candidate = key.clone();
+    candidate.kiro_cache_policy_override_json = override_json.map(ToString::to_string);
+    resolve_effective_kiro_cache_policy(runtime_config, &candidate)
+        .map_err(|_| bad_request("kiro_cache_policy_override_json is invalid"))?;
+    Ok(())
 }
 
 /// Returns the public Kiro gateway access info (base URL, auth cache TTL,
@@ -243,8 +268,13 @@ pub async fn list_admin_keys(
         .await
         .map_err(|err| internal_error("Failed to list Kiro keys", err))?;
     let keys = state.llm_gateway.overlay_key_usage_batch(&base_keys).await;
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    let key_views = keys
+        .iter()
+        .map(|key| build_admin_kiro_key_view(&runtime_config, key))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(AdminKiroKeysResponse {
-        keys: keys.iter().map(AdminKiroKeyView::from).collect(),
+        keys: key_views,
         auth_cache_ttl_seconds: state
             .llm_gateway_runtime_config
             .read()
@@ -388,13 +418,15 @@ pub async fn create_admin_key(
         request_min_start_interval_ms: None,
         kiro_request_validation_enabled: true,
         kiro_cache_estimation_enabled: true,
+        kiro_cache_policy_override_json: None,
     };
     state
         .llm_gateway_store
         .create_key(&record)
         .await
         .map_err(|err| internal_error("Failed to create Kiro key", err))?;
-    Ok(Json(AdminKiroKeyView::from(&record)))
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    Ok(Json(build_admin_kiro_key_view(&runtime_config, &record)?))
 }
 
 /// Update mutable fields on an existing Kiro key and return the view with
@@ -412,6 +444,7 @@ pub async fn patch_admin_key(
         .await
         .map_err(|err| internal_error("Failed to load Kiro key", err))?
         .ok_or_else(|| not_found("Kiro key not found"))?;
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
     if let Some(name) = request.name {
         key.name = normalize_name(&name)?;
     }
@@ -462,6 +495,22 @@ pub async fn patch_admin_key(
     if let Some(kiro_cache_estimation_enabled) = request.kiro_cache_estimation_enabled {
         key.kiro_cache_estimation_enabled = kiro_cache_estimation_enabled;
     }
+    if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
+        let override_json = match kiro_cache_policy_override_json {
+            Some(value) => {
+                parse_kiro_cache_policy_override_json(&value)
+                    .map_err(|_| bad_request("kiro_cache_policy_override_json is invalid"))?;
+                Some(value)
+            },
+            None => None,
+        };
+        validate_kiro_cache_policy_override_update(
+            &runtime_config,
+            &key,
+            override_json.as_deref(),
+        )?;
+        key.kiro_cache_policy_override_json = override_json;
+    }
     key.public_visible = false;
     materialize_legacy_kiro_route_group_if_needed(&state, &mut key).await?;
     validate_kiro_key_group_config(&state, &mut key).await?;
@@ -472,7 +521,7 @@ pub async fn patch_admin_key(
         .await
         .map_err(|err| internal_error("Failed to update Kiro key", err))?;
     let effective_key = state.llm_gateway.overlay_key_usage(&key).await;
-    Ok(Json(AdminKiroKeyView::from(&effective_key)))
+    Ok(Json(build_admin_kiro_key_view(&runtime_config, &effective_key)?))
 }
 
 /// Delete a Kiro API key by ID.
@@ -921,6 +970,7 @@ pub async fn record_messages_usage(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
     event_context: &KiroEventContext,
+    effective_policy: &static_flow_shared::llm_gateway_store::KiroCachePolicy,
     usage: KiroUsageSummary,
     usage_missing: bool,
 ) -> anyhow::Result<()> {
@@ -935,8 +985,11 @@ pub async fn record_messages_usage(
         .as_millis()
         .min(i32::MAX as u128) as i32;
     let event = build_kiro_usage_event_record(
-        &current,
-        event_context,
+        KiroUsageEventBuild {
+            effective_policy,
+            current: &current,
+            event_context,
+        },
         latency_ms,
         200,
         usage,
@@ -957,20 +1010,27 @@ pub async fn record_messages_usage(
         billable_tokens = event.billable_tokens,
         credit_usage = event.credit_usage.unwrap_or_default(),
         credit_usage_missing = event.credit_usage_missing,
-        captured_full_request = event.full_request_json.is_some(),
+        captured_canonical_request = event.full_request_json.is_some(),
+        captured_diagnostic_request_bodies = event.client_request_body_json.is_some()
+            || event.upstream_request_body_json.is_some(),
         "persisted kiro usage event"
     );
     Ok(())
+}
+
+pub struct FailedKiroRequestEvent<'a> {
+    pub effective_policy: &'a static_flow_shared::llm_gateway_store::KiroCachePolicy,
+    pub status_code: i32,
+    pub diagnostic_payload: String,
+    pub usage: KiroUsageSummary,
+    pub usage_missing: bool,
 }
 
 pub async fn record_failed_request_event(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
     event_context: &KiroEventContext,
-    status_code: i32,
-    diagnostic_payload: String,
-    usage: KiroUsageSummary,
-    usage_missing: bool,
+    failure: FailedKiroRequestEvent<'_>,
 ) -> anyhow::Result<()> {
     let current = state
         .llm_gateway_store
@@ -983,13 +1043,16 @@ pub async fn record_failed_request_event(
         .as_millis()
         .min(i32::MAX as u128) as i32;
     let event = build_kiro_usage_event_record(
-        &current,
-        event_context,
+        KiroUsageEventBuild {
+            effective_policy: failure.effective_policy,
+            current: &current,
+            event_context,
+        },
         latency_ms,
-        status_code,
-        usage,
-        usage_missing,
-        Some(diagnostic_payload),
+        failure.status_code,
+        failure.usage,
+        failure.usage_missing,
+        Some(failure.diagnostic_payload),
     );
     let _updated = state
         .llm_gateway
@@ -1003,32 +1066,41 @@ pub async fn record_failed_request_event(
         request_url = %event.request_url,
         status_code = event.status_code,
         latency_ms = event.latency_ms,
+        captured_canonical_request = event.full_request_json.is_some(),
+        captured_diagnostic_request_bodies = event.client_request_body_json.is_some()
+            || event.upstream_request_body_json.is_some(),
         "persisted kiro failure usage event"
     );
     Ok(())
 }
 
+struct KiroUsageEventBuild<'a> {
+    effective_policy: &'a static_flow_shared::llm_gateway_store::KiroCachePolicy,
+    current: &'a LlmGatewayKeyRecord,
+    event_context: &'a KiroEventContext,
+}
+
 fn build_kiro_usage_event_record(
-    current: &LlmGatewayKeyRecord,
-    event_context: &KiroEventContext,
+    build: KiroUsageEventBuild<'_>,
     latency_ms: i32,
     status_code: i32,
     usage: KiroUsageSummary,
     usage_missing: bool,
     last_message_content: Option<String>,
 ) -> LlmGatewayUsageEventRecord {
-    let capture_full_requests = is_high_credit_usage(usage.credit_usage);
+    let capture_diagnostic_request_bodies =
+        should_capture_full_kiro_request_bodies(build.effective_policy, usage.credit_usage);
     LlmGatewayUsageEventRecord {
         id: generate_task_id("kiro-usage"),
-        key_id: current.id.clone(),
-        key_name: current.name.clone(),
+        key_id: build.current.id.clone(),
+        key_name: build.current.name.clone(),
         provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
-        account_name: event_context.account_name.clone(),
-        request_method: event_context.request_method.clone(),
-        request_url: event_context.request_url.clone(),
+        account_name: build.event_context.account_name.clone(),
+        request_method: build.event_context.request_method.clone(),
+        request_url: build.event_context.request_url.clone(),
         latency_ms,
-        endpoint: event_context.endpoint.clone(),
-        model: event_context.model.clone(),
+        endpoint: build.event_context.endpoint.clone(),
+        model: build.event_context.model.clone(),
         status_code,
         input_uncached_tokens: usage.input_uncached_tokens.max(0) as u64,
         input_cached_tokens: usage.input_cached_tokens.max(0) as u64,
@@ -1041,17 +1113,19 @@ fn build_kiro_usage_event_record(
         usage_missing,
         credit_usage: usage.credit_usage,
         credit_usage_missing: usage.credit_usage_missing,
-        client_ip: event_context.client_ip.clone(),
-        ip_region: event_context.ip_region.clone(),
-        request_headers_json: event_context.request_headers_json.clone(),
+        client_ip: build.event_context.client_ip.clone(),
+        ip_region: build.event_context.ip_region.clone(),
+        request_headers_json: build.event_context.request_headers_json.clone(),
         last_message_content,
-        client_request_body_json: capture_full_requests
-            .then(|| event_context.client_request_body_json.clone())
+        client_request_body_json: capture_diagnostic_request_bodies
+            .then(|| build.event_context.client_request_body_json.clone())
             .flatten(),
-        upstream_request_body_json: capture_full_requests
-            .then(|| event_context.upstream_request_body_json.clone())
+        upstream_request_body_json: capture_diagnostic_request_bodies
+            .then(|| build.event_context.upstream_request_body_json.clone())
             .flatten(),
-        full_request_json: event_context.client_request_body_json.clone(),
+        // Keep the canonical raw client request for every JSON usage event.
+        // The policy threshold only gates the extra diagnostic request copies.
+        full_request_json: build.event_context.client_request_body_json.clone(),
         created_at: now_ms(),
     }
 }
@@ -1556,11 +1630,16 @@ fn external_origin(headers: &HeaderMap) -> Option<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
+    use axum::http::StatusCode;
+    use static_flow_shared::llm_gateway_store::{
+        default_kiro_cache_policy, default_kiro_cache_policy_json, merge_kiro_cache_policy,
+        KiroCachePolicyOverride, LlmGatewayKeyRecord,
+    };
 
     use super::{
         build_kiro_usage_event_record, normalize_key_route_config,
-        normalize_kiro_key_route_config_for_patch, normalize_model_name_map, KiroEventContext,
+        normalize_kiro_key_route_config_for_patch, normalize_model_name_map,
+        validate_kiro_cache_policy_override_update, KiroEventContext, KiroUsageEventBuild,
         KiroUsageSummary,
     };
 
@@ -1757,6 +1836,55 @@ mod tests {
     }
 
     #[test]
+    fn validate_kiro_cache_policy_override_update_rejects_invalid_effective_policy() {
+        let runtime_config = crate::state::LlmGatewayRuntimeConfig {
+            kiro_cache_policy_json: default_kiro_cache_policy_json(),
+            kiro_cache_policy: default_kiro_cache_policy(),
+            ..crate::state::LlmGatewayRuntimeConfig::default()
+        };
+        let key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+        };
+
+        let err = validate_kiro_cache_policy_override_update(
+            &runtime_config,
+            &key,
+            Some(r#"{"small_input_high_credit_boost":{"credit_end":0.5}}"#),
+        )
+        .expect_err("merged invalid override should be rejected");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(err.1 .0.error, "kiro_cache_policy_override_json is invalid");
+    }
+
+    #[test]
     fn normalize_kiro_key_route_config_for_patch_rejects_unknown_fixed_account() {
         let existing = BTreeSet::from(["alpha".to_string()]);
 
@@ -1796,6 +1924,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -1803,6 +1932,7 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -1825,8 +1955,11 @@ mod tests {
         let diagnostic = r#"{"kind":"kiro_failure_diagnostic","error":"boom"}"#.to_string();
 
         let record = build_kiro_usage_event_record(
-            &key,
-            &event_context,
+            KiroUsageEventBuild {
+                effective_policy: &default_kiro_cache_policy(),
+                current: &key,
+                event_context: &event_context,
+            },
             12,
             502,
             KiroUsageSummary {
@@ -1871,6 +2004,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -1878,6 +2012,7 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -1901,8 +2036,11 @@ mod tests {
         };
 
         let record = build_kiro_usage_event_record(
-            &key,
-            &event_context,
+            KiroUsageEventBuild {
+                effective_policy: &default_kiro_cache_policy(),
+                current: &key,
+                event_context: &event_context,
+            },
             42,
             200,
             KiroUsageSummary {
@@ -1926,7 +2064,7 @@ mod tests {
     }
 
     #[test]
-    fn build_kiro_success_usage_event_skips_full_request_for_normal_credit() {
+    fn build_kiro_success_usage_event_skips_diagnostic_request_bodies_for_normal_credit() {
         let key = LlmGatewayKeyRecord {
             id: "key-1".to_string(),
             name: "test-key".to_string(),
@@ -1947,6 +2085,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -1954,6 +2093,7 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -1977,8 +2117,11 @@ mod tests {
         };
 
         let record = build_kiro_usage_event_record(
-            &key,
-            &event_context,
+            KiroUsageEventBuild {
+                effective_policy: &default_kiro_cache_policy(),
+                current: &key,
+                event_context: &event_context,
+            },
             42,
             200,
             KiroUsageSummary {
@@ -1994,6 +2137,94 @@ mod tests {
 
         assert!(record.client_request_body_json.is_none());
         assert!(record.upstream_request_body_json.is_none());
+        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
+    }
+
+    #[test]
+    fn build_kiro_success_usage_event_uses_override_threshold_for_diagnostic_capture() {
+        let key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+        };
+        let event_context = KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some(
+                "{\"conversationState\":{\"conversationId\":\"conv-1\"}}".to_string(),
+            ),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("metadata_json".to_string()),
+            session_source_name: Some("session_id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
+            started_at: std::time::Instant::now(),
+        };
+        let effective_policy = merge_kiro_cache_policy(
+            &default_kiro_cache_policy(),
+            Some(&KiroCachePolicyOverride {
+                high_credit_diagnostic_threshold: Some(1.2),
+                ..KiroCachePolicyOverride::default()
+            }),
+        )
+        .expect("override should merge");
+
+        let record = build_kiro_usage_event_record(
+            KiroUsageEventBuild {
+                effective_policy: &effective_policy,
+                current: &key,
+                event_context: &event_context,
+            },
+            42,
+            200,
+            KiroUsageSummary {
+                input_uncached_tokens: 50_049,
+                input_cached_tokens: 0,
+                output_tokens: 926,
+                credit_usage: Some(1.3),
+                credit_usage_missing: false,
+            },
+            false,
+            event_context.last_message_content.clone(),
+        );
+
+        assert_eq!(record.client_request_body_json.as_deref(), Some("{\"messages\":[]}"));
+        assert_eq!(
+            record.upstream_request_body_json.as_deref(),
+            Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
+        );
         assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
     }
 }

@@ -581,6 +581,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     request_min_start_interval_ms: request_min_start_interval_ms_value,
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: None,
+                    kiro_cache_policy_override_json: None,
                     request_max_concurrency_unlimited: request_max_concurrency_value.is_none(),
                     request_min_start_interval_ms_unlimited: request_min_start_interval_ms_value
                         .is_none(),
@@ -2062,6 +2063,10 @@ pub fn admin_llm_gateway_page() -> Html {
                     kiro_cache_kmodels_json: config
                         .as_ref()
                         .map(|current| current.kiro_cache_kmodels_json.clone())
+                        .unwrap_or_default(),
+                    kiro_cache_policy_json: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_policy_json.clone())
                         .unwrap_or_default(),
                     kiro_prefix_cache_mode: config
                         .as_ref()

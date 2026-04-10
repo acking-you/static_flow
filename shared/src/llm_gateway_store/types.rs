@@ -184,6 +184,8 @@ pub struct LlmGatewayKeyRecord {
     /// Whether Kiro requests using this key should expose conservative cache
     /// estimation in Anthropic-compatible usage fields.
     pub kiro_cache_estimation_enabled: bool,
+    /// Optional per-key override for the global Kiro cache policy JSON.
+    pub kiro_cache_policy_override_json: Option<String>,
 }
 
 /// Persisted reusable account-pool group shared by keys of one provider.
@@ -456,6 +458,9 @@ pub struct LlmGatewayRuntimeConfigRecord {
     /// JSON object mapping Kiro model ids to conservative cache-estimation
     /// coefficients.
     pub kiro_cache_kmodels_json: String,
+    /// Raw JSON string for the default/global Kiro cache-policy. Invalid values
+    /// are ignored and recovered to `default_kiro_cache_policy()` at runtime.
+    pub kiro_cache_policy_json: String,
     /// Runtime mode for Kiro cache estimation. `formula` keeps the legacy
     /// conservative credit-based estimator; `prefix_tree` enables the shared
     /// prefix-cache simulator.
@@ -500,6 +505,7 @@ impl Default for LlmGatewayRuntimeConfigRecord {
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
+            kiro_cache_policy_json: crate::llm_gateway_store::default_kiro_cache_policy_json(),
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
             kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
             kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,

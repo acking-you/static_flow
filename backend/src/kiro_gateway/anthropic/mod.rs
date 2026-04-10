@@ -29,14 +29,23 @@ use super::{
     provider::{KiroProvider, ProviderCallError},
     token, AppKiroStateExt, KiroUsageSummary,
 };
-use crate::kiro_gateway::{is_high_credit_usage, record_messages_usage, KiroEventContext};
+use crate::kiro_gateway::{
+    cache_policy::{
+        adjust_input_tokens_for_cache_creation_cost_with_policy,
+        prefix_tree_credit_ratio_cap_basis_points_with_policy, resolve_effective_kiro_cache_policy,
+        should_capture_full_kiro_request_bodies,
+    },
+    record_messages_usage, FailedKiroRequestEvent, KiroEventContext,
+};
 
 pub mod converter;
 pub mod stream;
 pub mod types;
 pub mod websearch;
 
-use static_flow_shared::llm_gateway_store::{compute_billable_tokens, LlmGatewayKeyRecord};
+use static_flow_shared::llm_gateway_store::{
+    compute_billable_tokens, KiroCachePolicy, LlmGatewayKeyRecord,
+};
 
 use self::{
     converter::{
@@ -100,6 +109,7 @@ struct UsagePersistContext {
     state: AppState,
     key_record: LlmGatewayKeyRecord,
     event_context: KiroEventContext,
+    effective_cache_policy: KiroCachePolicy,
 }
 
 #[derive(Clone)]
@@ -122,6 +132,7 @@ pub(super) struct DiagnosticRequestContext<'a> {
 pub(super) struct ProviderFailureContext<'a> {
     state: &'a AppState,
     key_record: &'a LlmGatewayKeyRecord,
+    effective_cache_policy: &'a KiroCachePolicy,
     diagnostic: DiagnosticRequestContext<'a>,
 }
 
@@ -136,6 +147,7 @@ struct NonStreamRequestContext {
 #[derive(Clone)]
 struct KiroSimulationRequestContext {
     runtime_config: LlmGatewayRuntimeConfig,
+    effective_cache_policy: static_flow_shared::llm_gateway_store::KiroCachePolicy,
     simulation_config: KiroCacheSimulationConfig,
     projection: PromptProjection,
     prefix_cache_match: PrefixCacheMatch,
@@ -194,11 +206,12 @@ fn resolve_request_session(
 
 fn prepare_simulation_request_context(
     state: &AppState,
+    runtime_config: LlmGatewayRuntimeConfig,
+    effective_cache_policy: KiroCachePolicy,
     conversation_state: ConversationState,
     session_tracking: SessionTracking,
     cache_estimation_enabled: bool,
 ) -> (ConversationState, SessionTracking, KiroSimulationRequestContext) {
-    let runtime_config = state.llm_gateway_runtime_config.read().clone();
     let simulation_config = KiroCacheSimulationConfig::from(&runtime_config);
     let projection = PromptProjection::from_conversation_state(&conversation_state);
     let now = std::time::Instant::now();
@@ -221,6 +234,7 @@ fn prepare_simulation_request_context(
         };
     let simulation = KiroSimulationRequestContext {
         runtime_config,
+        effective_cache_policy,
         simulation_config,
         projection,
         prefix_cache_match,
@@ -295,7 +309,10 @@ fn log_high_credit_usage_anomaly(
     else {
         return;
     };
-    if !is_high_credit_usage(Some(credit_usage)) {
+    if !should_capture_full_kiro_request_bodies(
+        &simulation.effective_cache_policy,
+        Some(credit_usage),
+    ) {
         return;
     }
     let projected_total = simulation.projection.projected_input_token_count.max(1);
@@ -307,7 +324,10 @@ fn log_high_credit_usage_anomaly(
         usage.input_uncached_tokens.max(0) + usage.input_cached_tokens.max(0);
     let prefix_cached_tokens =
         estimate_prefix_tree_cached_tokens(authoritative_input_tokens, simulation);
-    let policy_cap_basis_points = prefix_tree_credit_ratio_cap_basis_points(usage.credit_usage);
+    let policy_cap_basis_points = prefix_tree_credit_ratio_cap_basis_points_with_policy(
+        &simulation.effective_cache_policy,
+        usage.credit_usage,
+    );
     let policy_cap_tokens = policy_cap_basis_points.map(|basis_points| {
         ((u128::from(authoritative_input_tokens.max(0) as u64) * u128::from(basis_points))
             / 10_000_u128)
@@ -737,10 +757,8 @@ pub(super) async fn map_provider_error(
 ) -> Response {
     let err_text = err.to_string();
     let (status, _, _) = classify_provider_error(&err_text);
-    let mut diagnostic_event_context = ctx.diagnostic.event_context.clone();
-    if err.request_body.is_some() {
-        diagnostic_event_context.upstream_request_body_json = err.request_body.clone();
-    }
+    let diagnostic_event_context =
+        provider_failure_event_context(ctx.diagnostic.event_context, err.request_body.as_deref());
     let diagnostic_payload = build_failure_diagnostic_payload(
         DiagnosticRequestContext {
             event_context: &diagnostic_event_context,
@@ -754,17 +772,31 @@ pub(super) async fn map_provider_error(
     if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
         ctx.state,
         ctx.key_record,
-        ctx.diagnostic.event_context,
-        status.as_u16() as i32,
-        diagnostic_payload,
-        zero_usage_summary(),
-        false,
+        &diagnostic_event_context,
+        FailedKiroRequestEvent {
+            effective_policy: ctx.effective_cache_policy,
+            status_code: status.as_u16() as i32,
+            diagnostic_payload,
+            usage: zero_usage_summary(),
+            usage_missing: false,
+        },
     )
     .await
     {
         tracing::warn!("failed to persist kiro failure usage event: {persist_err:#}");
     }
     provider_error_response(&err_text)
+}
+
+fn provider_failure_event_context(
+    event_context: &KiroEventContext,
+    upstream_request_body_json: Option<&str>,
+) -> KiroEventContext {
+    let mut diagnostic_event_context = event_context.clone();
+    if let Some(request_body) = upstream_request_body_json {
+        diagnostic_event_context.upstream_request_body_json = Some(request_body.to_string());
+    }
+    diagnostic_event_context
 }
 
 fn zero_usage_summary() -> KiroUsageSummary {
@@ -904,25 +936,6 @@ pub(super) fn resolve_input_tokens(
     }
 }
 
-fn adjust_input_tokens_for_cache_creation_cost(
-    authoritative_input_tokens: i32,
-    credit_usage: Option<f64>,
-    cache_estimation_enabled: bool,
-) -> i32 {
-    let authoritative_input_tokens = authoritative_input_tokens.max(0);
-    if !cache_estimation_enabled || authoritative_input_tokens >= 100_000 {
-        return authoritative_input_tokens;
-    }
-    let Some(observed_credit) = credit_usage.filter(|value| value.is_finite() && *value > 1.0)
-    else {
-        return authoritative_input_tokens;
-    };
-    let progress = ((observed_credit - 1.0) / 0.8).clamp(0.0, 1.0);
-    let boosted = authoritative_input_tokens as f64
-        + (100_000 - authoritative_input_tokens) as f64 * progress;
-    boosted.round() as i32
-}
-
 fn estimate_prefix_tree_cached_tokens(
     authoritative_input_tokens: i32,
     simulation: &KiroSimulationRequestContext,
@@ -937,24 +950,16 @@ fn estimate_prefix_tree_cached_tokens(
         .min(u128::from(authoritative_input_u64)) as i32
 }
 
-fn prefix_tree_credit_ratio_cap_basis_points(credit_usage: Option<f64>) -> Option<u32> {
-    let observed_credit = credit_usage.filter(|value| value.is_finite() && *value >= 0.3)?;
-    let cap_ratio = if observed_credit < 1.0 {
-        0.2 + (1.0 - observed_credit) * (5.0 / 7.0)
-    } else if observed_credit < 2.5 {
-        (2.5 - observed_credit) * (2.0 / 15.0)
-    } else {
-        0.0
-    };
-    Some((cap_ratio.clamp(0.0, 1.0) * 10_000.0).round() as u32)
-}
-
 fn clamp_prefix_tree_cached_tokens_with_credit_ratio_cap(
     authoritative_input_tokens: i32,
     credit_usage: Option<f64>,
     prefix_cached_tokens: i32,
+    simulation: &KiroSimulationRequestContext,
 ) -> i32 {
-    let Some(cap_basis_points) = prefix_tree_credit_ratio_cap_basis_points(credit_usage) else {
+    let Some(cap_basis_points) = prefix_tree_credit_ratio_cap_basis_points_with_policy(
+        &simulation.effective_cache_policy,
+        credit_usage,
+    ) else {
         return prefix_cached_tokens;
     };
     let authoritative_input_u64 = authoritative_input_tokens.max(0) as u64;
@@ -984,7 +989,8 @@ fn build_kiro_usage_summary(
             credit_usage_missing: credit_usage.is_none(),
         };
     }
-    let authoritative_input_tokens = adjust_input_tokens_for_cache_creation_cost(
+    let authoritative_input_tokens = adjust_input_tokens_for_cache_creation_cost_with_policy(
+        &simulation.effective_cache_policy,
         resolved_input_tokens,
         credit_usage,
         cache_estimation_enabled,
@@ -1012,6 +1018,7 @@ fn build_kiro_usage_summary(
                 authoritative_input_tokens,
                 credit_usage,
                 prefix_cached,
+                simulation,
             );
             KiroCacheEstimate {
                 input_tokens_total: authoritative_input_tokens,
@@ -1219,6 +1226,27 @@ async fn handle_messages(
         Ok(value) => value,
         Err(err) => return err.into_response(),
     };
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    let effective_cache_policy =
+        match resolve_effective_kiro_cache_policy(&runtime_config, &key_record) {
+            Ok(policy) => policy,
+            Err(err) => {
+                tracing::error!(
+                    key_id = %key_record.id,
+                    key_name = %key_record.name,
+                    error = ?err,
+                    "failed to resolve effective kiro cache policy at request start"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse::new(
+                        "api_error",
+                        "Kiro cache policy configuration is invalid.".to_string(),
+                    )),
+                )
+                    .into_response();
+            },
+        };
     event_context.client_request_body_json = serde_json::to_string(&*payload).ok();
     let request_validation_enabled = key_record.kiro_request_validation_enabled;
     let requested_model = payload.model.clone();
@@ -1280,6 +1308,7 @@ async fn handle_messages(
             state,
             key_record,
             event_context,
+            effective_cache_policy,
             &provider,
             payload,
             input_tokens,
@@ -1328,10 +1357,13 @@ async fn handle_messages(
                 &state,
                 &key_record,
                 &event_context,
-                StatusCode::BAD_REQUEST.as_u16() as i32,
-                diagnostic_payload,
-                zero_usage_summary(),
-                false,
+                FailedKiroRequestEvent {
+                    effective_policy: &effective_cache_policy,
+                    status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
+                    diagnostic_payload,
+                    usage: zero_usage_summary(),
+                    usage_missing: false,
+                },
             )
             .await
             {
@@ -1427,10 +1459,13 @@ async fn handle_messages(
                 &state,
                 &key_record,
                 &event_context,
-                StatusCode::BAD_REQUEST.as_u16() as i32,
-                diagnostic_payload,
-                zero_usage_summary(),
-                false,
+                FailedKiroRequestEvent {
+                    effective_policy: &effective_cache_policy,
+                    status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
+                    diagnostic_payload,
+                    usage: zero_usage_summary(),
+                    usage_missing: false,
+                },
             )
             .await
             {
@@ -1464,6 +1499,8 @@ async fn handle_messages(
     let tool_name_map = conversion.tool_name_map;
     let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
         &state,
+        runtime_config,
+        effective_cache_policy.clone(),
         conversion.conversation_state,
         conversion.session_tracking,
         key_record.kiro_cache_estimation_enabled,
@@ -1511,6 +1548,7 @@ async fn handle_messages(
                     ProviderFailureContext {
                         state: &state,
                         key_record: &key_record,
+                        effective_cache_policy: &simulation.effective_cache_policy,
                         diagnostic: DiagnosticRequestContext {
                             event_context: &event_context,
                             request_validation_enabled,
@@ -1539,6 +1577,7 @@ async fn handle_messages(
                     state,
                     key_record,
                     event_context,
+                    effective_cache_policy: simulation.effective_cache_policy.clone(),
                 },
                 response.response,
                 stream_request_ctx,
@@ -1556,6 +1595,7 @@ async fn handle_messages(
                 state,
                 key_record,
                 event_context,
+                effective_cache_policy: simulation.effective_cache_policy.clone(),
             },
             response.response,
             stream_request_ctx,
@@ -1576,6 +1616,7 @@ async fn handle_messages(
                 ProviderFailureContext {
                     state: &state,
                     key_record: &key_record,
+                    effective_cache_policy: &simulation.effective_cache_policy,
                     diagnostic: DiagnosticRequestContext {
                         event_context: &event_context,
                         request_validation_enabled,
@@ -1642,6 +1683,7 @@ async fn handle_stream_request(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
                         &usage_ctx.event_context,
+                        &usage_ctx.effective_cache_policy,
                         summary,
                         usage_missing,
                     )
@@ -1657,10 +1699,13 @@ async fn handle_stream_request(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
                         &usage_ctx.event_context,
-                        status_code,
-                        diagnostic_payload,
-                        summary,
-                        usage_missing,
+                        FailedKiroRequestEvent {
+                            effective_policy: &usage_ctx.effective_cache_policy,
+                            status_code,
+                            diagnostic_payload,
+                            usage: summary,
+                            usage_missing,
+                        },
                     )
                     .await
                 },
@@ -1714,6 +1759,7 @@ async fn handle_stream_request_buffered(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
                         &usage_ctx.event_context,
+                        &usage_ctx.effective_cache_policy,
                         summary,
                         usage_missing,
                     )
@@ -1729,10 +1775,13 @@ async fn handle_stream_request_buffered(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
                         &usage_ctx.event_context,
-                        status_code,
-                        diagnostic_payload,
-                        summary,
-                        usage_missing,
+                        FailedKiroRequestEvent {
+                            effective_policy: &usage_ctx.effective_cache_policy,
+                            status_code,
+                            diagnostic_payload,
+                            usage: summary,
+                            usage_missing,
+                        },
                     )
                     .await
                 },
@@ -1797,10 +1846,13 @@ async fn handle_non_stream_request(
                 &state,
                 &key_record,
                 &event_context,
-                StatusCode::BAD_GATEWAY.as_u16() as i32,
-                diagnostic_payload,
-                zero_usage_summary(),
-                false,
+                FailedKiroRequestEvent {
+                    effective_policy: &request_ctx.simulation.effective_cache_policy,
+                    status_code: StatusCode::BAD_GATEWAY.as_u16() as i32,
+                    diagnostic_payload,
+                    usage: zero_usage_summary(),
+                    usage_missing: false,
+                },
             )
             .await
             {
@@ -1975,7 +2027,15 @@ async fn handle_non_stream_request(
         key_record.kiro_cache_estimation_enabled,
         &assistant_message,
     );
-    if let Err(err) = record_messages_usage(&state, &key_record, &event_context, usage, false).await
+    if let Err(err) = record_messages_usage(
+        &state,
+        &key_record,
+        &event_context,
+        &request_ctx.simulation.effective_cache_policy,
+        usage,
+        false,
+    )
+    .await
     {
         tracing::warn!("failed to persist kiro usage event: {err:#}");
     }
@@ -2536,6 +2596,10 @@ mod tests {
 
     use axum::http::{HeaderMap, HeaderValue};
     use serde_json::json;
+    use static_flow_shared::llm_gateway_store::{
+        default_kiro_cache_policy, merge_kiro_cache_policy, KiroCachePolicyOverride,
+        KiroCreditRatioBand, KiroSmallInputHighCreditBoostOverride,
+    };
 
     use super::*;
     use crate::kiro_gateway::{
@@ -2584,6 +2648,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: model_name_map.map(|entries| {
@@ -2596,6 +2661,7 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         }
     }
 
@@ -2642,6 +2708,8 @@ mod tests {
         );
         KiroSimulationRequestContext {
             runtime_config,
+            effective_cache_policy:
+                static_flow_shared::llm_gateway_store::default_kiro_cache_policy(),
             simulation_config,
             projection,
             prefix_cache_match: PrefixCacheMatch {
@@ -2884,6 +2952,45 @@ mod tests {
     }
 
     #[test]
+    fn provider_failure_event_context_uses_provider_request_body_snapshot() {
+        let event_context = crate::kiro_gateway::KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some(
+                r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}"#
+                    .to_string(),
+            ),
+            upstream_request_body_json: Some(r#"{"stale":"value"}"#.to_string()),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("request_header".to_string()),
+            session_source_name: Some("x-claude-code-session-id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
+            started_at: std::time::Instant::now(),
+        };
+
+        let diagnostic = provider_failure_event_context(
+            &event_context,
+            Some(r#"{"conversationState":{"conversationId":"from-provider"}}"#),
+        );
+
+        assert_eq!(
+            diagnostic.upstream_request_body_json.as_deref(),
+            Some(r#"{"conversationState":{"conversationId":"from-provider"}}"#)
+        );
+        assert_eq!(
+            event_context.upstream_request_body_json.as_deref(),
+            Some(r#"{"stale":"value"}"#)
+        );
+    }
+
+    #[test]
     fn extract_last_message_content_summarizes_trailing_user_tool_results() {
         let mut payload = base_request("claude-sonnet-4-6");
         payload.messages = vec![
@@ -3113,22 +3220,58 @@ mod tests {
 
     #[test]
     fn effective_input_total_keeps_authoritative_total_when_credit_is_not_above_one() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.0), true), 50_000);
+        let policy = default_kiro_cache_policy();
+        assert_eq!(
+            adjust_input_tokens_for_cache_creation_cost_with_policy(
+                &policy,
+                50_000,
+                Some(1.0),
+                true,
+            ),
+            50_000
+        );
     }
 
     #[test]
     fn effective_input_total_moves_halfway_toward_hundred_k_at_credit_one_point_four() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.4), true), 75_000);
+        let policy = default_kiro_cache_policy();
+        assert_eq!(
+            adjust_input_tokens_for_cache_creation_cost_with_policy(
+                &policy,
+                50_000,
+                Some(1.4),
+                true,
+            ),
+            75_000
+        );
     }
 
     #[test]
     fn effective_input_total_caps_at_hundred_k_when_credit_reaches_one_point_eight() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.8), true), 100_000);
+        let policy = default_kiro_cache_policy();
+        assert_eq!(
+            adjust_input_tokens_for_cache_creation_cost_with_policy(
+                &policy,
+                50_000,
+                Some(1.8),
+                true,
+            ),
+            100_000
+        );
     }
 
     #[test]
     fn effective_input_total_keeps_large_authoritative_total_unchanged() {
-        assert_eq!(adjust_input_tokens_for_cache_creation_cost(120_000, Some(1.8), true), 120_000);
+        let policy = default_kiro_cache_policy();
+        assert_eq!(
+            adjust_input_tokens_for_cache_creation_cost_with_policy(
+                &policy,
+                120_000,
+                Some(1.8),
+                true,
+            ),
+            120_000
+        );
     }
 
     #[test]
@@ -3164,10 +3307,17 @@ mod tests {
             &simulation,
         );
 
-        let authoritative_input_tokens =
-            adjust_input_tokens_for_cache_creation_cost(50_000, Some(1.75), true);
-        let cap_basis_points =
-            prefix_tree_credit_ratio_cap_basis_points(Some(1.75)).expect("cap basis points");
+        let authoritative_input_tokens = adjust_input_tokens_for_cache_creation_cost_with_policy(
+            &simulation.effective_cache_policy,
+            50_000,
+            Some(1.75),
+            true,
+        );
+        let cap_basis_points = prefix_tree_credit_ratio_cap_basis_points_with_policy(
+            &simulation.effective_cache_policy,
+            Some(1.75),
+        )
+        .expect("cap basis points");
         let expected_cached = ((u128::from(authoritative_input_tokens as u64)
             * u128::from(cap_basis_points))
             / 10_000_u128) as i32;
@@ -3191,6 +3341,66 @@ mod tests {
 
         assert_eq!(summary.input_cached_tokens, 20_000);
         assert_eq!(summary.input_uncached_tokens, 80_000);
+    }
+
+    #[test]
+    fn build_usage_summary_uses_policy_override_for_boost_target() {
+        let mut simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        simulation.effective_cache_policy = merge_kiro_cache_policy(
+            &default_kiro_cache_policy(),
+            Some(&KiroCachePolicyOverride {
+                small_input_high_credit_boost: Some(KiroSmallInputHighCreditBoostOverride {
+                    target_input_tokens: Some(80_000),
+                    credit_start: Some(1.0),
+                    credit_end: Some(1.8),
+                }),
+                ..KiroCachePolicyOverride::default()
+            }),
+        )
+        .unwrap();
+
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(50_000),
+            400,
+            Some(1.8),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_uncached_tokens + summary.input_cached_tokens, 80_000);
+    }
+
+    #[test]
+    fn build_usage_summary_uses_policy_override_for_prefix_tree_bands() {
+        let mut simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
+        simulation.effective_cache_policy = merge_kiro_cache_policy(
+            &default_kiro_cache_policy(),
+            Some(&KiroCachePolicyOverride {
+                prefix_tree_credit_ratio_bands: Some(vec![KiroCreditRatioBand {
+                    credit_start: 0.4,
+                    credit_end: 1.4,
+                    cache_ratio_start: 0.5,
+                    cache_ratio_end: 0.1,
+                }]),
+                ..KiroCachePolicyOverride::default()
+            }),
+        )
+        .unwrap();
+
+        let summary = build_kiro_usage_summary(
+            "claude-opus-4-6",
+            12_000,
+            Some(100_000),
+            400,
+            Some(0.9),
+            true,
+            &simulation,
+        );
+
+        assert_eq!(summary.input_cached_tokens, 30_000);
+        assert_eq!(summary.input_uncached_tokens, 70_000);
     }
 
     #[test]
@@ -3432,6 +3642,8 @@ mod tests {
             )));
         let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
             &state,
+            state.llm_gateway_runtime_config.read().clone(),
+            default_kiro_cache_policy(),
             follow_up_state,
             SessionTracking {
                 source: SessionIdSource::GeneratedFallback(SessionFallbackReason::MissingMetadata),

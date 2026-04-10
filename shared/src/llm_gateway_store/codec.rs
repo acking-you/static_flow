@@ -16,6 +16,7 @@ use arrow_array::{
 };
 
 use super::{
+    kiro_cache_policy::default_kiro_cache_policy_json,
     schema::{
         llm_gateway_account_contribution_requests_schema, llm_gateway_account_groups_schema,
         llm_gateway_keys_schema, llm_gateway_proxy_bindings_schema,
@@ -80,6 +81,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut request_min_start_interval_ms = UInt64Builder::new();
     let mut kiro_request_validation_enabled = BooleanBuilder::new();
     let mut kiro_cache_estimation_enabled = BooleanBuilder::new();
+    let mut kiro_cache_policy_override_json = StringBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -118,6 +120,10 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         );
         kiro_request_validation_enabled.append_value(record.kiro_request_validation_enabled);
         kiro_cache_estimation_enabled.append_value(record.kiro_cache_estimation_enabled);
+        append_optional_str(
+            &mut kiro_cache_policy_override_json,
+            record.kiro_cache_policy_override_json.as_deref(),
+        );
     }
 
     RecordBatch::try_new(schema, vec![
@@ -148,6 +154,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(request_min_start_interval_ms.finish()),
         Arc::new(kiro_request_validation_enabled.finish()),
         Arc::new(kiro_cache_estimation_enabled.finish()),
+        Arc::new(kiro_cache_policy_override_json.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
@@ -311,6 +318,7 @@ pub fn build_runtime_config_batch(
     let mut usage_event_flush_interval_seconds = UInt64Builder::new();
     let mut usage_event_flush_max_buffer_bytes = UInt64Builder::new();
     let mut kiro_cache_kmodels_json = StringBuilder::new();
+    let mut kiro_cache_policy_json = StringBuilder::new();
     let mut kiro_prefix_cache_mode = StringBuilder::new();
     let mut kiro_prefix_cache_max_tokens = UInt64Builder::new();
     let mut kiro_prefix_cache_entry_ttl_seconds = UInt64Builder::new();
@@ -341,6 +349,7 @@ pub fn build_runtime_config_batch(
         usage_event_flush_interval_seconds.append_value(record.usage_event_flush_interval_seconds);
         usage_event_flush_max_buffer_bytes.append_value(record.usage_event_flush_max_buffer_bytes);
         kiro_cache_kmodels_json.append_value(&record.kiro_cache_kmodels_json);
+        kiro_cache_policy_json.append_value(&record.kiro_cache_policy_json);
         kiro_prefix_cache_mode.append_value(&record.kiro_prefix_cache_mode);
         kiro_prefix_cache_max_tokens.append_value(record.kiro_prefix_cache_max_tokens);
         kiro_prefix_cache_entry_ttl_seconds
@@ -369,6 +378,7 @@ pub fn build_runtime_config_batch(
         Arc::new(usage_event_flush_interval_seconds.finish()),
         Arc::new(usage_event_flush_max_buffer_bytes.finish()),
         Arc::new(kiro_cache_kmodels_json.finish()),
+        Arc::new(kiro_cache_policy_json.finish()),
         Arc::new(kiro_prefix_cache_mode.finish()),
         Arc::new(kiro_prefix_cache_max_tokens.finish()),
         Arc::new(kiro_prefix_cache_entry_ttl_seconds.finish()),
@@ -698,6 +708,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let kiro_cache_estimation_enabled = batch
             .column_by_name("kiro_cache_estimation_enabled")
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
+        let kiro_cache_policy_override_json = batch
+            .column_by_name("kiro_cache_policy_override_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = compute_billable_tokens(
@@ -757,6 +770,8 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 kiro_cache_estimation_enabled: kiro_cache_estimation_enabled
                     .and_then(|column| value_bool_opt(column, idx))
                     .unwrap_or(true),
+                kiro_cache_policy_override_json: kiro_cache_policy_override_json
+                    .and_then(|column| value_string_opt(column, idx)),
             });
         }
     }
@@ -1006,6 +1021,9 @@ pub fn batches_to_runtime_config(
         let kiro_cache_kmodels_json = batch
             .column_by_name("kiro_cache_kmodels_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let kiro_cache_policy_json = batch
+            .column_by_name("kiro_cache_policy_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let kiro_prefix_cache_mode = batch
             .column_by_name("kiro_prefix_cache_mode")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -1070,6 +1088,9 @@ pub fn batches_to_runtime_config(
                 kiro_cache_kmodels_json: kiro_cache_kmodels_json
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(default_kiro_cache_kmodels_json),
+                kiro_cache_policy_json: kiro_cache_policy_json
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(default_kiro_cache_policy_json),
                 kiro_prefix_cache_mode: kiro_prefix_cache_mode
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(|| DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string()),

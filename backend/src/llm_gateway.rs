@@ -38,12 +38,12 @@ use reqwest::header::{HeaderMap as ReqwestHeaderMap, HeaderValue as ReqwestHeade
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord,
-    LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
-    LlmGatewayUsageEventRecord, NewLlmGatewayAccountContributionRequestInput,
-    NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
-    LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_OPENAI,
-    LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
+    is_valid_kiro_prefix_cache_mode, now_ms, parse_kiro_cache_policy_json,
+    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
+    LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
+    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
+    NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
@@ -194,6 +194,7 @@ fn build_runtime_config_response(
         usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json: config.kiro_cache_kmodels_json.clone(),
+        kiro_cache_policy_json: config.kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: config.kiro_prefix_cache_mode.clone(),
         kiro_prefix_cache_max_tokens: config.kiro_prefix_cache_max_tokens,
         kiro_prefix_cache_entry_ttl_seconds: config.kiro_prefix_cache_entry_ttl_seconds,
@@ -450,6 +451,12 @@ pub async fn update_admin_runtime_config(
         .unwrap_or_else(|| current.kiro_cache_kmodels_json.clone());
     let kiro_cache_kmodels = parse_kiro_cache_kmodels_json(&kiro_cache_kmodels_json)
         .map_err(|_| bad_request("kiro_cache_kmodels_json is invalid"))?;
+    let kiro_cache_policy_json = request
+        .kiro_cache_policy_json
+        .clone()
+        .unwrap_or_else(|| current.kiro_cache_policy_json.clone());
+    let kiro_cache_policy = parse_kiro_cache_policy_json(&kiro_cache_policy_json)
+        .map_err(|_| bad_request("kiro_cache_policy_json is invalid"))?;
     let kiro_prefix_cache_mode = request
         .kiro_prefix_cache_mode
         .clone()
@@ -497,6 +504,7 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
+        kiro_cache_policy_json: kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
         kiro_prefix_cache_max_tokens,
         kiro_prefix_cache_entry_ttl_seconds,
@@ -528,6 +536,8 @@ pub async fn update_admin_runtime_config(
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
             kiro_cache_kmodels,
+            kiro_cache_policy_json: kiro_cache_policy_json.clone(),
+            kiro_cache_policy,
             kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
             kiro_prefix_cache_max_tokens,
             kiro_prefix_cache_entry_ttl_seconds,
@@ -550,6 +560,7 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json = %kiro_cache_kmodels_json,
+        kiro_cache_policy_json = %kiro_cache_policy_json,
         kiro_prefix_cache_mode = %kiro_prefix_cache_mode,
         kiro_prefix_cache_max_tokens,
         kiro_prefix_cache_entry_ttl_seconds,
@@ -1020,6 +1031,7 @@ async fn create_managed_key_record(
         request_min_start_interval_ms: input.request_min_start_interval_ms,
         kiro_request_validation_enabled: true,
         kiro_cache_estimation_enabled: true,
+        kiro_cache_policy_override_json: None,
     };
     state
         .llm_gateway_store
@@ -5647,6 +5659,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             route_strategy: None,
+            account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
             model_name_map: None,
@@ -5654,6 +5667,7 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         }
     }
 
@@ -6033,6 +6047,25 @@ mod tests {
         .expect_err("zero coefficient should fail");
 
         assert!(err.to_string().contains("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn update_runtime_config_rejects_invalid_kiro_cache_policy_json() {
+        let request: UpdateLlmGatewayRuntimeConfigRequest = serde_json::from_value(json!({
+            "kiro_cache_policy_json": "{\"prefix_tree_credit_ratio_bands\":[{\"credit_start\":1.0,\"credit_end\":0.5,\"cache_ratio_start\":0.2,\"cache_ratio_end\":0.1}]}"
+        }))
+        .expect("parse runtime config request");
+
+        let err = parse_kiro_cache_policy_json(
+            request
+                .kiro_cache_policy_json
+                .as_deref()
+                .expect("request should contain policy json"),
+        )
+        .map_err(|_| bad_request("kiro_cache_policy_json is invalid"))
+        .expect_err("invalid policy json should fail");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
     }
 
     #[test]

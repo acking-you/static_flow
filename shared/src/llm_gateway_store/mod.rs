@@ -5,6 +5,7 @@
 //! queues shown in the admin UI.
 
 mod codec;
+mod kiro_cache_policy;
 mod schema;
 mod types;
 
@@ -25,38 +26,6 @@ use lancedb::{
     Connection, Table,
 };
 
-pub use self::types::{
-    compute_billable_tokens, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
-    is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountContributionRequestRecord,
-    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord,
-    LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
-    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-    NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
-    NewLlmGatewayTokenRequestInput, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
-    DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
-    DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
-    DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
-    DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
-    DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS, DEFAULT_KIRO_PREFIX_CACHE_MODE,
-    DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
-    DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
-    DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
-    DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT, DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
-    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES, DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
-    DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
-    DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES, KIRO_PREFIX_CACHE_MODE_FORMULA,
-    KIRO_PREFIX_CACHE_MODE_PREFIX_TREE, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
-    LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE,
-    LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI,
-    LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE,
-    LLM_GATEWAY_PROXY_CONFIGS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
-    LLM_GATEWAY_SPONSOR_REQUESTS_TABLE, LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
-    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
-    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED, LLM_GATEWAY_TABLE_NAMES,
-    LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
-    LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
-    LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED, LLM_GATEWAY_USAGE_EVENTS_TABLE,
-};
 use self::{
     codec::{
         batches_to_account_contribution_requests, batches_to_account_groups, batches_to_keys,
@@ -73,6 +42,50 @@ use self::{
         ensure_sponsor_requests_table, ensure_token_requests_table, ensure_usage_events_table,
         escape_literal, key_columns, proxy_binding_columns, proxy_config_columns,
         sponsor_request_columns, token_request_columns, usage_event_columns,
+    },
+};
+pub use self::{
+    kiro_cache_policy::{
+        default_kiro_cache_policy, default_kiro_cache_policy_json,
+        interpolate_prefix_tree_cache_ratio, merge_kiro_cache_policy, parse_kiro_cache_policy_json,
+        parse_kiro_cache_policy_override_json, validate_kiro_cache_policy,
+        validate_kiro_cache_policy_override, KiroCachePolicy, KiroCachePolicyOverride,
+        KiroCreditRatioBand, KiroSmallInputHighCreditBoostOverride,
+        KiroSmallInputHighCreditBoostPolicy,
+    },
+    types::{
+        compute_billable_tokens, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
+        is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountContributionRequestRecord,
+        LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord,
+        LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
+        LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
+        NewLlmGatewayTokenRequestInput, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+        DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
+        DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
+        DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS, DEFAULT_KIRO_PREFIX_CACHE_MODE,
+        DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+        DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+        DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
+        DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES, KIRO_PREFIX_CACHE_MODE_FORMULA,
+        KIRO_PREFIX_CACHE_MODE_PREFIX_TREE, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+        LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE,
+        LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
+        LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
+        LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
+        LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
+        LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+        LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
+        LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED, LLM_GATEWAY_TABLE_NAMES,
+        LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
+        LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
+        LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED, LLM_GATEWAY_USAGE_EVENTS_TABLE,
     },
 };
 use crate::optimize::compact_table_with_fallback;
@@ -389,6 +402,7 @@ impl LlmGatewayStore {
                 "usage_event_flush_interval_seconds",
                 "usage_event_flush_max_buffer_bytes",
                 "kiro_cache_kmodels_json",
+                "kiro_cache_policy_json",
                 "kiro_prefix_cache_mode",
                 "kiro_prefix_cache_max_tokens",
                 "kiro_prefix_cache_entry_ttl_seconds",
@@ -1704,6 +1718,7 @@ mod tests {
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         }
     }
 
@@ -1787,12 +1802,15 @@ mod tests {
         )]));
         record.request_max_concurrency = Some(3);
         record.request_min_start_interval_ms = Some(1_500);
+        record.kiro_cache_policy_override_json =
+            Some(r#"{"high_credit_diagnostic_threshold":1.4}"#.to_string());
         store.create_key(&record).await.expect("create key");
 
         let mut updated = record.clone();
         updated.model_name_map = None;
         updated.request_max_concurrency = None;
         updated.request_min_start_interval_ms = None;
+        updated.kiro_cache_policy_override_json = None;
         updated.updated_at = now_ms();
         store.replace_key(&updated).await.expect("replace key");
 
@@ -1804,6 +1822,7 @@ mod tests {
         assert_eq!(reloaded.model_name_map, None);
         assert_eq!(reloaded.request_max_concurrency, None);
         assert_eq!(reloaded.request_min_start_interval_ms, None);
+        assert_eq!(reloaded.kiro_cache_policy_override_json, None);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2001,6 +2020,56 @@ mod tests {
         assert_eq!(loaded.kiro_prefix_cache_entry_ttl_seconds, 1_800);
         assert_eq!(loaded.kiro_conversation_anchor_max_entries, 1_024);
         assert_eq!(loaded.kiro_conversation_anchor_ttl_seconds, 43_200);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_round_trip_preserves_kiro_cache_policy_json() {
+        let dir = temp_store_dir("runtime-config-kiro-cache-policy");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let config = LlmGatewayRuntimeConfigRecord {
+            kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":80000,"credit_start":0.9,"credit_end":1.6},"prefix_tree_credit_ratio_bands":[{"credit_start":0.2,"credit_end":0.8,"cache_ratio_start":0.6,"cache_ratio_end":0.3},{"credit_start":0.8,"credit_end":1.4,"cache_ratio_start":0.3,"cache_ratio_end":0.1}],"high_credit_diagnostic_threshold":1.4}"#.to_string(),
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&config)
+            .await
+            .expect("upsert runtime config");
+
+        let loaded = store
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(loaded.kiro_cache_policy_json, config.kiro_cache_policy_json);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn key_round_trip_preserves_kiro_cache_policy_override_json() {
+        let dir = temp_store_dir("key-kiro-cache-policy-override");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let mut key = sample_key_record("test-key-cache-policy", "Policy override key");
+        key.kiro_cache_policy_override_json = Some(r#"{"small_input_high_credit_boost":{"target_input_tokens":120000},"high_credit_diagnostic_threshold":1.75}"#.to_string());
+        store
+            .create_key(&key)
+            .await
+            .expect("create key with override");
+
+        let loaded = store
+            .get_key_by_id(&key.id)
+            .await
+            .expect("load key")
+            .expect("created key exists");
+        assert_eq!(loaded.kiro_cache_policy_override_json, key.kiro_cache_policy_override_json,);
 
         let _ = fs::remove_dir_all(&dir);
     }

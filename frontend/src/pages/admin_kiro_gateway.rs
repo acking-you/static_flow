@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
@@ -112,6 +113,314 @@ fn format_json_for_textarea(raw: &str) -> String {
         .ok()
         .and_then(|value| serde_json::to_string_pretty(&value).ok())
         .unwrap_or_else(|| raw.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct KiroCachePolicyBandForm {
+    credit_start: String,
+    credit_end: String,
+    cache_ratio_start: String,
+    cache_ratio_end: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct KiroCachePolicyForm {
+    target_input_tokens: String,
+    credit_start: String,
+    credit_end: String,
+    high_credit_diagnostic_threshold: String,
+    bands: Vec<KiroCachePolicyBandForm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KiroCachePolicyJson {
+    small_input_high_credit_boost: KiroSmallInputHighCreditBoostJson,
+    prefix_tree_credit_ratio_bands: Vec<KiroCachePolicyBandJson>,
+    high_credit_diagnostic_threshold: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KiroSmallInputHighCreditBoostJson {
+    target_input_tokens: u64,
+    credit_start: f64,
+    credit_end: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KiroCachePolicyBandJson {
+    credit_start: f64,
+    credit_end: f64,
+    cache_ratio_start: f64,
+    cache_ratio_end: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct KiroCachePolicyOverrideJson {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    small_input_high_credit_boost: Option<KiroSmallInputHighCreditBoostOverrideJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prefix_tree_credit_ratio_bands: Option<Vec<KiroCachePolicyBandJson>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    high_credit_diagnostic_threshold: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct KiroSmallInputHighCreditBoostOverrideJson {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credit_start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credit_end: Option<f64>,
+}
+
+fn format_kiro_cache_policy_number(value: f64) -> String {
+    let mut text = value.to_string();
+    if !text.contains(['.', 'e', 'E']) {
+        text.push_str(".0");
+    }
+    text
+}
+
+fn parse_kiro_cache_policy_u64(label: &str, raw: &str) -> Result<u64, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} must not be empty."));
+    }
+    trimmed
+        .parse::<u64>()
+        .map_err(|_| format!("{label} must be a valid integer."))
+}
+
+fn parse_kiro_cache_policy_f64(label: &str, raw: &str) -> Result<f64, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} must not be empty."));
+    }
+    let value = trimmed
+        .parse::<f64>()
+        .map_err(|_| format!("{label} must be a valid number."))?;
+    if !value.is_finite() {
+        return Err(format!("{label} must be finite."));
+    }
+    Ok(value)
+}
+
+fn kiro_cache_policy_form_from_json(policy: &KiroCachePolicyJson) -> KiroCachePolicyForm {
+    KiroCachePolicyForm {
+        target_input_tokens: policy
+            .small_input_high_credit_boost
+            .target_input_tokens
+            .to_string(),
+        credit_start: format_kiro_cache_policy_number(
+            policy.small_input_high_credit_boost.credit_start,
+        ),
+        credit_end: format_kiro_cache_policy_number(
+            policy.small_input_high_credit_boost.credit_end,
+        ),
+        high_credit_diagnostic_threshold: format_kiro_cache_policy_number(
+            policy.high_credit_diagnostic_threshold,
+        ),
+        bands: policy
+            .prefix_tree_credit_ratio_bands
+            .iter()
+            .map(|band| KiroCachePolicyBandForm {
+                credit_start: format_kiro_cache_policy_number(band.credit_start),
+                credit_end: format_kiro_cache_policy_number(band.credit_end),
+                cache_ratio_start: format_kiro_cache_policy_number(band.cache_ratio_start),
+                cache_ratio_end: format_kiro_cache_policy_number(band.cache_ratio_end),
+            })
+            .collect(),
+    }
+}
+
+fn kiro_cache_policy_json_from_form(
+    form: &KiroCachePolicyForm,
+) -> Result<KiroCachePolicyJson, String> {
+    let bands = form
+        .bands
+        .iter()
+        .enumerate()
+        .map(|(index, band)| {
+            Ok(KiroCachePolicyBandJson {
+                credit_start: parse_kiro_cache_policy_f64(
+                    &format!("Band {} credit start", index + 1),
+                    &band.credit_start,
+                )?,
+                credit_end: parse_kiro_cache_policy_f64(
+                    &format!("Band {} credit end", index + 1),
+                    &band.credit_end,
+                )?,
+                cache_ratio_start: parse_kiro_cache_policy_f64(
+                    &format!("Band {} cache ratio start", index + 1),
+                    &band.cache_ratio_start,
+                )?,
+                cache_ratio_end: parse_kiro_cache_policy_f64(
+                    &format!("Band {} cache ratio end", index + 1),
+                    &band.cache_ratio_end,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let policy = KiroCachePolicyJson {
+        small_input_high_credit_boost: KiroSmallInputHighCreditBoostJson {
+            target_input_tokens: parse_kiro_cache_policy_u64(
+                "Small-input target input tokens",
+                &form.target_input_tokens,
+            )?,
+            credit_start: parse_kiro_cache_policy_f64(
+                "Small-input credit start",
+                &form.credit_start,
+            )?,
+            credit_end: parse_kiro_cache_policy_f64("Small-input credit end", &form.credit_end)?,
+        },
+        prefix_tree_credit_ratio_bands: bands,
+        high_credit_diagnostic_threshold: parse_kiro_cache_policy_f64(
+            "High-credit diagnostic threshold",
+            &form.high_credit_diagnostic_threshold,
+        )?,
+    };
+    Ok(policy)
+}
+
+fn parse_kiro_cache_policy_form_json(raw: &str) -> Result<KiroCachePolicyForm, String> {
+    let policy = serde_json::from_str::<KiroCachePolicyJson>(raw)
+        .map_err(|err| format!("Failed to parse kiro cache policy JSON: {err}"))?;
+    Ok(kiro_cache_policy_form_from_json(&policy))
+}
+
+fn serialize_kiro_cache_policy_form_json(form: &KiroCachePolicyForm) -> Result<String, String> {
+    let policy = kiro_cache_policy_json_from_form(form)?;
+    serde_json::to_string(&policy)
+        .map_err(|err| format!("Failed to serialize kiro cache policy: {err}"))
+}
+
+fn build_kiro_cache_policy_override_json(
+    global: &KiroCachePolicyForm,
+    edited: &KiroCachePolicyForm,
+) -> Result<Option<String>, String> {
+    let global_policy = kiro_cache_policy_json_from_form(global)?;
+    let edited_policy = kiro_cache_policy_json_from_form(edited)?;
+    let mut override_policy = KiroCachePolicyOverrideJson::default();
+    let mut boost_override = KiroSmallInputHighCreditBoostOverrideJson::default();
+
+    if edited_policy
+        .small_input_high_credit_boost
+        .target_input_tokens
+        != global_policy
+            .small_input_high_credit_boost
+            .target_input_tokens
+    {
+        boost_override.target_input_tokens = Some(
+            edited_policy
+                .small_input_high_credit_boost
+                .target_input_tokens,
+        );
+    }
+    if edited_policy.small_input_high_credit_boost.credit_start
+        != global_policy.small_input_high_credit_boost.credit_start
+    {
+        boost_override.credit_start =
+            Some(edited_policy.small_input_high_credit_boost.credit_start);
+    }
+    if edited_policy.small_input_high_credit_boost.credit_end
+        != global_policy.small_input_high_credit_boost.credit_end
+    {
+        boost_override.credit_end = Some(edited_policy.small_input_high_credit_boost.credit_end);
+    }
+    if boost_override != KiroSmallInputHighCreditBoostOverrideJson::default() {
+        override_policy.small_input_high_credit_boost = Some(boost_override);
+    }
+    if edited_policy.prefix_tree_credit_ratio_bands != global_policy.prefix_tree_credit_ratio_bands
+    {
+        override_policy.prefix_tree_credit_ratio_bands =
+            Some(edited_policy.prefix_tree_credit_ratio_bands.clone());
+    }
+    if edited_policy.high_credit_diagnostic_threshold
+        != global_policy.high_credit_diagnostic_threshold
+    {
+        override_policy.high_credit_diagnostic_threshold =
+            Some(edited_policy.high_credit_diagnostic_threshold);
+    }
+    if override_policy == KiroCachePolicyOverrideJson::default() {
+        Ok(None)
+    } else {
+        serde_json::to_string(&override_policy)
+            .map(Some)
+            .map_err(|err| format!("Failed to serialize kiro cache policy override: {err}"))
+    }
+}
+
+fn build_kiro_cache_policy_override_patch(
+    persisted_global: &KiroCachePolicyForm,
+    initial_override_enabled: bool,
+    initial_effective: &KiroCachePolicyForm,
+    edited_override_enabled: bool,
+    edited_effective: &KiroCachePolicyForm,
+) -> Result<Option<Option<String>>, String> {
+    let editor_state_changed = edited_override_enabled != initial_override_enabled
+        || (edited_override_enabled && edited_effective != initial_effective);
+    if !editor_state_changed {
+        return Ok(None);
+    }
+
+    if !edited_override_enabled {
+        return Ok(initial_override_enabled.then_some(None));
+    }
+
+    match build_kiro_cache_policy_override_json(persisted_global, edited_effective)? {
+        Some(json) => Ok(Some(Some(json))),
+        None if initial_override_enabled => Ok(Some(None)),
+        None => Ok(None),
+    }
+}
+
+fn should_reset_kiro_cache_policy_editor(
+    is_initial_load: bool,
+    editable_form: &KiroCachePolicyForm,
+    persisted_form: &KiroCachePolicyForm,
+) -> bool {
+    is_initial_load || editable_form == persisted_form
+}
+
+fn format_kiro_cache_policy_summary(
+    global: &KiroCachePolicyForm,
+    effective: &KiroCachePolicyForm,
+) -> String {
+    format_kiro_cache_policy_summary_with_scope(
+        if global == effective { "inherit global" } else { "override" },
+        effective,
+    )
+}
+
+fn format_effective_kiro_cache_policy_summary(
+    uses_global: bool,
+    effective: &KiroCachePolicyForm,
+) -> String {
+    format_kiro_cache_policy_summary_with_scope(
+        if uses_global { "inherit global" } else { "override" },
+        effective,
+    )
+}
+
+fn format_kiro_cache_policy_summary_with_scope(
+    scope: &str,
+    effective: &KiroCachePolicyForm,
+) -> String {
+    let scope = if scope.is_empty() { "inherit global" } else { scope };
+    format!(
+        "{scope} · boost {} -> {} => {} · diag {} · bands {}",
+        effective.credit_start.trim(),
+        effective.credit_end.trim(),
+        effective.target_input_tokens.trim(),
+        effective.high_credit_diagnostic_threshold.trim(),
+        effective.bands.len(),
+    )
 }
 
 fn format_cache_summary(account: &KiroAccountView) -> String {
@@ -257,6 +566,206 @@ fn format_kiro_key_candidate_credit_summary(summary: &KiroKeyCandidateCreditSumm
             format!(" · {} 个账号余额未加载", summary.missing_balance_count)
         }
     )
+}
+
+#[derive(Properties, PartialEq)]
+struct KiroCachePolicyEditorProps {
+    form: UseStateHandle<KiroCachePolicyForm>,
+}
+
+#[function_component(KiroCachePolicyEditor)]
+fn kiro_cache_policy_editor(props: &KiroCachePolicyEditorProps) -> Html {
+    let on_add_band = {
+        let form = props.form.clone();
+        Callback::from(move |_| {
+            let mut next = (*form).clone();
+            next.bands.push(KiroCachePolicyBandForm::default());
+            form.set(next);
+        })
+    };
+
+    html! {
+        <div class={classes!("space-y-3")}>
+            <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
+                <label class={classes!("block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Boost Target Tokens" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                        value={props.form.target_input_tokens.clone()}
+                        oninput={{
+                            let form = props.form.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                let mut next = (*form).clone();
+                                next.target_input_tokens = input.value();
+                                form.set(next);
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Diagnostic Threshold" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                        value={props.form.high_credit_diagnostic_threshold.clone()}
+                        oninput={{
+                            let form = props.form.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                let mut next = (*form).clone();
+                                next.high_credit_diagnostic_threshold = input.value();
+                                form.set(next);
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Boost Credit Start" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                        value={props.form.credit_start.clone()}
+                        oninput={{
+                            let form = props.form.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                let mut next = (*form).clone();
+                                next.credit_start = input.value();
+                                form.set(next);
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Boost Credit End" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                        value={props.form.credit_end.clone()}
+                        oninput={{
+                            let form = props.form.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                let mut next = (*form).clone();
+                                next.credit_end = input.value();
+                                form.set(next);
+                            })
+                        }}
+                    />
+                </label>
+            </div>
+
+            <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Prefix Tree Bands" }</div>
+                        <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                            { "Bands replace as a whole when any row changes. Keep credit/rate continuity between adjacent rows." }
+                        </div>
+                    </div>
+                    <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_add_band}>
+                        { "Add Band" }
+                    </button>
+                </div>
+                <div class={classes!("mt-3", "space-y-2")}>
+                    { for props.form.bands.iter().enumerate().map(|(index, band)| {
+                        let remove_disabled = props.form.bands.len() <= 1;
+                        html! {
+                            <div class={classes!("grid", "gap-2", "md:grid-cols-[repeat(4,minmax(0,1fr))_auto]", "items-end")}>
+                                <label class={classes!("block", "text-sm")}>
+                                    <div class={classes!("mb-1", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ format!("Band {} Credit Start", index + 1) }</div>
+                                    <input
+                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                        value={band.credit_start.clone()}
+                                        oninput={{
+                                            let form = props.form.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                let input: HtmlInputElement = event.target_unchecked_into();
+                                                let mut next = (*form).clone();
+                                                if let Some(target_band) = next.bands.get_mut(index) {
+                                                    target_band.credit_start = input.value();
+                                                }
+                                                form.set(next);
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <label class={classes!("block", "text-sm")}>
+                                    <div class={classes!("mb-1", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ format!("Band {} Credit End", index + 1) }</div>
+                                    <input
+                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                        value={band.credit_end.clone()}
+                                        oninput={{
+                                            let form = props.form.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                let input: HtmlInputElement = event.target_unchecked_into();
+                                                let mut next = (*form).clone();
+                                                if let Some(target_band) = next.bands.get_mut(index) {
+                                                    target_band.credit_end = input.value();
+                                                }
+                                                form.set(next);
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <label class={classes!("block", "text-sm")}>
+                                    <div class={classes!("mb-1", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ format!("Band {} Ratio Start", index + 1) }</div>
+                                    <input
+                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                        value={band.cache_ratio_start.clone()}
+                                        oninput={{
+                                            let form = props.form.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                let input: HtmlInputElement = event.target_unchecked_into();
+                                                let mut next = (*form).clone();
+                                                if let Some(target_band) = next.bands.get_mut(index) {
+                                                    target_band.cache_ratio_start = input.value();
+                                                }
+                                                form.set(next);
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <label class={classes!("block", "text-sm")}>
+                                    <div class={classes!("mb-1", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ format!("Band {} Ratio End", index + 1) }</div>
+                                    <input
+                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                        value={band.cache_ratio_end.clone()}
+                                        oninput={{
+                                            let form = props.form.clone();
+                                            Callback::from(move |event: InputEvent| {
+                                                let input: HtmlInputElement = event.target_unchecked_into();
+                                                let mut next = (*form).clone();
+                                                if let Some(target_band) = next.bands.get_mut(index) {
+                                                    target_band.cache_ratio_end = input.value();
+                                                }
+                                                form.set(next);
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-terminal", "text-xs")}
+                                    disabled={remove_disabled}
+                                    onclick={{
+                                        let form = props.form.clone();
+                                        Callback::from(move |_| {
+                                            let mut next = (*form).clone();
+                                            if next.bands.len() > 1 {
+                                                next.bands.remove(index);
+                                                form.set(next);
+                                            }
+                                        })
+                                    }}
+                                >
+                                    { "Remove" }
+                                </button>
+                            </div>
+                        }
+                    }) }
+                </div>
+            </div>
+        </div>
+    }
 }
 
 #[derive(Properties, PartialEq)]
@@ -708,6 +1217,7 @@ fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
 #[derive(Properties, PartialEq)]
 struct KiroKeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
+    persisted_global_policy_form: KiroCachePolicyForm,
     available_models: Vec<KiroModelView>,
     accounts: Vec<KiroAccountView>,
     account_groups: Vec<AdminAccountGroupView>,
@@ -718,6 +1228,13 @@ struct KiroKeyEditorCardProps {
 
 #[function_component(KiroKeyEditorCard)]
 fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
+    let initial_effective_policy_form_result =
+        parse_kiro_cache_policy_form_json(&props.key_item.effective_kiro_cache_policy_json);
+    let effective_policy_parse_error = initial_effective_policy_form_result.as_ref().err().cloned();
+    let initial_effective_policy_form = initial_effective_policy_form_result
+        .clone()
+        .unwrap_or_else(|_| KiroCachePolicyForm::default());
+    let initial_override_enabled = !props.key_item.uses_global_kiro_cache_policy;
     let name = use_state(|| props.key_item.name.clone());
     let quota = use_state(|| props.key_item.quota_billable_limit.to_string());
     let status = use_state(|| props.key_item.status.clone());
@@ -739,6 +1256,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let kiro_request_validation_enabled =
         use_state(|| props.key_item.kiro_request_validation_enabled);
     let kiro_cache_estimation_enabled = use_state(|| props.key_item.kiro_cache_estimation_enabled);
+    let policy_override_enabled = use_state(|| initial_override_enabled);
+    let key_policy_form = use_state(|| initial_effective_policy_form.clone());
+    let key_policy_effective_baseline = use_state(|| initial_effective_policy_form.clone());
     let route_settings_expanded = use_state(|| false);
     let model_mapping_expanded = use_state(|| false);
     let saving = use_state(|| false);
@@ -747,6 +1267,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     {
         let key_item = props.key_item.clone();
         let account_groups = props.account_groups.clone();
+        let initial_effective_policy_form = initial_effective_policy_form.clone();
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
@@ -755,6 +1276,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
+        let policy_override_enabled = policy_override_enabled.clone();
+        let key_policy_form = key_policy_form.clone();
+        let key_policy_effective_baseline = key_policy_effective_baseline.clone();
         use_effect_with((props.key_item.clone(), props.account_groups.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
@@ -773,6 +1297,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
             kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
+            policy_override_enabled.set(initial_override_enabled);
+            key_policy_form.set(initial_effective_policy_form.clone());
+            key_policy_effective_baseline.set(initial_effective_policy_form.clone());
             || ()
         });
     }
@@ -780,6 +1307,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let on_save = {
         let key_id = props.key_item.id.clone();
         let key_name = props.key_item.name.clone();
+        let persisted_global_policy_form = props.persisted_global_policy_form.clone();
+        let initial_effective_policy_form = initial_effective_policy_form.clone();
+        let has_effective_policy_parse_error = effective_policy_parse_error.is_some();
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
@@ -788,6 +1318,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
+        let policy_override_enabled = policy_override_enabled.clone();
+        let key_policy_form = key_policy_form.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -795,6 +1327,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         Callback::from(move |_| {
             let key_id = key_id.clone();
             let key_name = key_name.clone();
+            let persisted_global_policy_form = persisted_global_policy_form.clone();
+            let initial_effective_policy_form = initial_effective_policy_form.clone();
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
             let status_value = (*status).clone();
@@ -803,6 +1337,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let model_name_map_value = (*model_name_map).clone();
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
+            let policy_override_enabled_value = *policy_override_enabled;
+            let key_policy_form_value = (*key_policy_form).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -816,6 +1352,24 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         on_flash.emit((message, true));
                         return;
                     },
+                };
+                let policy_override_json = if has_effective_policy_parse_error {
+                    None
+                } else {
+                    match build_kiro_cache_policy_override_patch(
+                        &persisted_global_policy_form,
+                        initial_override_enabled,
+                        &initial_effective_policy_form,
+                        policy_override_enabled_value,
+                        &key_policy_form_value,
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            feedback.set(Some(err.clone()));
+                            on_flash.emit((err, true));
+                            return;
+                        },
+                    }
                 };
                 saving.set(true);
                 feedback.set(None);
@@ -833,6 +1387,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     request_min_start_interval_ms: None,
                     kiro_request_validation_enabled: Some(kiro_request_validation_enabled_value),
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
+                    kiro_cache_policy_override_json: policy_override_json
+                        .as_ref()
+                        .map(|value| value.as_deref()),
                     request_max_concurrency_unlimited: false,
                     request_min_start_interval_ms_unlimited: false,
                 })
@@ -906,6 +1463,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     request_min_start_interval_ms: None,
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
+                    kiro_cache_policy_override_json: None,
                     request_max_concurrency_unlimited: false,
                     request_min_start_interval_ms_unlimited: false,
                 })
@@ -969,6 +1527,61 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         Callback::from(move |_| model_name_map.set(BTreeMap::new()))
     };
+    let on_restore_inherit = {
+        let key_id = props.key_item.id.clone();
+        let key_name = props.key_item.name.clone();
+        let key_policy_form = key_policy_form.clone();
+        let key_policy_effective_baseline = key_policy_effective_baseline.clone();
+        let policy_override_enabled = policy_override_enabled.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        let persisted_global_policy_form = props.persisted_global_policy_form.clone();
+        Callback::from(move |_| {
+            if *saving {
+                return;
+            }
+            let key_id = key_id.clone();
+            let key_name = key_name.clone();
+            let key_policy_form = key_policy_form.clone();
+            let key_policy_effective_baseline = key_policy_effective_baseline.clone();
+            let policy_override_enabled = policy_override_enabled.clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            let persisted_global_policy_form = persisted_global_policy_form.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                feedback.set(None);
+                match patch_admin_kiro_key(&key_id, PatchAdminLlmGatewayKeyRequest {
+                    kiro_cache_policy_override_json: Some(None),
+                    ..PatchAdminLlmGatewayKeyRequest::default()
+                })
+                .await
+                {
+                    Ok(_) => {
+                        key_policy_effective_baseline.set(persisted_global_policy_form.clone());
+                        policy_override_enabled.set(false);
+                        key_policy_form.set(persisted_global_policy_form.clone());
+                        feedback.set(Some("Restored inherit.".to_string()));
+                        on_flash
+                            .emit((format!("Restored inherit for Kiro key `{key_name}`."), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((
+                            format!("Failed to restore inherit for Kiro key `{key_name}`.\n{err}"),
+                            true,
+                        ));
+                    },
+                }
+                saving.set(false);
+            });
+        })
+    };
     let fixed_route_groups = props
         .account_groups
         .iter()
@@ -988,6 +1601,25 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     );
     let candidate_credit_summary_text =
         format_kiro_key_candidate_credit_summary(&candidate_credit_summary);
+    let global_policy_summary = format_kiro_cache_policy_summary(
+        &props.persisted_global_policy_form,
+        &props.persisted_global_policy_form,
+    );
+    let displayed_effective_policy_form = if *policy_override_enabled {
+        (*key_policy_form).clone()
+    } else {
+        props.persisted_global_policy_form.clone()
+    };
+    let effective_policy_summary = effective_policy_parse_error
+        .as_ref()
+        .map(|err| format!("invalid backend policy json · {err}"))
+        .unwrap_or_else(|| {
+            format_effective_kiro_cache_policy_summary(
+                !*policy_override_enabled,
+                &displayed_effective_policy_form,
+            )
+        });
+    let policy_controls_disabled = effective_policy_parse_error.is_some() || *saving;
 
     let key_ratio = kiro_key_usage_ratio(
         props.key_item.remaining_billable,
@@ -1156,6 +1788,66 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         </span>
                     </span>
                 </label>
+                <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "space-y-3")}>
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                        <div class={classes!("space-y-1")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Cache Policy" }</div>
+                            <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                { format!("global: {global_policy_summary}") }
+                            </div>
+                            <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                { format!("effective: {effective_policy_summary}") }
+                            </div>
+                        </div>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                <input
+                                    type="checkbox"
+                                    checked={*policy_override_enabled}
+                                    disabled={policy_controls_disabled}
+                                    onchange={{
+                                        let policy_override_enabled = policy_override_enabled.clone();
+                                        let key_policy_form = key_policy_form.clone();
+                                        let key_policy_effective_baseline =
+                                            key_policy_effective_baseline.clone();
+                                        Callback::from(move |event: Event| {
+                                            let input: HtmlInputElement = event.target_unchecked_into();
+                                            let checked = input.checked();
+                                            policy_override_enabled.set(checked);
+                                            if checked {
+                                                key_policy_form
+                                                    .set((*key_policy_effective_baseline).clone());
+                                            }
+                                        })
+                                    }}
+                                />
+                                <span>{ "Override Global Policy" }</span>
+                            </label>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "text-xs")}
+                                disabled={!initial_override_enabled || *saving}
+                                onclick={on_restore_inherit}
+                            >
+                                { "Restore Inherit" }
+                            </button>
+                        </div>
+                    </div>
+                    if let Some(policy_error) = effective_policy_parse_error.clone() {
+                        <p class={classes!("m-0", "text-xs", "text-red-600", "dark:text-red-300")}>
+                            { format!("Backend effective policy JSON is invalid: {policy_error}") }
+                        </p>
+                    }
+                    if *policy_override_enabled {
+                        if effective_policy_parse_error.is_none() {
+                            <KiroCachePolicyEditor form={key_policy_form.clone()} />
+                        }
+                    } else {
+                        <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
+                            { "This key inherits the global cache policy. Enable override to replace only changed scalar fields or the full bands block." }
+                        </p>
+                    }
+                </div>
                 <div class={classes!("flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}>
                     <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2", "py-1", "font-mono", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
                         { "private" }
@@ -1638,6 +2330,8 @@ pub fn admin_kiro_gateway_page() -> Html {
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let runtime_config = use_state(|| None::<LlmGatewayRuntimeConfig>);
+    let kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
+    let persisted_kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let kiro_cache_kmodels_json = use_state(String::new);
     let saving_kmodel_config = use_state(|| false);
     let kiro_prefix_cache_mode = use_state(String::new);
@@ -1741,6 +2435,8 @@ pub fn admin_kiro_gateway_page() -> Html {
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
         let runtime_config = runtime_config.clone();
+        let kiro_cache_policy_form = kiro_cache_policy_form.clone();
+        let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
         let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
@@ -1757,6 +2453,8 @@ pub fn admin_kiro_gateway_page() -> Html {
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
             let runtime_config = runtime_config.clone();
+            let kiro_cache_policy_form = kiro_cache_policy_form.clone();
+            let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
             let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
             let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
             let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
@@ -1803,6 +2501,25 @@ pub fn admin_kiro_gateway_page() -> Html {
                         Ok(proxy_configs_resp),
                         Ok(proxy_bindings_resp),
                     ) => {
+                        let policy_form = match parse_kiro_cache_policy_form_json(
+                            &config_resp.kiro_cache_policy_json,
+                        ) {
+                            Ok(policy_form) => policy_form,
+                            Err(err) => {
+                                error.set(Some(err));
+                                loading.set(false);
+                                return;
+                            },
+                        };
+                        let should_reset_policy_editor = should_reset_kiro_cache_policy_editor(
+                            (*runtime_config).is_none(),
+                            &kiro_cache_policy_form,
+                            &persisted_kiro_cache_policy_form,
+                        );
+                        if should_reset_policy_editor {
+                            kiro_cache_policy_form.set(policy_form.clone());
+                        }
+                        persisted_kiro_cache_policy_form.set(policy_form);
                         kiro_cache_kmodels_json
                             .set(format_json_for_textarea(&config_resp.kiro_cache_kmodels_json));
                         kiro_prefix_cache_mode.set(config_resp.kiro_prefix_cache_mode.clone());
@@ -1861,6 +2578,8 @@ pub fn admin_kiro_gateway_page() -> Html {
 
     let on_save_kiro_cache_kmodels = {
         let runtime_config = runtime_config.clone();
+        let kiro_cache_policy_form_input = kiro_cache_policy_form.clone();
+        let persisted_kiro_cache_policy_form_input = persisted_kiro_cache_policy_form.clone();
         let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
         let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode.clone();
@@ -1873,8 +2592,13 @@ pub fn admin_kiro_gateway_page() -> Html {
         let saving_kmodel_config = saving_kmodel_config.clone();
         let notify = notify.clone();
         let error = error.clone();
+        let on_reload = on_reload.clone();
         Callback::from(move |_| {
             let runtime_config = runtime_config.clone();
+            let kiro_cache_policy_form_value = (*kiro_cache_policy_form_input).clone();
+            let kiro_cache_policy_form_input = kiro_cache_policy_form_input.clone();
+            let persisted_kiro_cache_policy_form_input =
+                persisted_kiro_cache_policy_form_input.clone();
             let kiro_cache_kmodels_json = (*kiro_cache_kmodels_json).clone();
             let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json_input.clone();
             let kiro_prefix_cache_mode_value = (*kiro_prefix_cache_mode_input).clone();
@@ -1896,6 +2620,7 @@ pub fn admin_kiro_gateway_page() -> Html {
             let saving_kmodel_config = saving_kmodel_config.clone();
             let notify = notify.clone();
             let error = error.clone();
+            let on_reload = on_reload.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(mut next_config) = (*runtime_config).clone() else {
                     let message = "Kiro runtime config is not loaded yet.".to_string();
@@ -1952,7 +2677,17 @@ pub fn admin_kiro_gateway_page() -> Html {
                     notify.emit((message, true));
                     return;
                 };
+                let kiro_cache_policy_json =
+                    match serialize_kiro_cache_policy_form_json(&kiro_cache_policy_form_value) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            error.set(Some(err.clone()));
+                            notify.emit((err, true));
+                            return;
+                        },
+                    };
                 next_config.kiro_cache_kmodels_json = kiro_cache_kmodels_json;
+                next_config.kiro_cache_policy_json = kiro_cache_policy_json;
                 next_config.kiro_prefix_cache_mode = mode.to_string();
                 next_config.kiro_prefix_cache_max_tokens = prefix_cache_max_tokens;
                 next_config.kiro_prefix_cache_entry_ttl_seconds = prefix_cache_entry_ttl_seconds;
@@ -1961,7 +2696,20 @@ pub fn admin_kiro_gateway_page() -> Html {
                 saving_kmodel_config.set(true);
                 match update_admin_llm_gateway_config(&next_config).await {
                     Ok(saved) => {
+                        let saved_policy_form = match parse_kiro_cache_policy_form_json(
+                            &saved.kiro_cache_policy_json,
+                        ) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                error.set(Some(err.clone()));
+                                notify.emit((err, true));
+                                saving_kmodel_config.set(false);
+                                return;
+                            },
+                        };
                         error.set(None);
+                        kiro_cache_policy_form_input.set(saved_policy_form.clone());
+                        persisted_kiro_cache_policy_form_input.set(saved_policy_form);
                         kiro_cache_kmodels_json_input
                             .set(format_json_for_textarea(&saved.kiro_cache_kmodels_json));
                         kiro_prefix_cache_mode_input.set(saved.kiro_prefix_cache_mode.clone());
@@ -1974,14 +2722,12 @@ pub fn admin_kiro_gateway_page() -> Html {
                         kiro_conversation_anchor_ttl_seconds_input
                             .set(saved.kiro_conversation_anchor_ttl_seconds.to_string());
                         runtime_config.set(Some(saved.clone()));
-                        notify.emit(("Saved Kiro cache simulation config.".to_string(), false));
+                        notify.emit(("Saved Kiro cache config.".to_string(), false));
+                        on_reload.emit(());
                     },
                     Err(err) => {
                         error.set(Some(err.clone()));
-                        notify.emit((
-                            format!("Failed to save Kiro cache simulation config.\n{err}"),
-                            true,
-                        ));
+                        notify.emit((format!("Failed to save Kiro cache config.\n{err}"), true));
                     },
                 }
                 saving_kmodel_config.set(false);
@@ -2392,7 +3138,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     <div>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Cache Simulation" }</h2>
                         <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "这里统一管理 Kiro 的全局 cache 模拟模式、prefix tree 容量/TTL，以及按模型的保守 Kmodel 系数。prefix tree 模式会基于修正后的 ConversationState 做共享前缀匹配；formula 模式继续走旧的保守 credit 反推。" }
+                            { "这里统一管理 Kiro 的全局 cache policy、cache 模拟模式、prefix tree 容量/TTL，以及按模型的保守 Kmodel 系数。prefix tree 模式会基于修正后的 ConversationState 做共享前缀匹配；formula 模式继续走旧的保守 credit 反推。" }
                         </p>
                     </div>
                     <button
@@ -2405,6 +3151,18 @@ pub fn admin_kiro_gateway_page() -> Html {
                     </button>
                 </div>
                 <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-2")}>
+                    <div class={classes!("lg:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "space-y-3")}>
+                        <div class={classes!("space-y-1")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Global Cache Policy" }</div>
+                            <div class={classes!("text-sm", "text-[var(--muted)]")}>
+                                { "Key 级 override 只覆盖变化过的标量字段，bands 则整段替换。未覆盖的字段继续继承全局默认。" }
+                            </div>
+                            <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                { format_kiro_cache_policy_summary(&kiro_cache_policy_form, &kiro_cache_policy_form) }
+                            </div>
+                        </div>
+                        <KiroCachePolicyEditor form={kiro_cache_policy_form.clone()} />
+                    </div>
                     <label class={classes!("block", "text-sm")}>
                         <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Simulation Mode" }</div>
                         <select
@@ -2497,6 +3255,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                     <div class={classes!("mt-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]", "space-y-1")}>
                         <div class={classes!("font-mono")}>
                             { format!("current stored bytes: {}", config.kiro_cache_kmodels_json.len()) }
+                        </div>
+                        <div class={classes!("font-mono")}>
+                            { format!("current policy bytes: {}", config.kiro_cache_policy_json.len()) }
                         </div>
                         <div>
                             { format!("mode={}, prefix_tree_max_tokens={}, prefix_tree_ttl_seconds={}, anchor_max_entries={}, anchor_ttl_seconds={}", config.kiro_prefix_cache_mode, config.kiro_prefix_cache_max_tokens, config.kiro_prefix_cache_entry_ttl_seconds, config.kiro_conversation_anchor_max_entries, config.kiro_conversation_anchor_ttl_seconds) }
@@ -2768,6 +3529,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     <KiroKeyEditorCard
                                         key={key_item.id.clone()}
                                         key_item={key_item.clone()}
+                                        persisted_global_policy_form={
+                                            (*persisted_kiro_cache_policy_form).clone()
+                                        }
                                         available_models={(*kiro_models).clone()}
                                         accounts={(*accounts).clone()}
                                         account_groups={(*account_groups).clone()}
@@ -3067,8 +3831,13 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
-        kiro_key_candidate_credit_summary, kiro_key_route_summary, sanitize_kiro_account_group_id,
+        build_kiro_cache_policy_override_json, build_kiro_cache_policy_override_patch,
+        format_kiro_cache_policy_summary, kiro_key_candidate_credit_summary,
+        kiro_key_route_summary, parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
+        should_reset_kiro_cache_policy_editor,
     };
     use crate::api::{AdminAccountGroupView, KiroAccountView, KiroBalanceView, KiroCacheView};
 
@@ -3120,6 +3889,326 @@ mod tests {
         assert_eq!(summary.missing_balance_count, 1);
         assert_eq!(summary.total_limit, 0.0);
         assert_eq!(summary.total_remaining, 0.0);
+    }
+
+    #[test]
+    fn format_kiro_cache_policy_summary_reports_inherit_global() {
+        let global = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("global policy should parse");
+
+        let summary = format_kiro_cache_policy_summary(&global, &global);
+
+        assert_eq!(summary, "inherit global · boost 1.0 -> 1.8 => 100000 · diag 2.0 · bands 2");
+    }
+
+    #[test]
+    fn build_kiro_cache_policy_override_json_only_emits_changed_scalar_field() {
+        let global = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("global policy should parse");
+        let mut edited = global.clone();
+        edited.high_credit_diagnostic_threshold = "1.5".to_string();
+
+        let override_json = build_kiro_cache_policy_override_json(&global, &edited)
+            .expect("override json")
+            .expect("changed policy should emit override json");
+        let override_value: serde_json::Value =
+            serde_json::from_str(&override_json).expect("override json should parse");
+
+        assert_eq!(
+            override_value,
+            json!({
+                "high_credit_diagnostic_threshold": 1.5
+            })
+        );
+    }
+
+    #[test]
+    fn build_kiro_cache_policy_override_json_only_emits_changed_bands_block() {
+        let global = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("global policy should parse");
+        let edited = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.5,
+                        "credit_end": 1.5,
+                        "cache_ratio_start": 0.6,
+                        "cache_ratio_end": 0.25
+                    },
+                    {
+                        "credit_start": 1.8,
+                        "credit_end": 2.8,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.05
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("edited policy should parse");
+
+        let override_json = build_kiro_cache_policy_override_json(&global, &edited)
+            .expect("override json")
+            .expect("changed policy should emit override json");
+        let override_value: serde_json::Value =
+            serde_json::from_str(&override_json).expect("override json should parse");
+
+        assert_eq!(
+            override_value,
+            json!({
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.5,
+                        "credit_end": 1.5,
+                        "cache_ratio_start": 0.6,
+                        "cache_ratio_end": 0.25
+                    },
+                    {
+                        "credit_start": 1.8,
+                        "credit_end": 2.8,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.05
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn build_kiro_cache_policy_override_patch_keeps_existing_override_when_unchanged() {
+        let global = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("global policy should parse");
+
+        let patch = build_kiro_cache_policy_override_patch(&global, true, &global, true, &global)
+            .expect("patch should build");
+
+        assert_eq!(patch, None);
+    }
+
+    #[test]
+    fn build_kiro_cache_policy_override_patch_clears_override_when_restoring_inherit() {
+        let global = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("global policy should parse");
+
+        let patch = build_kiro_cache_policy_override_patch(&global, true, &global, false, &global)
+            .expect("patch should build");
+
+        assert_eq!(patch, Some(None));
+    }
+
+    #[test]
+    fn should_reset_kiro_cache_policy_editor_resets_on_initial_load() {
+        let persisted = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("policy should parse");
+        let mut draft = persisted.clone();
+        draft.credit_end = "2.2".to_string();
+
+        assert!(should_reset_kiro_cache_policy_editor(true, &draft, &persisted));
+    }
+
+    #[test]
+    fn should_reset_kiro_cache_policy_editor_preserves_unsaved_draft() {
+        let persisted = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    },
+                    {
+                        "credit_start": 1.0,
+                        "credit_end": 2.5,
+                        "cache_ratio_start": 0.2,
+                        "cache_ratio_end": 0.0
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0
+            }"#,
+        )
+        .expect("policy should parse");
+        let mut draft = persisted.clone();
+        draft.credit_end = "2.2".to_string();
+
+        assert!(!should_reset_kiro_cache_policy_editor(false, &draft, &persisted,));
+    }
+
+    #[test]
+    fn parse_kiro_cache_policy_form_json_allows_backend_validated_policy_rules() {
+        let form = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 0,
+                    "credit_start": 2.0,
+                    "credit_end": 1.0
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 1.5,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 1.2,
+                        "cache_ratio_end": -0.1
+                    }
+                ],
+                "high_credit_diagnostic_threshold": -3.0
+            }"#,
+        )
+        .expect("frontend should only require parseable numeric fields");
+
+        assert_eq!(form.target_input_tokens, "0");
+        assert_eq!(form.credit_start, "2.0");
+        assert_eq!(form.credit_end, "1.0");
+        assert_eq!(form.high_credit_diagnostic_threshold, "-3.0");
+        assert_eq!(form.bands.len(), 1);
     }
 
     fn test_account(name: &str, balance: Option<(f64, f64)>) -> KiroAccountView {

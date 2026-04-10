@@ -1564,10 +1564,17 @@ fn daily_request_limit_cooldown(body: &str) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::{SystemTime, UNIX_EPOCH},
     };
+
+    use static_flow_shared::llm_gateway_store::LlmGatewayStore;
 
     use super::*;
     use crate::kiro_gateway::{
@@ -1609,12 +1616,28 @@ mod tests {
             last_used_at: None,
             created_at: 0,
             updated_at: 0,
+            account_group_id: None,
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
         }
+    }
+
+    async fn temp_store() -> (PathBuf, LlmGatewayStore) {
+        let dir = std::env::temp_dir().join(format!(
+            "kiro-provider-tests-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should be monotonic")
+                .as_nanos()
+        ));
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+        (dir, store)
     }
 
     fn call_context(profile_arn: Option<&str>) -> CallContext {
@@ -1684,60 +1707,87 @@ mod tests {
         assert_eq!(names, vec!["alpha", "beta"]);
     }
 
-    #[test]
-    fn filter_auths_for_key_route_auto_no_subset_keeps_full_pool() {
+    #[tokio::test]
+    async fn filter_auths_for_key_route_auto_no_subset_keeps_full_pool() {
+        let (dir, store) = temp_store().await;
         let auths = vec![auth("alpha"), auth("beta")];
-        let auths = filter_auths_for_key_route(&auths, &key(None, None, vec![]))
+        let auths = filter_auths_for_key_route(&store, &auths, &key(None, None, vec![]))
+            .await
             .expect("route should keep full pool");
         let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta"]);
+        let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn filter_auths_for_key_route_auto_strategy_without_subset_keeps_full_pool() {
+    #[tokio::test]
+    async fn filter_auths_for_key_route_auto_strategy_without_subset_keeps_full_pool() {
+        let (dir, store) = temp_store().await;
         let auths = vec![auth("alpha"), auth("beta")];
         let mut key_record = key(Some("auto"), None, vec!["alpha"]);
         key_record.auto_account_names = None;
-        let auths =
-            filter_auths_for_key_route(&auths, &key_record).expect("route should keep full pool");
+        let auths = filter_auths_for_key_route(&store, &auths, &key_record)
+            .await
+            .expect("route should keep full pool");
         let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta"]);
+        let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn filter_auths_for_key_route_auto_with_empty_subset_errors() {
+    #[tokio::test]
+    async fn filter_auths_for_key_route_auto_with_empty_subset_errors() {
+        let (dir, store) = temp_store().await;
         let auths = vec![auth("alpha"), auth("beta")];
-        let err = filter_auths_for_key_route(&auths, &key(Some("auto"), None, vec![])).unwrap_err();
+        let err = filter_auths_for_key_route(&store, &auths, &key(Some("auto"), None, vec![]))
+            .await
+            .unwrap_err();
         assert_eq!(err.to_string(), "no configured auto accounts are available");
+        let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn filter_auths_for_key_route_fixed_keeps_single_account() {
+    #[tokio::test]
+    async fn filter_auths_for_key_route_fixed_keeps_single_account() {
+        let (dir, store) = temp_store().await;
         let auths = vec![auth("alpha"), auth("beta")];
-        let auths = filter_auths_for_key_route(&auths, &key(Some("fixed"), Some("beta"), vec![]))
-            .expect("route should keep fixed account");
+        let auths =
+            filter_auths_for_key_route(&store, &auths, &key(Some("fixed"), Some("beta"), vec![]))
+                .await
+                .expect("route should keep fixed account");
         let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
         assert_eq!(names, vec!["beta"]);
+        let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn filter_auths_for_key_route_auto_with_subset_keeps_subset() {
+    #[tokio::test]
+    async fn filter_auths_for_key_route_auto_with_subset_keeps_subset() {
+        let (dir, store) = temp_store().await;
         let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
-        let auths =
-            filter_auths_for_key_route(&auths, &key(Some("auto"), None, vec!["alpha", "gamma"]))
-                .expect("route should keep auto subset");
+        let auths = filter_auths_for_key_route(
+            &store,
+            &auths,
+            &key(Some("auto"), None, vec!["alpha", "gamma"]),
+        )
+        .await
+        .expect("route should keep auto subset");
         let names: Vec<&str> = auths.iter().map(|item| item.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "gamma"]);
+        let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn filter_auths_for_key_route_fixed_missing_account_errors() {
+    #[tokio::test]
+    async fn filter_auths_for_key_route_fixed_missing_account_errors() {
+        let (dir, store) = temp_store().await;
         let auths = vec![auth("alpha"), auth("beta")];
-        let err = filter_auths_for_key_route(&auths, &key(Some("fixed"), Some("missing"), vec![]))
-            .unwrap_err();
+        let err = filter_auths_for_key_route(
+            &store,
+            &auths,
+            &key(Some("fixed"), Some("missing"), vec![]),
+        )
+        .await
+        .unwrap_err();
         assert!(err
             .to_string()
             .contains("fixed route account `missing` is not available"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

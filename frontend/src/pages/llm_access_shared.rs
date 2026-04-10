@@ -191,29 +191,6 @@ pub fn resolved_base_url(access: &LlmGatewayAccessResponse) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::format_kiro_disabled_reason;
-
-    #[test]
-    fn format_kiro_disabled_reason_maps_known_codes() {
-        assert_eq!(
-            format_kiro_disabled_reason(Some("invalid_refresh_token")).as_deref(),
-            Some("Disabled: invalid refresh token")
-        );
-        assert_eq!(
-            format_kiro_disabled_reason(Some("manual")).as_deref(),
-            Some("Disabled: manual")
-        );
-    }
-
-    #[test]
-    fn format_kiro_disabled_reason_ignores_empty_values() {
-        assert!(format_kiro_disabled_reason(None).is_none());
-        assert!(format_kiro_disabled_reason(Some("   ")).is_none());
-    }
-}
-
 pub fn example_key_secret(access: &LlmGatewayAccessResponse) -> String {
     access
         .keys
@@ -319,4 +296,27 @@ pub fn kiro_key_usage_ratio(remaining: i64, limit: u64) -> f64 {
     }
     let used = (limit as i64 - remaining).max(0) as f64;
     (used / limit as f64).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_kiro_disabled_reason;
+
+    #[test]
+    fn format_kiro_disabled_reason_maps_known_codes() {
+        assert_eq!(
+            format_kiro_disabled_reason(Some("invalid_refresh_token")).as_deref(),
+            Some("Disabled: invalid refresh token")
+        );
+        assert_eq!(
+            format_kiro_disabled_reason(Some("manual")).as_deref(),
+            Some("Disabled: manual")
+        );
+    }
+
+    #[test]
+    fn format_kiro_disabled_reason_ignores_empty_values() {
+        assert!(format_kiro_disabled_reason(None).is_none());
+        assert!(format_kiro_disabled_reason(Some("   ")).is_none());
+    }
 }

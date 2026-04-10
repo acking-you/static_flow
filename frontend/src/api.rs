@@ -4325,6 +4325,10 @@ const fn default_true() -> bool {
     true
 }
 
+fn default_kiro_cache_policy_json() -> String {
+    r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string()
+}
+
 /// Admin-only editable representation of a gateway key.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
@@ -4357,6 +4361,12 @@ pub struct AdminLlmGatewayKeyView {
     pub kiro_request_validation_enabled: bool,
     #[serde(default = "default_true")]
     pub kiro_cache_estimation_enabled: bool,
+    #[serde(default)]
+    pub kiro_cache_policy_override_json: Option<String>,
+    #[serde(default = "default_kiro_cache_policy_json")]
+    pub effective_kiro_cache_policy_json: String,
+    #[serde(default = "default_true")]
+    pub uses_global_kiro_cache_policy: bool,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -4672,6 +4682,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
     pub kiro_cache_kmodels_json: String,
+    #[serde(default = "default_kiro_cache_policy_json")]
+    pub kiro_cache_policy_json: String,
     pub kiro_prefix_cache_mode: String,
     pub kiro_prefix_cache_max_tokens: u64,
     pub kiro_prefix_cache_entry_ttl_seconds: u64,
@@ -5257,6 +5269,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
+            kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
             kiro_prefix_cache_mode: "prefix_tree".to_string(),
             kiro_prefix_cache_max_tokens: 4_000_000,
             kiro_prefix_cache_entry_ttl_seconds: 21_600,
@@ -5965,6 +5978,10 @@ pub async fn create_admin_llm_gateway_key(
             request_max_concurrency,
             request_min_start_interval_ms,
             kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+            effective_kiro_cache_policy_json: String::new(),
+            uses_global_kiro_cache_policy: true,
         })
     }
 
@@ -6010,6 +6027,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub request_min_start_interval_ms: Option<u64>,
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
+    pub kiro_cache_policy_override_json: Option<Option<&'a str>>,
     pub request_max_concurrency_unlimited: bool,
     pub request_min_start_interval_ms_unlimited: bool,
 }
@@ -6035,6 +6053,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
+            request.kiro_cache_policy_override_json,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -6125,6 +6144,14 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "kiro_cache_estimation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_cache_estimation_enabled),
+            );
+        }
+        if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
+            body.insert(
+                "kiro_cache_policy_override_json".to_string(),
+                kiro_cache_policy_override_json
+                    .map(|raw| serde_json::Value::String(raw.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
             );
         }
         if request.request_max_concurrency_unlimited {
@@ -7145,6 +7172,9 @@ pub async fn create_admin_kiro_key(
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+            effective_kiro_cache_policy_json: String::new(),
+            uses_global_kiro_cache_policy: true,
         })
     }
 
@@ -7192,6 +7222,7 @@ pub async fn patch_admin_kiro_key(
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
+            request.kiro_cache_policy_override_json,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -7270,6 +7301,14 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "kiro_cache_estimation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_cache_estimation_enabled),
+            );
+        }
+        if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
+            body.insert(
+                "kiro_cache_policy_override_json".to_string(),
+                kiro_cache_policy_override_json
+                    .map(|raw| serde_json::Value::String(raw.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
             );
         }
         let response = api_patch(&url)

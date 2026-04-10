@@ -16,9 +16,10 @@ use static_flow_shared::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     llm_gateway_store::{
-        self, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, now_ms,
-        LlmGatewayAccountGroupRecord, LlmGatewayStore,
-        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        self, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
+        default_kiro_cache_policy, default_kiro_cache_policy_json, now_ms,
+        parse_kiro_cache_policy_json, KiroCachePolicy, LlmGatewayAccountGroupRecord,
+        LlmGatewayStore, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
@@ -209,6 +210,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_max_buffer_bytes: u64,
     pub kiro_cache_kmodels_json: String,
     pub kiro_cache_kmodels: BTreeMap<String, f64>,
+    pub kiro_cache_policy_json: String,
+    pub kiro_cache_policy: KiroCachePolicy,
     pub kiro_prefix_cache_mode: String,
     pub kiro_prefix_cache_max_tokens: u64,
     pub kiro_prefix_cache_entry_ttl_seconds: u64,
@@ -242,6 +245,8 @@ impl Default for LlmGatewayRuntimeConfig {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_cache_kmodels: default_kiro_cache_kmodels(),
+            kiro_cache_policy_json: default_kiro_cache_policy_json(),
+            kiro_cache_policy: default_kiro_cache_policy(),
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
             kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
             kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
@@ -266,6 +271,20 @@ pub fn parse_kiro_cache_kmodels_json(value: &str) -> Result<BTreeMap<String, f64
         }
     }
     Ok(map)
+}
+
+fn sanitize_kiro_cache_policy_json(value: String) -> (String, KiroCachePolicy) {
+    match parse_kiro_cache_policy_json(&value) {
+        Ok(policy) => (value, policy),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "invalid kiro cache policy json in runtime config; falling back to defaults"
+            );
+            let default_json = default_kiro_cache_policy_json();
+            (default_json, default_kiro_cache_policy())
+        },
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -389,6 +408,9 @@ impl AppState {
         let usage_event_flush_max_buffer_bytes =
             llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
         let kiro_cache_kmodels_json = llm_gateway_runtime_config_record.kiro_cache_kmodels_json;
+        let (kiro_cache_policy_json, kiro_cache_policy) = sanitize_kiro_cache_policy_json(
+            llm_gateway_runtime_config_record.kiro_cache_policy_json,
+        );
         let kiro_prefix_cache_mode = llm_gateway_runtime_config_record.kiro_prefix_cache_mode;
         let kiro_prefix_cache_max_tokens =
             llm_gateway_runtime_config_record.kiro_prefix_cache_max_tokens;
@@ -422,6 +444,7 @@ impl AppState {
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json,
+            kiro_cache_policy_json,
             kiro_prefix_cache_mode,
             kiro_prefix_cache_max_tokens,
             kiro_prefix_cache_entry_ttl_seconds,
@@ -446,6 +469,8 @@ impl AppState {
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json,
             kiro_cache_kmodels,
+            kiro_cache_policy_json,
+            kiro_cache_policy,
             kiro_prefix_cache_mode,
             kiro_prefix_cache_max_tokens,
             kiro_prefix_cache_entry_ttl_seconds,
@@ -1175,4 +1200,17 @@ fn spawn_table_compactor(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_kiro_cache_policy_json_falls_back_to_default_values() {
+        let (json, policy) = sanitize_kiro_cache_policy_json(r#"{"unexpected":true}"#.to_string());
+
+        assert_eq!(json, default_kiro_cache_policy_json());
+        assert_eq!(policy, default_kiro_cache_policy());
+    }
 }

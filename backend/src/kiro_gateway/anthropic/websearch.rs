@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures_util::{stream, Stream};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
+use static_flow_shared::llm_gateway_store::{KiroCachePolicy, LlmGatewayKeyRecord};
 use uuid::Uuid;
 
 use super::{
@@ -27,7 +27,8 @@ use super::{
 };
 use crate::{
     kiro_gateway::{
-        provider::ProviderCallError, record_messages_usage, KiroEventContext, KiroUsageSummary,
+        provider::ProviderCallError, record_messages_usage, FailedKiroRequestEvent,
+        KiroEventContext, KiroUsageSummary,
     },
     state::AppState,
 };
@@ -107,6 +108,7 @@ pub async fn handle_websearch_request(
     state: AppState,
     key_record: LlmGatewayKeyRecord,
     mut event_context: KiroEventContext,
+    effective_cache_policy: KiroCachePolicy,
     provider: &crate::kiro_gateway::provider::KiroProvider,
     payload: &MessagesRequest,
     input_tokens: i32,
@@ -130,10 +132,13 @@ pub async fn handle_websearch_request(
                 &state,
                 &key_record,
                 &event_context,
-                StatusCode::BAD_REQUEST.as_u16() as i32,
-                diagnostic_payload,
-                zero_usage_summary(),
-                false,
+                FailedKiroRequestEvent {
+                    effective_policy: &effective_cache_policy,
+                    status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
+                    diagnostic_payload,
+                    usage: zero_usage_summary(),
+                    usage_missing: false,
+                },
             )
             .await
             {
@@ -174,6 +179,7 @@ pub async fn handle_websearch_request(
                     super::ProviderFailureContext {
                         state: &state,
                         key_record: &key_record,
+                        effective_cache_policy: &effective_cache_policy,
                         diagnostic: super::DiagnosticRequestContext {
                             event_context: &event_context,
                             request_validation_enabled: key_record.kiro_request_validation_enabled,
@@ -212,7 +218,15 @@ pub async fn handle_websearch_request(
         credit_usage: None,
         credit_usage_missing: true,
     };
-    if let Err(err) = record_messages_usage(&state, &key_record, &event_context, usage, false).await
+    if let Err(err) = record_messages_usage(
+        &state,
+        &key_record,
+        &event_context,
+        &effective_cache_policy,
+        usage,
+        false,
+    )
+    .await
     {
         tracing::warn!("failed to persist kiro web_search usage event: {err:#}");
     }

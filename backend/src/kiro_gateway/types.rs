@@ -5,9 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use static_flow_shared::llm_gateway_store::{
-    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
+    KiroCachePolicy, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
 };
 
 use super::{auth_file::KiroAuthRecord, wire::UsageLimitsResponse};
@@ -162,10 +162,18 @@ pub struct AdminKiroKeyView {
     pub model_name_map: Option<BTreeMap<String, String>>,
     pub kiro_request_validation_enabled: bool,
     pub kiro_cache_estimation_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kiro_cache_policy_override_json: Option<String>,
+    pub effective_kiro_cache_policy_json: String,
+    pub uses_global_kiro_cache_policy: bool,
 }
 
-impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
-    fn from(value: &LlmGatewayKeyRecord) -> Self {
+impl AdminKiroKeyView {
+    pub fn from_key_and_effective_policy(
+        value: &LlmGatewayKeyRecord,
+        effective_policy: &KiroCachePolicy,
+        uses_global_kiro_cache_policy: bool,
+    ) -> Self {
         Self {
             id: value.id.clone(),
             name: value.name.clone(),
@@ -190,8 +198,21 @@ impl From<&LlmGatewayKeyRecord> for AdminKiroKeyView {
             model_name_map: value.model_name_map.clone(),
             kiro_request_validation_enabled: value.kiro_request_validation_enabled,
             kiro_cache_estimation_enabled: value.kiro_cache_estimation_enabled,
+            kiro_cache_policy_override_json: value.kiro_cache_policy_override_json.clone(),
+            effective_kiro_cache_policy_json: serde_json::to_string_pretty(effective_policy)
+                .expect("effective kiro cache policy should serialize"),
+            uses_global_kiro_cache_policy,
         }
     }
+}
+
+fn deserialize_optional_nullable_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
 /// Admin response wrapper for the Kiro key inventory.
@@ -342,6 +363,8 @@ pub struct PatchKiroKeyRequest {
     pub kiro_request_validation_enabled: Option<bool>,
     #[serde(default)]
     pub kiro_cache_estimation_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_nullable_string")]
+    pub kiro_cache_policy_override_json: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -482,6 +505,8 @@ impl KiroAccountView {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -501,6 +526,26 @@ mod tests {
             KiroCacheView::default(),
         );
         assert_eq!(view.disabled_reason.as_deref(), Some("invalid_refresh_token"));
+    }
+
+    #[test]
+    fn patch_kiro_key_request_distinguishes_absent_null_and_value_for_policy_override() {
+        let absent: PatchKiroKeyRequest =
+            serde_json::from_value(json!({})).expect("parse absent request");
+        let clear: PatchKiroKeyRequest =
+            serde_json::from_value(json!({"kiro_cache_policy_override_json": null}))
+                .expect("parse clear request");
+        let set: PatchKiroKeyRequest = serde_json::from_value(json!({
+            "kiro_cache_policy_override_json": "{\"high_credit_diagnostic_threshold\":1.6}"
+        }))
+        .expect("parse set request");
+
+        assert_eq!(absent.kiro_cache_policy_override_json, None);
+        assert_eq!(clear.kiro_cache_policy_override_json, Some(None));
+        assert_eq!(
+            set.kiro_cache_policy_override_json,
+            Some(Some("{\"high_credit_diagnostic_threshold\":1.6}".to_string()))
+        );
     }
 }
 
