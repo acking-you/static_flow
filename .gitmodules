@@ -14,3 +14,6 @@
 [submodule "deps/lancedb"]
 	path = deps/lancedb
 	url = git@github.com:acking-you/lancedb.git
+[submodule "deps/juicefs"]
+	path = deps/juicefs
+	url = git@github.com:acking-you/juicefs.git
