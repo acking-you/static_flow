@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::converter::get_context_window_size;
+use super::{anthropic_usage_json, converter::get_context_window_size};
 use crate::kiro_gateway::wire::{AssistantMessage, Event, ToolUseEntry};
 
 /// A single Server-Sent Event with an event type and JSON data payload.
@@ -339,12 +339,7 @@ impl StreamContext {
                 "model":self.model,
                 "stop_reason":null,
                 "stop_sequence":null,
-                "usage":{
-                    "input_tokens":self.input_tokens,
-                    "output_tokens":1,
-                    "cache_creation_input_tokens":0,
-                    "cache_read_input_tokens":0
-                }
+                "usage": anthropic_usage_json(self.input_tokens, 1, 0)
             }
         })
     }
@@ -1189,10 +1184,10 @@ mod tests {
     }
 
     #[test]
-    fn message_start_includes_explicit_zero_cache_usage_fields() {
+    fn message_start_marks_half_input_as_cache_creation_when_cache_read_is_zero() {
         let ctx = StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new());
         let event = ctx.create_message_start_event();
-        assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(0));
+        assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(61));
         assert_eq!(event["message"]["usage"]["cache_read_input_tokens"], serde_json::json!(0));
     }
 

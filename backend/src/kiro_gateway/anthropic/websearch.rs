@@ -20,7 +20,7 @@ use static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord;
 use uuid::Uuid;
 
 use super::{
-    build_failure_diagnostic_payload, map_provider_error,
+    anthropic_usage_json, build_failure_diagnostic_payload, map_provider_error,
     stream::SseEvent,
     types::{ErrorResponse, MessagesRequest},
     zero_usage_summary,
@@ -253,12 +253,7 @@ pub async fn handle_websearch_request(
         "model": payload.model,
         "stop_reason": "end_turn",
         "stop_sequence": null,
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0
-        }
+        "usage": anthropic_usage_json(input_tokens, output_tokens, 0)
     }))
     .into_response()
 }
@@ -425,12 +420,7 @@ fn generate_websearch_events(
                 "model": model,
                 "content": [],
                 "stop_reason": null,
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0
-                }
+                "usage": anthropic_usage_json(input_tokens, 0, 0)
             }
         }),
     )];
@@ -687,6 +677,31 @@ mod tests {
             }]),
         );
         assert_eq!(extract_search_query(&req).as_deref(), Some("static flow kiro"));
+    }
+
+    #[test]
+    fn websearch_stream_message_start_marks_half_input_as_cache_creation() {
+        let events = generate_websearch_events(
+            "claude-sonnet-4-6",
+            "static flow kiro",
+            "toolu_test",
+            None,
+            125,
+            "summary",
+            16,
+        );
+        let message_start = events
+            .iter()
+            .find(|event| event.event == "message_start")
+            .expect("should include message_start");
+        assert_eq!(
+            message_start.data["message"]["usage"]["cache_creation_input_tokens"],
+            serde_json::json!(62)
+        );
+        assert_eq!(
+            message_start.data["message"]["usage"]["cache_read_input_tokens"],
+            serde_json::json!(0)
+        );
     }
 
     #[test]
