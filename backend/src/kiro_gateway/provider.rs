@@ -37,6 +37,10 @@ use crate::upstream_proxy::{HttpClientProfile, ResolvedUpstreamProxy, UpstreamPr
 
 const KIRO_PROVIDER_AWS_SDK_VERSION: &str = "1.0.34";
 const KIRO_LOG_BODY_PREVIEW_CHARS: usize = 8_192;
+// Observed Kiro upstream CONTENT_LENGTH_EXCEEDS_THRESHOLD failures occurred at
+// 1,630,504 and 1,707,517 bytes. Keep a small local safety margin so we fail
+// fast before sending requests that are already beyond the practical limit.
+const KIRO_GENERATE_REQUEST_MAX_BODY_BYTES: usize = 1_600_000;
 
 pub(crate) const KIRO_API_CLIENT_PROFILE: HttpClientProfile =
     HttpClientProfile::new(Some(720), 8, 60);
@@ -81,6 +85,20 @@ impl ProviderCallError {
             request_body,
         }
     }
+}
+
+fn validate_generate_request_size(request_body_len: usize) -> Result<()> {
+    if request_body_len <= KIRO_GENERATE_REQUEST_MAX_BODY_BYTES {
+        return Ok(());
+    }
+
+    let over_limit_bytes = request_body_len.saturating_sub(KIRO_GENERATE_REQUEST_MAX_BODY_BYTES);
+    Err(anyhow!(
+        "kiro local request rejected before upstream call: CONTENT_LENGTH_EXCEEDS_THRESHOLD \
+         request_body_len={request_body_len} \
+         request_body_limit={KIRO_GENERATE_REQUEST_MAX_BODY_BYTES} \
+         over_limit_bytes={over_limit_bytes}"
+    ))
 }
 
 impl std::fmt::Display for ProviderCallError {
@@ -813,6 +831,26 @@ impl KiroProvider {
                     None,
                 ))
             })?;
+            if let Err(err) = validate_generate_request_size(request_body.len()) {
+                tracing::warn!(
+                    account_name = %ctx.auth.name,
+                    attempt,
+                    force_refresh,
+                    api_region = ctx.auth.effective_api_region(),
+                    request_body_len = request_body.len(),
+                    request_body_limit = KIRO_GENERATE_REQUEST_MAX_BODY_BYTES,
+                    over_limit_bytes = request_body
+                        .len()
+                        .saturating_sub(KIRO_GENERATE_REQUEST_MAX_BODY_BYTES),
+                    has_profile_arn = ctx.auth.profile_arn.is_some(),
+                    queue_wait_ms,
+                    "kiro upstream generateAssistantResponse request body exceeds local safety limit; rejecting before upstream call"
+                );
+                return Err(ProviderAttemptError::Fatal(ProviderCallError::new(
+                    err,
+                    Some(request_body),
+                )));
+            }
             let (client, resolved_proxy) = build_client(
                 self.runtime.upstream_proxy_registry.as_ref(),
                 &ctx.auth,
@@ -1705,6 +1743,24 @@ mod tests {
         let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn validate_generate_request_size_accepts_payload_at_limit() {
+        validate_generate_request_size(KIRO_GENERATE_REQUEST_MAX_BODY_BYTES)
+            .expect("payload at the local safety limit should pass");
+    }
+
+    #[test]
+    fn validate_generate_request_size_rejects_payload_over_limit() {
+        let request_body_len = KIRO_GENERATE_REQUEST_MAX_BODY_BYTES + 1;
+        let err = validate_generate_request_size(request_body_len)
+            .expect_err("oversized payload should be rejected before upstream send");
+        let text = err.to_string();
+
+        assert!(text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD"));
+        assert!(text.contains(&request_body_len.to_string()));
+        assert!(text.contains(&KIRO_GENERATE_REQUEST_MAX_BODY_BYTES.to_string()));
     }
 
     #[tokio::test]
