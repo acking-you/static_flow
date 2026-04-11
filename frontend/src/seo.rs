@@ -291,6 +291,7 @@ fn route_path_for(route: &Route) -> String {
         Route::Admin => config::route_path("/admin"),
         Route::AdminLlmGateway => config::route_path("/admin/llm-gateway"),
         Route::AdminKiroGateway => config::route_path("/admin/kiro-gateway"),
+        Route::AdminKiroAccountStatus => config::route_path("/admin/kiro-gateway/accounts"),
         Route::AdminCommentRuns {
             task_id,
         } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
@@ -500,6 +501,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         Route::Admin
         | Route::AdminLlmGateway
         | Route::AdminKiroGateway
+        | Route::AdminKiroAccountStatus
         | Route::AdminCommentRuns {
             ..
         }

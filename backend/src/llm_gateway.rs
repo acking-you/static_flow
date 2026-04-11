@@ -84,24 +84,24 @@ use self::{
         AdminLlmGatewayKeysResponse, AdminLlmGatewaySponsorRequestQuery,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsResponse,
         AdminLlmGatewayTokenRequestQuery, AdminLlmGatewayTokenRequestView,
-        AdminLlmGatewayTokenRequestsResponse, AdminLlmGatewayUsageEventView,
-        AdminLlmGatewayUsageEventsResponse, AdminLlmGatewayUsageQuery,
-        AdminUpstreamProxyBindingView, AdminUpstreamProxyBindingsResponse,
-        AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
-        AdminUpstreamProxyConfigView, AdminUpstreamProxyConfigsResponse,
-        CreateAdminAccountGroupRequest, CreateAdminUpstreamProxyConfigRequest,
-        CreateLlmGatewayKeyRequest, GatewayResponseAdapter, ImportAccountRequest,
-        LlmGatewayAccessResponse, LlmGatewayCreditsView, LlmGatewayEventContext,
-        LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView, LlmGatewayRateLimitBucketView,
-        LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
-        LlmGatewayRuntimeConfigResponse, LlmGatewaySupportConfigView, PatchAccountSettingsRequest,
-        PatchAdminAccountGroupRequest, PatchAdminUpstreamProxyConfigRequest,
-        PatchLlmGatewayKeyRequest, PreparedGatewayRequest, PublicLlmGatewayAccountContributionView,
-        PublicLlmGatewayAccountContributionsResponse, PublicLlmGatewaySponsorView,
-        PublicLlmGatewaySponsorsResponse, PublicLlmGatewayUsageChartPointView,
-        PublicLlmGatewayUsageEventView, PublicLlmGatewayUsageKeyView,
-        PublicLlmGatewayUsageLookupRequest, PublicLlmGatewayUsageLookupResponse,
-        SubmitLlmGatewayAccountContributionRequest,
+        AdminLlmGatewayTokenRequestsResponse, AdminLlmGatewayUsageEventDetailView,
+        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsResponse,
+        AdminLlmGatewayUsageQuery, AdminUpstreamProxyBindingView,
+        AdminUpstreamProxyBindingsResponse, AdminUpstreamProxyCheckResponse,
+        AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView,
+        AdminUpstreamProxyConfigsResponse, CreateAdminAccountGroupRequest,
+        CreateAdminUpstreamProxyConfigRequest, CreateLlmGatewayKeyRequest, GatewayResponseAdapter,
+        ImportAccountRequest, LlmGatewayAccessResponse, LlmGatewayCreditsView,
+        LlmGatewayEventContext, LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView,
+        LlmGatewayRateLimitBucketView, LlmGatewayRateLimitStatusResponse,
+        LlmGatewayRateLimitWindowView, LlmGatewayRuntimeConfigResponse,
+        LlmGatewaySupportConfigView, PatchAccountSettingsRequest, PatchAdminAccountGroupRequest,
+        PatchAdminUpstreamProxyConfigRequest, PatchLlmGatewayKeyRequest, PreparedGatewayRequest,
+        PublicLlmGatewayAccountContributionView, PublicLlmGatewayAccountContributionsResponse,
+        PublicLlmGatewaySponsorView, PublicLlmGatewaySponsorsResponse,
+        PublicLlmGatewayUsageChartPointView, PublicLlmGatewayUsageEventView,
+        PublicLlmGatewayUsageKeyView, PublicLlmGatewayUsageLookupRequest,
+        PublicLlmGatewayUsageLookupResponse, SubmitLlmGatewayAccountContributionRequest,
         SubmitLlmGatewayAccountContributionRequestResponse, SubmitLlmGatewaySponsorRequest,
         SubmitLlmGatewaySponsorRequestResponse, SubmitLlmGatewayTokenRequest,
         SubmitLlmGatewayTokenRequestResponse, UpdateAdminUpstreamProxyBindingRequest,
@@ -146,6 +146,9 @@ const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 3_600;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
+const MIN_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60;
+const MAX_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 7 * 24 * 60 * 60;
+const MAX_RUNTIME_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 3650;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
@@ -193,6 +196,9 @@ fn build_runtime_config_response(
         usage_event_flush_batch_size: config.usage_event_flush_batch_size,
         usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
+        usage_event_maintenance_enabled: config.usage_event_maintenance_enabled,
+        usage_event_maintenance_interval_seconds: config.usage_event_maintenance_interval_seconds,
+        usage_event_detail_retention_days: config.usage_event_detail_retention_days,
         kiro_cache_kmodels_json: config.kiro_cache_kmodels_json.clone(),
         kiro_cache_policy_json: config.kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: config.kiro_prefix_cache_mode.clone(),
@@ -235,6 +241,17 @@ fn validate_positive_u64(
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     if value == 0 {
         return Err(bad_request(&format!("{field_name} must be positive")));
+    }
+    Ok(())
+}
+
+fn validate_usage_event_detail_retention_days(
+    value: i64,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if value != -1 && !(1..=MAX_RUNTIME_USAGE_EVENT_DETAIL_RETENTION_DAYS).contains(&value) {
+        return Err(bad_request(
+            "usage_event_detail_retention_days must be -1 or between 1 and 3650",
+        ));
     }
     Ok(())
 }
@@ -445,6 +462,22 @@ pub async fn update_admin_runtime_config(
     {
         return Err(bad_request("usage_event_flush_max_buffer_bytes is out of range"));
     }
+    let usage_event_maintenance_enabled = request
+        .usage_event_maintenance_enabled
+        .unwrap_or(current.usage_event_maintenance_enabled);
+    let usage_event_maintenance_interval_seconds = request
+        .usage_event_maintenance_interval_seconds
+        .unwrap_or(current.usage_event_maintenance_interval_seconds);
+    if !(MIN_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS
+        ..=MAX_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS)
+        .contains(&usage_event_maintenance_interval_seconds)
+    {
+        return Err(bad_request("usage_event_maintenance_interval_seconds is out of range"));
+    }
+    let usage_event_detail_retention_days = request
+        .usage_event_detail_retention_days
+        .unwrap_or(current.usage_event_detail_retention_days);
+    validate_usage_event_detail_retention_days(usage_event_detail_retention_days)?;
     let kiro_cache_kmodels_json = request
         .kiro_cache_kmodels_json
         .clone()
@@ -503,6 +536,9 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
+        usage_event_maintenance_enabled,
+        usage_event_maintenance_interval_seconds,
+        usage_event_detail_retention_days,
         kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
         kiro_cache_policy_json: kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
@@ -534,6 +570,9 @@ pub async fn update_admin_runtime_config(
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            usage_event_maintenance_enabled,
+            usage_event_maintenance_interval_seconds,
+            usage_event_detail_retention_days,
             kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
             kiro_cache_kmodels,
             kiro_cache_policy_json: kiro_cache_policy_json.clone(),
@@ -559,6 +598,9 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
+        usage_event_maintenance_enabled,
+        usage_event_maintenance_interval_seconds,
+        usage_event_detail_retention_days,
         kiro_cache_kmodels_json = %kiro_cache_kmodels_json,
         kiro_cache_policy_json = %kiro_cache_policy_json,
         kiro_prefix_cache_mode = %kiro_prefix_cache_mode,
@@ -1218,7 +1260,12 @@ pub async fn list_admin_usage_events(
     let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
     let mut events = state
         .llm_gateway_store
-        .query_usage_events(query.key_id.as_deref(), None, Some(fetch_count), Some(reverse_offset))
+        .query_usage_event_summaries(
+            query.key_id.as_deref(),
+            None,
+            Some(fetch_count),
+            Some(reverse_offset),
+        )
         .await
         .map_err(|err| internal_error("Failed to query llm gateway usage events", err))?;
     events.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -1246,6 +1293,21 @@ pub async fn list_admin_usage_events(
             .collect(),
         generated_at: now_ms(),
     }))
+}
+
+pub async fn get_admin_usage_event_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(event_id): axum::extract::Path<String>,
+) -> Result<Json<AdminLlmGatewayUsageEventDetailView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let event = state
+        .llm_gateway_store
+        .get_usage_event_detail_by_id(&event_id)
+        .await
+        .map_err(|err| internal_error("Failed to load llm gateway usage event detail", err))?
+        .ok_or_else(|| not_found("LLM gateway usage event not found"))?;
+    Ok(Json(AdminLlmGatewayUsageEventDetailView::from(&event)))
 }
 
 pub async fn lookup_public_usage(
@@ -6100,6 +6162,13 @@ mod tests {
 
         let err = validate_positive_u64("kiro_conversation_anchor_max_entries", 0)
             .expect_err("zero max entries should fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn update_runtime_config_rejects_invalid_usage_event_detail_retention_days() {
+        let err = validate_usage_event_detail_retention_days(0)
+            .expect_err("zero retention days should fail");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
     }
 

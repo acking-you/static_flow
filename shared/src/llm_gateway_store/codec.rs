@@ -8,10 +8,10 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::{Context, Result};
 use arrow_array::{
     builder::{
-        BooleanBuilder, Float64Builder, Int32Builder, StringBuilder, TimestampMillisecondBuilder,
-        UInt64Builder,
+        BooleanBuilder, Float64Builder, Int32Builder, Int64Builder, StringBuilder,
+        TimestampMillisecondBuilder, UInt64Builder,
     },
-    Array, ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
+    Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     TimestampMillisecondArray, UInt64Array,
 };
 
@@ -30,7 +30,7 @@ use super::{
         LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
         LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
         LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        LlmGatewayUsageEventSummaryRecord, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
@@ -41,9 +41,12 @@ use super::{
         DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
         DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
-        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES, LLM_GATEWAY_PROTOCOL_OPENAI,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS, LLM_GATEWAY_PROTOCOL_OPENAI,
         LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
     },
 };
@@ -317,6 +320,9 @@ pub fn build_runtime_config_batch(
     let mut usage_event_flush_batch_size = UInt64Builder::new();
     let mut usage_event_flush_interval_seconds = UInt64Builder::new();
     let mut usage_event_flush_max_buffer_bytes = UInt64Builder::new();
+    let mut usage_event_maintenance_enabled = BooleanBuilder::new();
+    let mut usage_event_maintenance_interval_seconds = UInt64Builder::new();
+    let mut usage_event_detail_retention_days = Int64Builder::new();
     let mut kiro_cache_kmodels_json = StringBuilder::new();
     let mut kiro_cache_policy_json = StringBuilder::new();
     let mut kiro_prefix_cache_mode = StringBuilder::new();
@@ -348,6 +354,10 @@ pub fn build_runtime_config_batch(
         usage_event_flush_batch_size.append_value(record.usage_event_flush_batch_size);
         usage_event_flush_interval_seconds.append_value(record.usage_event_flush_interval_seconds);
         usage_event_flush_max_buffer_bytes.append_value(record.usage_event_flush_max_buffer_bytes);
+        usage_event_maintenance_enabled.append_value(record.usage_event_maintenance_enabled);
+        usage_event_maintenance_interval_seconds
+            .append_value(record.usage_event_maintenance_interval_seconds);
+        usage_event_detail_retention_days.append_value(record.usage_event_detail_retention_days);
         kiro_cache_kmodels_json.append_value(&record.kiro_cache_kmodels_json);
         kiro_cache_policy_json.append_value(&record.kiro_cache_policy_json);
         kiro_prefix_cache_mode.append_value(&record.kiro_prefix_cache_mode);
@@ -377,6 +387,9 @@ pub fn build_runtime_config_batch(
         Arc::new(usage_event_flush_batch_size.finish()),
         Arc::new(usage_event_flush_interval_seconds.finish()),
         Arc::new(usage_event_flush_max_buffer_bytes.finish()),
+        Arc::new(usage_event_maintenance_enabled.finish()),
+        Arc::new(usage_event_maintenance_interval_seconds.finish()),
+        Arc::new(usage_event_detail_retention_days.finish()),
         Arc::new(kiro_cache_kmodels_json.finish()),
         Arc::new(kiro_cache_policy_json.finish()),
         Arc::new(kiro_prefix_cache_mode.finish()),
@@ -965,6 +978,108 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
     Ok(rows)
 }
 
+pub fn batches_to_usage_event_summaries(
+    batches: &[RecordBatch],
+) -> Result<Vec<LlmGatewayUsageEventSummaryRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let id = required_str_col(batch, "id")?;
+        let key_id = required_str_col(batch, "key_id")?;
+        let key_name = batch
+            .column_by_name("key_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let provider_type = batch
+            .column_by_name("provider_type")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let account_name = batch
+            .column_by_name("account_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let request_method = batch
+            .column_by_name("request_method")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let request_url = batch
+            .column_by_name("request_url")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let latency_ms = batch
+            .column_by_name("latency_ms")
+            .and_then(|column| column.as_any().downcast_ref::<Int32Array>());
+        let endpoint = required_str_col(batch, "endpoint")?;
+        let model = optional_str_col(batch, "model")?;
+        let status_code = required_i32_col(batch, "status_code")?;
+        let input_uncached_tokens = required_u64_col(batch, "input_uncached_tokens")?;
+        let input_cached_tokens = required_u64_col(batch, "input_cached_tokens")?;
+        let output_tokens = required_u64_col(batch, "output_tokens")?;
+        let billable_tokens = required_u64_col(batch, "billable_tokens")?;
+        let usage_missing = required_bool_col(batch, "usage_missing")?;
+        let credit_usage = batch
+            .column_by_name("credit_usage")
+            .and_then(|column| column.as_any().downcast_ref::<Float64Array>());
+        let credit_usage_missing = batch
+            .column_by_name("credit_usage_missing")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
+        let client_ip = batch
+            .column_by_name("client_ip")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let ip_region = batch
+            .column_by_name("ip_region")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let last_message_content = batch
+            .column_by_name("last_message_content")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let created_at = required_ts_col(batch, "created_at")?;
+
+        for idx in 0..batch.num_rows() {
+            let provider_type_value = provider_type
+                .and_then(|column| value_string_opt(column, idx))
+                .unwrap_or_else(|| LLM_GATEWAY_PROVIDER_CODEX.to_string());
+            let credit_usage_value = credit_usage.and_then(|column| value_f64_opt(column, idx));
+            rows.push(LlmGatewayUsageEventSummaryRecord {
+                id: id.value(idx).to_string(),
+                key_id: key_id.value(idx).to_string(),
+                key_name: key_name
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| key_id.value(idx).to_string()),
+                provider_type: provider_type_value.clone(),
+                account_name: account_name.and_then(|column| value_string_opt(column, idx)),
+                request_method: request_method
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| "POST".to_string()),
+                request_url: request_url
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| endpoint.value(idx).to_string()),
+                latency_ms: latency_ms
+                    .and_then(|column| value_i32_opt(column, idx))
+                    .unwrap_or_default(),
+                endpoint: endpoint.value(idx).to_string(),
+                model: value_string_opt(model, idx),
+                status_code: status_code.value(idx),
+                input_uncached_tokens: input_uncached_tokens.value(idx),
+                input_cached_tokens: input_cached_tokens.value(idx),
+                output_tokens: output_tokens.value(idx),
+                billable_tokens: billable_tokens.value(idx),
+                usage_missing: usage_missing.value(idx),
+                credit_usage: credit_usage_value,
+                credit_usage_missing: credit_usage_missing
+                    .and_then(|column| value_bool_opt(column, idx))
+                    .unwrap_or(
+                        provider_type_value == LLM_GATEWAY_PROVIDER_KIRO
+                            && credit_usage_value.is_none(),
+                    ),
+                client_ip: client_ip
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                ip_region: ip_region
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                last_message_content: last_message_content
+                    .and_then(|column| value_string_opt(column, idx)),
+                created_at: created_at.value(idx),
+            });
+        }
+    }
+    Ok(rows)
+}
+
 /// Decode Arrow [`RecordBatch`]es back into
 /// [`LlmGatewayRuntimeConfigRecord`] rows.
 ///
@@ -1018,6 +1133,15 @@ pub fn batches_to_runtime_config(
         let usage_event_flush_max_buffer_bytes = batch
             .column_by_name("usage_event_flush_max_buffer_bytes")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let usage_event_maintenance_enabled = batch
+            .column_by_name("usage_event_maintenance_enabled")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
+        let usage_event_maintenance_interval_seconds = batch
+            .column_by_name("usage_event_maintenance_interval_seconds")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let usage_event_detail_retention_days = batch
+            .column_by_name("usage_event_detail_retention_days")
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>());
         let kiro_cache_kmodels_json = batch
             .column_by_name("kiro_cache_kmodels_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -1085,6 +1209,15 @@ pub fn batches_to_runtime_config(
                 usage_event_flush_max_buffer_bytes: usage_event_flush_max_buffer_bytes
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES),
+                usage_event_maintenance_enabled: usage_event_maintenance_enabled
+                    .and_then(|column| value_bool_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED),
+                usage_event_maintenance_interval_seconds: usage_event_maintenance_interval_seconds
+                    .and_then(|column| value_u64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS),
+                usage_event_detail_retention_days: usage_event_detail_retention_days
+                    .and_then(|column| value_i64_opt(column, idx))
+                    .unwrap_or(DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS),
                 kiro_cache_kmodels_json: kiro_cache_kmodels_json
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(default_kiro_cache_kmodels_json),
@@ -1428,6 +1561,14 @@ fn value_u64_opt(array: &UInt64Array, idx: usize) -> Option<u64> {
 }
 
 fn value_i32_opt(array: &Int32Array, idx: usize) -> Option<i32> {
+    if array.is_null(idx) {
+        None
+    } else {
+        Some(array.value(idx))
+    }
+}
+
+fn value_i64_opt(array: &Int64Array, idx: usize) -> Option<i64> {
     if array.is_null(idx) {
         None
     } else {

@@ -816,30 +816,30 @@ fn anthropic_total_input_tokens(usage: KiroUsageSummary) -> i32 {
         .saturating_add(usage.input_cached_tokens.max(0))
 }
 
-fn anthropic_cache_creation_input_tokens(input_tokens: i32, cache_read_input_tokens: i32) -> i32 {
-    let input_tokens = input_tokens.max(0);
-    let cache_read_input_tokens = cache_read_input_tokens.max(0).min(input_tokens);
-    if cache_read_input_tokens == 0 {
-        input_tokens / 2
-    } else {
-        0
-    }
+fn anthropic_input_usage_breakdown(
+    input_tokens_total: i32,
+    cache_read_input_tokens: i32,
+) -> (i32, i32, i32) {
+    let input_tokens_total = input_tokens_total.max(0);
+    let cache_read_input_tokens = cache_read_input_tokens.max(0).min(input_tokens_total);
+    let non_cached_input_tokens_total = input_tokens_total.saturating_sub(cache_read_input_tokens);
+    let cache_creation_input_tokens =
+        if cache_read_input_tokens == 0 { non_cached_input_tokens_total / 2 } else { 0 };
+    let input_tokens = non_cached_input_tokens_total.saturating_sub(cache_creation_input_tokens);
+    (input_tokens, cache_creation_input_tokens, cache_read_input_tokens)
 }
 
 pub(super) fn anthropic_usage_json(
-    input_tokens: i32,
+    input_tokens_total: i32,
     output_tokens: i32,
     cache_read_input_tokens: i32,
 ) -> serde_json::Value {
-    let input_tokens = input_tokens.max(0);
-    let cache_read_input_tokens = cache_read_input_tokens.max(0).min(input_tokens);
+    let (input_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
+        anthropic_input_usage_breakdown(input_tokens_total, cache_read_input_tokens);
     serde_json::json!({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens.max(0),
-        "cache_creation_input_tokens": anthropic_cache_creation_input_tokens(
-            input_tokens,
-            cache_read_input_tokens,
-        ),
+        "cache_creation_input_tokens": cache_creation_input_tokens,
         "cache_read_input_tokens": cache_read_input_tokens,
     })
 }
@@ -3185,7 +3185,7 @@ mod tests {
     fn anthropic_usage_marks_half_input_as_cache_creation_when_cache_read_is_zero() {
         let usage = anthropic_usage_json(125, 16, 0);
 
-        assert_eq!(usage["input_tokens"], serde_json::json!(125));
+        assert_eq!(usage["input_tokens"], serde_json::json!(63));
         assert_eq!(usage["output_tokens"], serde_json::json!(16));
         assert_eq!(usage["cache_creation_input_tokens"], serde_json::json!(62));
         assert_eq!(usage["cache_read_input_tokens"], serde_json::json!(0));
@@ -3195,7 +3195,23 @@ mod tests {
     fn anthropic_usage_keeps_cache_creation_zero_when_cache_read_is_non_zero() {
         let usage = anthropic_usage_json(125, 16, 20);
 
-        assert_eq!(usage["input_tokens"], serde_json::json!(125));
+        assert_eq!(usage["input_tokens"], serde_json::json!(105));
+        assert_eq!(usage["output_tokens"], serde_json::json!(16));
+        assert_eq!(usage["cache_creation_input_tokens"], serde_json::json!(0));
+        assert_eq!(usage["cache_read_input_tokens"], serde_json::json!(20));
+    }
+
+    #[test]
+    fn anthropic_usage_from_summary_reports_uncached_input_separately_from_cache_read() {
+        let usage = anthropic_usage_json_from_summary(KiroUsageSummary {
+            input_uncached_tokens: 80,
+            input_cached_tokens: 20,
+            output_tokens: 16,
+            credit_usage: None,
+            credit_usage_missing: false,
+        });
+
+        assert_eq!(usage["input_tokens"], serde_json::json!(80));
         assert_eq!(usage["output_tokens"], serde_json::json!(16));
         assert_eq!(usage["cache_creation_input_tokens"], serde_json::json!(0));
         assert_eq!(usage["cache_read_input_tokens"], serde_json::json!(20));

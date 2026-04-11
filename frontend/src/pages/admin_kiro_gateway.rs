@@ -39,6 +39,18 @@ const TAB_KEYS: &str = "keys";
 const TAB_GROUPS: &str = "groups";
 const TAB_USAGE: &str = "usage";
 
+fn kiro_account_status_route() -> Route {
+    Route::AdminKiroAccountStatus
+}
+
+fn kiro_account_status_cta_text() -> &'static str {
+    "Open Account Status Page"
+}
+
+fn should_load_kiro_usage_preview(active_tab: &str) -> bool {
+    active_tab == TAB_USAGE
+}
+
 /// Shared Tailwind classes for the dark "Kiro" pill badge.
 fn kiro_badge() -> Classes {
     classes!(
@@ -769,17 +781,17 @@ fn kiro_cache_policy_editor(props: &KiroCachePolicyEditorProps) -> Html {
 }
 
 #[derive(Properties, PartialEq)]
-struct KiroAccountCardProps {
-    account: KiroAccountView,
-    proxy_configs: Vec<AdminUpstreamProxyConfigView>,
-    on_reload: Callback<()>,
-    flash: UseStateHandle<Option<String>>,
-    notify: Callback<(String, bool)>,
-    error: UseStateHandle<Option<String>>,
+pub(crate) struct KiroAccountCardProps {
+    pub(crate) account: KiroAccountView,
+    pub(crate) proxy_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub(crate) on_reload: Callback<()>,
+    pub(crate) flash: UseStateHandle<Option<String>>,
+    pub(crate) notify: Callback<(String, bool)>,
+    pub(crate) error: UseStateHandle<Option<String>>,
 }
 
 #[function_component(KiroAccountCard)]
-fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
+pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
     let expanded = use_state(|| false);
     let scheduler_max = use_state(|| props.account.kiro_channel_max_concurrency.to_string());
     let scheduler_min = use_state(|| props.account.kiro_channel_min_start_interval_ms.to_string());
@@ -2557,8 +2569,11 @@ pub fn admin_kiro_gateway_page() -> Html {
 
     {
         let reload_usage = reload_usage.clone();
-        use_effect_with(*refresh_tick, move |_| {
-            reload_usage.emit(());
+        let active_tab = active_tab.clone();
+        use_effect_with(((*active_tab).clone(), *refresh_tick), move |(active_tab, _)| {
+            if should_load_kiro_usage_preview(active_tab) {
+                reload_usage.emit(());
+            }
             || ()
         });
     }
@@ -3427,34 +3442,46 @@ pub fn admin_kiro_gateway_page() -> Html {
             <section>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
-                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Accounts" }</h2>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Account Status" }</h2>
+                        <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "状态卡片已经移到独立 admin 页面。那里保留现有卡片样式，并补上分页和名称前缀搜索。" }
+                        </p>
                     </div>
+                    <Link<Route>
+                        to={kiro_account_status_route()}
+                        classes={classes!("btn-terminal", "btn-terminal-primary")}
+                    >
+                        { kiro_account_status_cta_text() }
+                    </Link<Route>>
                 </div>
-                <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
-                    {
-                        if (*accounts).is_empty() {
-                            html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                                    { "当前还没有导入任何 Kiro 账号。可以从上面的 SQLite 导入，或者手动填写字段生成一个账号文件。" }
-                                </div>
-                            }
-                        } else {
-                            html! {
-                                for (*accounts).iter().map(|account| html! {
-                                    <KiroAccountCard
-                                        key={account.name.clone()}
-                                        account={account.clone()}
-                                        proxy_configs={(*proxy_configs).clone()}
-                                        on_reload={on_reload.clone()}
-                                        flash={flash.clone()}
-                                        notify={notify.clone()}
-                                        error={error.clone()}
-                                    />
-                                })
-                            }
-                        }
-                    }
+                <div class={classes!("mt-4", "grid", "gap-4", "lg:grid-cols-3")}>
+                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Imported Accounts" }</div>
+                        <div class={classes!("mt-2", "font-mono", "text-3xl", "font-black", "text-[var(--text)]")}>{ accounts.len() }</div>
+                        <p class={classes!("mt-3", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "账号越来越多之后，状态浏览和维护入口不能继续挤在同一块。" }
+                        </p>
+                    </article>
+                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Disabled Accounts" }</div>
+                        <div class={classes!("mt-2", "font-mono", "text-3xl", "font-black", if disabled_account_count > 0 { "text-amber-600" } else { "text-[var(--text)]" })}>{ disabled_account_count }</div>
+                        <p class={classes!("mt-3", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "独立状态页支持当前页刷新，适合集中查看这些异常或停用账号。" }
+                        </p>
+                    </article>
+                    <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                        <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Search / Paging" }</div>
+                        <div class={classes!("mt-2", "font-mono", "text-sm", "text-[var(--text)]")}>{ "prefix match + paginated cards" }</div>
+                        <p class={classes!("mt-3", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { "这里保留导入和手工创建；状态浏览改到新页面做，避免旧设计继续膨胀。" }
+                        </p>
+                    </article>
                 </div>
+                if (*accounts).is_empty() {
+                    <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                        { "当前还没有导入任何 Kiro 账号。可以先从上面的 SQLite 导入，或者手动填写字段生成一个账号文件。" }
+                    </div>
+                }
             </section>
             } // end TAB_ACCOUNTS
 
@@ -3835,11 +3862,16 @@ mod tests {
 
     use super::{
         build_kiro_cache_policy_override_json, build_kiro_cache_policy_override_patch,
-        format_kiro_cache_policy_summary, kiro_key_candidate_credit_summary,
-        kiro_key_route_summary, parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
-        should_reset_kiro_cache_policy_editor,
+        format_kiro_cache_policy_summary, kiro_account_status_cta_text, kiro_account_status_route,
+        kiro_key_candidate_credit_summary, kiro_key_route_summary,
+        parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
+        should_load_kiro_usage_preview, should_reset_kiro_cache_policy_editor, TAB_GROUPS,
+        TAB_KEYS, TAB_OVERVIEW, TAB_USAGE,
     };
-    use crate::api::{AdminAccountGroupView, KiroAccountView, KiroBalanceView, KiroCacheView};
+    use crate::{
+        api::{AdminAccountGroupView, KiroAccountView, KiroBalanceView, KiroCacheView},
+        router::Route,
+    };
 
     #[test]
     fn sanitize_kiro_account_group_id_drops_unknown_value() {
@@ -3922,6 +3954,16 @@ mod tests {
         let summary = format_kiro_cache_policy_summary(&global, &global);
 
         assert_eq!(summary, "inherit global · boost 1.0 -> 1.8 => 100000 · diag 2.0 · bands 2");
+    }
+
+    #[test]
+    fn kiro_account_status_cta_text_is_stable() {
+        assert_eq!(kiro_account_status_cta_text(), "Open Account Status Page");
+    }
+
+    #[test]
+    fn kiro_account_status_route_points_to_admin_page() {
+        assert_eq!(kiro_account_status_route(), Route::AdminKiroAccountStatus);
     }
 
     #[test]
@@ -4209,6 +4251,14 @@ mod tests {
         assert_eq!(form.credit_end, "1.0");
         assert_eq!(form.high_credit_diagnostic_threshold, "-3.0");
         assert_eq!(form.bands.len(), 1);
+    }
+
+    #[test]
+    fn should_load_kiro_usage_preview_only_for_usage_tab() {
+        assert!(should_load_kiro_usage_preview(TAB_USAGE));
+        assert!(!should_load_kiro_usage_preview(TAB_OVERVIEW));
+        assert!(!should_load_kiro_usage_preview(TAB_KEYS));
+        assert!(!should_load_kiro_usage_preview(TAB_GROUPS));
     }
 
     fn test_account(name: &str, balance: Option<(f64, f64)>) -> KiroAccountView {

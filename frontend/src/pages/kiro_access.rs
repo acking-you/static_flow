@@ -7,7 +7,6 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{fetch_kiro_access, KiroAccessResponse},
-    pages::llm_access_shared::{format_kiro_disabled_reason, format_reset_hint, kiro_credit_ratio},
     router::Route,
 };
 
@@ -47,8 +46,8 @@ fn resolve_base_url(access: &KiroAccessResponse) -> String {
 }
 
 #[function_component(KiroAccessPage)]
-/// Render the public Kiro access page, including connection examples and the
-/// cached status cards for all configured Kiro accounts.
+/// Render the public Kiro access page, including connection examples and base
+/// URL info.
 pub fn kiro_access_page() -> Html {
     let access = use_state(|| None::<KiroAccessResponse>);
     let loading = use_state(|| true);
@@ -139,8 +138,8 @@ pub fn kiro_access_page() -> Html {
                                 Callback::from(move |_| reload_access.emit(()))
                             }}
                             disabled={*loading}
-                            title="刷新可用额度"
-                            aria-label="刷新可用额度"
+                            title="刷新接入信息"
+                            aria-label="刷新接入信息"
                         >
                             <i class={classes!("fas", if *loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
                         </button>
@@ -173,113 +172,6 @@ pub fn kiro_access_page() -> Html {
                     </div>
                 }
             </section>
-
-
-            // ── Quota Cards ──
-            {
-                if let Some(ref access_data) = access_value {
-                    if !access_data.accounts.is_empty() {
-                        html! {
-                            <section class={classes!("space-y-3")}>
-                                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                                    <h2 class={classes!("m-0", "font-mono", "text-sm", "font-bold", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>
-                                        { "Quota Snapshot" }
-                                    </h2>
-                                    <button
-                                        type="button"
-                                        class={classes!("btn-terminal")}
-                                        onclick={{
-                                            let reload_access = reload_access.clone();
-                                            Callback::from(move |_| reload_access.emit(()))
-                                        }}
-                                        disabled={*loading}
-                                    >
-                                        { if *loading { "Refreshing..." } else { "Refresh Quota" } }
-                                    </button>
-                                </div>
-                                <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
-                                { for access_data.accounts.iter().map(|status| {
-                                    let ratio = kiro_credit_ratio(status.current_usage, status.usage_limit);
-                                    let pct = (ratio * 100.0).round() as i32;
-                                    let remaining_text = status.remaining.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
-                                    let limit_text = status.usage_limit.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
-                                    let disabled_reason = format_kiro_disabled_reason(status.disabled_reason.as_deref());
-                                    html! {
-                                        <article class={classes!(
-                                            "group", "overflow-hidden", "rounded-lg", "border", "border-[var(--border)]",
-                                            "bg-[var(--surface)]", "p-5",
-                                            "transition-all", "duration-200",
-                                            "hover:-translate-y-0.5", "hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)]",
-                                        )}>
-                                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                <span class={classes!("font-mono", "text-sm", "font-bold", "text-[var(--text)]")}>{ status.name.clone() }</span>
-                                                if status.disabled {
-                                                    <span class={classes!("inline-flex", "rounded-full", "bg-amber-500/10", "px-2", "py-0.5", "text-[10px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
-                                                        { "disabled" }
-                                                    </span>
-                                                }
-                                                if let Some(ref plan) = status.subscription_title {
-                                                    <span class={classes!("ml-auto", "rounded-full", "bg-[var(--surface-alt)]", "px-2.5", "py-0.5", "font-mono", "text-[10px]", "font-semibold", "text-[var(--muted)]")}>
-                                                        { plan.clone() }
-                                                    </span>
-                                                }
-                                            </div>
-                                            if let Some(disabled_reason) = disabled_reason {
-                                                <p class={classes!("mt-2", "mb-0", "font-mono", "text-[11px]", "text-amber-700", "dark:text-amber-200")}>
-                                                    { disabled_reason }
-                                                </p>
-                                            }
-                                            <div class={classes!("mt-4", "grid", "gap-3", "grid-cols-2")}>
-                                                <div>
-                                                    <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "剩余" }</div>
-                                                    <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", "text-[var(--text)]")}>
-                                                        { remaining_text }
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "总额度" }</div>
-                                                    <div class={classes!("mt-1", "font-mono", "text-2xl", "font-black", "text-[var(--text)]")}>
-                                                        { limit_text }
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class={classes!("mt-4")}>
-                                                <div class={classes!("flex", "items-center", "justify-between", "font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>
-                                                    <span>{ "用量" }</span>
-                                                    <span>{ format!("{pct}%") }</span>
-                                                </div>
-                                                <div class={classes!("mt-1.5", "h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
-                                                    <div
-                                                        class={classes!("h-full", "rounded-full", "bg-[linear-gradient(90deg,#0f766e,#2563eb)]", "transition-[width]", "duration-300")}
-                                                        style={format!("width: {}%;", pct.clamp(0, 100))}
-                                                    />
-                                                </div>
-                                                <div class={classes!("mt-2", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                    { format_reset_hint(status.next_reset_at) }
-                                                </div>
-                                            </div>
-                                            if let Some(ref cache_error) = status.cache.error_message {
-                                                <div class={classes!("mt-3", "rounded-lg", "bg-amber-500/8", "px-3", "py-1.5", "font-mono", "text-[11px]", "text-amber-700", "dark:text-amber-200")}>
-                                                    { cache_error.clone() }
-                                                </div>
-                                            }
-                                        </article>
-                                    }
-                                }) }
-                                </div>
-                            </section>
-                        }
-                    } else {
-                        html! {
-                            <section class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-5", "py-10", "text-center", "font-mono", "text-sm", "text-[var(--muted)]")}>
-                                { "当前还没有导入 Kiro 账号" }
-                            </section>
-                        }
-                    }
-                } else {
-                    html! {}
-                }
-            }
 
             // ── Code Examples (tabbed) ──
             <section class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>

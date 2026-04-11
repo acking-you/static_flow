@@ -7,10 +7,10 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        fetch_kiro_access, fetch_llm_gateway_access, fetch_llm_gateway_account_contributions,
+        fetch_llm_gateway_access, fetch_llm_gateway_account_contributions,
         fetch_llm_gateway_sponsors, fetch_llm_gateway_status, fetch_llm_gateway_support_config,
         submit_llm_gateway_account_contribution_request, submit_llm_gateway_sponsor_request,
-        submit_llm_gateway_token_request, KiroAccessResponse, LlmGatewayAccessResponse,
+        submit_llm_gateway_token_request, LlmGatewayAccessResponse,
         LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView,
         LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
         LlmGatewaySupportConfigView, PublicLlmGatewayAccountContributionView,
@@ -18,9 +18,8 @@ use crate::{
         SubmitLlmGatewaySponsorInput, API_BASE,
     },
     pages::llm_access_shared::{
-        format_kiro_disabled_reason, format_ms, format_number_i64, format_number_u64,
-        format_percent, format_reset_hint, format_window_label, kiro_credit_ratio,
-        pretty_limit_name, resolved_base_url, usage_ratio, MaskedSecretCode,
+        format_ms, format_number_i64, format_number_u64, format_percent, format_reset_hint,
+        format_window_label, pretty_limit_name, resolved_base_url, usage_ratio, MaskedSecretCode,
         REMOTE_COMPACT_ARTICLE_ID,
     },
     router::Route,
@@ -304,13 +303,10 @@ fn public_key_card(props: &PublicKeyCardProps) -> Html {
 #[function_component(LlmAccessPage)]
 pub fn llm_access_page() -> Html {
     let access = use_state(|| None::<LlmGatewayAccessResponse>);
-    let kiro_access = use_state(|| None::<KiroAccessResponse>);
     let rate_limit_status = use_state(|| None::<LlmGatewayRateLimitStatusResponse>);
     let loading = use_state(|| true);
-    let kiro_loading = use_state(|| true);
     let status_loading = use_state(|| true);
     let error = use_state(|| None::<String>);
-    let kiro_error = use_state(|| None::<String>);
     let status_error = use_state(|| None::<String>);
     let support_config = use_state(|| None::<LlmGatewaySupportConfigView>);
     let support_error = use_state(|| None::<String>);
@@ -371,27 +367,6 @@ pub fn llm_access_page() -> Html {
                     },
                 }
                 loading.set(false);
-            });
-            || ()
-        });
-    }
-    {
-        let kiro_access = kiro_access.clone();
-        let kiro_loading = kiro_loading.clone();
-        let kiro_error = kiro_error.clone();
-        use_effect_with((), move |_| {
-            wasm_bindgen_futures::spawn_local(async move {
-                match fetch_kiro_access().await {
-                    Ok(data) => {
-                        kiro_access.set(Some(data));
-                        kiro_error.set(None);
-                    },
-                    Err(err) => {
-                        kiro_access.set(None);
-                        kiro_error.set(Some(err));
-                    },
-                }
-                kiro_loading.set(false);
             });
             || ()
         });
@@ -594,18 +569,14 @@ pub fn llm_access_page() -> Html {
         let status_error = status_error.clone();
         let refreshing_status = refreshing_status.clone();
         let show_toast = show_toast.clone();
-        let kiro_access = kiro_access.clone();
         Callback::from(move |_| {
             refreshing_status.set(true);
             let rate_limit_status = rate_limit_status.clone();
             let status_error = status_error.clone();
             let refreshing_status = refreshing_status.clone();
             let show_toast = show_toast.clone();
-            let kiro_access = kiro_access.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let (codex_result, kiro_result) =
-                    futures::join!(fetch_llm_gateway_status(), fetch_kiro_access(),);
-                match codex_result {
+                match fetch_llm_gateway_status().await {
                     Ok(data) => {
                         rate_limit_status.set(Some(data));
                         status_error.set(None);
@@ -614,9 +585,6 @@ pub fn llm_access_page() -> Html {
                         status_error.set(Some(err.clone()));
                         show_toast(format!("刷新失败：{}", err), true, 2200);
                     },
-                }
-                if let Ok(data) = kiro_result {
-                    kiro_access.set(Some(data));
                 }
                 show_toast("已刷新限额快照".to_string(), false, 2200);
                 refreshing_status.set(false);
@@ -853,7 +821,6 @@ pub fn llm_access_page() -> Html {
         }
     } else if let Some(access) = (*access).clone() {
         let base_url = resolved_base_url(&access);
-        let kiro_access_value = (*kiro_access).clone();
         let support_config_value = (*support_config).clone();
         let support_error_value = (*support_error).clone();
         let group_name = support_config_value
@@ -965,11 +932,6 @@ pub fn llm_access_page() -> Html {
                                 })} />
                                 { status.status.clone() }
                             </span>
-                            if kiro_access_value.as_ref().is_some_and(|k| !k.accounts.is_empty()) {
-                                <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2", "py-0.5", "font-mono", "text-[10px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
-                                    { "Kiro" }
-                                </span>
-                            }
                         </div>
                         <button
                             type="button"
@@ -1134,62 +1096,6 @@ pub fn llm_access_page() -> Html {
                             </div>
                         }
                     }) }
-
-                    // Kiro accounts (inside the collapsible status section)
-                    if let Some(kiro_data) = kiro_access_value.clone() {
-                        if !kiro_data.accounts.is_empty() {
-                            { for kiro_data.accounts.into_iter().map(|acct| {
-                                let ratio = kiro_credit_ratio(acct.current_usage, acct.usage_limit);
-                                let pct = (ratio * 100.0).round() as i32;
-                                let remaining_text = acct.remaining.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
-                                let limit_text = acct.usage_limit.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
-                                let disabled_reason = format_kiro_disabled_reason(acct.disabled_reason.as_deref());
-                                html! {
-                                    <div class={classes!(
-                                        "mt-4", "rounded-lg", "border", "border-[var(--border)]",
-                                        "bg-[var(--surface-alt)]", "p-4",
-                                        "border-l-[3px]", "border-l-emerald-500/50",
-                                    )}>
-                                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-slate-900", "px-2", "py-0.5", "font-mono", "text-[10px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-emerald-300")}>
-                                                { "Kiro" }
-                                            </span>
-                                            <span class={classes!("font-mono", "text-[11px]", "font-bold", "uppercase", "tracking-wider", "text-[var(--text)]")}>
-                                                { acct.name }
-                                            </span>
-                                            if acct.disabled {
-                                                <span class={classes!("text-[10px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
-                                                    { "disabled" }
-                                                </span>
-                                            }
-                                            <span class={classes!("ml-auto", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                                                { format!("{remaining_text} / {limit_text}") }
-                                            </span>
-                                        </div>
-                                        <div class={classes!("mt-2.5", "h-1.5", "overflow-hidden", "rounded-full", "bg-[var(--surface)]")}>
-                                            <div
-                                                class={classes!("h-full", "rounded-full", "bg-[linear-gradient(90deg,#0f766e,#2563eb)]", "transition-[width]", "duration-300")}
-                                                style={format!("width: {}%;", pct.clamp(0, 100))}
-                                            />
-                                        </div>
-                                        if let Some(disabled_reason) = disabled_reason {
-                                            <div class={classes!("mt-1.5", "font-mono", "text-[10px]", "text-amber-700", "dark:text-amber-200")}>
-                                                { disabled_reason }
-                                            </div>
-                                        }
-                                        <div class={classes!("mt-1.5", "flex", "items-center", "gap-3", "font-mono", "text-[10px]", "text-[var(--muted)]")}>
-                                            <span>{ acct.subscription_title.unwrap_or_else(|| "-".to_string()) }</span>
-                                            <span class={classes!("ml-auto")}>{ format_reset_hint(acct.next_reset_at) }</span>
-                                        </div>
-                                    </div>
-                                }
-                            }) }
-                        }
-                    } else if *kiro_loading {
-                        <div class={classes!("mt-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                            { "Loading Kiro quota..." }
-                        </div>
-                    }
 
                     <div class={classes!("mt-4", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]", "flex-wrap")}>
                         <span>{ format!("refresh {}s", status.refresh_interval_seconds) }</span>

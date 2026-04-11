@@ -1187,6 +1187,7 @@ mod tests {
     fn message_start_marks_half_input_as_cache_creation_when_cache_read_is_zero() {
         let ctx = StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new());
         let event = ctx.create_message_start_event();
+        assert_eq!(event["message"]["usage"]["input_tokens"], serde_json::json!(62));
         assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(61));
         assert_eq!(event["message"]["usage"]["cache_read_input_tokens"], serde_json::json!(0));
     }

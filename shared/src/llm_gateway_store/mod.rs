@@ -30,10 +30,11 @@ use self::{
     codec::{
         batches_to_account_contribution_requests, batches_to_account_groups, batches_to_keys,
         batches_to_proxy_bindings, batches_to_proxy_configs, batches_to_runtime_config,
-        batches_to_sponsor_requests, batches_to_token_requests, batches_to_usage_events,
-        build_account_contribution_requests_batch, build_account_groups_batch, build_keys_batch,
-        build_proxy_bindings_batch, build_proxy_configs_batch, build_runtime_config_batch,
-        build_sponsor_requests_batch, build_token_requests_batch, build_usage_events_batch,
+        batches_to_sponsor_requests, batches_to_token_requests, batches_to_usage_event_summaries,
+        batches_to_usage_events, build_account_contribution_requests_batch,
+        build_account_groups_batch, build_keys_batch, build_proxy_bindings_batch,
+        build_proxy_configs_batch, build_runtime_config_batch, build_sponsor_requests_batch,
+        build_token_requests_batch, build_usage_events_batch,
     },
     schema::{
         account_contribution_request_columns, account_group_columns,
@@ -42,6 +43,7 @@ use self::{
         ensure_sponsor_requests_table, ensure_token_requests_table, ensure_usage_events_table,
         escape_literal, key_columns, proxy_binding_columns, proxy_config_columns,
         sponsor_request_columns, token_request_columns, usage_event_columns,
+        usage_event_summary_columns,
     },
 };
 pub use self::{
@@ -59,8 +61,9 @@ pub use self::{
         LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord,
         LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
         LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-        NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
-        NewLlmGatewayTokenRequestInput, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        LlmGatewayUsageEventSummaryRecord, NewLlmGatewayAccountContributionRequestInput,
+        NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
+        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
@@ -71,16 +74,19 @@ pub use self::{
         DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
         DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
-        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES, KIRO_PREFIX_CACHE_MODE_FORMULA,
-        KIRO_PREFIX_CACHE_MODE_PREFIX_TREE, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
-        LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE,
-        LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
-        LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
-        LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
-        LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
-        LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
+        KIRO_PREFIX_CACHE_MODE_FORMULA, KIRO_PREFIX_CACHE_MODE_PREFIX_TREE,
+        LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_ACCOUNT_GROUPS_TABLE,
+        LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
+        LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+        LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE,
+        LLM_GATEWAY_PROXY_CONFIGS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
+        LLM_GATEWAY_SPONSOR_REQUESTS_TABLE, LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
         LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
         LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED, LLM_GATEWAY_TABLE_NAMES,
         LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
@@ -1014,6 +1020,40 @@ impl LlmGatewayStore {
             .await
     }
 
+    pub async fn query_usage_event_summaries(
+        &self,
+        key_id: Option<&str>,
+        provider_type: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<LlmGatewayUsageEventSummaryRecord>> {
+        let table = self.usage_events_table().await?;
+        let mut query = table
+            .query()
+            .select(Select::columns(&usage_event_summary_columns()));
+        if let Some(filter) = join_filters([
+            key_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("key_id = '{}'", escape_literal(value))),
+            provider_type
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("provider_type = '{}'", escape_literal(value))),
+        ]) {
+            query = query.only_if(filter);
+        }
+        if let Some(offset) = offset {
+            query = query.offset(offset);
+        }
+        if let Some(limit) = limit {
+            query = query.limit(limit.max(1));
+        }
+        let batches = query.execute().await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_usage_event_summaries(&batch_list)
+    }
+
     async fn query_usage_events_filtered(
         &self,
         key_id: Option<&str>,
@@ -1058,6 +1098,49 @@ impl LlmGatewayStore {
         let batches = query.execute().await?;
         let batch_list = batches.try_collect::<Vec<_>>().await?;
         batches_to_usage_events(&batch_list)
+    }
+
+    pub async fn get_usage_event_detail_by_id(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<LlmGatewayUsageEventRecord>> {
+        let table = self.usage_events_table().await?;
+        let escaped = escape_literal(event_id);
+        let batches = table
+            .query()
+            .only_if(format!("id = '{escaped}'"))
+            .limit(1)
+            .select(Select::columns(&usage_event_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_usage_events(&batch_list).map(|mut rows| rows.pop())
+    }
+
+    pub async fn clear_usage_event_details_before(&self, before_ms: i64) -> Result<u64> {
+        let table = self.usage_events_table().await?;
+        let predicate =
+            format!("created_at < arrow_cast({before_ms}, 'Timestamp(Millisecond, None)')");
+        let result = table
+            .update()
+            .only_if(predicate)
+            .column("request_headers_json", "NULL")
+            .column("client_request_body_json", "NULL")
+            .column("upstream_request_body_json", "NULL")
+            .column("full_request_json", "NULL")
+            .execute()
+            .await
+            .context("failed to clear llm gateway usage-event detail payloads")?;
+        Ok(result.rows_updated)
+    }
+
+    pub async fn optimize_usage_event_indices(&self) -> Result<()> {
+        let table = self.usage_events_table().await?;
+        table
+            .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+            .await
+            .context("failed to optimize llm gateway usage-event indices")?;
+        Ok(())
     }
 
     /// Aggregate all usage events into per-key rollup totals via a SQL
@@ -2376,6 +2459,192 @@ mod tests {
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].full_request_json, record.full_request_json);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn query_usage_event_summaries_keep_preview_and_exclude_detail_payloads() {
+        let dir = temp_store_dir("usage-summary-projection");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let key = sample_key_record("test-key-summary", "Summary Key");
+        store.create_key(&key).await.expect("create key");
+
+        let record = LlmGatewayUsageEventRecord {
+            id: "evt-summary".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            latency_ms: 21,
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 14,
+            input_cached_tokens: 2,
+            output_tokens: 3,
+            billable_tokens: 31,
+            usage_missing: false,
+            credit_usage: Some(0.75),
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{\"x-test\":\"1\"}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some("{\"conversationState\":{}}".to_string()),
+            full_request_json: Some("{\"messages\":[]}".to_string()),
+            created_at: now_ms(),
+        };
+        store
+            .append_usage_event(&record)
+            .await
+            .expect("append usage event");
+
+        let rows = store
+            .query_usage_event_summaries(
+                Some(&key.id),
+                Some(LLM_GATEWAY_PROVIDER_KIRO),
+                Some(10),
+                Some(0),
+            )
+            .await
+            .expect("query usage summaries");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, record.id);
+        assert_eq!(rows[0].billable_tokens, record.billable_tokens);
+        assert_eq!(rows[0].request_url, record.request_url);
+        assert_eq!(rows[0].last_message_content, record.last_message_content);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn get_usage_event_detail_by_id_returns_heavy_fields() {
+        let dir = temp_store_dir("usage-detail-lookup");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let key = sample_key_record("test-key-detail", "Detail Key");
+        store.create_key(&key).await.expect("create key");
+
+        let record = LlmGatewayUsageEventRecord {
+            id: "evt-detail".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 19,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5.3-codex".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 20,
+            input_cached_tokens: 0,
+            output_tokens: 4,
+            billable_tokens: 40,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{\"x-test\":\"1\"}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some("{\"input\":[\"hello\"]}".to_string()),
+            full_request_json: Some("{\"messages\":[]}".to_string()),
+            created_at: now_ms(),
+        };
+        store
+            .append_usage_event(&record)
+            .await
+            .expect("append usage event");
+
+        let loaded = store
+            .get_usage_event_detail_by_id(&record.id)
+            .await
+            .expect("load usage detail")
+            .expect("usage detail exists");
+
+        assert_eq!(loaded.id, record.id);
+        assert_eq!(loaded.request_headers_json, record.request_headers_json);
+        assert_eq!(loaded.client_request_body_json, record.client_request_body_json);
+        assert_eq!(loaded.upstream_request_body_json, record.upstream_request_body_json);
+        assert_eq!(loaded.full_request_json, record.full_request_json);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn clear_old_usage_event_details_preserves_summary_fields() {
+        let dir = temp_store_dir("usage-detail-trim");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let key = sample_key_record("test-key-trim", "Trim Key");
+        store.create_key(&key).await.expect("create key");
+
+        let created_at = now_ms() - 10_000;
+        let record = LlmGatewayUsageEventRecord {
+            id: "evt-trim".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_KIRO.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            latency_ms: 11,
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 1,
+            output_tokens: 2,
+            billable_tokens: 21,
+            usage_missing: false,
+            credit_usage: Some(0.5),
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{\"x-test\":\"1\"}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some("{\"conversationState\":{}}".to_string()),
+            full_request_json: Some("{\"messages\":[]}".to_string()),
+            created_at,
+        };
+        store
+            .append_usage_event(&record)
+            .await
+            .expect("append usage event");
+
+        let cleared = store
+            .clear_usage_event_details_before(created_at + 1)
+            .await
+            .expect("clear old usage detail");
+        assert_eq!(cleared, 1);
+
+        let loaded = store
+            .get_usage_event_detail_by_id(&record.id)
+            .await
+            .expect("load trimmed event")
+            .expect("trimmed event exists");
+        assert_eq!(loaded.billable_tokens, record.billable_tokens);
+        assert_eq!(loaded.credit_usage, record.credit_usage);
+        assert_eq!(loaded.request_headers_json, "{}");
+        assert_eq!(loaded.last_message_content, record.last_message_content);
+        assert_eq!(loaded.client_request_body_json, None);
+        assert_eq!(loaded.upstream_request_body_json, None);
+        assert_eq!(loaded.full_request_json, None);
 
         let _ = fs::remove_dir_all(&dir);
     }

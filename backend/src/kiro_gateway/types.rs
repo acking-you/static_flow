@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use static_flow_shared::llm_gateway_store::{
     KiroCachePolicy, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
+    LlmGatewayUsageEventSummaryRecord,
 };
 
 use super::{auth_file::KiroAuthRecord, wire::UsageLimitsResponse};
@@ -78,34 +79,6 @@ pub struct KiroPublicStatusView {
     pub next_reset_at: Option<i64>,
     /// Live cache status for this account's balance probe.
     pub cache: KiroCacheView,
-}
-
-impl KiroPublicStatusView {
-    /// Build a public status view by merging auth metadata with an optional
-    /// balance snapshot.
-    ///
-    /// `subscription_title` prefers the balance-derived value and falls back
-    /// to the one stored in the auth record.
-    pub fn from_auth_and_balance(
-        auth: &KiroAuthRecord,
-        balance: Option<&KiroBalanceView>,
-        cache: KiroCacheView,
-    ) -> Self {
-        Self {
-            name: auth.name.clone(),
-            provider: auth.provider.clone(),
-            disabled: auth.disabled,
-            disabled_reason: auth.disabled_reason.clone(),
-            subscription_title: balance
-                .and_then(|value| value.subscription_title.clone())
-                .or_else(|| auth.subscription_title.clone()),
-            current_usage: balance.map(|value| value.current_usage),
-            usage_limit: balance.map(|value| value.usage_limit),
-            remaining: balance.map(|value| value.remaining),
-            next_reset_at: balance.and_then(|value| value.next_reset_at),
-            cache,
-        }
-    }
 }
 
 /// Admin-facing view of a single Kiro gateway API key.
@@ -252,9 +225,35 @@ pub struct AdminKiroAccountGroupsResponse {
     pub generated_at: i64,
 }
 
-/// Admin-facing projection of one persisted Kiro usage event.
+/// Admin-facing projection of one persisted Kiro usage event summary.
 #[derive(Debug, Serialize)]
 pub struct AdminKiroUsageEventView {
+    pub id: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub account_name: Option<String>,
+    pub request_method: String,
+    pub request_url: String,
+    pub latency_ms: i32,
+    pub endpoint: String,
+    pub model: Option<String>,
+    pub status_code: i32,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub last_message_content: Option<String>,
+    pub created_at: i64,
+}
+
+/// Full Kiro usage-event detail payload returned on demand.
+#[derive(Debug, Serialize)]
+pub struct AdminKiroUsageEventDetailView {
     pub id: String,
     pub key_id: String,
     pub key_name: String,
@@ -282,7 +281,35 @@ pub struct AdminKiroUsageEventView {
     pub created_at: i64,
 }
 
-impl From<&LlmGatewayUsageEventRecord> for AdminKiroUsageEventView {
+impl From<&LlmGatewayUsageEventSummaryRecord> for AdminKiroUsageEventView {
+    fn from(value: &LlmGatewayUsageEventSummaryRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            key_id: value.key_id.clone(),
+            key_name: value.key_name.clone(),
+            account_name: value.account_name.clone(),
+            request_method: value.request_method.clone(),
+            request_url: value.request_url.clone(),
+            latency_ms: value.latency_ms,
+            endpoint: value.endpoint.clone(),
+            model: value.model.clone(),
+            status_code: value.status_code,
+            input_uncached_tokens: value.input_uncached_tokens,
+            input_cached_tokens: value.input_cached_tokens,
+            output_tokens: value.output_tokens,
+            billable_tokens: value.billable_tokens,
+            usage_missing: value.usage_missing,
+            credit_usage: value.credit_usage,
+            credit_usage_missing: value.credit_usage_missing,
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            last_message_content: value.last_message_content.clone(),
+            created_at: value.created_at,
+        }
+    }
+}
+
+impl From<&LlmGatewayUsageEventRecord> for AdminKiroUsageEventDetailView {
     fn from(value: &LlmGatewayUsageEventRecord) -> Self {
         Self {
             id: value.id.clone(),
@@ -503,56 +530,29 @@ impl KiroAccountView {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn account_view_surfaces_disabled_reason() {
-        let auth = KiroAuthRecord {
-            name: "alpha".to_string(),
-            disabled: true,
-            disabled_reason: Some("invalid_refresh_token".to_string()),
-            ..KiroAuthRecord::default()
-        };
-        let view = KiroAccountView::from_auth(
-            &auth,
-            "direct".to_string(),
-            None,
-            None,
-            None,
-            KiroCacheView::default(),
-        );
-        assert_eq!(view.disabled_reason.as_deref(), Some("invalid_refresh_token"));
-    }
-
-    #[test]
-    fn patch_kiro_key_request_distinguishes_absent_null_and_value_for_policy_override() {
-        let absent: PatchKiroKeyRequest =
-            serde_json::from_value(json!({})).expect("parse absent request");
-        let clear: PatchKiroKeyRequest =
-            serde_json::from_value(json!({"kiro_cache_policy_override_json": null}))
-                .expect("parse clear request");
-        let set: PatchKiroKeyRequest = serde_json::from_value(json!({
-            "kiro_cache_policy_override_json": "{\"high_credit_diagnostic_threshold\":1.6}"
-        }))
-        .expect("parse set request");
-
-        assert_eq!(absent.kiro_cache_policy_override_json, None);
-        assert_eq!(clear.kiro_cache_policy_override_json, Some(None));
-        assert_eq!(
-            set.kiro_cache_policy_override_json,
-            Some(Some("{\"high_credit_diagnostic_threshold\":1.6}".to_string()))
-        );
-    }
-}
-
 /// Admin response wrapper for the full Kiro account inventory.
 #[derive(Debug, Serialize)]
 pub struct AdminKiroAccountsResponse {
     pub accounts: Vec<KiroAccountView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AdminKiroAccountStatusesQuery {
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminKiroAccountStatusesResponse {
+    pub accounts: Vec<KiroAccountView>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
     pub generated_at: i64,
 }
 
@@ -624,4 +624,97 @@ pub struct PatchKiroAccountRequest {
     pub proxy_mode: Option<String>,
     #[serde(default)]
     pub proxy_config_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn account_view_surfaces_disabled_reason() {
+        let auth = KiroAuthRecord {
+            name: "alpha".to_string(),
+            disabled: true,
+            disabled_reason: Some("invalid_refresh_token".to_string()),
+            ..KiroAuthRecord::default()
+        };
+        let view = KiroAccountView::from_auth(
+            &auth,
+            "direct".to_string(),
+            None,
+            None,
+            None,
+            KiroCacheView::default(),
+        );
+        assert_eq!(view.disabled_reason.as_deref(), Some("invalid_refresh_token"));
+    }
+
+    #[test]
+    fn patch_kiro_key_request_distinguishes_absent_null_and_value_for_policy_override() {
+        let absent: PatchKiroKeyRequest =
+            serde_json::from_value(json!({})).expect("parse absent request");
+        let clear: PatchKiroKeyRequest =
+            serde_json::from_value(json!({"kiro_cache_policy_override_json": null}))
+                .expect("parse clear request");
+        let set: PatchKiroKeyRequest = serde_json::from_value(json!({
+            "kiro_cache_policy_override_json": "{\"high_credit_diagnostic_threshold\":1.6}"
+        }))
+        .expect("parse set request");
+
+        assert_eq!(absent.kiro_cache_policy_override_json, None);
+        assert_eq!(clear.kiro_cache_policy_override_json, Some(None));
+        assert_eq!(
+            set.kiro_cache_policy_override_json,
+            Some(Some("{\"high_credit_diagnostic_threshold\":1.6}".to_string()))
+        );
+    }
+
+    #[test]
+    fn admin_kiro_account_status_query_defaults_to_none() {
+        let query: AdminKiroAccountStatusesQuery =
+            serde_json::from_value(json!({})).expect("parse empty query");
+
+        assert_eq!(query.prefix, None);
+        assert_eq!(query.limit, None);
+        assert_eq!(query.offset, None);
+    }
+
+    #[test]
+    fn recent_kiro_usage_event_view_keeps_only_preview_fields() {
+        let event = LlmGatewayUsageEventSummaryRecord {
+            id: "evt-1".to_string(),
+            key_id: "key-1".to_string(),
+            key_name: "alpha".to_string(),
+            provider_type: "kiro".to_string(),
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "https://example.com".to_string(),
+            latency_ms: 42,
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 20,
+            output_tokens: 30,
+            billable_tokens: 40,
+            usage_missing: false,
+            credit_usage: Some(1.25),
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "Local".to_string(),
+            last_message_content: Some("hello".to_string()),
+            created_at: 123,
+        };
+
+        let view = AdminKiroUsageEventView::from(&event);
+
+        assert_eq!(view.id, "evt-1");
+        assert_eq!(view.key_name, "alpha");
+        assert_eq!(view.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(view.credit_usage, Some(1.25));
+        assert_eq!(view.last_message_content.as_deref(), Some("hello"));
+        assert_eq!(view.created_at, 123);
+    }
 }

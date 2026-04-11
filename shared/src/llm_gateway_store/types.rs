@@ -69,6 +69,9 @@ pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 256;
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
 /// Default maximum buffered usage-event payload size before a forced flush.
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED: bool = true;
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = -1;
 pub const DEFAULT_KIRO_CACHE_KMODEL_OPUS_46: f64 = 8.061927916785985e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_SONNET_46: f64 = 5.055065250835128e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_HAIKU_45: f64 = 2.3681034438052206e-06;
@@ -258,6 +261,33 @@ pub struct LlmGatewayUsageEventRecord {
     /// intended to persist the entire original request JSON for every new
     /// usage event whenever the caller supplied a JSON body.
     pub full_request_json: Option<String>,
+    pub created_at: i64,
+}
+
+/// Lightweight usage-event projection used by paging, filters, and charts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LlmGatewayUsageEventSummaryRecord {
+    pub id: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub provider_type: String,
+    pub account_name: Option<String>,
+    pub request_method: String,
+    pub request_url: String,
+    pub latency_ms: i32,
+    pub endpoint: String,
+    pub model: Option<String>,
+    pub status_code: i32,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub last_message_content: Option<String>,
     pub created_at: i64,
 }
 
@@ -455,6 +485,14 @@ pub struct LlmGatewayRuntimeConfigRecord {
     pub usage_event_flush_interval_seconds: u64,
     /// Maximum buffered usage-event payload size before a forced flush.
     pub usage_event_flush_max_buffer_bytes: u64,
+    /// Whether the dedicated usage-event maintenance loop is enabled.
+    pub usage_event_maintenance_enabled: bool,
+    /// Seconds between usage-event maintenance passes.
+    pub usage_event_maintenance_interval_seconds: u64,
+    /// How long to preserve heavy usage-event detail fields.
+    ///
+    /// `-1` keeps details forever. Positive values keep only the last N days.
+    pub usage_event_detail_retention_days: i64,
     /// JSON object mapping Kiro model ids to conservative cache-estimation
     /// coefficients.
     pub kiro_cache_kmodels_json: String,
@@ -504,6 +542,11 @@ impl Default for LlmGatewayRuntimeConfigRecord {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+            usage_event_maintenance_enabled: DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
+            usage_event_maintenance_interval_seconds:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
+            usage_event_detail_retention_days:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_cache_policy_json: crate::llm_gateway_store::default_kiro_cache_policy_json(),
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),

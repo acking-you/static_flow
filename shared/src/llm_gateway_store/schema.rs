@@ -133,6 +133,9 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         Field::new("usage_event_flush_batch_size", DataType::UInt64, false),
         Field::new("usage_event_flush_interval_seconds", DataType::UInt64, false),
         Field::new("usage_event_flush_max_buffer_bytes", DataType::UInt64, false),
+        Field::new("usage_event_maintenance_enabled", DataType::Boolean, false),
+        Field::new("usage_event_maintenance_interval_seconds", DataType::UInt64, false),
+        Field::new("usage_event_detail_retention_days", DataType::Int64, false),
         Field::new("kiro_cache_kmodels_json", DataType::Utf8, false),
         Field::new("kiro_cache_policy_json", DataType::Utf8, false),
         Field::new("kiro_prefix_cache_mode", DataType::Utf8, false),
@@ -356,6 +359,9 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
     ensure_nullable_u64_column(&table, "usage_event_flush_batch_size").await?;
     ensure_nullable_u64_column(&table, "usage_event_flush_interval_seconds").await?;
     ensure_nullable_u64_column(&table, "usage_event_flush_max_buffer_bytes").await?;
+    ensure_nullable_bool_column(&table, "usage_event_maintenance_enabled").await?;
+    ensure_nullable_u64_column(&table, "usage_event_maintenance_interval_seconds").await?;
+    ensure_nullable_i64_column(&table, "usage_event_detail_retention_days").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_kmodels_json").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_policy_json").await?;
     ensure_nullable_utf8_column(&table, "kiro_prefix_cache_mode").await?;
@@ -578,6 +584,28 @@ async fn ensure_nullable_u64_column(table: &Table, column: &str) -> Result<()> {
     Ok(())
 }
 
+/// Adds a nullable Int64 column to an existing table without rewriting old
+/// rows.
+async fn ensure_nullable_i64_column(table: &Table, column: &str) -> Result<()> {
+    let schema = table.schema().await?;
+    if schema.field_with_name(column).is_ok() {
+        return Ok(());
+    }
+    tracing::info!(table = %table.name(), column, "Adding nullable Int64 column to LLM gateway table");
+    table
+        .add_columns(
+            NewColumnTransform::AllNulls(Arc::new(Schema::new(vec![Field::new(
+                column,
+                DataType::Int64,
+                true,
+            )]))),
+            None,
+        )
+        .await
+        .with_context(|| format!("failed to add `{column}` to `{}`", table.name()))?;
+    Ok(())
+}
+
 /// Adds a nullable Float64 column to an existing table without rewriting old
 /// rows.
 async fn ensure_nullable_f64_column(table: &Table, column: &str) -> Result<()> {
@@ -711,6 +739,34 @@ pub fn usage_event_columns() -> [&'static str; 26] {
         "client_request_body_json",
         "upstream_request_body_json",
         "full_request_json",
+        "created_at",
+    ]
+}
+
+/// Ordered projection used when reading lightweight usage-event summaries.
+pub fn usage_event_summary_columns() -> [&'static str; 22] {
+    [
+        "id",
+        "key_id",
+        "key_name",
+        "provider_type",
+        "account_name",
+        "request_method",
+        "request_url",
+        "latency_ms",
+        "endpoint",
+        "model",
+        "status_code",
+        "input_uncached_tokens",
+        "input_cached_tokens",
+        "output_tokens",
+        "billable_tokens",
+        "usage_missing",
+        "credit_usage",
+        "credit_usage_missing",
+        "client_ip",
+        "ip_region",
+        "last_message_content",
         "created_at",
     ]
 }

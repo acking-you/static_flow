@@ -23,21 +23,23 @@ use crate::{
         fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_keys,
         fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
         fetch_admin_llm_gateway_sponsor_requests, fetch_admin_llm_gateway_token_requests,
-        fetch_admin_llm_gateway_usage_events, import_admin_legacy_kiro_proxy_configs,
-        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
-        patch_admin_llm_gateway_account_group, patch_admin_llm_gateway_key,
-        patch_admin_llm_gateway_proxy_config, refresh_admin_llm_gateway_account,
-        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
-        AccountSummaryView, AdminAccountGroupView, AdminLlmGatewayAccountContributionRequestView,
+        fetch_admin_llm_gateway_usage_event_detail, fetch_admin_llm_gateway_usage_events,
+        import_admin_legacy_kiro_proxy_configs, import_admin_llm_gateway_account,
+        patch_admin_llm_gateway_account, patch_admin_llm_gateway_account_group,
+        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
+        refresh_admin_llm_gateway_account, update_admin_llm_gateway_config,
+        update_admin_llm_gateway_proxy_binding, AccountSummaryView, AdminAccountGroupView,
+        AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
-        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
-        AdminUpstreamProxyBindingView, AdminUpstreamProxyCheckResponse,
-        AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView,
-        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
-        PatchAdminAccountGroupInput, PatchAdminLlmGatewayAccountInput,
-        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
+        AdminLlmGatewayUsageEventDetailView, AdminLlmGatewayUsageEventView,
+        AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
+        AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
+        AdminUpstreamProxyConfigView, CreateAdminAccountGroupInput,
+        CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
+        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
+        PatchAdminUpstreamProxyConfigInput,
     },
     components::pagination::Pagination,
     pages::llm_access_shared::{format_number_i64, format_number_u64, MaskedSecretCode},
@@ -353,6 +355,14 @@ fn pretty_headers_json(raw: &str) -> String {
         .ok()
         .and_then(|value| serde_json::to_string_pretty(&value).ok())
         .unwrap_or_else(|| raw.to_string())
+}
+
+fn usage_last_message_preview(event: &AdminLlmGatewayUsageEventView) -> String {
+    event
+        .last_message_content
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn pretty_json_text(raw: &str) -> String {
@@ -1511,7 +1521,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let sponsor_request_loading = use_state(|| false);
     let sponsor_request_status_filter = use_state(String::new);
     let sponsor_request_action_inflight = use_state(HashSet::<String>::new);
-    let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventView>);
+    let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventDetailView>);
+    let usage_detail_loading = use_state(|| false);
     let usage_scroll_top_ref = use_node_ref();
     let usage_scroll_bottom_ref = use_node_ref();
     let usage_scroll_width = use_state(|| 1_i32);
@@ -1529,6 +1540,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_flush_batch_size_input = use_state(|| "256".to_string());
     let usage_flush_interval_input = use_state(|| "15".to_string());
     let usage_flush_max_buffer_bytes_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
+    let usage_maintenance_enabled_input = use_state(|| true);
+    let usage_maintenance_interval_input = use_state(|| "3600".to_string());
+    let usage_detail_retention_days_input = use_state(|| "-1".to_string());
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let create_proxy_name = use_state(|| "shared-upstream".to_string());
@@ -1567,6 +1581,25 @@ pub fn admin_llm_gateway_page() -> Html {
                 clear_handle.borrow_mut().take();
             });
             *toast_timeout.borrow_mut() = Some(timeout);
+        })
+    };
+    let open_usage_detail = {
+        let selected_usage_event = selected_usage_event.clone();
+        let usage_detail_loading = usage_detail_loading.clone();
+        let flash = flash.clone();
+        Callback::from(move |event_id: String| {
+            let selected_usage_event = selected_usage_event.clone();
+            let usage_detail_loading = usage_detail_loading.clone();
+            let flash = flash.clone();
+            selected_usage_event.set(None);
+            usage_detail_loading.set(true);
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_admin_llm_gateway_usage_event_detail(&event_id).await {
+                    Ok(detail) => selected_usage_event.set(Some(detail)),
+                    Err(err) => flash.emit((err, true)),
+                }
+                usage_detail_loading.set(false);
+            });
         })
     };
     let accounts = use_state(Vec::<AccountSummaryView>::new);
@@ -1774,6 +1807,9 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
         let usage_flush_interval_input = usage_flush_interval_input.clone();
         let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+        let usage_maintenance_enabled_input = usage_maintenance_enabled_input.clone();
+        let usage_maintenance_interval_input = usage_maintenance_interval_input.clone();
+        let usage_detail_retention_days_input = usage_detail_retention_days_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_page = usage_page.clone();
@@ -1801,6 +1837,9 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
             let usage_flush_interval_input = usage_flush_interval_input.clone();
             let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+            let usage_maintenance_enabled_input = usage_maintenance_enabled_input.clone();
+            let usage_maintenance_interval_input = usage_maintenance_interval_input.clone();
+            let usage_detail_retention_days_input = usage_detail_retention_days_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_page = usage_page.clone();
@@ -1889,6 +1928,11 @@ pub fn admin_llm_gateway_page() -> Html {
                             .set(cfg.usage_event_flush_interval_seconds.to_string());
                         usage_flush_max_buffer_bytes_input
                             .set(cfg.usage_event_flush_max_buffer_bytes.to_string());
+                        usage_maintenance_enabled_input.set(cfg.usage_event_maintenance_enabled);
+                        usage_maintenance_interval_input
+                            .set(cfg.usage_event_maintenance_interval_seconds.to_string());
+                        usage_detail_retention_days_input
+                            .set(cfg.usage_event_detail_retention_days.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
                         account_groups.set(account_group_items);
@@ -1954,6 +1998,9 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
         let usage_flush_interval_input = usage_flush_interval_input.clone();
         let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+        let usage_maintenance_enabled_input = usage_maintenance_enabled_input.clone();
+        let usage_maintenance_interval_input = usage_maintenance_interval_input.clone();
+        let usage_detail_retention_days_input = usage_detail_retention_days_input.clone();
         let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
@@ -1981,6 +2028,11 @@ pub fn admin_llm_gateway_page() -> Html {
                 (*usage_flush_interval_input).trim().parse::<u64>();
             let usage_event_flush_max_buffer_bytes =
                 (*usage_flush_max_buffer_bytes_input).trim().parse::<u64>();
+            let usage_event_maintenance_enabled = *usage_maintenance_enabled_input;
+            let usage_event_maintenance_interval_seconds =
+                (*usage_maintenance_interval_input).trim().parse::<u64>();
+            let usage_event_detail_retention_days =
+                (*usage_detail_retention_days_input).trim().parse::<i64>();
             let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
@@ -2047,6 +2099,19 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("usage flush 缓冲上限必须是非负整数".to_string()));
                     return;
                 };
+                let Ok(usage_event_maintenance_interval_seconds) =
+                    usage_event_maintenance_interval_seconds
+                else {
+                    load_error.set(Some("usage maintenance 间隔必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(usage_event_detail_retention_days) = usage_event_detail_retention_days
+                else {
+                    load_error.set(Some(
+                        "usage detail 保留天数必须是整数，使用 -1 表示永久保留".to_string(),
+                    ));
+                    return;
+                };
                 let runtime_config = LlmGatewayRuntimeConfig {
                     auth_cache_ttl_seconds: ttl,
                     max_request_body_bytes,
@@ -2060,6 +2125,9 @@ pub fn admin_llm_gateway_page() -> Html {
                     usage_event_flush_batch_size,
                     usage_event_flush_interval_seconds,
                     usage_event_flush_max_buffer_bytes,
+                    usage_event_maintenance_enabled,
+                    usage_event_maintenance_interval_seconds,
+                    usage_event_detail_retention_days,
                     kiro_cache_kmodels_json: config
                         .as_ref()
                         .map(|current| current.kiro_cache_kmodels_json.clone())
@@ -3153,7 +3221,37 @@ pub fn admin_llm_gateway_page() -> Html {
     // Build the full-screen modal for a selected usage event (request detail,
     // headers, last message, copy buttons). Rendered outside the tab flow so
     // it overlays the entire viewport.
-    let usage_detail_modal = (*selected_usage_event).clone().map(|event| {
+    let usage_detail_modal = if *usage_detail_loading {
+        Some(html! {
+            <div class={classes!(
+                "fixed",
+                "inset-0",
+                "z-[90]",
+                "flex",
+                "items-center",
+                "justify-center",
+                "bg-slate-950/58",
+                "backdrop-blur-sm",
+                "px-4",
+                "py-8"
+            )}>
+                <div class={classes!(
+                    "rounded-xl",
+                    "border",
+                    "border-[var(--border)]",
+                    "bg-[var(--surface)]",
+                    "px-5",
+                    "py-4",
+                    "text-sm",
+                    "text-[var(--muted)]",
+                    "shadow-[0_16px_48px_rgba(0,0,0,0.2)]"
+                )}>
+                    { "正在加载请求详情..." }
+                </div>
+            </div>
+        })
+    } else {
+        (*selected_usage_event).clone().map(|event| {
         let request_detail_summary = format!(
             "{} {} · {} / {} · key {} · account {} · status {} · model {} · route {} · latency {}",
             event.request_method,
@@ -3461,7 +3559,8 @@ pub fn admin_llm_gateway_page() -> Html {
                 </div>
             </div>
         }
-    });
+        })
+    };
 
     html! {
         <main class={classes!(
@@ -3796,12 +3895,69 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
+                            <label class={classes!("text-sm", "flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-3")}>
+                                <input
+                                    type="checkbox"
+                                    checked={*usage_maintenance_enabled_input}
+                                    oninput={{
+                                        let usage_maintenance_enabled_input = usage_maintenance_enabled_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_maintenance_enabled_input.set(target.checked());
+                                            }
+                                        })
+                                    }}
+                                />
+                                <div>
+                                    <div class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>{ "usage_event_maintenance_enabled" }</div>
+                                    <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                        { "定期清理老 usage 明细字段，并对 usage_events 重新做 index optimize。" }
+                                    </div>
+                                </div>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "usage_event_maintenance_interval_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="60"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*usage_maintenance_interval_input).clone()}
+                                    oninput={{
+                                        let usage_maintenance_interval_input = usage_maintenance_interval_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_maintenance_interval_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "usage_event_detail_retention_days" }</span>
+                                <input
+                                    type="number"
+                                    min="-1"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*usage_detail_retention_days_input).clone()}
+                                    oninput={{
+                                        let usage_detail_retention_days_input = usage_detail_retention_days_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_detail_retention_days_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
                             <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "text-xs", "text-[var(--muted)]", "md:col-span-2", "xl:col-span-3")}>
                                 <p class={classes!("m-0")}>
                                     { "默认轮询窗口：Codex / Kiro 都是 240-300 秒；每个账号请求之间插入 0-10 秒随机抖动。" }
                                 </p>
                                 <p class={classes!("m-0", "mt-1")}>
                                     { "默认 usage flush：256 条、15 秒、8 MiB。提高阈值能显著降低 version churn，但会增加短时缓冲占用。" }
+                                </p>
+                                <p class={classes!("m-0", "mt-1")}>
+                                    { "usage maintenance 会保留 summary 字段，只清空超过 retention 窗口的请求明细，并定期对 usage_events 执行 index optimize。" }
                                 </p>
                             </div>
                             <div class={classes!("flex", "items-end", "md:col-span-2", "xl:col-span-3")}>
@@ -3843,6 +3999,18 @@ pub fn admin_llm_gateway_page() -> Html {
                                         cfg.usage_event_flush_batch_size,
                                         cfg.usage_event_flush_interval_seconds,
                                         format_number_u64(cfg.usage_event_flush_max_buffer_bytes)
+                                    ) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!(
+                                        "当前 usage maintenance：{} / {} 秒 / 明细保留 {}",
+                                        if cfg.usage_event_maintenance_enabled { "enabled" } else { "disabled" },
+                                        cfg.usage_event_maintenance_interval_seconds,
+                                        if cfg.usage_event_detail_retention_days == -1 {
+                                            "forever".to_string()
+                                        } else {
+                                            format!("{} 天", cfg.usage_event_detail_retention_days)
+                                        }
                                     ) }
                                 </p>
                             </div>
@@ -4801,12 +4969,11 @@ pub fn admin_llm_gateway_page() -> Html {
                                     </tr>
                                 } else {
                                     { for usage_events.iter().map(|event| {
-                                        let event_for_detail_modal = event.clone();
-                                        let event_for_message_modal = event.clone();
-                                        let header_preview = pretty_headers_json(&event.request_headers_json);
+                                        let event_id_for_detail = event.id.clone();
+                                        let event_id_for_message = event.id.clone();
+                                        let header_preview = "按需加载".to_string();
                                         let account_label = event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string());
-                                        let last_message_full = event.last_message_content.clone().unwrap_or_else(|| "-".to_string());
-                                        let last_message_preview = preview_text(&last_message_full, 120);
+                                        let last_message_preview = usage_last_message_preview(event);
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
@@ -4873,8 +5040,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     }
                                                 </div>
                                             </td>
-                                            <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
-                                                <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title={last_message_full.clone()}>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
+                                                <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title="按需查看最后一条消息">
                                                     { last_message_preview }
                                                 </div>
                                                     <button
@@ -4900,8 +5067,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         title="查看最后一条内容全文"
                                                         aria-label="查看最后一条内容全文"
                                                         onclick={{
-                                                            let selected_usage_event = selected_usage_event.clone();
-                                                            Callback::from(move |_| selected_usage_event.set(Some(event_for_message_modal.clone())))
+                                                            let open_usage_detail = open_usage_detail.clone();
+                                                            Callback::from(move |_| open_usage_detail.emit(event_id_for_message.clone()))
                                                         }}
                                                     >
                                                         <i class={classes!("fas", "fa-expand")} />
@@ -4929,8 +5096,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         title="查看请求详情"
                                                         aria-label="查看请求详情"
                                                         onclick={{
-                                                            let selected_usage_event = selected_usage_event.clone();
-                                                            Callback::from(move |_| selected_usage_event.set(Some(event_for_detail_modal.clone())))
+                                                            let open_usage_detail = open_usage_detail.clone();
+                                                            Callback::from(move |_| open_usage_detail.emit(event_id_for_detail.clone()))
                                                         }}
                                                     >
                                                         <i class={classes!("fas", "fa-bars-staggered")}></i>
@@ -5452,5 +5619,30 @@ pub fn admin_llm_gateway_page() -> Html {
                 </div>
             }
         </main>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_last_message_preview_prefers_summary_content() {
+        let event = AdminLlmGatewayUsageEventView {
+            last_message_content: Some("hello".to_string()),
+            ..AdminLlmGatewayUsageEventView::default()
+        };
+
+        assert_eq!(usage_last_message_preview(&event), "hello");
+    }
+
+    #[test]
+    fn usage_last_message_preview_falls_back_for_blank_content() {
+        let event = AdminLlmGatewayUsageEventView {
+            last_message_content: Some("   ".to_string()),
+            ..AdminLlmGatewayUsageEventView::default()
+        };
+
+        assert_eq!(usage_last_message_preview(&event), "-");
     }
 }

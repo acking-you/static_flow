@@ -140,6 +140,13 @@ pub enum Route {
     AdminKiroGateway,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/admin/kiro-gateway/accounts")]
+    AdminKiroAccountStatus,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/kiro-gateway/accounts")]
+    AdminKiroAccountStatus,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/admin/comments/runs/:task_id")]
     AdminCommentRuns { task_id: String },
     #[cfg(feature = "mock")]
@@ -239,6 +246,9 @@ fn switch(route: Route) -> Html {
         Route::Admin => html! { <pages::admin::AdminPage /> },
         Route::AdminLlmGateway => html! { <pages::admin_llm_gateway::AdminLlmGatewayPage /> },
         Route::AdminKiroGateway => html! { <pages::admin_kiro_gateway::AdminKiroGatewayPage /> },
+        Route::AdminKiroAccountStatus => {
+            html! { <pages::admin_kiro_account_status::AdminKiroAccountStatusPage /> }
+        },
         Route::AdminCommentRuns {
             task_id,
         } => {

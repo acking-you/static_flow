@@ -7,6 +7,7 @@ use static_flow_shared::llm_gateway_store::{
     compute_billable_tokens, LlmGatewayAccountContributionRequestRecord,
     LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyConfigRecord,
     LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+    LlmGatewayUsageEventSummaryRecord,
 };
 
 use crate::handlers::ErrorResponse;
@@ -227,6 +228,36 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub current_in_flight: u32,
     pub events: Vec<AdminLlmGatewayUsageEventView>,
     pub generated_at: i64,
+}
+
+/// Full detail payload for one usage event requested on demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminLlmGatewayUsageEventDetailView {
+    pub id: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub account_name: Option<String>,
+    pub request_method: String,
+    pub request_url: String,
+    pub latency_ms: i32,
+    pub endpoint: String,
+    pub model: Option<String>,
+    pub status_code: i32,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub request_headers_json: String,
+    pub last_message_content: Option<String>,
+    pub client_request_body_json: Option<String>,
+    pub upstream_request_body_json: Option<String>,
+    pub full_request_json: Option<String>,
+    pub created_at: i64,
 }
 
 /// Admin-facing reusable account-pool group shared by keys of one provider.
@@ -488,7 +519,7 @@ pub struct AdminLlmGatewayTokenRequestQuery {
     pub offset: Option<usize>,
 }
 
-/// Admin-facing usage event enriched with request diagnostics.
+/// Admin-facing usage event summary used in paginated list views.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminLlmGatewayUsageEventView {
     pub id: String,
@@ -510,11 +541,7 @@ pub struct AdminLlmGatewayUsageEventView {
     pub credit_usage_missing: bool,
     pub client_ip: String,
     pub ip_region: String,
-    pub request_headers_json: String,
     pub last_message_content: Option<String>,
-    pub client_request_body_json: Option<String>,
-    pub upstream_request_body_json: Option<String>,
-    pub full_request_json: Option<String>,
     pub created_at: i64,
 }
 
@@ -536,6 +563,9 @@ pub struct LlmGatewayRuntimeConfigResponse {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
+    pub usage_event_maintenance_enabled: bool,
+    pub usage_event_maintenance_interval_seconds: u64,
+    pub usage_event_detail_retention_days: i64,
     pub kiro_cache_kmodels_json: String,
     pub kiro_cache_policy_json: String,
     pub kiro_prefix_cache_mode: String,
@@ -671,6 +701,9 @@ pub struct UpdateLlmGatewayRuntimeConfigRequest {
     pub usage_event_flush_batch_size: Option<u64>,
     pub usage_event_flush_interval_seconds: Option<u64>,
     pub usage_event_flush_max_buffer_bytes: Option<u64>,
+    pub usage_event_maintenance_enabled: Option<bool>,
+    pub usage_event_maintenance_interval_seconds: Option<u64>,
+    pub usage_event_detail_retention_days: Option<i64>,
     pub kiro_cache_kmodels_json: Option<String>,
     pub kiro_cache_policy_json: Option<String>,
     pub kiro_prefix_cache_mode: Option<String>,
@@ -944,7 +977,35 @@ impl From<&LlmGatewayKeyRecord> for PublicLlmGatewayUsageKeyView {
     }
 }
 
-impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventView {
+impl From<&LlmGatewayUsageEventSummaryRecord> for AdminLlmGatewayUsageEventView {
+    fn from(value: &LlmGatewayUsageEventSummaryRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            key_id: value.key_id.clone(),
+            key_name: value.key_name.clone(),
+            account_name: value.account_name.clone(),
+            request_method: value.request_method.clone(),
+            request_url: value.request_url.clone(),
+            latency_ms: value.latency_ms,
+            endpoint: value.endpoint.clone(),
+            model: value.model.clone(),
+            status_code: value.status_code,
+            input_uncached_tokens: value.input_uncached_tokens,
+            input_cached_tokens: value.input_cached_tokens,
+            output_tokens: value.output_tokens,
+            billable_tokens: value.billable_tokens,
+            usage_missing: value.usage_missing,
+            credit_usage: value.credit_usage,
+            credit_usage_missing: value.credit_usage_missing,
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            last_message_content: value.last_message_content.clone(),
+            created_at: value.created_at,
+        }
+    }
+}
+
+impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventDetailView {
     fn from(value: &LlmGatewayUsageEventRecord) -> Self {
         Self {
             id: value.id.clone(),
@@ -1115,5 +1176,47 @@ impl From<&LlmGatewaySponsorRequestRecord> for PublicLlmGatewaySponsorView {
             github_id: value.github_id.clone(),
             processed_at: value.processed_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use static_flow_shared::llm_gateway_store::LlmGatewayUsageEventSummaryRecord;
+
+    use super::*;
+
+    #[test]
+    fn admin_usage_event_view_preserves_last_message_preview() {
+        let event = LlmGatewayUsageEventSummaryRecord {
+            id: "evt-1".to_string(),
+            key_id: "key-1".to_string(),
+            key_name: "alpha".to_string(),
+            provider_type: "kiro".to_string(),
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "https://example.com".to_string(),
+            latency_ms: 42,
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 20,
+            output_tokens: 30,
+            billable_tokens: 40,
+            usage_missing: false,
+            credit_usage: Some(1.25),
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "Local".to_string(),
+            last_message_content: Some("hello".to_string()),
+            created_at: 123,
+        };
+
+        let view = AdminLlmGatewayUsageEventView::from(&event);
+
+        assert_eq!(view.id, "evt-1");
+        assert_eq!(view.key_name, "alpha");
+        assert_eq!(view.last_message_content.as_deref(), Some("hello"));
+        assert_eq!(view.created_at, 123);
     }
 }

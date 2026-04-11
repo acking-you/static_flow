@@ -230,6 +230,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/admin/llm-gateway/usage", get(llm_gateway::list_admin_usage_events))
         .route(
+            "/admin/llm-gateway/usage/:event_id",
+            get(llm_gateway::get_admin_usage_event_detail),
+        )
+        .route(
             "/admin/llm-gateway/token-requests",
             get(llm_gateway::list_admin_token_requests),
         )
@@ -296,6 +300,14 @@ pub fn create_router(state: AppState) -> Router {
             patch(kiro_gateway::patch_admin_key).delete(kiro_gateway::delete_admin_key),
         )
         .route("/admin/kiro-gateway/usage", get(kiro_gateway::list_admin_usage_events))
+        .route(
+            "/admin/kiro-gateway/usage/:event_id",
+            get(kiro_gateway::get_admin_usage_event_detail),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts/statuses",
+            get(kiro_gateway::list_admin_account_statuses),
+        )
         .route(
             "/admin/kiro-gateway/accounts",
             get(kiro_gateway::list_admin_accounts).post(kiro_gateway::create_manual_account),

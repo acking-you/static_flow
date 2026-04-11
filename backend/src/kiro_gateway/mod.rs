@@ -52,8 +52,9 @@ use self::{
         KiroCachedAccountStatus,
     },
     types::{
-        AdminKiroAccountGroupView, AdminKiroAccountGroupsResponse, AdminKiroAccountsResponse,
-        AdminKiroKeyView, AdminKiroKeysResponse, AdminKiroUsageEventView,
+        AdminKiroAccountGroupView, AdminKiroAccountGroupsResponse, AdminKiroAccountStatusesQuery,
+        AdminKiroAccountStatusesResponse, AdminKiroAccountsResponse, AdminKiroKeyView,
+        AdminKiroKeysResponse, AdminKiroUsageEventDetailView, AdminKiroUsageEventView,
         AdminKiroUsageEventsResponse, AdminKiroUsageQuery, CreateKiroAccountGroupRequest,
         CreateKiroKeyRequest, CreateManualKiroAccountRequest, ImportLocalKiroAccountRequest,
         KiroAccessResponse, KiroAccountView, KiroBalanceView, KiroCacheView, KiroPublicStatusView,
@@ -72,6 +73,8 @@ const MIN_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 const MAX_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 16;
 const MIN_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 const MAX_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 60_000;
+const DEFAULT_ADMIN_KIRO_ACCOUNT_STATUS_LIMIT: usize = 24;
+const MAX_ADMIN_KIRO_ACCOUNT_STATUS_LIMIT: usize = 96;
 type KiroAdminResult<T> = Result<T, (StatusCode, Json<ErrorResponse>)>;
 
 /// Per-request context captured at authentication time and carried through
@@ -246,12 +249,11 @@ pub async fn get_public_access(
         .llm_gateway_runtime_config
         .read()
         .auth_cache_ttl_seconds;
-    let accounts = build_public_statuses(&state).await;
     Ok(Json(KiroAccessResponse {
         base_url,
         gateway_path,
         auth_cache_ttl_seconds,
-        accounts,
+        accounts: public_kiro_access_accounts(),
         generated_at: now_ms(),
     }))
 }
@@ -577,7 +579,7 @@ pub async fn list_admin_usage_events(
     let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
     let mut events = state
         .llm_gateway_store
-        .query_usage_events(
+        .query_usage_event_summaries(
             query.key_id.as_deref(),
             Some(LLM_GATEWAY_PROVIDER_KIRO),
             Some(fetch_count),
@@ -597,6 +599,22 @@ pub async fn list_admin_usage_events(
     }))
 }
 
+pub async fn get_admin_usage_event_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(event_id): Path<String>,
+) -> Result<Json<AdminKiroUsageEventDetailView>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let event = state
+        .llm_gateway_store
+        .get_usage_event_detail_by_id(&event_id)
+        .await
+        .map_err(|err| internal_error("Failed to load Kiro usage event detail", err))?
+        .filter(|event| event.provider_type == LLM_GATEWAY_PROVIDER_KIRO)
+        .ok_or_else(|| not_found("Kiro usage event not found"))?;
+    Ok(Json(AdminKiroUsageEventDetailView::from(&event)))
+}
+
 /// List all configured Kiro accounts with their cached balance/status.
 pub async fn list_admin_accounts(
     State(state): State<AppState>,
@@ -607,6 +625,88 @@ pub async fn list_admin_accounts(
         accounts: build_account_views(&state).await,
         generated_at: now_ms(),
     }))
+}
+
+fn public_kiro_access_accounts() -> Vec<KiroPublicStatusView> {
+    Vec::new()
+}
+
+fn normalize_admin_kiro_account_status_limit(raw: Option<usize>) -> usize {
+    raw.unwrap_or(DEFAULT_ADMIN_KIRO_ACCOUNT_STATUS_LIMIT)
+        .clamp(1, MAX_ADMIN_KIRO_ACCOUNT_STATUS_LIMIT)
+}
+
+fn normalized_kiro_account_status_prefix(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw.unwrap_or_default().trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
+fn filter_kiro_account_views_by_prefix(
+    accounts: &[KiroAccountView],
+    prefix: Option<&str>,
+) -> Vec<KiroAccountView> {
+    let Some(prefix) = normalized_kiro_account_status_prefix(prefix) else {
+        return accounts.to_vec();
+    };
+    accounts
+        .iter()
+        .filter(|item| item.name.to_ascii_lowercase().starts_with(&prefix))
+        .cloned()
+        .collect()
+}
+
+struct PaginatedKiroAccountViews {
+    accounts: Vec<KiroAccountView>,
+    total: usize,
+    limit: usize,
+    offset: usize,
+}
+
+fn paginate_kiro_account_views(
+    accounts: Vec<KiroAccountView>,
+    offset: usize,
+    limit: usize,
+) -> PaginatedKiroAccountViews {
+    let total = accounts.len();
+    let accounts = accounts.into_iter().skip(offset).take(limit).collect();
+    PaginatedKiroAccountViews {
+        accounts,
+        total,
+        limit,
+        offset,
+    }
+}
+
+fn build_admin_kiro_account_statuses_response(
+    accounts: &[KiroAccountView],
+    query: &AdminKiroAccountStatusesQuery,
+    generated_at: i64,
+) -> AdminKiroAccountStatusesResponse {
+    let limit = normalize_admin_kiro_account_status_limit(query.limit);
+    let offset = query.offset.unwrap_or(0);
+    let filtered = filter_kiro_account_views_by_prefix(accounts, query.prefix.as_deref());
+    let page = paginate_kiro_account_views(filtered, offset, limit);
+    AdminKiroAccountStatusesResponse {
+        accounts: page.accounts,
+        total: page.total,
+        limit: page.limit,
+        offset: page.offset,
+        generated_at,
+    }
+}
+
+pub async fn list_admin_account_statuses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminKiroAccountStatusesQuery>,
+) -> Result<Json<AdminKiroAccountStatusesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_admin_access(&state, &headers)?;
+    let accounts = build_account_views(&state).await;
+    Ok(Json(build_admin_kiro_account_statuses_response(&accounts, &query, now_ms())))
 }
 
 /// Create a Kiro account from a manually supplied JSON payload.
@@ -924,25 +1024,6 @@ async fn effective_account_proxy_parts(
         ),
         Err(err) => (format!("invalid ({err})"), None, None),
     }
-}
-
-/// Build the unauthenticated public status list shown on the access endpoint.
-async fn build_public_statuses(state: &AppState) -> Vec<KiroPublicStatusView> {
-    let cached = state.kiro_gateway.cached_status_snapshot().await;
-    let Ok(auths) = state.kiro_gateway.token_manager.list_auths().await else {
-        return Vec::new();
-    };
-    let refresh_interval_seconds = state
-        .llm_gateway_runtime_config
-        .read()
-        .kiro_status_refresh_max_interval_seconds;
-    let mut statuses = Vec::with_capacity(auths.len());
-    for auth in auths {
-        let (balance, cache) =
-            cached_status_parts(cached.accounts.get(&auth.name), refresh_interval_seconds);
-        statuses.push(KiroPublicStatusView::from_auth_and_balance(&auth, balance.as_ref(), cache));
-    }
-    statuses
 }
 
 /// Split a cached account status entry into its balance and cache-health
@@ -1637,11 +1718,48 @@ mod tests {
     };
 
     use super::{
-        build_kiro_usage_event_record, normalize_key_route_config,
+        build_admin_kiro_account_statuses_response, build_kiro_usage_event_record,
+        filter_kiro_account_views_by_prefix, normalize_key_route_config,
         normalize_kiro_key_route_config_for_patch, normalize_model_name_map,
-        validate_kiro_cache_policy_override_update, KiroEventContext, KiroUsageEventBuild,
+        paginate_kiro_account_views, public_kiro_access_accounts,
+        validate_kiro_cache_policy_override_update, AdminKiroAccountStatusesQuery,
+        KiroAccessResponse, KiroAccountView, KiroCacheView, KiroEventContext, KiroUsageEventBuild,
         KiroUsageSummary,
     };
+
+    fn test_account_view(name: &str) -> KiroAccountView {
+        KiroAccountView {
+            name: name.to_string(),
+            auth_method: "social".to_string(),
+            provider: Some("github".to_string()),
+            upstream_user_id: None,
+            email: None,
+            expires_at: None,
+            profile_arn: None,
+            has_refresh_token: true,
+            disabled: false,
+            disabled_reason: None,
+            source: None,
+            source_db_path: None,
+            last_imported_at: None,
+            subscription_title: None,
+            region: Some("us-east-1".to_string()),
+            auth_region: Some("us-east-1".to_string()),
+            api_region: Some("us-east-1".to_string()),
+            machine_id: None,
+            kiro_channel_max_concurrency: 1,
+            kiro_channel_min_start_interval_ms: 0,
+            minimum_remaining_credits_before_block: 0.0,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "direct".to_string(),
+            effective_proxy_url: None,
+            effective_proxy_config_name: None,
+            proxy_url: None,
+            balance: None,
+            cache: KiroCacheView::default(),
+        }
+    }
 
     #[test]
     fn normalize_model_name_map_drops_identity_entries() {
@@ -1668,6 +1786,77 @@ mod tests {
         )]));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn filter_kiro_account_views_by_prefix_trims_and_matches_case_insensitively() {
+        let accounts = vec![
+            test_account_view("Alpha"),
+            test_account_view("alpha-two"),
+            test_account_view("beta"),
+        ];
+
+        let filtered = filter_kiro_account_views_by_prefix(&accounts, Some("  ALpHa "));
+
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "alpha-two"]
+        );
+    }
+
+    #[test]
+    fn paginate_kiro_account_views_returns_total_and_slice() {
+        let accounts =
+            vec![test_account_view("alpha"), test_account_view("beta"), test_account_view("gamma")];
+
+        let page = paginate_kiro_account_views(accounts, 1, 1);
+
+        assert_eq!(page.total, 3);
+        assert_eq!(page.offset, 1);
+        assert_eq!(page.limit, 1);
+        assert_eq!(page.accounts.len(), 1);
+        assert_eq!(page.accounts[0].name, "beta");
+    }
+
+    #[test]
+    fn public_kiro_access_accounts_are_always_empty() {
+        let response = KiroAccessResponse {
+            base_url: "https://example.com/api/kiro-gateway".to_string(),
+            gateway_path: "/api/kiro-gateway".to_string(),
+            auth_cache_ttl_seconds: 60,
+            accounts: public_kiro_access_accounts(),
+            generated_at: 0,
+        };
+
+        assert!(response.accounts.is_empty());
+    }
+
+    #[test]
+    fn build_admin_kiro_account_statuses_response_applies_prefix_and_window_metadata() {
+        let accounts = vec![
+            test_account_view("alpha"),
+            test_account_view("beta"),
+            test_account_view("gamma"),
+            test_account_view("delta"),
+        ];
+        let response = build_admin_kiro_account_statuses_response(
+            &accounts,
+            &AdminKiroAccountStatusesQuery {
+                prefix: Some("g".to_string()),
+                limit: None,
+                offset: Some(0),
+            },
+            0,
+        );
+
+        assert_eq!(response.total, 1);
+        assert_eq!(response.limit, 24);
+        assert_eq!(response.offset, 0);
+        assert_eq!(response.accounts.len(), 1);
+        assert_eq!(response.accounts[0].name, "gamma");
     }
 
     #[test]

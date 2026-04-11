@@ -30,9 +30,12 @@ use static_flow_shared::{
         DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
         DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
     },
     music_store::{self, MusicDataStore},
     music_wish_store::{self, MusicWishStore},
@@ -208,6 +211,9 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
+    pub usage_event_maintenance_enabled: bool,
+    pub usage_event_maintenance_interval_seconds: u64,
+    pub usage_event_detail_retention_days: i64,
     pub kiro_cache_kmodels_json: String,
     pub kiro_cache_kmodels: BTreeMap<String, f64>,
     pub kiro_cache_policy_json: String,
@@ -243,6 +249,11 @@ impl Default for LlmGatewayRuntimeConfig {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+            usage_event_maintenance_enabled: DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
+            usage_event_maintenance_interval_seconds:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
+            usage_event_detail_retention_days:
+                DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_cache_kmodels: default_kiro_cache_kmodels(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
@@ -407,6 +418,12 @@ impl AppState {
             llm_gateway_runtime_config_record.usage_event_flush_interval_seconds;
         let usage_event_flush_max_buffer_bytes =
             llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
+        let usage_event_maintenance_enabled =
+            llm_gateway_runtime_config_record.usage_event_maintenance_enabled;
+        let usage_event_maintenance_interval_seconds =
+            llm_gateway_runtime_config_record.usage_event_maintenance_interval_seconds;
+        let usage_event_detail_retention_days =
+            llm_gateway_runtime_config_record.usage_event_detail_retention_days;
         let kiro_cache_kmodels_json = llm_gateway_runtime_config_record.kiro_cache_kmodels_json;
         let (kiro_cache_policy_json, kiro_cache_policy) = sanitize_kiro_cache_policy_json(
             llm_gateway_runtime_config_record.kiro_cache_policy_json,
@@ -443,6 +460,9 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            usage_event_maintenance_enabled,
+            usage_event_maintenance_interval_seconds,
+            usage_event_detail_retention_days,
             kiro_cache_kmodels_json,
             kiro_cache_policy_json,
             kiro_prefix_cache_mode,
@@ -467,6 +487,9 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            usage_event_maintenance_enabled,
+            usage_event_maintenance_interval_seconds,
+            usage_event_detail_retention_days,
             kiro_cache_kmodels_json,
             kiro_cache_kmodels,
             kiro_cache_policy_json,
@@ -521,6 +544,9 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
+            usage_event_maintenance_enabled,
+            usage_event_maintenance_interval_seconds,
+            usage_event_detail_retention_days,
             kiro_cache_kmodels_json = %llm_gateway_runtime_config.read().kiro_cache_kmodels_json,
             "initialized llm gateway runtime state"
         );

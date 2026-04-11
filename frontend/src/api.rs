@@ -4325,6 +4325,14 @@ const fn default_true() -> bool {
     true
 }
 
+const fn default_usage_event_maintenance_interval_seconds() -> u64 {
+    60 * 60
+}
+
+const fn default_usage_event_detail_retention_days() -> i64 {
+    -1
+}
+
 fn default_kiro_cache_policy_json() -> String {
     r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string()
 }
@@ -4396,10 +4404,36 @@ pub struct AdminAccountGroupsResponse {
     pub generated_at: i64,
 }
 
-/// Rich per-request usage event used by the admin diagnostics view.
+/// Summary usage event used by admin paging and filtering views.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
 pub struct AdminLlmGatewayUsageEventView {
+    pub id: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub account_name: Option<String>,
+    pub request_method: String,
+    pub request_url: String,
+    pub latency_ms: i32,
+    pub endpoint: String,
+    pub model: Option<String>,
+    pub status_code: i32,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing: bool,
+    pub credit_usage: Option<f64>,
+    pub credit_usage_missing: bool,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub last_message_content: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminLlmGatewayUsageEventDetailView {
     pub id: String,
     pub key_id: String,
     pub key_name: String,
@@ -4681,6 +4715,12 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
+    #[serde(default = "default_true")]
+    pub usage_event_maintenance_enabled: bool,
+    #[serde(default = "default_usage_event_maintenance_interval_seconds")]
+    pub usage_event_maintenance_interval_seconds: u64,
+    #[serde(default = "default_usage_event_detail_retention_days")]
+    pub usage_event_detail_retention_days: i64,
     pub kiro_cache_kmodels_json: String,
     #[serde(default = "default_kiro_cache_policy_json")]
     pub kiro_cache_policy_json: String,
@@ -5268,6 +5308,9 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            usage_event_maintenance_enabled: true,
+            usage_event_maintenance_interval_seconds: 60 * 60,
+            usage_event_detail_retention_days: -1,
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
             kiro_prefix_cache_mode: "prefix_tree".to_string(),
@@ -6465,6 +6508,34 @@ pub async fn fetch_admin_llm_gateway_usage_events(
     }
 }
 
+pub async fn fetch_admin_llm_gateway_usage_event_detail(
+    event_id: &str,
+) -> Result<AdminLlmGatewayUsageEventDetailView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = event_id;
+        Ok(AdminLlmGatewayUsageEventDetailView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let encoded = urlencoding::encode(event_id);
+        let url = format!("{}/admin/llm-gateway/usage/{}", admin_base(), encoded);
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 // === Account pool management ===
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -6866,6 +6937,42 @@ pub struct AdminKiroAccountsResponse {
     pub generated_at: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminKiroAccountStatusesResponse {
+    pub accounts: Vec<KiroAccountView>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AdminKiroAccountStatusesQuery {
+    pub prefix: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+fn build_admin_kiro_account_statuses_url(query: &AdminKiroAccountStatusesQuery) -> String {
+    let mut url = format!("{}/admin/kiro-gateway/accounts/statuses", admin_base());
+    let mut params = Vec::new();
+    if let Some(prefix) = query.prefix.as_deref() {
+        params.push(format!("prefix={}", urlencoding::encode(prefix)));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(offset) = query.offset {
+        params.push(format!("offset={offset}"));
+    }
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    url
+}
+
 pub async fn fetch_kiro_access() -> Result<KiroAccessResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -6873,24 +6980,7 @@ pub async fn fetch_kiro_access() -> Result<KiroAccessResponse, String> {
             base_url: "http://localhost:3000/api/kiro-gateway".to_string(),
             gateway_path: "/api/kiro-gateway".to_string(),
             auth_cache_ttl_seconds: 60,
-            accounts: vec![KiroPublicStatusView {
-                name: "default".to_string(),
-                provider: Some("github".to_string()),
-                disabled: false,
-                disabled_reason: None,
-                subscription_title: Some("KIRO STUDENT".to_string()),
-                current_usage: Some(7.0),
-                usage_limit: Some(1000.0),
-                remaining: Some(993.0),
-                next_reset_at: Some(1_775_001_600),
-                cache: KiroCacheView {
-                    status: "ready".to_string(),
-                    refresh_interval_seconds: 60,
-                    last_checked_at: Some(0),
-                    last_success_at: Some(0),
-                    error_message: None,
-                },
-            }],
+            accounts: vec![],
             generated_at: 0,
         })
     }
@@ -7428,6 +7518,38 @@ pub async fn fetch_admin_kiro_accounts() -> Result<AdminKiroAccountsResponse, St
     }
 }
 
+pub async fn fetch_admin_kiro_account_statuses(
+    query: &AdminKiroAccountStatusesQuery,
+) -> Result<AdminKiroAccountStatusesResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminKiroAccountStatusesResponse {
+            accounts: vec![],
+            total: 0,
+            limit: query.limit.unwrap_or(24),
+            offset: query.offset.unwrap_or(0),
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = build_admin_kiro_account_statuses_url(query);
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 pub async fn import_admin_kiro_account(
     name: Option<&str>,
     sqlite_path: Option<&str>,
@@ -7594,5 +7716,35 @@ pub async fn delete_admin_kiro_account(name: &str) -> Result<(), String> {
             return Err(format!("Failed: {text}"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_kiro_account_statuses_response_defaults_are_empty() {
+        let response: AdminKiroAccountStatusesResponse =
+            serde_json::from_str("{}").expect("response should parse");
+
+        assert!(response.accounts.is_empty());
+        assert_eq!(response.total, 0);
+        assert_eq!(response.limit, 0);
+        assert_eq!(response.offset, 0);
+    }
+
+    #[test]
+    fn build_admin_kiro_account_statuses_url_encodes_prefix_and_window() {
+        let url = build_admin_kiro_account_statuses_url(&AdminKiroAccountStatusesQuery {
+            prefix: Some("alpha team".to_string()),
+            limit: Some(24),
+            offset: Some(48),
+        });
+
+        assert!(url.contains("/admin/kiro-gateway/accounts/statuses"));
+        assert!(url.contains("prefix=alpha%20team"));
+        assert!(url.contains("limit=24"));
+        assert!(url.contains("offset=48"));
     }
 }
