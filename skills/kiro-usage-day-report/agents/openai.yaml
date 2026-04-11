@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kiro Usage Day Report"
+  short_description: "Report one China-time day's Kiro credit usage"
+  default_prompt: "Use $kiro-usage-day-report to total one China-time calendar day's Kiro credits and break down matching accounts by substring plus exact names."
