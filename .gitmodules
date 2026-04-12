@@ -17,3 +17,6 @@
 [submodule "deps/juicefs"]
 	path = deps/juicefs
 	url = git@github.com:acking-you/juicefs.git
+[submodule "deps/ffmpeg-sidecar"]
+	path = deps/ffmpeg-sidecar
+	url = git@github.com:acking-you/ffmpeg-sidecar.git
