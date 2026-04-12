@@ -1,0 +1,33 @@
+[package]
+name = "static-flow-media"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+dashmap = "6.1"
+ffmpeg-sidecar = { path = "../deps/ffmpeg-sidecar", default-features = false, features = ["download_ffmpeg"] }
+mime_guess2 = "2.3"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+static-flow-media-types = { path = "../media-types" }
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+urlencoding = "2.1"
+
+[dev-dependencies]
+tempfile = "3.23"

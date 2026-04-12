@@ -816,6 +816,26 @@ fn anthropic_total_input_tokens(usage: KiroUsageSummary) -> i32 {
         .saturating_add(usage.input_cached_tokens.max(0))
 }
 
+fn anthropic_cache_creation_input_tokens_with_policy(
+    policy: &KiroCachePolicy,
+    non_cached_input_tokens_total: i32,
+    cache_read_input_tokens: i32,
+) -> i32 {
+    if non_cached_input_tokens_total <= 0 {
+        return 0;
+    }
+    if cache_read_input_tokens == 0 {
+        return non_cached_input_tokens_total / 2;
+    }
+    let ratio = policy.anthropic_cache_creation_input_ratio;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return 0;
+    }
+    (((non_cached_input_tokens_total as f64) * ratio).floor() as i32)
+        .max(0)
+        .min(non_cached_input_tokens_total)
+}
+
 fn anthropic_input_usage_breakdown(
     input_tokens_total: i32,
     cache_read_input_tokens: i32,
@@ -825,6 +845,23 @@ fn anthropic_input_usage_breakdown(
     let non_cached_input_tokens_total = input_tokens_total.saturating_sub(cache_read_input_tokens);
     let cache_creation_input_tokens =
         if cache_read_input_tokens == 0 { non_cached_input_tokens_total / 2 } else { 0 };
+    let input_tokens = non_cached_input_tokens_total.saturating_sub(cache_creation_input_tokens);
+    (input_tokens, cache_creation_input_tokens, cache_read_input_tokens)
+}
+
+fn anthropic_input_usage_breakdown_with_policy(
+    policy: &KiroCachePolicy,
+    input_tokens_total: i32,
+    cache_read_input_tokens: i32,
+) -> (i32, i32, i32) {
+    let input_tokens_total = input_tokens_total.max(0);
+    let cache_read_input_tokens = cache_read_input_tokens.max(0).min(input_tokens_total);
+    let non_cached_input_tokens_total = input_tokens_total.saturating_sub(cache_read_input_tokens);
+    let cache_creation_input_tokens = anthropic_cache_creation_input_tokens_with_policy(
+        policy,
+        non_cached_input_tokens_total,
+        cache_read_input_tokens,
+    );
     let input_tokens = non_cached_input_tokens_total.saturating_sub(cache_creation_input_tokens);
     (input_tokens, cache_creation_input_tokens, cache_read_input_tokens)
 }
@@ -844,8 +881,41 @@ pub(super) fn anthropic_usage_json(
     })
 }
 
+pub(super) fn anthropic_usage_json_with_policy(
+    policy: &KiroCachePolicy,
+    input_tokens_total: i32,
+    output_tokens: i32,
+    cache_read_input_tokens: i32,
+) -> serde_json::Value {
+    let (input_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
+        anthropic_input_usage_breakdown_with_policy(
+            policy,
+            input_tokens_total,
+            cache_read_input_tokens,
+        );
+    serde_json::json!({
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens.max(0),
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens,
+    })
+}
+
+#[cfg(test)]
 fn anthropic_usage_json_from_summary(usage: KiroUsageSummary) -> serde_json::Value {
     anthropic_usage_json(
+        anthropic_total_input_tokens(usage),
+        usage.output_tokens,
+        usage.input_cached_tokens,
+    )
+}
+
+fn anthropic_usage_json_from_summary_with_policy(
+    usage: KiroUsageSummary,
+    policy: &KiroCachePolicy,
+) -> serde_json::Value {
+    anthropic_usage_json_with_policy(
+        policy,
         anthropic_total_input_tokens(usage),
         usage.output_tokens,
         usage.input_cached_tokens,
@@ -2049,7 +2119,10 @@ async fn handle_non_stream_request(
             "model": request_ctx.model,
             "stop_reason": stop_reason,
             "stop_sequence": null,
-            "usage": anthropic_usage_json_from_summary(usage)
+            "usage": anthropic_usage_json_from_summary_with_policy(
+                usage,
+                &request_ctx.simulation.effective_cache_policy,
+            )
         })),
     )
         .into_response()
@@ -2291,7 +2364,10 @@ fn create_sse_stream(
             &request_ctx.simulation,
         );
         let mut final_events = ctx.generate_final_events();
-        let anthropic_usage = anthropic_usage_json_from_summary(summary);
+        let anthropic_usage = anthropic_usage_json_from_summary_with_policy(
+            summary,
+            &request_ctx.simulation.effective_cache_policy,
+        );
         for event in &mut final_events {
             if event.event == "message_delta" {
                 if let Some(usage) = event.data.get_mut("usage") {
@@ -2486,7 +2562,10 @@ fn create_buffered_sse_stream(
             &request_ctx.simulation,
             summary,
         );
-        let anthropic_usage = anthropic_usage_json_from_summary(summary);
+        let anthropic_usage = anthropic_usage_json_from_summary_with_policy(
+            summary,
+            &request_ctx.simulation.effective_cache_policy,
+        );
         for event in &mut all_events {
             if let Some(usage) = event
                 .data
@@ -3214,6 +3293,28 @@ mod tests {
         assert_eq!(usage["input_tokens"], serde_json::json!(80));
         assert_eq!(usage["output_tokens"], serde_json::json!(16));
         assert_eq!(usage["cache_creation_input_tokens"], serde_json::json!(0));
+        assert_eq!(usage["cache_read_input_tokens"], serde_json::json!(20));
+    }
+
+    #[test]
+    fn anthropic_usage_from_summary_uses_policy_ratio_to_emit_cache_creation_with_cache_read() {
+        let mut policy = default_kiro_cache_policy();
+        policy.anthropic_cache_creation_input_ratio = 0.25;
+
+        let usage = anthropic_usage_json_from_summary_with_policy(
+            KiroUsageSummary {
+                input_uncached_tokens: 80,
+                input_cached_tokens: 20,
+                output_tokens: 16,
+                credit_usage: None,
+                credit_usage_missing: false,
+            },
+            &policy,
+        );
+
+        assert_eq!(usage["input_tokens"], serde_json::json!(60));
+        assert_eq!(usage["output_tokens"], serde_json::json!(16));
+        assert_eq!(usage["cache_creation_input_tokens"], serde_json::json!(20));
         assert_eq!(usage["cache_read_input_tokens"], serde_json::json!(20));
     }
 

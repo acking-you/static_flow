@@ -21,9 +21,15 @@ FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$ROOT_DIR/frontend/dist}"
 DAEMON="false"
 BUILD_BACKEND="false"
 BUILD_FRONTEND="false"
-LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary.log}"
+LOCAL_MEDIA_MODE="${LOCAL_MEDIA_MODE:-enabled}"
+STATICFLOW_MEDIA_PROXY_BASE_URL="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}"
+BACKEND_DEFAULT_FEATURES="${BACKEND_DEFAULT_FEATURES:-}"
+BACKEND_FEATURES="${BACKEND_FEATURES:-}"
+FRONTEND_DEFAULT_FEATURES="${FRONTEND_DEFAULT_FEATURES:-}"
+FRONTEND_FEATURES="${FRONTEND_FEATURES:-}"
+LOG_FILE="${LOG_FILE:-}"
 CANARY_BIN_PATH="${CANARY_BIN_PATH:-$ROOT_DIR/bin/static-flow-backend-canary}"
-PID_FILE="${PID_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary.pid}"
+PID_FILE="${PID_FILE:-}"
 
 log() { echo "[canary] $*"; }
 fail() { echo "[canary][ERROR] $*" >&2; exit 1; }
@@ -50,6 +56,12 @@ Environment variables (all optional):
   LOG_FILE             Runtime log path (default: ./tmp/staticflow-backend-canary.log)
   CANARY_BIN_PATH      Output binary path (default: ./bin/static-flow-backend-canary)
   PID_FILE             Daemon pid file (default: ./tmp/staticflow-backend-canary.pid)
+  LOCAL_MEDIA_MODE     enabled|disabled (default: enabled)
+  STATICFLOW_MEDIA_PROXY_BASE_URL Upstream media service base URL (default when enabled: http://127.0.0.1:39085)
+  BACKEND_DEFAULT_FEATURES 0 disables default backend features for no-media build
+  BACKEND_FEATURES     Extra cargo backend features
+  FRONTEND_DEFAULT_FEATURES 0 disables default frontend features for no-media build
+  FRONTEND_FEATURES    Extra trunk frontend features
   ADMIN_TOKEN          If set, allows remote admin access with this token
   ADMIN_LOCAL_ONLY     Default true; set to false to disable IP check
 
@@ -72,7 +84,31 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$LOCAL_MEDIA_MODE" == "disabled" ]]; then
+  if [[ -z "$BACKEND_DEFAULT_FEATURES" ]]; then
+    BACKEND_DEFAULT_FEATURES="0"
+  fi
+  if [[ -z "$FRONTEND_DEFAULT_FEATURES" ]]; then
+    FRONTEND_DEFAULT_FEATURES="0"
+  fi
+  if [[ "${CANARY_BIN_PATH}" == "$ROOT_DIR/bin/static-flow-backend-canary" ]]; then
+    CANARY_BIN_PATH="$ROOT_DIR/bin/static-flow-backend-canary-no-media"
+  fi
+else
+  if [[ -z "$BACKEND_DEFAULT_FEATURES" ]]; then
+    BACKEND_DEFAULT_FEATURES="1"
+  fi
+  if [[ -z "$FRONTEND_DEFAULT_FEATURES" ]]; then
+    FRONTEND_DEFAULT_FEATURES="1"
+  fi
+  if [[ -z "$STATICFLOW_MEDIA_PROXY_BASE_URL" ]]; then
+    STATICFLOW_MEDIA_PROXY_BASE_URL="http://127.0.0.1:39085"
+  fi
+fi
+
 SITE_BASE_URL="${SITE_BASE_URL:-http://127.0.0.1:${PORT}}"
+LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary-${PORT}.log}"
+PID_FILE="${PID_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary-${PORT}.pid}"
 
 mkdir -p "$ROOT_DIR/tmp" "$(dirname "$LOG_FILE")" "$(dirname "$CANARY_BIN_PATH")" "$(dirname "$PID_FILE")"
 if [[ "$DAEMON" != "true" ]]; then
@@ -99,17 +135,25 @@ resolve_backend_bin() {
   fail "Backend binary not found. Run with --build or: cargo build --profile release-backend -p static-flow-backend"
 }
 
+build_backend_bin() {
+  log "Building backend for canary via make bin-backend ..."
+  BACKEND_DEFAULT_FEATURES="$BACKEND_DEFAULT_FEATURES" \
+  BACKEND_FEATURES="$BACKEND_FEATURES" \
+  BACKEND_BIN_NAME="$(basename "$CANARY_BIN_PATH")" \
+    make bin-backend >/dev/null
+  chmod +x "$CANARY_BIN_PATH"
+  log "Binary copied to ${CANARY_BIN_PATH#$ROOT_DIR/}"
+}
+
 if [[ "$BUILD_FRONTEND" == "true" ]]; then
   log "Building frontend (selfhosted mode)..."
-  "$ROOT_DIR/scripts/build_frontend_selfhosted.sh"
+  FRONTEND_DEFAULT_FEATURES="$FRONTEND_DEFAULT_FEATURES" \
+  FRONTEND_FEATURES="$FRONTEND_FEATURES" \
+    "$ROOT_DIR/scripts/build_frontend_selfhosted.sh"
 fi
 
 if [[ "$BUILD_BACKEND" == "true" ]]; then
-  log "Building backend (release-backend profile) for canary..."
-  cargo build --profile release-backend -p static-flow-backend
-  cp "$ROOT_DIR/target/release-backend/static-flow-backend" "$CANARY_BIN_PATH"
-  chmod +x "$CANARY_BIN_PATH"
-  log "Binary copied to ${CANARY_BIN_PATH#$ROOT_DIR/}"
+  build_backend_bin
 fi
 
 BACKEND_BIN_PATH="$(resolve_backend_bin)"
@@ -136,6 +180,9 @@ log "DB root:  $DB_ROOT"
 log "Listen:   $HOST:$PORT"
 log "Site URL: $SITE_BASE_URL"
 log "Frontend: $FRONTEND_DIST_DIR"
+log "Local media mode: $LOCAL_MEDIA_MODE"
+log "Media proxy base URL: ${STATICFLOW_MEDIA_PROXY_BASE_URL:-<disabled>}"
+log "Build features: BACKEND_DEFAULT_FEATURES=$BACKEND_DEFAULT_FEATURES BACKEND_FEATURES=${BACKEND_FEATURES:-<none>} FRONTEND_DEFAULT_FEATURES=$FRONTEND_DEFAULT_FEATURES FRONTEND_FEATURES=${FRONTEND_FEATURES:-<none>}"
 
 export BIND_ADDR="$HOST"
 export PORT
@@ -151,6 +198,11 @@ export COMMENT_AI_CODEX_JSON_STREAM
 export COMMENT_AI_CODEX_BYPASS
 export COMMENT_AI_RESULT_DIR
 export COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS
+if [[ "$LOCAL_MEDIA_MODE" == "enabled" ]]; then
+  export STATICFLOW_MEDIA_PROXY_BASE_URL
+else
+  unset STATICFLOW_MEDIA_PROXY_BASE_URL
+fi
 
 if [[ "$DAEMON" == "true" ]]; then
   : > "$LOG_FILE"

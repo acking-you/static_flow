@@ -1915,6 +1915,16 @@ pub fn admin_page() -> Html {
     let music_wish_total_pages = (*music_wish_total).max(1).div_ceil(PAGE_SIZE);
     let article_request_total_pages = (*article_request_total).max(1).div_ceil(PAGE_SIZE);
 
+    #[cfg(feature = "local-media")]
+    let local_media_link = html! {
+        <Link<Route> to={Route::AdminLocalMedia} classes={classes!("btn-fluent-secondary")}>
+            <i class={classes!("fas", "fa-film", "mr-2")} aria-hidden="true"></i>
+            { "Local Media" }
+        </Link<Route>>
+    };
+    #[cfg(not(feature = "local-media"))]
+    let local_media_link = Html::default();
+
     html! {
         <main class={classes!("container", "py-8")}>
             <section class={classes!(
@@ -1942,6 +1952,7 @@ pub fn admin_page() -> Html {
                             <i class={classes!("fas", "fa-bolt", "mr-2")} aria-hidden="true"></i>
                             { "Kiro Gateway" }
                         </Link<Route>>
+                        { local_media_link }
                         <button class={classes!("btn-fluent-secondary")} onclick={on_reload_click.clone()}>
                             <i class={classes!("fas", "fa-rotate-right", "mr-2")} aria-hidden="true"></i>
                             { if *loading { "Loading..." } else { "Refresh" } }

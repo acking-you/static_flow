@@ -244,10 +244,21 @@ pub struct ViewTrendQuery {
     pub day: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
     pub code: u16,
+}
+
+#[cfg(not(feature = "local-media"))]
+pub async fn local_media_feature_disabled_api() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Local media feature is disabled".to_string(),
+            code: StatusCode::NOT_FOUND.as_u16(),
+        }),
+    )
 }
 
 #[derive(Debug, Serialize)]

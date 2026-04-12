@@ -20,6 +20,8 @@ STANDALONE_DIST_DIR="$FRONTEND_DIR/dist/standalone"
 OUTPUT_DIR=""
 SKIP_NPM="false"
 NPM_CACHE_DIR="${NPM_CACHE_DIR:-$ROOT_DIR/tmp/npm-cache}"
+FRONTEND_DEFAULT_FEATURES="${FRONTEND_DEFAULT_FEATURES:-1}"
+FRONTEND_FEATURES="${FRONTEND_FEATURES:-}"
 
 log() { echo "[build-selfhosted] $*"; }
 fail() { echo "[build-selfhosted][ERROR] $*" >&2; exit 1; }
@@ -41,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [--out <dir>] [--skip-npm]"
       echo "  --out <dir>   Copy dist to a custom directory after build"
       echo "  --skip-npm    Skip npm install (use if deps are already installed)"
+      echo ""
+      echo "Feature env:"
+      echo "  FRONTEND_DEFAULT_FEATURES=0   Build with --no-default-features"
+      echo "  FRONTEND_FEATURES=<list>      Extra trunk --features list"
       exit 0 ;;
     *) fail "Unknown option: $1" ;;
   esac
@@ -61,9 +67,16 @@ fi
 log "Building frontend for self-hosted mode (API_BASE=/api)..."
 
 cd "$FRONTEND_DIR"
+TRUNK_ARGS=(build --release)
+if [[ "$FRONTEND_DEFAULT_FEATURES" == "0" ]]; then
+  TRUNK_ARGS+=(--no-default-features)
+fi
+if [[ -n "$FRONTEND_FEATURES" ]]; then
+  TRUNK_ARGS+=(--features "$FRONTEND_FEATURES")
+fi
 NPM_CONFIG_CACHE="$NPM_CACHE_DIR" \
 STATICFLOW_API_BASE="/api" \
-trunk build --release
+trunk "${TRUNK_ARGS[@]}"
 
 # Copy standalone pages that are linked from the SPA homepage.
 rm -rf "$STANDALONE_DIST_DIR"

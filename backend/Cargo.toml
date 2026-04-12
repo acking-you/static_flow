@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = ["local-media"]
+local-media = ["dep:static-flow-media-types"]
+
 [lints]
 workspace = true
 
@@ -18,7 +22,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sha2 = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
 chrono = { workspace = true }
 flate2 = "1.1"
 maxminddb = "0.27"
@@ -37,6 +41,7 @@ parking_lot = "0.12"
 memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
+static-flow-media-types = { path = "../media-types", optional = true }
 base64 = "0.22.1"
 bytes = "1.10"
 crc = "3.3"
@@ -47,6 +52,7 @@ rand = "0.8"
 lru = "0.12"
 charabia = "0.9"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3.23"
+wiremock = "0.6"

@@ -16,6 +16,9 @@ MUSIC_DB_PATH="${MUSIC_DB_PATH:-${MUSIC_LANCEDB_URI:-$DB_ROOT/lancedb-music}}"
 HOST="${HOST:-127.0.0.1}"
 PORT_BASE="${PORT_BASE:-39080}"
 PORT_SCAN_LIMIT="${PORT_SCAN_LIMIT:-120}"
+BACKEND_DEFAULT_FEATURES="${BACKEND_DEFAULT_FEATURES:-1}"
+BACKEND_FEATURES="${BACKEND_FEATURES:-}"
+BACKEND_BIN_NAME="${BACKEND_BIN_NAME:-static-flow-backend}"
 
 log() {
   echo "[start-backend] $*"
@@ -25,6 +28,36 @@ fail() {
   echo "[start-backend][ERROR] $*" >&2
   exit 1
 }
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/start_backend_from_tmp.sh
+
+Environment variables:
+  DB_ROOT                    Temp data root (default: ./tmp/cli-e2e-run)
+  DB_PATH                    Content DB override
+  COMMENTS_DB_PATH           Comments DB override
+  MUSIC_DB_PATH              Music DB override
+  HOST                       Bind address (default: 127.0.0.1)
+  PORT                       Fixed port override
+  PORT_BASE                  Port scan start (default: 39080)
+  PORT_SCAN_LIMIT            Number of ports to scan (default: 120)
+  BACKEND_DEFAULT_FEATURES   0 disables default backend features
+  BACKEND_FEATURES           Extra cargo feature list for backend build
+  BACKEND_BIN_NAME           Output binary name under ./bin
+  BACKEND_BIN                Explicit backend binary path (skips make bin-backend)
+  STATICFLOW_MEDIA_PROXY_BASE_URL
+
+Behavior:
+  - Always builds via `make bin-backend` unless BACKEND_BIN is provided.
+  - Starts the backend on a free local high port.
+EOF
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
 
 is_port_busy() {
   local port="$1"
@@ -51,36 +84,31 @@ choose_port() {
   fail "No free high port found in [$PORT_BASE, $((PORT_BASE + PORT_SCAN_LIMIT - 1))]."
 }
 
+build_backend_bin() {
+  if [[ -n "${BACKEND_BIN:-}" ]]; then
+    return
+  fi
+
+  log "Building backend binary via make bin-backend ..."
+  BACKEND_DEFAULT_FEATURES="$BACKEND_DEFAULT_FEATURES" \
+  BACKEND_FEATURES="$BACKEND_FEATURES" \
+  BACKEND_BIN_NAME="$BACKEND_BIN_NAME" \
+    make bin-backend >/dev/null
+}
+
 resolve_backend_bin() {
   if [[ -n "${BACKEND_BIN:-}" && -x "${BACKEND_BIN}" ]]; then
     echo "$BACKEND_BIN"
     return
   fi
 
-  if [[ -x "$ROOT_DIR/target/debug/static-flow-backend" ]]; then
-    echo "$ROOT_DIR/target/debug/static-flow-backend"
+  local bin_path="$ROOT_DIR/bin/$BACKEND_BIN_NAME"
+  if [[ -x "$bin_path" ]]; then
+    echo "$bin_path"
     return
   fi
 
-  if [[ -x "$ROOT_DIR/target/release-backend/static-flow-backend" ]]; then
-    echo "$ROOT_DIR/target/release-backend/static-flow-backend"
-    return
-  fi
-
-  if [[ -x "$ROOT_DIR/target/release/static-flow-backend" ]]; then
-    echo "$ROOT_DIR/target/release/static-flow-backend"
-    return
-  fi
-
-  log "Backend binary not found, building debug binary..."
-  cargo build -p static-flow-backend >/dev/null
-
-  if [[ -x "$ROOT_DIR/target/debug/static-flow-backend" ]]; then
-    echo "$ROOT_DIR/target/debug/static-flow-backend"
-    return
-  fi
-
-  fail "Failed to build/find static-flow-backend binary."
+  fail "Failed to build/find backend binary: $bin_path"
 }
 
 wait_backend_ready() {
@@ -291,6 +319,7 @@ mkdir -p "$COMMENTS_DB_PATH"
 mkdir -p "$MUSIC_DB_PATH"
 
 PORT_CHOSEN="$(choose_port)"
+build_backend_bin
 BACKEND_BIN_PATH="$(resolve_backend_bin)"
 COMMENT_AI_CONTENT_API_BASE_EFFECTIVE="${COMMENT_AI_CONTENT_API_BASE:-http://${HOST}:${PORT_CHOSEN}/api}"
 COMMENT_AI_CODEX_SANDBOX_EFFECTIVE="${COMMENT_AI_CODEX_SANDBOX:-danger-full-access}"
@@ -298,6 +327,7 @@ COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE="${COMMENT_AI_CODEX_JSON_STREAM:-1}"
 COMMENT_AI_CODEX_BYPASS_EFFECTIVE="${COMMENT_AI_CODEX_BYPASS:-0}"
 COMMENT_AI_RESULT_DIR_EFFECTIVE="${COMMENT_AI_RESULT_DIR:-/tmp/staticflow-comment-results}"
 COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE="${COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS:-1}"
+STATICFLOW_MEDIA_PROXY_BASE_URL_EFFECTIVE="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}"
 
 log "Using DB_ROOT=$DB_ROOT"
 log "Using CONTENT_DB_PATH=$DB_PATH"
@@ -305,7 +335,9 @@ log "Using COMMENTS_DB_PATH=$COMMENTS_DB_PATH"
 log "Using MUSIC_DB_PATH=$MUSIC_DB_PATH"
 log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
 log "Using HOST=$HOST PORT=$PORT_CHOSEN"
+log "Using BACKEND_DEFAULT_FEATURES=$BACKEND_DEFAULT_FEATURES BACKEND_FEATURES=${BACKEND_FEATURES:-<none>} BACKEND_BIN_NAME=$BACKEND_BIN_NAME"
 log "Comment AI env: COMMENT_AI_CONTENT_API_BASE=$COMMENT_AI_CONTENT_API_BASE_EFFECTIVE COMMENT_AI_CODEX_SANDBOX=$COMMENT_AI_CODEX_SANDBOX_EFFECTIVE COMMENT_AI_CODEX_JSON_STREAM=$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE COMMENT_AI_CODEX_BYPASS=$COMMENT_AI_CODEX_BYPASS_EFFECTIVE COMMENT_AI_RESULT_DIR=$COMMENT_AI_RESULT_DIR_EFFECTIVE COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS=$COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE"
+log "Media proxy env: STATICFLOW_MEDIA_PROXY_BASE_URL=${STATICFLOW_MEDIA_PROXY_BASE_URL_EFFECTIVE:-<unset>}"
 log "GeoIP env passthrough: GEOIP_DB_PATH=${GEOIP_DB_PATH:-<default>} ENABLE_GEOIP_AUTO_DOWNLOAD=${ENABLE_GEOIP_AUTO_DOWNLOAD:-<default>} ENABLE_GEOIP_FALLBACK_API=${ENABLE_GEOIP_FALLBACK_API:-<default>} GEOIP_PROXY_URL=${GEOIP_PROXY_URL:-<none>}"
 
 RUST_ENV="development" \
@@ -320,6 +352,7 @@ COMMENT_AI_CODEX_JSON_STREAM="$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE" \
 COMMENT_AI_CODEX_BYPASS="$COMMENT_AI_CODEX_BYPASS_EFFECTIVE" \
 COMMENT_AI_RESULT_DIR="$COMMENT_AI_RESULT_DIR_EFFECTIVE" \
 COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS="$COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE" \
+STATICFLOW_MEDIA_PROXY_BASE_URL="$STATICFLOW_MEDIA_PROXY_BASE_URL_EFFECTIVE" \
 MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}" \
 "$BACKEND_BIN_PATH" &
 BACKEND_PID=$!

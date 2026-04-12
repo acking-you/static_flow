@@ -365,6 +365,15 @@ fn usage_last_message_preview(event: &AdminLlmGatewayUsageEventView) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn usage_last_message_table_preview(event: &AdminLlmGatewayUsageEventView) -> String {
+    let preview = usage_last_message_preview(event);
+    if preview == "-" {
+        return preview;
+    }
+    let single_line = preview.split_whitespace().collect::<Vec<_>>().join(" ");
+    preview_text(&single_line, 120)
+}
+
 fn pretty_json_text(raw: &str) -> String {
     serde_json::from_str::<serde_json::Value>(raw)
         .ok()
@@ -4973,7 +4982,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                         let event_id_for_message = event.id.clone();
                                         let header_preview = "按需加载".to_string();
                                         let account_label = event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string());
-                                        let last_message_preview = usage_last_message_preview(event);
+                                        let last_message_preview = usage_last_message_table_preview(event);
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
@@ -5039,9 +5048,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         <span class={classes!("text-amber-700", "dark:text-amber-200")}>{ "missing" }</span>
                                                     }
                                                 </div>
-                                            </td>
+                                                </td>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
-                                                <div class={classes!("max-w-[18rem]", "whitespace-pre-wrap", "break-words", "text-xs", "leading-6", "text-[var(--muted)]")} title="按需查看最后一条消息">
+                                                <div class={classes!("max-w-[18rem]", "overflow-hidden", "whitespace-normal", "break-words", "text-xs", "leading-5", "text-[var(--muted)]")}>
                                                     { last_message_preview }
                                                 </div>
                                                     <button
@@ -5644,5 +5653,35 @@ mod tests {
         };
 
         assert_eq!(usage_last_message_preview(&event), "-");
+    }
+
+    #[test]
+    fn usage_last_message_table_preview_collapses_whitespace_and_truncates() {
+        let event = AdminLlmGatewayUsageEventView {
+            last_message_content: Some(
+                "first line\n\nsecond   line with   extra spaces and a very long suffix that \
+                 should be truncated in the table preview because it keeps going with more and \
+                 more text until the shortened variant must end with ellipsis"
+                    .to_string(),
+            ),
+            ..AdminLlmGatewayUsageEventView::default()
+        };
+
+        let preview = usage_last_message_table_preview(&event);
+
+        assert!(!preview.contains('\n'));
+        assert!(preview.contains("first line second line with extra spaces"));
+        assert!(preview.ends_with("..."));
+        assert!(preview.chars().count() <= 123);
+    }
+
+    #[test]
+    fn usage_last_message_table_preview_keeps_short_single_line_text() {
+        let event = AdminLlmGatewayUsageEventView {
+            last_message_content: Some("short text".to_string()),
+            ..AdminLlmGatewayUsageEventView::default()
+        };
+
+        assert_eq!(usage_last_message_table_preview(&event), "short text");
     }
 }

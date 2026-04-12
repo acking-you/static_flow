@@ -512,6 +512,168 @@ pub async fn fetch_categories() -> Result<Vec<CategoryInfo>, String> {
     }
 }
 
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalMediaEntryKind {
+    Directory,
+    Video,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalMediaEntry {
+    pub kind: LocalMediaEntryKind,
+    pub name: String,
+    pub relative_path: String,
+    pub size_bytes: Option<u64>,
+    pub modified_at_ms: Option<i64>,
+    pub extension: Option<String>,
+    pub poster_url: Option<String>,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalMediaListResponse {
+    pub configured: bool,
+    pub current_dir: String,
+    pub parent_dir: Option<String>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub entries: Vec<LocalMediaEntry>,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalMediaPlaybackStatus {
+    Ready,
+    Preparing,
+    Failed,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalMediaPlaybackMode {
+    Raw,
+    Hls,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalMediaPlaybackOpenResponse {
+    pub status: LocalMediaPlaybackStatus,
+    pub mode: Option<LocalMediaPlaybackMode>,
+    pub job_id: Option<String>,
+    pub player_url: Option<String>,
+    pub title: String,
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalMediaPlaybackJobResponse {
+    pub job_id: String,
+    pub status: LocalMediaPlaybackStatus,
+    pub mode: Option<LocalMediaPlaybackMode>,
+    pub player_url: Option<String>,
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Serialize)]
+struct LocalMediaPlaybackOpenRequest<'a> {
+    file: &'a str,
+}
+
+#[cfg(feature = "local-media")]
+pub async fn fetch_admin_local_media_list(
+    dir: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<LocalMediaListResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (dir, limit, offset);
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut params = Vec::new();
+        if let Some(dir) = dir.filter(|value| !value.trim().is_empty()) {
+            params.push(format!("dir={}", urlencoding::encode(dir)));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = offset {
+            params.push(format!("offset={offset}"));
+        }
+        let mut url = "/admin/local-media/api/list".to_string();
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url).send().await.map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(format!("Failed to load local media: HTTP {}", response.status()));
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub async fn open_admin_local_media_playback(
+    file: &str,
+) -> Result<LocalMediaPlaybackOpenResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = file;
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let response = api_post("/admin/local-media/api/playback/open")
+            .json(&LocalMediaPlaybackOpenRequest {
+                file,
+            })
+            .map_err(|err| err.to_string())?
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(format!("Failed to open local media playback: HTTP {}", response.status()));
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub async fn fetch_admin_local_media_job_status(
+    job_id: &str,
+) -> Result<LocalMediaPlaybackJobResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = job_id;
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("/admin/local-media/api/playback/jobs/{job_id}");
+        let response = api_get(&url).send().await.map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(format!("Failed to fetch playback job status: HTTP {}", response.status()));
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+}
+
 /// Fetch site-level counts for home page stats.
 pub async fn fetch_site_stats() -> Result<SiteStats, String> {
     #[cfg(feature = "mock")]

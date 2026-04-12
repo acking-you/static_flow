@@ -43,6 +43,8 @@ use static_flow_shared::{
 };
 use tokio::sync::{mpsc, watch};
 
+#[cfg(feature = "local-media")]
+use crate::media_proxy::MediaProxyState;
 use crate::{
     article_request_worker::{self, ArticleRequestWorkerConfig},
     comment_worker::{self, CommentAiWorkerConfig},
@@ -354,6 +356,8 @@ pub struct AppState {
     pub(crate) shutdown_tx: watch::Sender<bool>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) index_html_template: Arc<String>,
+    #[cfg(feature = "local-media")]
+    pub(crate) media_proxy: Option<Arc<MediaProxyState>>,
 }
 
 impl AppState {
@@ -582,6 +586,8 @@ impl AppState {
             api_behavior_runtime_config.clone(),
             shutdown_rx.clone(),
         );
+        #[cfg(feature = "local-media")]
+        let media_proxy = MediaProxyState::from_env()?;
         let llm_gateway_warmup = llm_gateway.clone();
         let llm_gateway_warmup_runtime_config = llm_gateway_runtime_config.clone();
         let llm_gateway_warmup_proxy_registry = upstream_proxy_registry.clone();
@@ -694,6 +700,8 @@ impl AppState {
             shutdown_tx,
             shutdown_rx: app_shutdown_rx,
             index_html_template: Arc::new(index_html_template),
+            #[cfg(feature = "local-media")]
+            media_proxy,
         })
     }
 

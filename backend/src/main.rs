@@ -8,6 +8,8 @@ mod geoip;
 mod handlers;
 mod kiro_gateway;
 mod llm_gateway;
+#[cfg(feature = "local-media")]
+mod media_proxy;
 mod memory_profiler;
 mod music_wish_worker;
 mod public_submit_guard;

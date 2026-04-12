@@ -444,8 +444,38 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/article-requests/tasks/:request_id/ai-output/stream",
             get(handlers::admin_article_request_ai_stream),
+        );
+
+    #[cfg(feature = "local-media")]
+    let api_router = api_router
+        .route("/admin/local-media/api/list", get(crate::media_proxy::handlers::list_local_media))
+        .route(
+            "/admin/local-media/api/playback/open",
+            post(crate::media_proxy::handlers::open_local_media_playback),
         )
-        .with_state(state.clone());
+        .route(
+            "/admin/local-media/api/playback/jobs/:job_id",
+            get(crate::media_proxy::handlers::get_local_media_job_status),
+        )
+        .route(
+            "/admin/local-media/api/playback/raw",
+            get(crate::media_proxy::handlers::stream_local_media_raw),
+        )
+        .route(
+            "/admin/local-media/api/playback/hls/:job_id/:file_name",
+            get(crate::media_proxy::handlers::stream_local_media_hls_artifact),
+        )
+        .route(
+            "/admin/local-media/api/poster",
+            get(crate::media_proxy::handlers::stream_local_media_poster),
+        );
+
+    #[cfg(not(feature = "local-media"))]
+    let api_router = api_router
+        .route("/admin/local-media/api", any(handlers::local_media_feature_disabled_api))
+        .route("/admin/local-media/api/*path", any(handlers::local_media_feature_disabled_api));
+
+    let api_router = api_router.with_state(state.clone());
 
     // 2) SEO routes — /, /posts/:id, /sitemap.xml, /robots.txt
     let spa_state = state.clone();
@@ -510,6 +540,15 @@ fn parse_allowed_origins(value: Option<&str>) -> Option<Vec<HeaderValue>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "local-media"))]
+    use axum::{
+        body::{to_bytes, Body},
+        http::{header, Request, StatusCode},
+        routing::any,
+    };
+    #[cfg(not(feature = "local-media"))]
+    use tower::Service;
+
     use super::parse_allowed_origins;
 
     #[test]
@@ -522,5 +561,39 @@ mod tests {
     fn parse_allowed_origins_parses_comma_separated_values() {
         let origins = parse_allowed_origins(Some("https://a.com, https://b.com")).unwrap();
         assert_eq!(origins.len(), 2);
+    }
+
+    #[cfg(not(feature = "local-media"))]
+    #[tokio::test]
+    async fn local_media_disabled_api_route_returns_json_404() {
+        let mut router = axum::Router::new()
+            .route("/admin/local-media/api", any(crate::handlers::local_media_feature_disabled_api))
+            .route(
+                "/admin/local-media/api/*path",
+                any(crate::handlers::local_media_feature_disabled_api),
+            )
+            .into_service();
+
+        let response = router
+            .call(
+                Request::builder()
+                    .uri("/admin/local-media/api/list?limit=1")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("application/json"))
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body_text = std::str::from_utf8(&body).expect("utf8 body");
+        assert!(body_text.contains("Local media feature is disabled"));
     }
 }

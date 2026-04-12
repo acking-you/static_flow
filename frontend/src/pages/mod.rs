@@ -4,6 +4,10 @@ pub mod admin_article_request_stream;
 pub mod admin_kiro_account_status;
 pub mod admin_kiro_gateway;
 pub mod admin_llm_gateway;
+#[cfg(feature = "local-media")]
+pub mod admin_local_media;
+#[cfg(feature = "local-media")]
+pub mod admin_local_media_player;
 pub mod admin_music_wish_stream;
 pub mod article_detail;
 pub mod article_raw;

@@ -141,6 +141,7 @@ struct KiroCachePolicyForm {
     credit_start: String,
     credit_end: String,
     high_credit_diagnostic_threshold: String,
+    anthropic_cache_creation_input_ratio: String,
     bands: Vec<KiroCachePolicyBandForm>,
 }
 
@@ -150,6 +151,8 @@ struct KiroCachePolicyJson {
     small_input_high_credit_boost: KiroSmallInputHighCreditBoostJson,
     prefix_tree_credit_ratio_bands: Vec<KiroCachePolicyBandJson>,
     high_credit_diagnostic_threshold: f64,
+    #[serde(default)]
+    anthropic_cache_creation_input_ratio: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -178,6 +181,8 @@ struct KiroCachePolicyOverrideJson {
     prefix_tree_credit_ratio_bands: Option<Vec<KiroCachePolicyBandJson>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     high_credit_diagnostic_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    anthropic_cache_creation_input_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -238,6 +243,9 @@ fn kiro_cache_policy_form_from_json(policy: &KiroCachePolicyJson) -> KiroCachePo
         high_credit_diagnostic_threshold: format_kiro_cache_policy_number(
             policy.high_credit_diagnostic_threshold,
         ),
+        anthropic_cache_creation_input_ratio: format_kiro_cache_policy_number(
+            policy.anthropic_cache_creation_input_ratio,
+        ),
         bands: policy
             .prefix_tree_credit_ratio_bands
             .iter()
@@ -295,6 +303,10 @@ fn kiro_cache_policy_json_from_form(
         high_credit_diagnostic_threshold: parse_kiro_cache_policy_f64(
             "High-credit diagnostic threshold",
             &form.high_credit_diagnostic_threshold,
+        )?,
+        anthropic_cache_creation_input_ratio: parse_kiro_cache_policy_f64(
+            "Anthropic cache creation input ratio",
+            &form.anthropic_cache_creation_input_ratio,
         )?,
     };
     Ok(policy)
@@ -358,6 +370,12 @@ fn build_kiro_cache_policy_override_json(
     {
         override_policy.high_credit_diagnostic_threshold =
             Some(edited_policy.high_credit_diagnostic_threshold);
+    }
+    if edited_policy.anthropic_cache_creation_input_ratio
+        != global_policy.anthropic_cache_creation_input_ratio
+    {
+        override_policy.anthropic_cache_creation_input_ratio =
+            Some(edited_policy.anthropic_cache_creation_input_ratio);
     }
     if override_policy == KiroCachePolicyOverrideJson::default() {
         Ok(None)
@@ -426,11 +444,12 @@ fn format_kiro_cache_policy_summary_with_scope(
 ) -> String {
     let scope = if scope.is_empty() { "inherit global" } else { scope };
     format!(
-        "{scope} · boost {} -> {} => {} · diag {} · bands {}",
+        "{scope} · boost {} -> {} => {} · diag {} · create {} · bands {}",
         effective.credit_start.trim(),
         effective.credit_end.trim(),
         effective.target_input_tokens.trim(),
         effective.high_credit_diagnostic_threshold.trim(),
+        effective.anthropic_cache_creation_input_ratio.trim(),
         effective.bands.len(),
     )
 }
@@ -626,6 +645,22 @@ fn kiro_cache_policy_editor(props: &KiroCachePolicyEditorProps) -> Html {
                                 let input: HtmlInputElement = event.target_unchecked_into();
                                 let mut next = (*form).clone();
                                 next.high_credit_diagnostic_threshold = input.value();
+                                form.set(next);
+                            })
+                        }}
+                    />
+                </label>
+                <label class={classes!("block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Anthropic Creation Ratio" }</div>
+                    <input
+                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                        value={props.form.anthropic_cache_creation_input_ratio.clone()}
+                        oninput={{
+                            let form = props.form.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                let mut next = (*form).clone();
+                                next.anthropic_cache_creation_input_ratio = input.value();
                                 form.set(next);
                             })
                         }}
@@ -3953,7 +3988,10 @@ mod tests {
 
         let summary = format_kiro_cache_policy_summary(&global, &global);
 
-        assert_eq!(summary, "inherit global · boost 1.0 -> 1.8 => 100000 · diag 2.0 · bands 2");
+        assert_eq!(
+            summary,
+            "inherit global · boost 1.0 -> 1.8 => 100000 · diag 2.0 · create 0.0 · bands 2"
+        );
     }
 
     #[test]
@@ -4006,6 +4044,45 @@ mod tests {
             override_value,
             json!({
                 "high_credit_diagnostic_threshold": 1.5
+            })
+        );
+    }
+
+    #[test]
+    fn build_kiro_cache_policy_override_json_only_emits_changed_creation_ratio() {
+        let global = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0,
+                "anthropic_cache_creation_input_ratio": 0.0
+            }"#,
+        )
+        .expect("global policy should parse");
+        let mut edited = global.clone();
+        edited.anthropic_cache_creation_input_ratio = "0.25".to_string();
+
+        let override_json = build_kiro_cache_policy_override_json(&global, &edited)
+            .expect("override json")
+            .expect("changed policy should emit override json");
+        let override_value: serde_json::Value =
+            serde_json::from_str(&override_json).expect("override json should parse");
+
+        assert_eq!(
+            override_value,
+            json!({
+                "anthropic_cache_creation_input_ratio": 0.25
             })
         );
     }
@@ -4251,6 +4328,32 @@ mod tests {
         assert_eq!(form.credit_end, "1.0");
         assert_eq!(form.high_credit_diagnostic_threshold, "-3.0");
         assert_eq!(form.bands.len(), 1);
+    }
+
+    #[test]
+    fn parse_kiro_cache_policy_form_json_accepts_anthropic_cache_creation_input_ratio() {
+        let form = parse_kiro_cache_policy_form_json(
+            r#"{
+                "small_input_high_credit_boost": {
+                    "target_input_tokens": 100000,
+                    "credit_start": 1.0,
+                    "credit_end": 1.8
+                },
+                "prefix_tree_credit_ratio_bands": [
+                    {
+                        "credit_start": 0.3,
+                        "credit_end": 1.0,
+                        "cache_ratio_start": 0.7,
+                        "cache_ratio_end": 0.2
+                    }
+                ],
+                "high_credit_diagnostic_threshold": 2.0,
+                "anthropic_cache_creation_input_ratio": 0.25
+            }"#,
+        )
+        .expect("policy should parse");
+
+        assert_eq!(form.anthropic_cache_creation_input_ratio, "0.25");
     }
 
     #[test]

@@ -167,6 +167,20 @@ pub enum Route {
     #[at("/static_flow/admin/article-requests/runs/:request_id")]
     AdminArticleRequestRuns { request_id: String },
 
+    #[cfg(all(feature = "local-media", not(feature = "mock")))]
+    #[at("/admin/local-media")]
+    AdminLocalMedia,
+    #[cfg(all(feature = "local-media", feature = "mock"))]
+    #[at("/static_flow/admin/local-media")]
+    AdminLocalMedia,
+
+    #[cfg(all(feature = "local-media", not(feature = "mock")))]
+    #[at("/admin/local-media/player")]
+    AdminLocalMediaPlayer,
+    #[cfg(all(feature = "local-media", feature = "mock"))]
+    #[at("/static_flow/admin/local-media/player")]
+    AdminLocalMediaPlayer,
+
     #[cfg(not(feature = "mock"))]
     #[at("/media/video")]
     MediaVideo,
@@ -263,6 +277,12 @@ fn switch(route: Route) -> Html {
             request_id,
         } => {
             html! { <pages::admin_article_request_stream::AdminArticleRequestRunsPage request_id={request_id} /> }
+        },
+        #[cfg(feature = "local-media")]
+        Route::AdminLocalMedia => html! { <pages::admin_local_media::AdminLocalMediaPage /> },
+        #[cfg(feature = "local-media")]
+        Route::AdminLocalMediaPlayer => {
+            html! { <pages::admin_local_media_player::AdminLocalMediaPlayerPage /> }
         },
         Route::MediaVideo => html! { <pages::coming_soon::ComingSoonPage feature={"video"} /> },
         Route::MediaAudio => html! { <pages::music_library::MusicLibraryPage /> },

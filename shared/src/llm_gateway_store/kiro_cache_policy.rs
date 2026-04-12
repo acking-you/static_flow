@@ -9,6 +9,8 @@ pub struct KiroCachePolicy {
     pub small_input_high_credit_boost: KiroSmallInputHighCreditBoostPolicy,
     pub prefix_tree_credit_ratio_bands: Vec<KiroCreditRatioBand>,
     pub high_credit_diagnostic_threshold: f64,
+    #[serde(default)]
+    pub anthropic_cache_creation_input_ratio: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,6 +39,8 @@ pub struct KiroCachePolicyOverride {
     pub prefix_tree_credit_ratio_bands: Option<Vec<KiroCreditRatioBand>>,
     #[serde(default)]
     pub high_credit_diagnostic_threshold: Option<f64>,
+    #[serde(default)]
+    pub anthropic_cache_creation_input_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -72,6 +76,7 @@ pub fn default_kiro_cache_policy() -> KiroCachePolicy {
             },
         ],
         high_credit_diagnostic_threshold: 2.0,
+        anthropic_cache_creation_input_ratio: 0.0,
     }
 }
 
@@ -117,6 +122,9 @@ pub fn merge_kiro_cache_policy(
     }
     if let Some(value) = override_policy.high_credit_diagnostic_threshold {
         merged.high_credit_diagnostic_threshold = value;
+    }
+    if let Some(value) = override_policy.anthropic_cache_creation_input_ratio {
+        merged.anthropic_cache_creation_input_ratio = value;
     }
     validate_kiro_cache_policy(&merged)?;
     Ok(merged)
@@ -166,6 +174,14 @@ pub fn validate_kiro_cache_policy(policy: &KiroCachePolicy) -> Result<()> {
     let diagnostic = policy.high_credit_diagnostic_threshold;
     if !diagnostic.is_finite() || diagnostic < 0.0 {
         return Err(anyhow!("high_credit_diagnostic_threshold must be finite and >= 0"));
+    }
+    let anthropic_cache_creation_input_ratio = policy.anthropic_cache_creation_input_ratio;
+    if !anthropic_cache_creation_input_ratio.is_finite()
+        || !(0.0..=1.0).contains(&anthropic_cache_creation_input_ratio)
+    {
+        return Err(anyhow!(
+            "anthropic_cache_creation_input_ratio must be finite and between 0 and 1"
+        ));
     }
     if policy.prefix_tree_credit_ratio_bands.is_empty() {
         return Err(anyhow!("prefix_tree_credit_ratio_bands must contain at least one band"));
@@ -255,6 +271,13 @@ pub fn validate_kiro_cache_policy_override(
             return Err(anyhow!("high_credit_diagnostic_threshold must be finite and >= 0"));
         }
     }
+    if let Some(value) = override_policy.anthropic_cache_creation_input_ratio {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(anyhow!(
+                "anthropic_cache_creation_input_ratio must be finite and between 0 and 1"
+            ));
+        }
+    }
     if let Some(bands) = override_policy.prefix_tree_credit_ratio_bands.as_ref() {
         validate_kiro_cache_policy(&KiroCachePolicy {
             prefix_tree_credit_ratio_bands: bands.clone(),
@@ -292,6 +315,7 @@ mod tests {
         assert_eq!(policy.prefix_tree_credit_ratio_bands[1].cache_ratio_start, 0.2);
         assert_eq!(policy.prefix_tree_credit_ratio_bands[1].cache_ratio_end, 0.0);
         assert_eq!(policy.high_credit_diagnostic_threshold, 2.0);
+        assert_eq!(policy.anthropic_cache_creation_input_ratio, 0.0);
     }
 
     #[test]
@@ -307,6 +331,7 @@ mod tests {
                 }),
                 prefix_tree_credit_ratio_bands: None,
                 high_credit_diagnostic_threshold: Some(1.4),
+                anthropic_cache_creation_input_ratio: Some(0.25),
             }),
         )
         .expect("override should merge");
@@ -316,6 +341,7 @@ mod tests {
         assert_eq!(merged.small_input_high_credit_boost.credit_end, 1.8);
         assert_eq!(merged.prefix_tree_credit_ratio_bands, global.prefix_tree_credit_ratio_bands);
         assert_eq!(merged.high_credit_diagnostic_threshold, 1.4);
+        assert_eq!(merged.anthropic_cache_creation_input_ratio, 0.25);
     }
 
     #[test]
@@ -462,6 +488,16 @@ mod tests {
     }
 
     #[test]
+    fn validate_override_rejects_out_of_range_anthropic_cache_creation_input_ratio() {
+        let override_policy = KiroCachePolicyOverride {
+            anthropic_cache_creation_input_ratio: Some(1.5),
+            ..Default::default()
+        };
+
+        assert!(validate_kiro_cache_policy_override(&override_policy).is_err());
+    }
+
+    #[test]
     fn parse_policy_rejects_unknown_field() {
         let mut value: Value =
             serde_json::from_str(&default_kiro_cache_policy_json()).expect("default json");
@@ -473,5 +509,15 @@ mod tests {
     #[test]
     fn parse_override_rejects_unknown_field() {
         assert!(parse_kiro_cache_policy_override_json(r#"{"unexpected":true}"#).is_err());
+    }
+
+    #[test]
+    fn parse_policy_defaults_missing_anthropic_cache_creation_input_ratio_to_zero() {
+        let policy = parse_kiro_cache_policy_json(
+            r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#,
+        )
+        .expect("legacy policy json without the new field should still parse");
+
+        assert_eq!(policy.anthropic_cache_creation_input_ratio, 0.0);
     }
 }

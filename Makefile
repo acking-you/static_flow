@@ -1,9 +1,13 @@
 .PHONY: help install dev dev-backend dev-frontend build clean test check stop kill-backend kill-frontend fmt lint ci \
-	bin bin-cli bin-backend bin-all
+	bin bin-cli bin-backend bin-media bin-all
 
 # Binary output directory
 BIN_DIR ?= ./bin
 TARGET_DIR ?= ./target/release
+BACKEND_DEFAULT_FEATURES ?= 1
+BACKEND_FEATURES ?=
+BACKEND_BIN_NAME ?= static-flow-backend
+MEDIA_BIN_NAME ?= static-flow-media
 
 # 默认目标：显示帮助信息
 help:
@@ -23,6 +27,7 @@ help:
 	@echo "二进制构建："
 	@echo "  make bin-cli           - 编译 CLI 二进制（sf-cli）"
 	@echo "  make bin-backend       - 编译后端二进制（static-flow-backend）"
+	@echo "  make bin-media         - 编译媒体服务二进制（static-flow-media）"
 	@echo "  make bin-all           - 编译全部 Rust 二进制并导出到 ./bin"
 	@echo "  make bin BIN=<name>    - 编译指定 package 二进制并导出到 ./bin"
 	@echo "                           例如：make bin BIN=sf-cli"
@@ -130,11 +135,29 @@ bin-cli:
 # 编译 backend binary (release-backend profile: keeps symbols for memory profiler)
 bin-backend:
 	@echo "📦 编译 static-flow-backend ..."
-	@cargo build -p static-flow-backend --profile release-backend
+	@cmd="cargo build -p static-flow-backend --profile release-backend"; \
+	if [ "$(BACKEND_DEFAULT_FEATURES)" = "0" ]; then \
+		cmd="$$cmd --no-default-features"; \
+	fi; \
+	if [ -n "$(BACKEND_FEATURES)" ]; then \
+		cmd="$$cmd --features $(BACKEND_FEATURES)"; \
+	fi; \
+	echo "📦 $$cmd"; \
+	eval "$$cmd"
 	@mkdir -p $(BIN_DIR)
-	@cp ./target/release-backend/static-flow-backend $(BIN_DIR)/static-flow-backend
-	@echo "✅ 输出: $(BIN_DIR)/static-flow-backend"
+	@cp ./target/release-backend/static-flow-backend $(BIN_DIR)/$(BACKEND_BIN_NAME)
+	@echo "✅ 输出: $(BIN_DIR)/$(BACKEND_BIN_NAME)"
+
+# 编译 media service binary (release-backend profile for consistency with backend deployments)
+bin-media:
+	@echo "📦 编译 static-flow-media ..."
+	@cmd="cargo build -p static-flow-media --profile release-backend"; \
+	echo "📦 $$cmd"; \
+	eval "$$cmd"
+	@mkdir -p $(BIN_DIR)
+	@cp ./target/release-backend/static-flow-media $(BIN_DIR)/$(MEDIA_BIN_NAME)
+	@echo "✅ 输出: $(BIN_DIR)/$(MEDIA_BIN_NAME)"
 
 # 编译所有 Rust binary
-bin-all: bin-cli bin-backend
+bin-all: bin-cli bin-backend bin-media
 	@echo "✅ 全部二进制已导出到 $(BIN_DIR)"

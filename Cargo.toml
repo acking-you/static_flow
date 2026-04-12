@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["frontend", "shared", "backend", "cli"]
+members = ["frontend", "shared", "backend", "cli", "media-service", "media-types"]
 exclude = ["deps/lance", "deps/lancedb"]
 
 # Workspace 级别的依赖版本管理

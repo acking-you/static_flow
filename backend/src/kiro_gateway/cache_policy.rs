@@ -148,4 +148,14 @@ mod tests {
         assert!(should_capture_full_kiro_request_bodies(&effective, Some(1.3)));
         assert!(!should_capture_full_kiro_request_bodies(&effective, Some(1.1)));
     }
+
+    #[test]
+    fn effective_policy_accepts_anthropic_cache_creation_input_ratio_override() {
+        let runtime = sample_runtime();
+        let key = sample_key(Some(r#"{"anthropic_cache_creation_input_ratio":0.25}"#));
+
+        let effective = resolve_effective_kiro_cache_policy(&runtime, &key).unwrap();
+
+        assert!((effective.anthropic_cache_creation_input_ratio - 0.25).abs() < f64::EPSILON);
+    }
 }

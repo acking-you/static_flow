@@ -307,6 +307,10 @@ fn route_path_for(route: &Route) -> String {
             "/admin/article-requests/runs/{}",
             urlencoding::encode(request_id)
         )),
+        #[cfg(feature = "local-media")]
+        Route::AdminLocalMedia => config::route_path("/admin/local-media"),
+        #[cfg(feature = "local-media")]
+        Route::AdminLocalMediaPlayer => config::route_path("/admin/local-media/player"),
         Route::NotFound => config::route_path("/404"),
         Route::MediaVideo => config::route_path("/media/video"),
         Route::MediaAudio => config::route_path("/media/audio"),
@@ -511,6 +515,19 @@ pub fn apply_route_seo(route: Option<&Route>) {
         | Route::AdminArticleRequestRuns {
             ..
         } => {
+            apply_common_seo(
+                "Admin · StaticFlow",
+                "StaticFlow 管理界面。",
+                &canonical_url,
+                "website",
+                "noindex,nofollow,noarchive",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        #[cfg(feature = "local-media")]
+        Route::AdminLocalMedia | Route::AdminLocalMediaPlayer => {
             apply_common_seo(
                 "Admin · StaticFlow",
                 "StaticFlow 管理界面。",

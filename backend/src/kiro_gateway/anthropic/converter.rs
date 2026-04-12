@@ -19,17 +19,34 @@ use crate::kiro_gateway::wire::{
     ToolUseEntry, UserInputMessage, UserInputMessageContext, UserMessage,
 };
 
+const MULTIMODAL_UNSUPPORTED_SCHEMA_KEYWORDS: &[&str] = &[
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "contains",
+    "dependentSchemas",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "prefixItems",
+    "unevaluatedProperties",
+];
+
+fn permissive_object_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": true
+    })
+}
+
 // Ensures a JSON schema object has all required top-level fields
 // (type, properties, required, additionalProperties) so Kiro's
 // tool validation does not reject it.
 fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
     let serde_json::Value::Object(mut obj) = schema else {
-        return serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": true
-        });
+        return permissive_object_schema();
     };
     if obj
         .get("type")
@@ -421,11 +438,8 @@ fn collect_schema_keywords(value: &serde_json::Value, counts: &mut BTreeMap<Stri
     match value {
         serde_json::Value::Object(map) => {
             for (key, child) in map {
-                match key.as_str() {
-                    "anyOf" | "oneOf" | "allOf" | "contains" | "dependentSchemas" => {
-                        *counts.entry(key.clone()).or_default() += 1;
-                    },
-                    _ => {},
+                if MULTIMODAL_UNSUPPORTED_SCHEMA_KEYWORDS.contains(&key.as_str()) {
+                    *counts.entry(key.clone()).or_default() += 1;
                 }
                 collect_schema_keywords(child, counts);
             }
@@ -436,6 +450,42 @@ fn collect_schema_keywords(value: &serde_json::Value, counts: &mut BTreeMap<Stri
             }
         },
         _ => {},
+    }
+}
+
+fn schema_contains_multimodal_unsupported_keywords(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map.iter().any(|(key, child)| {
+            MULTIMODAL_UNSUPPORTED_SCHEMA_KEYWORDS.contains(&key.as_str())
+                || schema_contains_multimodal_unsupported_keywords(child)
+        }),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .any(schema_contains_multimodal_unsupported_keywords),
+        _ => false,
+    }
+}
+
+fn conversation_contains_images(current: &UserInputMessage, history: &[Message]) -> bool {
+    if !current.images.is_empty() {
+        return true;
+    }
+    history.iter().any(|message| match message {
+        Message::User(message) => !message.user_input_message.images.is_empty(),
+        Message::Assistant(_) => false,
+    })
+}
+
+fn apply_multimodal_tool_schema_compatibility(tools: &mut [Tool], has_images: bool) {
+    if !has_images {
+        return;
+    }
+    for tool in tools {
+        let schema = &tool.tool_specification.input_schema.json;
+        if schema_contains_multimodal_unsupported_keywords(schema) {
+            tool.tool_specification.input_schema =
+                InputSchema::from_json(permissive_object_schema());
+        }
     }
 }
 
@@ -869,13 +919,7 @@ fn create_placeholder_tool(name: &str) -> Tool {
         tool_specification: ToolSpecification {
             name: name.to_string(),
             description: "Tool used in conversation history".to_string(),
-            input_schema: InputSchema::from_json(serde_json::json!({
-                "$schema": "http://json-schema.org/draft-07/schema#",
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": true
-            })),
+            input_schema: InputSchema::from_json(permissive_object_schema()),
         },
     }
 }
@@ -1030,6 +1074,10 @@ pub(crate) fn convert_normalized_request_with_resolved_session(
             tools.push(create_placeholder_tool(&tool_name));
         }
     }
+    apply_multimodal_tool_schema_compatibility(
+        &mut tools,
+        conversation_contains_images(&user_input, &history),
+    );
 
     let mut context = user_input.user_input_message_context.clone();
     if !tools.is_empty() {
@@ -2090,6 +2138,149 @@ mod tests {
                 .tools
                 .len(),
             1
+        );
+        let schema = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools[0]
+            .tool_specification
+            .input_schema
+            .json;
+        assert_eq!(
+            schema["properties"]["size"]["anyOf"],
+            serde_json::json!([{ "type": "integer" }, { "type": "null" }])
+        );
+    }
+
+    #[test]
+    fn convert_request_rewrites_anyof_tool_schema_for_current_image_turn() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "text",
+                    "text": "Describe this image"
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "aGVsbG8="
+                    }
+                }
+            ]),
+        }]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: "convert_number".to_string(),
+            description: "Convert a number".to_string(),
+            input_schema: HashMap::from([
+                ("type".to_string(), serde_json::json!("object")),
+                (
+                    "properties".to_string(),
+                    serde_json::json!({
+                        "size": {
+                            "anyOf": [{"type": "integer"}, {"type": "null"}]
+                        }
+                    }),
+                ),
+                ("required".to_string(), serde_json::json!([])),
+                ("additionalProperties".to_string(), serde_json::json!(true)),
+            ]),
+            max_uses: None,
+        }]);
+
+        let result = convert_request(&req).expect("image request should still convert");
+        let schema = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools[0]
+            .tool_specification
+            .input_schema
+            .json;
+        assert_eq!(
+            schema,
+            &serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": true
+            })
+        );
+    }
+
+    #[test]
+    fn convert_request_rewrites_anyof_tool_schema_for_history_image_turn() {
+        let mut req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": "Describe this image"
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("I can help"),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("继续"),
+            },
+        ]);
+        req.tools = Some(vec![AnthropicTool {
+            tool_type: None,
+            name: "convert_number".to_string(),
+            description: "Convert a number".to_string(),
+            input_schema: HashMap::from([
+                ("type".to_string(), serde_json::json!("object")),
+                (
+                    "properties".to_string(),
+                    serde_json::json!({
+                        "size": {
+                            "anyOf": [{"type": "integer"}, {"type": "null"}]
+                        }
+                    }),
+                ),
+                ("required".to_string(), serde_json::json!([])),
+                ("additionalProperties".to_string(), serde_json::json!(true)),
+            ]),
+            max_uses: None,
+        }]);
+
+        let result = convert_request(&req).expect("history image request should still convert");
+        let schema = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools[0]
+            .tool_specification
+            .input_schema
+            .json;
+        assert_eq!(
+            schema,
+            &serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": true
+            })
         );
     }
 

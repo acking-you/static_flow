@@ -36,5 +36,6 @@ yew-hooks = "0.3.4"
 static-flow-shared = { path = "../shared" }
 
 [features]
-default = []
+default = ["local-media"]
+local-media = []
 mock = []
