@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tokio::fs::{self, ReadDir};
+use tokio::fs;
 
 use crate::{
     path_guard::{resolve_media_path, sanitize_relative_media_path},
@@ -57,80 +57,108 @@ pub fn normalize_relative_path(relative: &str) -> Result<String> {
 }
 
 async fn collect_entries(absolute_dir: &Path, relative_dir: &str) -> Result<Vec<LocalMediaEntry>> {
-    let mut entries = Vec::new();
-    let mut read_dir = fs::read_dir(absolute_dir)
+    let absolute_dir = absolute_dir.to_path_buf();
+    let relative_dir = relative_dir.to_string();
+    tokio::task::spawn_blocking(move || collect_entries_blocking(&absolute_dir, &relative_dir))
         .await
+        .context("failed to join local media directory listing task")?
+}
+
+fn collect_entries_blocking(
+    absolute_dir: &Path,
+    relative_dir: &str,
+) -> Result<Vec<LocalMediaEntry>> {
+    let read_dir = std::fs::read_dir(absolute_dir)
         .with_context(|| format!("failed to read directory {}", absolute_dir.display()))?;
+    let mut entries = Vec::new();
 
-    while let Some(entry) = next_entry(&mut read_dir).await? {
-        let file_name = entry.file_name().to_string_lossy().to_string();
-        if file_name.starts_with('.') {
-            continue;
+    for entry_result in read_dir {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(err) => {
+                tracing::warn!(
+                    dir = %absolute_dir.display(),
+                    error = %err,
+                    "skipping unreadable local media directory entry"
+                );
+                continue;
+            },
+        };
+        if let Some(entry) = build_entry_from_dir_entry(&entry, relative_dir) {
+            entries.push(entry);
         }
-
-        let file_type = entry
-            .file_type()
-            .await
-            .with_context(|| format!("failed to read file type for {}", entry.path().display()))?;
-        let relative_path = join_relative(relative_dir, &file_name);
-
-        if file_type.is_dir() {
-            let modified_at_ms = entry
-                .metadata()
-                .await
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .and_then(|duration| i64::try_from(duration.as_millis()).ok());
-            entries.push(LocalMediaEntry {
-                kind: LocalMediaEntryKind::Directory,
-                name: file_name,
-                relative_path,
-                size_bytes: None,
-                modified_at_ms,
-                extension: None,
-                poster_url: None,
-            });
-            continue;
-        }
-
-        if !file_type.is_file() || !is_video_name(&file_name) {
-            continue;
-        }
-
-        let metadata = entry
-            .metadata()
-            .await
-            .with_context(|| format!("failed to stat {}", entry.path().display()))?;
-        let modified_at_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .and_then(|duration| i64::try_from(duration.as_millis()).ok());
-        let poster_url = poster_url_for_relative_path(&relative_path);
-
-        entries.push(LocalMediaEntry {
-            kind: LocalMediaEntryKind::Video,
-            name: file_name.clone(),
-            relative_path,
-            size_bytes: Some(metadata.len()),
-            modified_at_ms,
-            extension: PathBuf::from(&file_name)
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_ascii_lowercase()),
-            poster_url: Some(poster_url),
-        });
     }
 
     Ok(entries)
 }
 
-async fn next_entry(read_dir: &mut ReadDir) -> Result<Option<tokio::fs::DirEntry>> {
-    read_dir
-        .next_entry()
-        .await
-        .context("failed to advance local media directory iterator")
+fn build_entry_from_dir_entry(
+    entry: &std::fs::DirEntry,
+    relative_dir: &str,
+) -> Option<LocalMediaEntry> {
+    let path = entry.path();
+    let file_name = entry.file_name().to_string_lossy().to_string();
+    if file_name.starts_with('.') {
+        return None;
+    }
+
+    let file_type = match entry.file_type() {
+        Ok(file_type) => file_type,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "skipping local media entry with unreadable file type");
+            return None;
+        },
+    };
+    let relative_path = join_relative(relative_dir, &file_name);
+
+    if file_type.is_dir() {
+        let modified_at_ms = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+        return Some(LocalMediaEntry {
+            kind: LocalMediaEntryKind::Directory,
+            name: file_name,
+            relative_path,
+            size_bytes: None,
+            modified_at_ms,
+            extension: None,
+            poster_url: None,
+        });
+    }
+
+    if !file_type.is_file() || !is_video_name(&file_name) {
+        return None;
+    }
+
+    let metadata = match entry.metadata() {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "skipping local media entry with unreadable metadata");
+            return None;
+        },
+    };
+    let modified_at_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+    let poster_url = poster_url_for_relative_path(&relative_path);
+
+    Some(LocalMediaEntry {
+        kind: LocalMediaEntryKind::Video,
+        name: file_name.clone(),
+        relative_path,
+        size_bytes: Some(metadata.len()),
+        modified_at_ms,
+        extension: PathBuf::from(&file_name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase()),
+        poster_url: Some(poster_url),
+    })
 }
 
 fn compare_entries(left: &LocalMediaEntry, right: &LocalMediaEntry) -> Ordering {
@@ -190,7 +218,11 @@ pub fn poster_url_for_relative_path(relative_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::poster_url_for_relative_path;
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::{build_entry_from_dir_entry, poster_url_for_relative_path};
 
     #[test]
     fn poster_url_uses_admin_endpoint_and_encodes_file_path() {
@@ -198,5 +230,34 @@ mod tests {
             poster_url_for_relative_path("目录/clip 01.mkv"),
             "/admin/local-media/api/poster?file=%E7%9B%AE%E5%BD%95%2Fclip%2001.mkv"
         );
+    }
+
+    #[test]
+    fn build_entry_from_dir_entry_skips_files_that_disappear_mid_scan() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("demo.mp4");
+        fs::write(&path, b"demo").expect("write test file");
+        let entry = fs::read_dir(dir.path())
+            .expect("read dir")
+            .next()
+            .expect("entry result")
+            .expect("dir entry");
+        fs::remove_file(&path).expect("remove test file");
+
+        let item = build_entry_from_dir_entry(&entry, "");
+        assert!(item.is_none());
+    }
+
+    #[test]
+    fn build_entry_from_dir_entry_skips_hidden_service_state() {
+        let dir = tempdir().expect("tempdir");
+        let hidden = dir.path().join(".static-flow");
+        fs::create_dir_all(&hidden).expect("create hidden dir");
+        let entry = fs::read_dir(dir.path())
+            .expect("read dir")
+            .find_map(Result::ok)
+            .expect("entry");
+
+        assert!(build_entry_from_dir_entry(&entry, "").is_none());
     }
 }

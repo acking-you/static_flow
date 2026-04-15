@@ -10,6 +10,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_local_media_proxy_env.sh"
 
 DB_ROOT="${DB_ROOT:-/mnt/wsl/data4tb/static-flow-data}"
 DB_PATH="${DB_PATH:-${LANCEDB_URI:-$DB_ROOT/lancedb}}"
@@ -58,6 +59,8 @@ Environment variables (all optional):
   PID_FILE             Daemon pid file (default: ./tmp/staticflow-backend-canary.pid)
   LOCAL_MEDIA_MODE     enabled|disabled (default: enabled)
   STATICFLOW_MEDIA_PROXY_BASE_URL Upstream media service base URL (default when enabled: http://127.0.0.1:39085)
+  STATICFLOW_MEDIA_PROXY_HOST Default proxy host when base URL is unset
+  STATICFLOW_MEDIA_PROXY_PORT Default proxy port when base URL is unset
   BACKEND_DEFAULT_FEATURES 0 disables default backend features for no-media build
   BACKEND_FEATURES     Extra cargo backend features
   FRONTEND_DEFAULT_FEATURES 0 disables default frontend features for no-media build
@@ -101,10 +104,9 @@ else
   if [[ -z "$FRONTEND_DEFAULT_FEATURES" ]]; then
     FRONTEND_DEFAULT_FEATURES="1"
   fi
-  if [[ -z "$STATICFLOW_MEDIA_PROXY_BASE_URL" ]]; then
-    STATICFLOW_MEDIA_PROXY_BASE_URL="http://127.0.0.1:39085"
-  fi
 fi
+
+sf_apply_local_media_proxy_defaults
 
 SITE_BASE_URL="${SITE_BASE_URL:-http://127.0.0.1:${PORT}}"
 LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary-${PORT}.log}"

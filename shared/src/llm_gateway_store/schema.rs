@@ -771,6 +771,36 @@ pub fn usage_event_summary_columns() -> [&'static str; 22] {
     ]
 }
 
+/// Ordered projection used when rebuilding compact usage-event rows while
+/// preserving headers but skipping large request bodies.
+pub fn usage_event_rebuild_columns() -> [&'static str; 23] {
+    [
+        "id",
+        "key_id",
+        "key_name",
+        "provider_type",
+        "account_name",
+        "request_method",
+        "request_url",
+        "latency_ms",
+        "endpoint",
+        "model",
+        "status_code",
+        "input_uncached_tokens",
+        "input_cached_tokens",
+        "output_tokens",
+        "billable_tokens",
+        "usage_missing",
+        "credit_usage",
+        "credit_usage_missing",
+        "client_ip",
+        "ip_region",
+        "request_headers_json",
+        "last_message_content",
+        "created_at",
+    ]
+}
+
 /// Ordered projection used when reading token-request rows back from LanceDB.
 pub fn token_request_columns() -> [&'static str; 16] {
     [

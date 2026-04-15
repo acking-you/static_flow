@@ -22,12 +22,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 static-flow-media-types = { path = "../media-types" }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 urlencoding = "2.1"
+uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.23"

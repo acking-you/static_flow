@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_local_media_proxy_env.sh"
 
 STATE_DIR="${STATE_DIR:-/tmp/staticflow-kiro-gateway-e2e}"
 DB_ROOT="${DB_ROOT:-$STATE_DIR}"
@@ -68,6 +69,8 @@ while [[ $# -gt 0 ]]; do
     *) fail "Unknown option: $1" ;;
   esac
 done
+
+sf_apply_local_media_proxy_defaults
 
 realish_path() {
   python3 - "$1" <<'PY'
@@ -267,6 +270,18 @@ if is_port_busy "$PORT"; then
   fail "Port $PORT is already in use."
 fi
 
+log "Using isolated STATE_DIR=$STATE_DIR"
+log "Using CONTENT_DB_PATH=$DB_PATH"
+log "Using COMMENTS_DB_PATH=$COMMENTS_DB_PATH"
+log "Using MUSIC_DB_PATH=$MUSIC_DB_PATH"
+log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
+log "Using HOST=$HOST PORT=$PORT"
+log "Using LOG_FILE=$LOG_FILE"
+log "Using TABLE_COMPACT_ENABLED=$TABLE_COMPACT_ENABLED"
+log "Using STATICFLOW_KIRO_UPSTREAM_PROXY_URL=$STATICFLOW_KIRO_UPSTREAM_PROXY_URL"
+log "Using LOCAL_MEDIA_MODE=$LOCAL_MEDIA_MODE"
+log "Using STATICFLOW_MEDIA_PROXY_BASE_URL=${STATICFLOW_MEDIA_PROXY_BASE_URL:-<unset>}"
+
 run_backend() {
   RUST_ENV=development \
   RUST_LOG="$RUST_LOG" \
@@ -280,6 +295,7 @@ run_backend() {
   TABLE_COMPACT_ENABLED="$TABLE_COMPACT_ENABLED" \
   STATICFLOW_KIRO_AUTHS_DIR="$STATICFLOW_KIRO_AUTHS_DIR" \
   STATICFLOW_KIRO_UPSTREAM_PROXY_URL="$STATICFLOW_KIRO_UPSTREAM_PROXY_URL" \
+  STATICFLOW_MEDIA_PROXY_BASE_URL="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}" \
   MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}" \
   "${BACKEND_BIN_PATH}"
 }
@@ -298,6 +314,7 @@ if [[ "$DAEMON" == "true" ]]; then
     TABLE_COMPACT_ENABLED="$TABLE_COMPACT_ENABLED" \
     STATICFLOW_KIRO_AUTHS_DIR="$STATICFLOW_KIRO_AUTHS_DIR" \
     STATICFLOW_KIRO_UPSTREAM_PROXY_URL="$STATICFLOW_KIRO_UPSTREAM_PROXY_URL" \
+    STATICFLOW_MEDIA_PROXY_BASE_URL="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}" \
     MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}" \
     "$BACKEND_BIN_PATH" >"$LOG_FILE" 2>&1 < /dev/null &
   BACKEND_PID=$!

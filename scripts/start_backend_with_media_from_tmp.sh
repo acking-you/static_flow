@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_media_service_common.sh"
 
 HOST="${HOST:-127.0.0.1}"
 MEDIA_PORT_BASE="${MEDIA_PORT_BASE:-39085}"
@@ -19,7 +20,7 @@ fail() {
   exit 1
 }
 
-[[ -n "${STATICFLOW_LOCAL_MEDIA_ROOT:-}" ]] || fail "STATICFLOW_LOCAL_MEDIA_ROOT is required"
+sf_apply_media_service_defaults
 
 is_port_busy() {
   local port="$1"
@@ -47,6 +48,10 @@ choose_media_port() {
 }
 
 MEDIA_PORT_CHOSEN="$(choose_media_port)"
+
+log "Using HOST=$HOST"
+log "Using MEDIA_PORT=$MEDIA_PORT_CHOSEN"
+log "Using STATICFLOW_LOCAL_MEDIA_ROOT=$STATICFLOW_LOCAL_MEDIA_ROOT"
 
 cleanup() {
   if [[ -f "$MEDIA_PID_FILE" ]]; then

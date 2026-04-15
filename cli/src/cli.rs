@@ -693,6 +693,19 @@ pub enum DbCommands {
         #[arg(long, default_value_t = 256)]
         batch_size: usize,
     },
+    /// Redact old/heavy llm usage-event detail payloads, then rebuild the
+    /// table into a compact stable copy.
+    RebuildLlmGatewayUsageEvents {
+        /// Number of rows to copy per batch during the rebuild step.
+        #[arg(long, default_value_t = 256)]
+        batch_size: usize,
+        /// Optional source DB root used to recover from a backup table.
+        #[arg(long)]
+        source_db_path: Option<PathBuf>,
+        /// Optional source table name when reading from a non-canonical backup.
+        #[arg(long)]
+        source_table: Option<String>,
+    },
     /// Run blob v2 compaction e2e test with synthetic data.
     TestBlobCompact {
         /// Number of synthetic songs to insert (default: 5).

@@ -69,13 +69,14 @@ use crate::{
         MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD,
         MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
         MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS,
-        MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS, MAX_CONFIGURABLE_VIEW_TREND_DAYS,
-        MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE,
+        MAX_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT, MAX_CONFIGURABLE_VIEW_DEDUPE_WINDOW_SECONDS,
+        MAX_CONFIGURABLE_VIEW_TREND_DAYS, MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_BATCH_SIZE,
         MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_INTERVAL_SECS,
         MIN_CONFIGURABLE_API_BEHAVIOR_FLUSH_MAX_BUFFER_BYTES,
         MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD,
         MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
         MIN_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS,
+        MIN_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT,
     },
 };
 
@@ -360,6 +361,7 @@ pub struct CompactionRuntimeConfigResponse {
     pub scan_interval_seconds: u64,
     pub fragment_threshold: usize,
     pub prune_older_than_hours: i64,
+    pub worker_count: usize,
 }
 
 impl From<CompactionRuntimeConfig> for CompactionRuntimeConfigResponse {
@@ -369,6 +371,7 @@ impl From<CompactionRuntimeConfig> for CompactionRuntimeConfigResponse {
             scan_interval_seconds: value.scan_interval_seconds,
             fragment_threshold: value.fragment_threshold,
             prune_older_than_hours: value.prune_older_than_hours,
+            worker_count: value.worker_count,
         }
     }
 }
@@ -383,6 +386,8 @@ pub struct UpdateCompactionRuntimeConfigRequest {
     pub fragment_threshold: Option<usize>,
     #[serde(default)]
     pub prune_older_than_hours: Option<i64>,
+    #[serde(default)]
+    pub worker_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4031,6 +4036,16 @@ fn apply_compaction_runtime_config_update(
         next.prune_older_than_hours = value;
     }
 
+    if let Some(value) = request.worker_count {
+        if !(MIN_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT
+            ..=MAX_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT)
+            .contains(&value)
+        {
+            return Err(bad_request("`worker_count` must be between 1 and 32"));
+        }
+        next.worker_count = value;
+    }
+
     Ok(next)
 }
 
@@ -5758,6 +5773,7 @@ mod tests {
                 scan_interval_seconds: Some(5),
                 fragment_threshold: None,
                 prune_older_than_hours: None,
+                worker_count: None,
             },
         );
         assert!(result.is_err());
@@ -5769,6 +5785,19 @@ mod tests {
                 scan_interval_seconds: Some(60),
                 fragment_threshold: Some(1),
                 prune_older_than_hours: None,
+                worker_count: None,
+            },
+        );
+        assert!(result.is_err());
+
+        let result = apply_compaction_runtime_config_update(
+            CompactionRuntimeConfig::default(),
+            UpdateCompactionRuntimeConfigRequest {
+                enabled: None,
+                scan_interval_seconds: Some(60),
+                fragment_threshold: Some(128),
+                prune_older_than_hours: None,
+                worker_count: Some(0),
             },
         );
         assert!(result.is_err());
@@ -5783,6 +5812,7 @@ mod tests {
                 scan_interval_seconds: Some(300),
                 fragment_threshold: None,
                 prune_older_than_hours: Some(6),
+                worker_count: Some(8),
             },
         )
         .expect("should apply partial compaction config update");
@@ -5791,6 +5821,7 @@ mod tests {
         assert_eq!(config.scan_interval_seconds, 300);
         assert_eq!(config.fragment_threshold, 128);
         assert_eq!(config.prune_older_than_hours, 6);
+        assert_eq!(config.worker_count, 8);
     }
 
     #[test]

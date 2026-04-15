@@ -19,9 +19,11 @@ pub struct LocalMediaState {
     config: LocalMediaConfig,
     root_dir: PathBuf,
     cache_dir: PathBuf,
+    remux_limiter: Arc<Semaphore>,
     transcode_limiter: Arc<Semaphore>,
     poster_limiter: Arc<Semaphore>,
     jobs: Arc<DashMap<String, Arc<PlaybackJobHandle>>>,
+    upload_locks: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl LocalMediaState {
@@ -67,6 +69,7 @@ impl LocalMediaState {
         tracing::info!(
             root_dir = %root_dir.display(),
             cache_dir = %cache_dir.display(),
+            max_remux_jobs = config.max_remux_jobs,
             max_transcode_jobs = config.max_transcode_jobs,
             max_poster_jobs = config.max_poster_jobs,
             auto_download_ffmpeg = config.auto_download_ffmpeg,
@@ -74,9 +77,11 @@ impl LocalMediaState {
         );
 
         Ok(Some(Arc::new(Self {
+            remux_limiter: Arc::new(Semaphore::new(config.max_remux_jobs)),
             transcode_limiter: Arc::new(Semaphore::new(config.max_transcode_jobs)),
             poster_limiter: Arc::new(Semaphore::new(config.max_poster_jobs)),
             jobs: Arc::new(DashMap::new()),
+            upload_locks: Arc::new(DashMap::new()),
             config,
             root_dir,
             cache_dir,
@@ -99,6 +104,10 @@ impl LocalMediaState {
         &self.transcode_limiter
     }
 
+    pub fn remux_limiter(&self) -> &Arc<Semaphore> {
+        &self.remux_limiter
+    }
+
     pub fn poster_limiter(&self) -> &Arc<Semaphore> {
         &self.poster_limiter
     }
@@ -106,20 +115,38 @@ impl LocalMediaState {
     pub fn jobs(&self) -> &Arc<DashMap<String, Arc<PlaybackJobHandle>>> {
         &self.jobs
     }
+
+    pub fn upload_root(&self) -> PathBuf {
+        self.root_dir.join(".static-flow").join("uploads")
+    }
+
+    pub fn upload_task_dir(&self, task_id: &str) -> PathBuf {
+        self.upload_root().join(task_id)
+    }
+
+    pub fn upload_task_lock(&self, task_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.upload_locks
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
 }
 
 #[cfg(test)]
 impl LocalMediaState {
     pub fn new_for_test(root_dir: PathBuf, cache_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self {
+            remux_limiter: Arc::new(Semaphore::new(2)),
             transcode_limiter: Arc::new(Semaphore::new(1)),
             poster_limiter: Arc::new(Semaphore::new(1)),
             jobs: Arc::new(DashMap::new()),
+            upload_locks: Arc::new(DashMap::new()),
             config: LocalMediaConfig {
                 enabled: true,
                 root: Some(root_dir.clone()),
                 cache_dir: cache_dir.clone(),
                 auto_download_ffmpeg: false,
+                max_remux_jobs: 2,
                 max_transcode_jobs: 1,
                 max_poster_jobs: 1,
                 list_page_size: 120,
@@ -129,5 +156,21 @@ impl LocalMediaState {
             root_dir,
             cache_dir,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::LocalMediaState;
+
+    #[test]
+    fn new_for_test_uses_two_remux_permits_by_default() {
+        let state =
+            LocalMediaState::new_for_test(PathBuf::from("/tmp/root"), PathBuf::from("/tmp/cache"));
+        assert_eq!(state.config().max_remux_jobs, 2);
+        assert_eq!(state.remux_limiter().available_permits(), 2);
+        assert_eq!(state.transcode_limiter().available_permits(), 1);
     }
 }

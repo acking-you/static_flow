@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -245,6 +245,7 @@ pub const CONTENT_BACKGROUND_COMPACTION_TABLE_NAMES: &[&str] =
 
 pub struct StaticFlowDataStore {
     db: Connection,
+    db_uri: String,
     articles_table: String,
     images_table: String,
     taxonomies_table: String,
@@ -267,6 +268,7 @@ impl StaticFlowDataStore {
 
         let store = Self {
             db,
+            db_uri: db_uri.to_string(),
             articles_table: "articles".to_string(),
             images_table: "images".to_string(),
             taxonomies_table: "taxonomies".to_string(),
@@ -309,60 +311,90 @@ impl StaticFlowDataStore {
     }
 
     async fn bootstrap_article_views_table(&self) -> Result<()> {
-        match self
-            .db
-            .open_table(&self.article_views_table)
-            .execute()
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                let schema = article_view_schema();
-                let batch = RecordBatch::new_empty(schema.clone());
-                let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-                self.db
-                    .create_table(
-                        &self.article_views_table,
-                        Box::new(batches) as Box<dyn RecordBatchReader + Send>,
-                    )
-                    .storage_option("new_table_enable_stable_row_ids", "true")
-                    .storage_option("new_table_enable_v2_manifest_paths", "true")
-                    .execute()
-                    .await
-                    .context("failed to create article_views table")?;
-                Ok(())
-            },
-        }
+        self.bootstrap_aux_table(&self.article_views_table, article_view_schema(), false)
+            .await?;
+        Ok(())
     }
 
     async fn bootstrap_api_behavior_table(&self) -> Result<()> {
-        match self.db.open_table(&self.api_behavior_table).execute().await {
-            Ok(table) => {
-                repair_api_behavior_frag_reuse_if_needed(&table).await?;
+        self.bootstrap_aux_table(&self.api_behavior_table, api_behavior_schema(), true)
+            .await?;
+        Ok(())
+    }
+
+    async fn bootstrap_aux_table(
+        &self,
+        table_name: &str,
+        schema: Arc<Schema>,
+        repair_api_behavior_frag_reuse: bool,
+    ) -> Result<()> {
+        match self.open_existing_aux_table(table_name).await {
+            Ok(Some(table)) => {
+                if repair_api_behavior_frag_reuse {
+                    repair_api_behavior_frag_reuse_if_needed(&table).await?;
+                }
                 Ok(())
             },
-            Err(_) => {
-                let schema = api_behavior_schema();
+            Ok(None) => {
                 let batch = RecordBatch::new_empty(schema.clone());
-                let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
+                let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
                 self.db
                     .create_table(
-                        &self.api_behavior_table,
+                        table_name,
                         Box::new(batches) as Box<dyn RecordBatchReader + Send>,
                     )
                     .storage_option("new_table_enable_stable_row_ids", "true")
                     .storage_option("new_table_enable_v2_manifest_paths", "true")
                     .execute()
                     .await
-                    .context("failed to create api_behavior_events table")?;
+                    .with_context(|| format!("failed to create {table_name} table"))?;
                 let table = self
                     .db
-                    .open_table(&self.api_behavior_table)
+                    .open_table(table_name)
                     .execute()
                     .await
-                    .context("failed to open api_behavior_events table")?;
-                repair_api_behavior_frag_reuse_if_needed(&table).await?;
+                    .with_context(|| format!("failed to open {table_name} table"))?;
+                if repair_api_behavior_frag_reuse {
+                    repair_api_behavior_frag_reuse_if_needed(&table).await?;
+                }
                 Ok(())
+            },
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn open_existing_aux_table(&self, table_name: &str) -> Result<Option<Table>> {
+        match self.db.open_table(table_name).execute().await {
+            Ok(table) => Ok(Some(table)),
+            Err(open_err) => {
+                let table_dir = local_table_dir(&self.db_uri, table_name);
+                if !table_dir.exists() {
+                    return Ok(None);
+                }
+                let quarantined = quarantine_zero_byte_lance_tail_files(&table_dir, table_name)
+                    .with_context(|| {
+                        format!("failed to quarantine zero-byte tail files for `{table_name}`")
+                    })?;
+                if quarantined.is_empty() {
+                    return Err(open_err)
+                        .with_context(|| format!("failed to open existing table `{table_name}`"));
+                }
+                tracing::warn!(
+                    table = table_name,
+                    quarantined_count = quarantined.len(),
+                    "quarantined zero-byte Lance tail files before retrying table open"
+                );
+                self.db
+                    .open_table(table_name)
+                    .execute()
+                    .await
+                    .map(Some)
+                    .with_context(|| {
+                        format!(
+                            "failed to reopen `{table_name}` after quarantining zero-byte tail \
+                             files"
+                        )
+                    })
             },
         }
     }
@@ -613,6 +645,14 @@ impl StaticFlowDataStore {
         results
     }
 
+    pub async fn maintain_article_views_table(&self, config: &CompactConfig) -> CompactResult {
+        self.check_and_compact_article_views(config).await
+    }
+
+    pub async fn maintain_api_behavior_table(&self, config: &CompactConfig) -> CompactResult {
+        self.check_and_compact_api_behavior(config).await
+    }
+
     async fn check_and_compact_article_views(&self, config: &CompactConfig) -> CompactResult {
         if config
             .skip_tables
@@ -636,10 +676,12 @@ impl StaticFlowDataStore {
                 return CompactResult {
                     table: self.article_views_table.clone(),
                     small_fragments: 0,
+                    max_unindexed_rows: 0,
                     action: CompactAction::CompactFailed,
                     elapsed_ms: 0,
                     compacted: false,
                     pruned: false,
+                    index_optimized: false,
                     error: Some(format!("table lock failed: {err:#}")),
                 }
             },
@@ -674,10 +716,12 @@ impl StaticFlowDataStore {
                 return CompactResult {
                     table: self.api_behavior_table.clone(),
                     small_fragments: 0,
+                    max_unindexed_rows: 0,
                     action: CompactAction::CompactFailed,
                     elapsed_ms: 0,
                     compacted: false,
                     pruned: false,
+                    index_optimized: false,
                     error: Some(format!("table lock failed: {err:#}")),
                 }
             },
@@ -3189,10 +3233,12 @@ fn skipped_compact_result(table: &str) -> CompactResult {
     CompactResult {
         table: table.to_string(),
         small_fragments: 0,
+        max_unindexed_rows: 0,
         action: CompactAction::SkippedByConfig,
         elapsed_ms: 0,
         compacted: false,
         pruned: false,
+        index_optimized: false,
         error: None,
     }
 }
@@ -3201,10 +3247,12 @@ fn disabled_compact_result(table: &str) -> CompactResult {
     CompactResult {
         table: table.to_string(),
         small_fragments: 0,
+        max_unindexed_rows: 0,
         action: CompactAction::CompactionDisabled,
         elapsed_ms: 0,
         compacted: false,
         pruned: false,
+        index_optimized: false,
         error: None,
     }
 }
@@ -3213,10 +3261,12 @@ fn open_failed_compact_result(table: &str, err: anyhow::Error) -> CompactResult 
     CompactResult {
         table: table.to_string(),
         small_fragments: 0,
+        max_unindexed_rows: 0,
         action: CompactAction::OpenFailed,
         elapsed_ms: 0,
         compacted: false,
         pruned: false,
+        index_optimized: false,
         error: Some(format!("open failed: {err:#}")),
     }
 }
@@ -3276,6 +3326,82 @@ fn table_access_lock_path(table: &str) -> PathBuf {
     std::env::temp_dir()
         .join("staticflow-table-locks")
         .join(format!("{table}.lock"))
+}
+
+fn local_table_dir(db_uri: &str, table_name: &str) -> PathBuf {
+    Path::new(db_uri).join(format!("{table_name}.lance"))
+}
+
+fn zero_byte_tail_quarantine_root(table_dir: &Path) -> PathBuf {
+    let db_root = table_dir.parent().unwrap_or(table_dir);
+    db_root
+        .parent()
+        .unwrap_or(db_root)
+        .join("recovery-quarantine")
+}
+
+fn quarantine_zero_byte_lance_tail_files(
+    table_dir: &Path,
+    table_name: &str,
+) -> Result<Vec<PathBuf>> {
+    let mut zero_byte_files = Vec::new();
+    for relative_dir in ["_versions", "_transactions", "_indices", "data"] {
+        let scan_dir = table_dir.join(relative_dir);
+        collect_zero_byte_files(&scan_dir, &mut zero_byte_files)?;
+    }
+    if zero_byte_files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_secs();
+    let quarantine_dir =
+        zero_byte_tail_quarantine_root(table_dir).join(format!("{table_name}-zero-byte-{stamp}"));
+    let mut moved = Vec::with_capacity(zero_byte_files.len());
+    for path in zero_byte_files {
+        let relative = path
+            .strip_prefix(table_dir)
+            .with_context(|| format!("failed to relativize `{}`", path.display()))?;
+        let destination = quarantine_dir.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create quarantine dir `{}`", parent.display())
+            })?;
+        }
+        fs::rename(&path, &destination).with_context(|| {
+            format!(
+                "failed to move zero-byte Lance tail file `{}` to `{}`",
+                path.display(),
+                destination.display()
+            )
+        })?;
+        moved.push(destination);
+    }
+    Ok(moved)
+}
+
+fn collect_zero_byte_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("failed to read Lance tail dir `{}`", dir.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("failed to read entry under `{}`", dir.display()))?;
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .with_context(|| format!("failed to stat `{}`", path.display()))?;
+        if metadata.is_dir() {
+            collect_zero_byte_files(&path, out)?;
+        } else if metadata.is_file() && metadata.len() == 0 {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 async fn repair_api_behavior_frag_reuse_if_needed(table: &Table) -> Result<()> {
@@ -3740,10 +3866,11 @@ mod tests {
     use super::{
         alternate_embedding_language, choose_primary_search_language, cosine_similarity,
         extract_highlight, extract_semantic_highlight, find_case_insensitive_match_range,
-        is_pure_english_query, semantic_query_tokens, split_text_by_sentence_or_size,
-        table_uses_stable_row_ids, vector_column_for_language, CompactAction,
-        NewApiBehaviorEventInput, StaticFlowDataStore, TextEmbeddingLanguage,
-        CONTENT_COMPACTION_TABLE_NAMES, CONTENT_TABLE_NAMES,
+        is_pure_english_query, quarantine_zero_byte_lance_tail_files, semantic_query_tokens,
+        split_text_by_sentence_or_size, table_uses_stable_row_ids, vector_column_for_language,
+        zero_byte_tail_quarantine_root, CompactAction, NewApiBehaviorEventInput,
+        StaticFlowDataStore, TextEmbeddingLanguage, CONTENT_COMPACTION_TABLE_NAMES,
+        CONTENT_TABLE_NAMES,
     };
 
     #[test]
@@ -3772,6 +3899,49 @@ mod tests {
             .expect("api_behavior_events table should exist after connect");
 
         fs::remove_dir_all(&dir).expect("cleanup temp db dir");
+    }
+
+    #[test]
+    fn quarantine_zero_byte_lance_tail_files_moves_only_zero_byte_tail_files() {
+        let root = temp_db_dir();
+        let table_dir = root.join("api_behavior_events.lance");
+        fs::create_dir_all(table_dir.join("_versions")).expect("create versions dir");
+        fs::create_dir_all(table_dir.join("_transactions")).expect("create transactions dir");
+        fs::create_dir_all(table_dir.join("data")).expect("create data dir");
+        fs::create_dir_all(table_dir.join("_indices/nested")).expect("create indices dir");
+        fs::create_dir_all(table_dir.join("notes")).expect("create non-tail dir");
+
+        fs::write(table_dir.join("_versions/zero.manifest"), b"").expect("write zero manifest");
+        fs::write(table_dir.join("_transactions/zero.txn"), b"").expect("write zero txn");
+        fs::write(table_dir.join("data/zero.lance"), b"").expect("write zero data");
+        fs::write(table_dir.join("_indices/nested/zero.idx"), b"").expect("write zero index");
+        fs::write(table_dir.join("_versions/live.manifest"), b"ok").expect("write live manifest");
+        fs::write(table_dir.join("notes/ignore.txt"), b"").expect("write ignored file");
+
+        let moved = quarantine_zero_byte_lance_tail_files(&table_dir, "api_behavior_events")
+            .expect("quarantine zero-byte files");
+        assert_eq!(moved.len(), 4);
+        assert!(!table_dir.join("_versions/zero.manifest").exists());
+        assert!(!table_dir.join("_transactions/zero.txn").exists());
+        assert!(!table_dir.join("data/zero.lance").exists());
+        assert!(!table_dir.join("_indices/nested/zero.idx").exists());
+        assert!(table_dir.join("_versions/live.manifest").exists());
+        assert!(table_dir.join("notes/ignore.txt").exists());
+
+        let quarantine_root = zero_byte_tail_quarantine_root(&table_dir);
+        let mut found = 0usize;
+        for entry in fs::read_dir(&quarantine_root).expect("read quarantine root") {
+            let path = entry.expect("quarantine entry").path();
+            if path.is_dir() {
+                found += usize::from(path.join("_versions/zero.manifest").exists());
+                found += usize::from(path.join("_transactions/zero.txn").exists());
+                found += usize::from(path.join("data/zero.lance").exists());
+                found += usize::from(path.join("_indices/nested/zero.idx").exists());
+            }
+        }
+        assert_eq!(found, 4);
+
+        fs::remove_dir_all(&root).expect("cleanup temp db dir");
     }
 
     #[test]

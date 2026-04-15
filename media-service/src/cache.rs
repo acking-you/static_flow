@@ -27,6 +27,15 @@ pub struct HlsCachePaths {
 }
 
 #[derive(Debug, Clone)]
+pub struct Mp4CachePaths {
+    pub job_id: String,
+    pub dir: PathBuf,
+    pub video: PathBuf,
+    pub ready_marker: PathBuf,
+    pub error_marker: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct PosterCacheKeyInput<'a> {
     pub relative_path: &'a str,
     pub file_size: u64,
@@ -62,6 +71,17 @@ pub fn hls_cache_paths(cache_root: &Path, job_id: &str) -> HlsCachePaths {
     HlsCachePaths {
         job_id: job_id.to_string(),
         playlist: dir.join("index.m3u8"),
+        ready_marker: dir.join(".ready"),
+        error_marker: dir.join(".error.txt"),
+        dir,
+    }
+}
+
+pub fn mp4_cache_paths(cache_root: &Path, job_id: &str) -> Mp4CachePaths {
+    let dir = cache_root.join(job_id);
+    Mp4CachePaths {
+        job_id: job_id.to_string(),
+        video: dir.join("output.mp4"),
         ready_marker: dir.join(".ready"),
         error_marker: dir.join(".error.txt"),
         dir,
@@ -107,7 +127,7 @@ pub async fn source_modified_at_ms(path: &Path) -> Result<i64> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::poster_cache_paths;
+    use super::{mp4_cache_paths, poster_cache_paths};
 
     #[test]
     fn poster_cache_paths_use_jpg_artifacts() {
@@ -117,5 +137,15 @@ mod tests {
         assert_eq!(paths.image, cache_root.join("poster-key").join("poster.jpg"));
         assert_eq!(paths.ready_marker, cache_root.join("poster-key").join(".ready"));
         assert_eq!(paths.error_marker, cache_root.join("poster-key").join(".error.txt"));
+    }
+
+    #[test]
+    fn mp4_cache_paths_use_mp4_artifacts() {
+        let cache_root = PathBuf::from("/tmp/local-media-cache");
+        let paths = mp4_cache_paths(&cache_root, "video-key");
+        assert_eq!(paths.dir, cache_root.join("video-key"));
+        assert_eq!(paths.video, cache_root.join("video-key").join("output.mp4"));
+        assert_eq!(paths.ready_marker, cache_root.join("video-key").join(".ready"));
+        assert_eq!(paths.error_marker, cache_root.join("video-key").join(".error.txt"));
     }
 }

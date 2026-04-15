@@ -133,7 +133,7 @@ pub async fn handle_websearch_request(
                 &key_record,
                 &event_context,
                 FailedKiroRequestEvent {
-                    effective_policy: &effective_cache_policy,
+                    _effective_policy: &effective_cache_policy,
                     status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
                     diagnostic_payload,
                     usage: zero_usage_summary(),

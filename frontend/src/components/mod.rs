@@ -1,5 +1,7 @@
 // Reusable components live here.
 
+#[cfg(feature = "local-media")]
+pub mod admin_local_media_uploads;
 pub mod article_card;
 pub mod audio_player;
 pub mod error_banner;

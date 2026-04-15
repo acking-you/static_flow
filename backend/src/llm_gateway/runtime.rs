@@ -16,7 +16,7 @@ use parking_lot::{Mutex, RwLock};
 use reqwest::header::HeaderValue as ReqwestHeaderValue;
 use serde::Deserialize;
 use static_flow_shared::llm_gateway_store::{
-    now_ms, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord, LlmGatewayStore,
+    LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord, LlmGatewayStore,
     LlmGatewayUsageEventRecord,
 };
 use tokio::{
@@ -53,18 +53,6 @@ struct UsageFlushConfig {
     max_buffer_bytes: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct UsageMaintenanceConfig {
-    enabled: bool,
-    interval: Duration,
-    detail_retention_days: i64,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct UsageEventMaintenanceStats {
-    cleared_detail_rows: u64,
-}
-
 fn usage_flush_config(runtime_config: &LlmGatewayRuntimeConfig) -> UsageFlushConfig {
     UsageFlushConfig {
         batch_size: runtime_config.usage_event_flush_batch_size.max(1) as usize,
@@ -73,26 +61,6 @@ fn usage_flush_config(runtime_config: &LlmGatewayRuntimeConfig) -> UsageFlushCon
         ),
         max_buffer_bytes: runtime_config.usage_event_flush_max_buffer_bytes.max(1) as usize,
     }
-}
-
-fn usage_maintenance_config(runtime_config: &LlmGatewayRuntimeConfig) -> UsageMaintenanceConfig {
-    UsageMaintenanceConfig {
-        enabled: runtime_config.usage_event_maintenance_enabled,
-        interval: Duration::from_secs(
-            runtime_config
-                .usage_event_maintenance_interval_seconds
-                .max(60),
-        ),
-        detail_retention_days: runtime_config.usage_event_detail_retention_days,
-    }
-}
-
-fn usage_event_detail_cutoff_ms(retention_days: i64, now_ms_value: i64) -> Option<i64> {
-    if retention_days <= 0 {
-        return None;
-    }
-    let retention_window_ms = retention_days.saturating_mul(24 * 60 * 60 * 1000);
-    Some(now_ms_value.saturating_sub(retention_window_ms))
 }
 
 fn estimate_usage_event_bytes(event: &LlmGatewayUsageEventRecord) -> usize {
@@ -161,7 +129,6 @@ impl LlmGatewayRuntimeState {
             usage_event_rx,
             shutdown_rx.clone(),
         );
-        spawn_usage_event_maintenance_loop(store.clone(), runtime_config.clone(), shutdown_rx);
         Ok(Self {
             store,
             runtime_config,
@@ -289,6 +256,7 @@ impl LlmGatewayRuntimeState {
         self.usage_event_counts.read().total_event_count
     }
 
+    #[cfg(test)]
     pub(crate) fn usage_event_count_for_provider(&self, provider_type: &str) -> usize {
         self.usage_event_counts
             .read()
@@ -331,12 +299,49 @@ fn spawn_usage_event_flusher(
         let mut buffer = Vec::with_capacity(initial_config.batch_size);
         let mut buffered_bytes = 0usize;
         let mut flush_count: u64 = 0;
+        let mut retry_failed_batch_on_timer = false;
 
         loop {
             let flush_config = {
                 let config = runtime_config.read().clone();
                 usage_flush_config(&config)
             };
+            if retry_failed_batch_on_timer && !buffer.is_empty() {
+                tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            while let Ok(event) = rx.try_recv() {
+                                buffered_bytes = buffered_bytes.saturating_add(estimate_usage_event_bytes(&event));
+                                buffer.push(event);
+                            }
+                            let _ = flush_usage_event_buffer(
+                                store.as_ref(),
+                                usage_event_counts.as_ref(),
+                                &mut buffer,
+                                &mut buffered_bytes,
+                                &mut flush_count,
+                                "final usage event flush failed during shutdown",
+                            )
+                            .await;
+                            tracing::info!("llm gateway usage event flusher shutting down (shutdown signal)");
+                            return;
+                        }
+                    }
+                    _ = tokio::time::sleep(flush_config.flush_interval) => {
+                        retry_failed_batch_on_timer = flush_usage_event_buffer(
+                            store.as_ref(),
+                            usage_event_counts.as_ref(),
+                            &mut buffer,
+                            &mut buffered_bytes,
+                            &mut flush_count,
+                            "usage event retry flush failed",
+                        )
+                        .await;
+                    }
+                }
+                continue;
+            }
             tokio::select! {
                 biased;
                 _ = shutdown_rx.changed() => {
@@ -345,7 +350,7 @@ fn spawn_usage_event_flusher(
                             buffered_bytes = buffered_bytes.saturating_add(estimate_usage_event_bytes(&event));
                             buffer.push(event);
                         }
-                        flush_usage_event_buffer(
+                        let _ = flush_usage_event_buffer(
                             store.as_ref(),
                             usage_event_counts.as_ref(),
                             &mut buffer,
@@ -379,7 +384,7 @@ fn spawn_usage_event_flusher(
                             if buffer.len() >= flush_config.batch_size
                                 || buffered_bytes >= flush_config.max_buffer_bytes
                             {
-                                flush_usage_event_buffer(
+                                retry_failed_batch_on_timer = flush_usage_event_buffer(
                                     store.as_ref(),
                                     usage_event_counts.as_ref(),
                                     &mut buffer,
@@ -391,7 +396,7 @@ fn spawn_usage_event_flusher(
                             }
                         },
                         None => {
-                            flush_usage_event_buffer(
+                            let _ = flush_usage_event_buffer(
                                 store.as_ref(),
                                 usage_event_counts.as_ref(),
                                 &mut buffer,
@@ -407,7 +412,7 @@ fn spawn_usage_event_flusher(
                 }
                 _ = tokio::time::sleep(flush_config.flush_interval) => {
                     if !buffer.is_empty() {
-                        flush_usage_event_buffer(
+                        retry_failed_batch_on_timer = flush_usage_event_buffer(
                             store.as_ref(),
                             usage_event_counts.as_ref(),
                             &mut buffer,
@@ -423,75 +428,6 @@ fn spawn_usage_event_flusher(
     });
 }
 
-fn spawn_usage_event_maintenance_loop(
-    store: Arc<LlmGatewayStore>,
-    runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
-    mut shutdown_rx: watch::Receiver<bool>,
-) {
-    tokio::spawn(async move {
-        loop {
-            let maintenance_config = {
-                let config = runtime_config.read().clone();
-                usage_maintenance_config(&config)
-            };
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        tracing::info!("llm gateway usage-event maintenance loop shutting down");
-                        return;
-                    }
-                }
-                _ = tokio::time::sleep(maintenance_config.interval) => {
-                    if !maintenance_config.enabled {
-                        continue;
-                    }
-                    match run_usage_event_maintenance_once(store.as_ref(), maintenance_config).await {
-                        Ok(stats) => {
-                            if stats.cleared_detail_rows > 0 {
-                                tracing::info!(
-                                    cleared_detail_rows = stats.cleared_detail_rows,
-                                    detail_retention_days = maintenance_config.detail_retention_days,
-                                    "completed llm gateway usage-event maintenance pass"
-                                );
-                            } else {
-                                tracing::debug!(
-                                    detail_retention_days = maintenance_config.detail_retention_days,
-                                    "completed llm gateway usage-event maintenance pass"
-                                );
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!("llm gateway usage-event maintenance failed: {err:#}");
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
-async fn run_usage_event_maintenance_once(
-    store: &LlmGatewayStore,
-    config: UsageMaintenanceConfig,
-) -> Result<UsageEventMaintenanceStats> {
-    if !config.enabled {
-        return Ok(UsageEventMaintenanceStats::default());
-    }
-
-    let mut stats = UsageEventMaintenanceStats::default();
-    if let Some(cutoff_ms) = usage_event_detail_cutoff_ms(config.detail_retention_days, now_ms()) {
-        stats.cleared_detail_rows = store
-            .clear_usage_event_details_before(cutoff_ms)
-            .await
-            .context("failed to clear old usage-event detail payloads")?;
-    }
-    store
-        .optimize_usage_event_indices()
-        .await
-        .context("failed to optimize usage-event indices")?;
-    Ok(stats)
-}
-
 async fn flush_usage_event_buffer(
     store: &LlmGatewayStore,
     usage_event_counts: &RwLock<UsageEventCountCache>,
@@ -499,9 +435,9 @@ async fn flush_usage_event_buffer(
     buffered_bytes: &mut usize,
     flush_count: &mut u64,
     error_message: &'static str,
-) {
+) -> bool {
     if buffer.is_empty() {
-        return;
+        return false;
     }
 
     let batch = std::mem::take(buffer);
@@ -512,11 +448,13 @@ async fn flush_usage_event_buffer(
             apply_persisted_usage_event_counts(usage_event_counts, &batch);
             *flush_count += 1;
             tracing::debug!("flushed {count} llm gateway usage events (flush #{flush_count})");
+            false
         },
         Err(err) => {
             tracing::error!(count, "{}: {err:#}", error_message);
             *buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
             *buffer = batch;
+            true
         },
     }
 }
@@ -1008,7 +946,7 @@ mod tests {
 
     use static_flow_shared::llm_gateway_store::{
         now_ms, LlmGatewayStore, LlmGatewayUsageEventRecord, LLM_GATEWAY_KEY_STATUS_ACTIVE,
-        LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+        LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_USAGE_EVENTS_TABLE,
     };
     use tokio::{sync::watch, time::Duration};
 
@@ -1271,6 +1209,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn usage_event_flush_failure_stops_drain_until_timer_retry() {
+        let dir = temp_dir("llm-gateway-usage-flush-failure");
+        let auths_dir = temp_dir("llm-gateway-auths-flush-failure");
+        fs::create_dir_all(&auths_dir).expect("create auth dir");
+
+        let store = Arc::new(
+            LlmGatewayStore::connect(&dir.to_string_lossy())
+                .await
+                .expect("connect llm gateway store"),
+        );
+        let runtime_config = Arc::new(RwLock::new(crate::state::LlmGatewayRuntimeConfig {
+            usage_event_flush_batch_size: 1,
+            usage_event_flush_interval_seconds: 3600,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            ..crate::state::LlmGatewayRuntimeConfig::default()
+        }));
+        let account_pool = Arc::new(AccountPool::new(auths_dir.clone()));
+        let upstream_proxy_registry = Arc::new(
+            UpstreamProxyRegistry::new(store.clone())
+                .await
+                .expect("create upstream proxy registry"),
+        );
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let runtime = LlmGatewayRuntimeState::new(
+            store,
+            runtime_config,
+            account_pool,
+            upstream_proxy_registry,
+            shutdown_rx,
+        )
+        .expect("create runtime");
+        let key = sample_key();
+
+        fs::remove_dir_all(dir.join(format!("{LLM_GATEWAY_USAGE_EVENTS_TABLE}.lance")))
+            .expect("remove usage-events table to force append failures");
+
+        let make_event = |index: usize| LlmGatewayUsageEventRecord {
+            id: format!("evt-{index}"),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: key.provider_type.clone(),
+            account_name: Some("test-account".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 10,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 2,
+            input_cached_tokens: 0,
+            output_tokens: 1,
+            billable_tokens: 7,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            created_at: now_ms() + index as i64,
+        };
+
+        runtime
+            .append_usage_event(&key, &make_event(0))
+            .await
+            .expect("enqueue first usage event");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let mut accepted_after_failure = 0usize;
+        for index in 1..=(USAGE_EVENT_CHANNEL_CAPACITY * 2) {
+            let send_result = tokio::time::timeout(
+                Duration::from_millis(10),
+                runtime.append_usage_event(&key, &make_event(index)),
+            )
+            .await;
+            if send_result.is_err() {
+                break;
+            }
+            accepted_after_failure += 1;
+        }
+
+        assert!(
+            accepted_after_failure <= USAGE_EVENT_CHANNEL_CAPACITY + 32,
+            "receiver kept draining after failure; accepted_after_failure={accepted_after_failure}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&auths_dir);
+    }
+
+    #[tokio::test]
     async fn usage_events_flush_when_buffer_bytes_reach_limit() {
         let dir = temp_dir("llm-gateway-usage-byte-flush");
         let auths_dir = temp_dir("llm-gateway-auths-byte-flush");
@@ -1388,83 +1420,5 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&auths_dir);
-    }
-
-    #[test]
-    fn usage_event_detail_cutoff_ms_skips_non_positive_retention() {
-        assert_eq!(usage_event_detail_cutoff_ms(-1, 1_000), None);
-        assert_eq!(usage_event_detail_cutoff_ms(0, 1_000), None);
-        assert_eq!(
-            usage_event_detail_cutoff_ms(3, 5 * 24 * 60 * 60 * 1000),
-            Some(2 * 24 * 60 * 60 * 1000)
-        );
-    }
-
-    #[tokio::test]
-    async fn usage_event_maintenance_clears_old_details_and_keeps_summary_fields() {
-        let dir = temp_dir("llm-gateway-usage-maintenance");
-        let store = Arc::new(
-            LlmGatewayStore::connect(&dir.to_string_lossy())
-                .await
-                .expect("connect llm gateway store"),
-        );
-        let key = sample_key();
-        store.create_key(&key).await.expect("create key");
-        let old_created_at = now_ms() - (5 * 24 * 60 * 60 * 1000);
-        let event = LlmGatewayUsageEventRecord {
-            id: "evt-maintenance".to_string(),
-            key_id: key.id.clone(),
-            key_name: key.name.clone(),
-            provider_type: key.provider_type.clone(),
-            account_name: Some("test-account".to_string()),
-            request_method: "POST".to_string(),
-            request_url: "/api/llm-gateway/v1/responses".to_string(),
-            latency_ms: 12,
-            endpoint: "/v1/responses".to_string(),
-            model: Some("gpt-5".to_string()),
-            status_code: 200,
-            input_uncached_tokens: 5,
-            input_cached_tokens: 1,
-            output_tokens: 2,
-            billable_tokens: 9,
-            usage_missing: false,
-            credit_usage: None,
-            credit_usage_missing: false,
-            client_ip: "127.0.0.1".to_string(),
-            ip_region: "local".to_string(),
-            request_headers_json: "{\"x-test\":\"1\"}".to_string(),
-            last_message_content: Some("hello".to_string()),
-            client_request_body_json: Some("{\"messages\":[]} ".trim().to_string()),
-            upstream_request_body_json: Some("{\"input\":[\"hello\"]}".to_string()),
-            full_request_json: Some("{\"messages\":[]}".to_string()),
-            created_at: old_created_at,
-        };
-        store
-            .append_usage_event(&event)
-            .await
-            .expect("append usage event");
-
-        let stats = run_usage_event_maintenance_once(store.as_ref(), UsageMaintenanceConfig {
-            enabled: true,
-            interval: Duration::from_secs(60),
-            detail_retention_days: 1,
-        })
-        .await
-        .expect("run usage maintenance");
-
-        assert_eq!(stats.cleared_detail_rows, 1);
-        let loaded = store
-            .get_usage_event_detail_by_id(&event.id)
-            .await
-            .expect("load usage event")
-            .expect("usage event exists");
-        assert_eq!(loaded.billable_tokens, event.billable_tokens);
-        assert_eq!(loaded.request_headers_json, "{}");
-        assert_eq!(loaded.last_message_content, event.last_message_content);
-        assert_eq!(loaded.client_request_body_json, None);
-        assert_eq!(loaded.upstream_request_body_json, None);
-        assert_eq!(loaded.full_request_json, None);
-
-        let _ = fs::remove_dir_all(&dir);
     }
 }

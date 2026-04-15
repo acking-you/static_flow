@@ -29,13 +29,15 @@ pub fn admin_local_media_page() -> Html {
     let data = use_state(|| None::<LocalMediaListResponse>);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
+    let refresh_nonce = use_state(|| 0u64);
 
     {
         let data = data.clone();
         let loading = loading.clone();
         let error = error.clone();
         let current_dir = current_dir.clone();
-        use_effect_with(current_dir.clone(), move |dir| {
+        let refresh_key = *refresh_nonce;
+        use_effect_with((current_dir.clone(), refresh_key), move |(dir, _)| {
             loading.set(true);
             error.set(None);
             let dir = dir.clone();
@@ -78,6 +80,13 @@ pub fn admin_local_media_page() -> Html {
                     },
                 );
             }
+        })
+    };
+
+    let refresh_dir = {
+        let refresh_nonce = refresh_nonce.clone();
+        Callback::from(move |_| {
+            refresh_nonce.set(*refresh_nonce + 1);
         })
     };
 
@@ -145,11 +154,7 @@ pub fn admin_local_media_page() -> Html {
                     <button
                         type="button"
                         class="btn-fluent-secondary"
-                        onclick={{
-                            let open_dir = open_dir.clone();
-                            let current_dir = current_dir.clone();
-                            Callback::from(move |_| open_dir.emit(current_dir.clone()))
-                        }}
+                        onclick={refresh_dir.reform(|_| ())}
                     >
                         <i class="fas fa-rotate-right mr-2" aria-hidden="true"></i>
                         { "Refresh" }
@@ -159,6 +164,10 @@ pub fn admin_local_media_page() -> Html {
                     { breadcrumb }
                 </div>
             </section>
+            <crate::components::admin_local_media_uploads::AdminLocalMediaUploads
+                current_dir={current_dir.clone()}
+                on_refresh_dir={refresh_dir}
+            />
             { content }
         </main>
     }

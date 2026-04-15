@@ -71,7 +71,7 @@ pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED: bool = true;
 pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
-pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = -1;
+pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 7;
 pub const DEFAULT_KIRO_CACHE_KMODEL_OPUS_46: f64 = 8.061927916785985e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_SONNET_46: f64 = 5.055065250835128e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_HAIKU_45: f64 = 2.3681034438052206e-06;
@@ -257,9 +257,8 @@ pub struct LlmGatewayUsageEventRecord {
     pub upstream_request_body_json: Option<String>,
     /// Canonical full raw request body as received from the client.
     ///
-    /// Unlike the diagnostic-only request body fields above, this field is
-    /// intended to persist the entire original request JSON for every new
-    /// usage event whenever the caller supplied a JSON body.
+    /// Persisted only for failure diagnostics so successful usage events do
+    /// not turn the table into an unbounded request-body archive.
     pub full_request_json: Option<String>,
     pub created_at: i64,
 }

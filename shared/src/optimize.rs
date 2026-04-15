@@ -1,8 +1,8 @@
 use std::{collections::HashSet, time::Instant};
 
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use lancedb::{
-    table::{CompactionOptions, OptimizeAction},
+    table::{CompactionOptions, OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
 
@@ -13,11 +13,14 @@ const SAFE_COMPACTION_BATCH_SIZE: usize = 8;
 const SAFE_COMPACTION_MAX_ROWS_PER_GROUP: usize = 8;
 const SAFE_COMPACTION_MAX_BYTES_PER_FILE: usize = 512 * 1024 * 1024;
 const SMALL_FRAGMENT_ROW_THRESHOLD: usize = 100_000;
+const FRAGMENT_SCAN_CONCURRENCY: usize = 32;
 
+#[derive(Debug, Clone)]
 pub struct CompactConfig {
     pub enabled: bool,
     pub fragment_threshold: usize,
     pub prune_older_than_hours: i64,
+    pub optimize_dirty_indices: bool,
     /// Tables to skip during compaction.
     pub skip_tables: HashSet<String>,
 }
@@ -28,6 +31,7 @@ impl Default for CompactConfig {
             enabled: true,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
             prune_older_than_hours: 1,
+            optimize_dirty_indices: true,
             skip_tables: HashSet::new(),
         }
     }
@@ -62,13 +66,16 @@ impl CompactAction {
     }
 }
 
+#[derive(Debug)]
 pub struct CompactResult {
     pub table: String,
     pub small_fragments: usize,
+    pub max_unindexed_rows: usize,
     pub action: CompactAction,
     pub elapsed_ms: u128,
     pub compacted: bool,
     pub pruned: bool,
+    pub index_optimized: bool,
     pub error: Option<String>,
 }
 
@@ -114,10 +121,12 @@ pub async fn scan_and_compact_tables(
             results.push(CompactResult {
                 table: name.to_string(),
                 small_fragments: 0,
+                max_unindexed_rows: 0,
                 action: CompactAction::SkippedByConfig,
                 elapsed_ms: 0,
                 compacted: false,
                 pruned: false,
+                index_optimized: false,
                 error: None,
             });
             continue;
@@ -131,20 +140,24 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
     let started = Instant::now();
     let finalize = |action: CompactAction,
                     small_fragments: usize,
+                    max_unindexed_rows: usize,
                     compacted: bool,
                     pruned: bool,
+                    index_optimized: bool,
                     error: Option<String>| CompactResult {
         table: name.to_string(),
         small_fragments,
+        max_unindexed_rows,
         action,
         elapsed_ms: started.elapsed().as_millis(),
         compacted,
         pruned,
+        index_optimized,
         error,
     };
 
     if !config.enabled {
-        return finalize(CompactAction::CompactionDisabled, 0, false, false, None);
+        return finalize(CompactAction::CompactionDisabled, 0, 0, false, false, false, None);
     }
 
     let table = match db.open_table(name).execute().await {
@@ -153,6 +166,8 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
             return finalize(
                 CompactAction::OpenFailed,
                 0,
+                0,
+                false,
                 false,
                 false,
                 Some(format!("open failed: {err:#}")),
@@ -169,20 +184,24 @@ pub async fn check_opened_table_and_compact(
     let started = Instant::now();
     let finalize = |action: CompactAction,
                     small_fragments: usize,
+                    max_unindexed_rows: usize,
                     compacted: bool,
                     pruned: bool,
+                    index_optimized: bool,
                     error: Option<String>| CompactResult {
         table: table.name().to_string(),
         small_fragments,
+        max_unindexed_rows,
         action,
         elapsed_ms: started.elapsed().as_millis(),
         compacted,
         pruned,
+        index_optimized,
         error,
     };
 
     if !config.enabled {
-        return finalize(CompactAction::CompactionDisabled, 0, false, false, None);
+        return finalize(CompactAction::CompactionDisabled, 0, 0, false, false, false, None);
     }
 
     let small = match count_small_fragments(table).await {
@@ -191,33 +210,119 @@ pub async fn check_opened_table_and_compact(
             return finalize(
                 CompactAction::StatsFailed,
                 0,
+                0,
+                false,
                 false,
                 false,
                 Some(format!("fragment scan failed: {err}")),
             )
         },
     };
+    let max_unindexed_rows = match max_unindexed_rows(table).await {
+        Ok(count) => count,
+        Err(err) => {
+            return finalize(
+                CompactAction::StatsFailed,
+                small,
+                0,
+                false,
+                false,
+                false,
+                Some(format!("index scan failed: {err}")),
+            )
+        },
+    };
     if small < config.fragment_threshold {
-        return match prune_table_versions(table, config.prune_older_than_hours, false, false).await
+        // Even when compaction is skipped, old versions should still be pruned
+        // and lagging indices repaired through the same maintenance entrypoint.
+        let pruned =
+            match prune_table_versions(table, config.prune_older_than_hours, false, false).await {
+                Ok(()) => true,
+                Err(err) => {
+                    return finalize(
+                        CompactAction::SkippedBelowThreshold,
+                        small,
+                        max_unindexed_rows,
+                        false,
+                        false,
+                        false,
+                        Some(err),
+                    );
+                },
+            };
+        let index_optimized = match optimize_dirty_indices_if_needed(
+            table,
+            max_unindexed_rows,
+            config.optimize_dirty_indices,
+        )
+        .await
         {
-            Ok(()) => finalize(CompactAction::SkippedBelowThreshold, small, false, true, None),
+            Ok(changed) => changed,
             Err(err) => {
-                finalize(CompactAction::SkippedBelowThreshold, small, false, false, Some(err))
+                return finalize(
+                    CompactAction::SkippedBelowThreshold,
+                    small,
+                    max_unindexed_rows,
+                    false,
+                    pruned,
+                    false,
+                    Some(err),
+                );
             },
         };
+        return finalize(
+            CompactAction::SkippedBelowThreshold,
+            small,
+            max_unindexed_rows,
+            false,
+            pruned,
+            index_optimized,
+            None,
+        );
     }
 
     let action = match compact_table_with_fallback(table).await {
         Ok(action) => action,
-        Err(err) => return finalize(CompactAction::CompactFailed, small, false, false, Some(err)),
+        Err(err) => {
+            return finalize(
+                CompactAction::CompactFailed,
+                small,
+                max_unindexed_rows,
+                false,
+                false,
+                false,
+                Some(err),
+            )
+        },
     };
 
     if let Err(err) = prune_table_versions(table, config.prune_older_than_hours, false, false).await
     {
-        return finalize(CompactAction::CompactedPruneFailed, small, true, false, Some(err));
+        return finalize(
+            CompactAction::CompactedPruneFailed,
+            small,
+            max_unindexed_rows,
+            true,
+            false,
+            false,
+            Some(err),
+        );
     }
 
-    finalize(action, small, true, true, None)
+    let index_optimized = match optimize_dirty_indices_if_needed(
+        table,
+        max_unindexed_rows,
+        config.optimize_dirty_indices,
+    )
+    .await
+    {
+        Ok(changed) => changed,
+        Err(err) => {
+            return finalize(action, small, max_unindexed_rows, true, true, false, Some(err));
+        },
+    };
+
+    finalize(action, small, max_unindexed_rows, true, true, index_optimized, None)
 }
 
 enum OptimizePath {
@@ -279,18 +384,57 @@ async fn count_small_fragments(table: &Table) -> Result<usize, String> {
         .await
         .map_err(|err| format!("failed to load dataset: {err:#}"))?;
     let fragments = dataset.get_fragments();
-    let sizes = join_all(fragments.iter().map(|fragment| async move {
+    let small = stream::iter(fragments.into_iter().map(|fragment| async move {
         match fragment.fast_physical_rows() {
             Ok(rows) => rows,
             Err(_) => fragment.physical_rows().await.unwrap_or(0),
         }
     }))
+    // Large fragmented tables can have thousands of fragments. Bound the scan
+    // fan-out so maintenance does not create an avoidable memory spike while
+    // it is merely counting small fragments.
+    .buffer_unordered(FRAGMENT_SCAN_CONCURRENCY)
+    .fold(0usize, |count, rows| async move {
+        count + usize::from(rows < SMALL_FRAGMENT_ROW_THRESHOLD)
+    })
     .await;
 
-    Ok(sizes
-        .into_iter()
-        .filter(|rows| *rows < SMALL_FRAGMENT_ROW_THRESHOLD)
-        .count())
+    Ok(small)
+}
+
+async fn max_unindexed_rows(table: &Table) -> Result<usize, String> {
+    let indices = table
+        .list_indices()
+        .await
+        .map_err(|err| format!("failed to list indices: {err:#}"))?;
+    let mut max_rows = 0usize;
+    for index in indices {
+        if let Some(stats) = table
+            .index_stats(&index.name)
+            .await
+            .map_err(|err| format!("failed to inspect index `{}`: {err:#}", index.name))?
+        {
+            max_rows = max_rows.max(stats.num_unindexed_rows);
+        }
+    }
+    Ok(max_rows)
+}
+
+async fn optimize_dirty_indices_if_needed(
+    table: &Table,
+    max_unindexed_rows: usize,
+    enabled: bool,
+) -> Result<bool, String> {
+    if !enabled || max_unindexed_rows == 0 {
+        return Ok(false);
+    }
+    // Only rebuild indices when the table reports real lag. Fragment count and
+    // row count alone are not enough reason to rewrite every index.
+    table
+        .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+        .await
+        .map_err(|err| format!("index optimize failed: {err:#}"))?;
+    Ok(true)
 }
 
 async fn maintenance_compaction_options(table: &Table) -> Result<CompactionOptions, String> {
@@ -453,12 +597,14 @@ mod tests {
             enabled: true,
             fragment_threshold: usize::MAX,
             prune_older_than_hours: 0,
+            optimize_dirty_indices: true,
             skip_tables: HashSet::new(),
         })
         .await;
         assert_eq!(result.action, CompactAction::SkippedBelowThreshold);
         assert!(!result.compacted);
         assert!(result.pruned);
+        assert!(!result.index_optimized);
         assert!(result.error.is_none());
 
         let version_count_after = table
@@ -467,6 +613,78 @@ mod tests {
             .expect("list versions after prune")
             .len();
         assert_eq!(version_count_after, 1);
+
+        std::fs::remove_dir_all(&dir).expect("cleanup temp db dir");
+    }
+
+    #[tokio::test]
+    async fn check_opened_table_and_compact_optimizes_dirty_indices_when_needed() {
+        use lancedb::index::{scalar::BTreeIndexBuilder, Index};
+
+        let dir = temp_db_dir();
+        std::fs::create_dir_all(&dir).expect("create temp db dir");
+        let uri = dir.to_string_lossy().to_string();
+        let db = connect(&uri).execute().await.expect("connect temp db");
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]));
+
+        let initial_batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(
+            Int32Array::from_iter_values(0..100),
+        )])
+        .expect("initial batch");
+        let table = db
+            .create_table("dirty_index", initial_batch)
+            .execute()
+            .await
+            .expect("create dirty_index table");
+
+        table
+            .create_index(&["value"], Index::BTree(BTreeIndexBuilder::default()))
+            .execute()
+            .await
+            .expect("create btree index");
+
+        let appended_batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from_iter_values(100..200))])
+                .expect("appended batch");
+        table
+            .add(appended_batch)
+            .execute()
+            .await
+            .expect("append unindexed rows");
+
+        let index_name = table.list_indices().await.expect("list indices")[0]
+            .name
+            .clone();
+        let stats_before = table
+            .index_stats(&index_name)
+            .await
+            .expect("index stats before")
+            .expect("index stats exist");
+        assert_eq!(stats_before.num_unindexed_rows, 100);
+
+        let result = check_opened_table_and_compact(&table, &CompactConfig {
+            enabled: true,
+            fragment_threshold: usize::MAX,
+            prune_older_than_hours: 0,
+            optimize_dirty_indices: true,
+            skip_tables: HashSet::new(),
+        })
+        .await;
+
+        assert_eq!(result.action, CompactAction::SkippedBelowThreshold);
+        assert!(!result.compacted);
+        assert!(result.pruned);
+        assert!(result.index_optimized);
+        assert_eq!(result.max_unindexed_rows, 100);
+        assert!(result.error.is_none());
+
+        let stats_after = table
+            .index_stats(&index_name)
+            .await
+            .expect("index stats after")
+            .expect("index stats exist");
+        assert_eq!(stats_after.num_unindexed_rows, 0);
+        assert_eq!(table.count_rows(None).await.expect("count rows"), 200);
 
         std::fs::remove_dir_all(&dir).expect("cleanup temp db dir");
     }

@@ -20,6 +20,7 @@ use crate::{
 };
 
 const POSTER_PROFILE: &str = "poster-jpg-v1";
+const POSTER_STDERR_LIMIT: usize = 32 * 1024;
 
 pub async fn stream_or_generate_poster(
     state: Arc<LocalMediaState>,
@@ -91,16 +92,44 @@ async fn run_poster_command(
     final_output: &Path,
     ready_marker: &Path,
 ) -> Result<()> {
-    let output = command
+    let mut child = command
         .spawn()
-        .context("failed to spawn ffmpeg for poster generation")?
-        .wait_with_output()
+        .context("failed to spawn ffmpeg for poster generation")?;
+    let stderr = child.stderr.take();
+    let stderr_task = stderr.map(|mut stderr| {
+        tokio::spawn(async move {
+            let mut output = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = tokio::io::AsyncReadExt::read(&mut stderr, &mut chunk)
+                    .await
+                    .context("failed to read ffmpeg poster stderr")?;
+                if read == 0 {
+                    break;
+                }
+                output.extend_from_slice(&chunk[..read]);
+                if output.len() > POSTER_STDERR_LIMIT {
+                    let overflow = output.len() - POSTER_STDERR_LIMIT;
+                    output.drain(..overflow);
+                }
+            }
+            Ok::<String, anyhow::Error>(String::from_utf8_lossy(&output).into_owned())
+        })
+    });
+    let status = child
+        .wait()
         .await
         .context("failed to wait for ffmpeg poster generation")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = match stderr_task {
+        Some(task) => task
+            .await
+            .context("failed to join ffmpeg poster stderr task")??,
+        None => String::new(),
+    };
+    if !status.success() {
+        let stderr = stderr.trim().to_string();
         if stderr.is_empty() {
-            anyhow::bail!("ffmpeg poster generation exited with status {}", output.status);
+            anyhow::bail!("ffmpeg poster generation exited with status {}", status);
         }
         anyhow::bail!("ffmpeg poster generation failed: {stderr}");
     }

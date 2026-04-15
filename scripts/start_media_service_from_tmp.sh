@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_media_service_common.sh"
 
 HOST="${HOST:-127.0.0.1}"
 PORT_BASE="${PORT_BASE:-39085}"
@@ -34,7 +35,7 @@ Environment variables:
   MEDIA_BIN                          Explicit media binary path (skips make bin-media)
   LOG_FILE                           Daemon log path (default: ./tmp/staticflow-media.log)
   PID_FILE                           Daemon pid file (default: ./tmp/staticflow-media.pid)
-  STATICFLOW_LOCAL_MEDIA_ROOT        Required media root
+  STATICFLOW_LOCAL_MEDIA_ROOT        Media root (default: /mnt/e/videos/static)
   STATICFLOW_LOCAL_MEDIA_CACHE_DIR   Optional media cache dir
   STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG Optional; default 1
 
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "${STATICFLOW_LOCAL_MEDIA_ROOT:-}" ]] || fail "STATICFLOW_LOCAL_MEDIA_ROOT is required"
+sf_apply_media_service_defaults
 
 is_port_busy() {
   local port="$1"
@@ -103,25 +104,11 @@ resolve_media_bin() {
   fail "Failed to build/find media binary: $bin_path"
 }
 
-wait_media_ready() {
-  local host="$1"
-  local port="$2"
-
-  for _ in $(seq 1 80); do
-    if curl -fsS "http://${host}:${port}/internal/local-media/list?limit=1" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-
-  return 1
-}
-
 PORT_CHOSEN="$(choose_port)"
 build_media_bin
 MEDIA_BIN_PATH="$(resolve_media_bin)"
 STATICFLOW_LOCAL_MEDIA_CACHE_DIR_EFFECTIVE="${STATICFLOW_LOCAL_MEDIA_CACHE_DIR:-$ROOT_DIR/tmp/local-media-cache}"
-STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG_EFFECTIVE="${STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG:-1}"
+STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG_EFFECTIVE="${STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG}"
 
 mkdir -p "$ROOT_DIR/tmp" "$(dirname "$LOG_FILE")" "$(dirname "$PID_FILE")"
 
@@ -142,10 +129,10 @@ if [[ "$DAEMON" == "true" ]]; then
     setsid "$MEDIA_BIN_PATH" < /dev/null >> "$LOG_FILE" 2>&1 &
   MEDIA_PID=$!
   echo "$MEDIA_PID" > "$PID_FILE"
-  if ! wait_media_ready "$HOST" "$PORT_CHOSEN"; then
-    fail "Media service failed to become ready: http://${HOST}:${PORT_CHOSEN}/internal/local-media/list?limit=1"
+  if ! sf_wait_media_service_ready "$HOST" "$PORT_CHOSEN"; then
+    fail "Media service failed to become ready: $(sf_media_service_health_url "$HOST" "$PORT_CHOSEN" 1)"
   fi
-  log "Media service is ready at http://${HOST}:${PORT_CHOSEN}"
+  log "Media service is ready at $(sf_media_service_health_url "$HOST" "$PORT_CHOSEN" 1)"
   log "Daemon pid=$MEDIA_PID log=$LOG_FILE pid_file=$PID_FILE"
   exit 0
 fi
@@ -167,10 +154,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if ! wait_media_ready "$HOST" "$PORT_CHOSEN"; then
-  fail "Media service failed to become ready: http://${HOST}:${PORT_CHOSEN}/internal/local-media/list?limit=1"
+if ! sf_wait_media_service_ready "$HOST" "$PORT_CHOSEN"; then
+  fail "Media service failed to become ready: $(sf_media_service_health_url "$HOST" "$PORT_CHOSEN" 1)"
 fi
 
 log "Media service is ready."
-log "Verification URL: http://${HOST}:${PORT_CHOSEN}/internal/local-media/list?limit=2"
+log "Verification URL: $(sf_media_service_health_url "$HOST" "$PORT_CHOSEN" 2)"
 wait "$MEDIA_PID"

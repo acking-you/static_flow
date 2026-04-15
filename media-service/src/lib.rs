@@ -28,6 +28,10 @@ pub mod probe;
 pub mod routes;
 /// Shared service state and initialization.
 pub mod state;
+/// Resumable upload lifecycle and chunk append logic.
+pub mod upload;
+/// Disk-backed upload task metadata storage.
+pub mod upload_store;
 /// Shared request and response types.
 pub mod types;
 

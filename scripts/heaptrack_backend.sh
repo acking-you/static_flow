@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_local_media_proxy_env.sh"
 
 # ── Defaults (same DB-root convention as start_backend_selfhosted.sh) ──
 DB_ROOT="${DB_ROOT:-/mnt/wsl/data4tb/static-flow-data}"
@@ -51,6 +52,10 @@ Modes:
 Environment variables (same as start_backend_from_tmp.sh):
   DB_ROOT, DB_PATH, COMMENTS_DB_PATH, MUSIC_DB_PATH, HOST, PORT
   HEAPTRACK_OUTPUT_DIR  Output directory (default: tmp/heaptrack/)
+  LOCAL_MEDIA_MODE      enabled|disabled (default: enabled)
+  STATICFLOW_MEDIA_PROXY_BASE_URL Default proxy base URL (default: http://127.0.0.1:39085)
+  STATICFLOW_MEDIA_PROXY_HOST Default proxy host when base URL is unset
+  STATICFLOW_MEDIA_PROXY_PORT Default proxy port when base URL is unset
 
 Examples:
   ./scripts/heaptrack_backend.sh                    # launch + profile
@@ -75,6 +80,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+sf_apply_local_media_proxy_defaults
+
 # ── Mode: attach to running process ──
 if [[ -n "$ATTACH_PID" ]]; then
   PTRACE_SCOPE=$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "?")
@@ -95,6 +102,8 @@ log "Binary: $BACKEND_BIN"
 log "DB: content=$DB_PATH comments=$COMMENTS_DB_PATH music=$MUSIC_DB_PATH"
 log "Listen: $HOST:$PORT"
 log "Output: $HEAPTRACK_OUTPUT_DIR/"
+log "Local media mode: $LOCAL_MEDIA_MODE"
+log "Media proxy base URL: ${STATICFLOW_MEDIA_PROXY_BASE_URL:-<unset>}"
 log ""
 
 # Note: heaptrack uses LD_PRELOAD to hook libc malloc/free.
@@ -128,6 +137,7 @@ PORT="$PORT" \
 LANCEDB_URI="$DB_PATH" \
 COMMENTS_LANCEDB_URI="$COMMENTS_DB_PATH" \
 MUSIC_LANCEDB_URI="$MUSIC_DB_PATH" \
+STATICFLOW_MEDIA_PROXY_BASE_URL="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}" \
 MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}" \
 heaptrack --output "$HEAPTRACK_OUTPUT_DIR/heaptrack" "$BACKEND_BIN" &
 BACKEND_PID=$!

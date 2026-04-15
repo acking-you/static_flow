@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     env,
     sync::Arc,
     time::{Duration, Instant},
@@ -9,17 +9,17 @@ use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::{
-    article_request_store::{self, ArticleRequestStore},
-    comments_store::{self, CommentDataStore},
-    interactive_store::{self, InteractivePageStore},
+    article_request_store::ArticleRequestStore,
+    comments_store::CommentDataStore,
+    interactive_store::InteractivePageStore,
     lancedb_api::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     llm_gateway_store::{
-        self, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
-        default_kiro_cache_policy, default_kiro_cache_policy_json, now_ms,
-        parse_kiro_cache_policy_json, KiroCachePolicy, LlmGatewayAccountGroupRecord,
-        LlmGatewayStore, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, default_kiro_cache_policy,
+        default_kiro_cache_policy_json, now_ms, parse_kiro_cache_policy_json, KiroCachePolicy,
+        LlmGatewayAccountGroupRecord, LlmGatewayStore,
+        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
@@ -30,16 +30,12 @@ use static_flow_shared::{
         DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
         DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS, DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
-        DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_BATCH_SIZE,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
-        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
-        DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
     },
-    music_store::{self, MusicDataStore},
-    music_wish_store::{self, MusicWishStore},
-    optimize::{scan_and_compact_tables, CompactConfig},
+    music_store::MusicDataStore,
+    music_wish_store::MusicWishStore,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -54,6 +50,7 @@ use crate::{
     llm_gateway::LlmGatewayRuntimeState,
     music_wish_worker::{self, MusicWishWorkerConfig},
     public_submit_guard::PublicSubmitGuard,
+    table_maintenance,
     upstream_proxy::UpstreamProxyRegistry,
 };
 
@@ -97,6 +94,9 @@ pub const MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10_000;
 pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 8_760;
+pub const DEFAULT_TABLE_COMPACT_WORKER_COUNT: usize = 4;
+pub const MIN_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT: usize = 1;
+pub const MAX_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewAnalyticsRuntimeConfig {
@@ -178,6 +178,7 @@ pub struct CompactionRuntimeConfig {
     pub scan_interval_seconds: u64,
     pub fragment_threshold: usize,
     pub prune_older_than_hours: i64,
+    pub worker_count: usize,
 }
 
 impl Default for CompactionRuntimeConfig {
@@ -187,6 +188,7 @@ impl Default for CompactionRuntimeConfig {
             scan_interval_seconds: DEFAULT_TABLE_COMPACT_SCAN_INTERVAL_SECS,
             fragment_threshold: DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD,
             prune_older_than_hours: DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS,
+            worker_count: DEFAULT_TABLE_COMPACT_WORKER_COUNT,
         }
     }
 }
@@ -213,9 +215,6 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
-    pub usage_event_maintenance_enabled: bool,
-    pub usage_event_maintenance_interval_seconds: u64,
-    pub usage_event_detail_retention_days: i64,
     pub kiro_cache_kmodels_json: String,
     pub kiro_cache_kmodels: BTreeMap<String, f64>,
     pub kiro_cache_policy_json: String,
@@ -251,11 +250,6 @@ impl Default for LlmGatewayRuntimeConfig {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
             usage_event_flush_max_buffer_bytes:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
-            usage_event_maintenance_enabled: DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
-            usage_event_maintenance_interval_seconds:
-                DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
-            usage_event_detail_retention_days:
-                DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_cache_kmodels: default_kiro_cache_kmodels(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
@@ -308,14 +302,14 @@ pub struct AdminAccessConfig {
 
 /// Stores that participate in the periodic table compaction loop.
 #[derive(Clone)]
-struct TableCompactorStores {
-    content_store: Arc<StaticFlowDataStore>,
-    comment_store: Arc<CommentDataStore>,
-    music_store: Arc<MusicDataStore>,
-    music_wish_store: Arc<MusicWishStore>,
-    article_request_store: Arc<ArticleRequestStore>,
-    interactive_store: Arc<InteractivePageStore>,
-    llm_gateway_store: Arc<LlmGatewayStore>,
+pub(crate) struct TableCompactorStores {
+    pub(crate) content_store: Arc<StaticFlowDataStore>,
+    pub(crate) comment_store: Arc<CommentDataStore>,
+    pub(crate) music_store: Arc<MusicDataStore>,
+    pub(crate) music_wish_store: Arc<MusicWishStore>,
+    pub(crate) article_request_store: Arc<ArticleRequestStore>,
+    pub(crate) interactive_store: Arc<InteractivePageStore>,
+    pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
 }
 
 #[derive(Clone)]
@@ -422,12 +416,6 @@ impl AppState {
             llm_gateway_runtime_config_record.usage_event_flush_interval_seconds;
         let usage_event_flush_max_buffer_bytes =
             llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
-        let usage_event_maintenance_enabled =
-            llm_gateway_runtime_config_record.usage_event_maintenance_enabled;
-        let usage_event_maintenance_interval_seconds =
-            llm_gateway_runtime_config_record.usage_event_maintenance_interval_seconds;
-        let usage_event_detail_retention_days =
-            llm_gateway_runtime_config_record.usage_event_detail_retention_days;
         let kiro_cache_kmodels_json = llm_gateway_runtime_config_record.kiro_cache_kmodels_json;
         let (kiro_cache_policy_json, kiro_cache_policy) = sanitize_kiro_cache_policy_json(
             llm_gateway_runtime_config_record.kiro_cache_policy_json,
@@ -464,9 +452,6 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
-            usage_event_maintenance_enabled,
-            usage_event_maintenance_interval_seconds,
-            usage_event_detail_retention_days,
             kiro_cache_kmodels_json,
             kiro_cache_policy_json,
             kiro_prefix_cache_mode,
@@ -491,9 +476,6 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
-            usage_event_maintenance_enabled,
-            usage_event_maintenance_interval_seconds,
-            usage_event_detail_retention_days,
             kiro_cache_kmodels_json,
             kiro_cache_kmodels,
             kiro_cache_policy_json,
@@ -548,9 +530,6 @@ impl AppState {
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
-            usage_event_maintenance_enabled,
-            usage_event_maintenance_interval_seconds,
-            usage_event_detail_retention_days,
             kiro_cache_kmodels_json = %llm_gateway_runtime_config.read().kiro_cache_kmodels_json,
             "initialized llm gateway runtime state"
         );
@@ -648,7 +627,7 @@ impl AppState {
             shutdown_rx.clone(),
         );
 
-        spawn_table_compactor(
+        table_maintenance::spawn_table_maintenance_loop(
             TableCompactorStores {
                 content_store: store.clone(),
                 comment_store: comment_store.clone(),
@@ -905,12 +884,21 @@ fn read_compaction_runtime_config_from_env() -> CompactionRuntimeConfig {
                 && *value <= MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS
         })
         .unwrap_or(DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS);
+    let worker_count = env::var("TABLE_COMPACT_WORKER_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| {
+            *value >= MIN_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT
+                && *value <= MAX_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT
+        })
+        .unwrap_or(DEFAULT_TABLE_COMPACT_WORKER_COUNT);
 
     CompactionRuntimeConfig {
         enabled,
         scan_interval_seconds,
         fragment_threshold,
         prune_older_than_hours,
+        worker_count,
     }
 }
 
@@ -1050,190 +1038,6 @@ fn spawn_behavior_event_flusher(
     });
 
     tx
-}
-
-fn spawn_table_compactor(
-    stores: TableCompactorStores,
-    compaction_runtime_config: Arc<RwLock<CompactionRuntimeConfig>>,
-    mut shutdown_rx: watch::Receiver<bool>,
-) {
-    tokio::spawn(async move {
-        // Startup delay to avoid racing with schema migrations
-        tokio::select! {
-            biased;
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    tracing::info!("table compactor cancelled during startup delay");
-                    return;
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_secs(60)) => {}
-        }
-
-        let startup_config = compaction_runtime_config.read().clone();
-        tracing::info!(
-            "table compactor started (enabled={}, scan_interval={}s, threshold={}, \
-             prune_older_than_hours={})",
-            startup_config.enabled,
-            startup_config.scan_interval_seconds,
-            startup_config.fragment_threshold,
-            startup_config.prune_older_than_hours
-        );
-
-        loop {
-            let started = Instant::now();
-            let runtime = compaction_runtime_config.read().clone();
-            let config = CompactConfig {
-                enabled: runtime.enabled,
-                fragment_threshold: runtime.fragment_threshold,
-                prune_older_than_hours: runtime.prune_older_than_hours,
-                skip_tables: HashSet::new(),
-            };
-
-            let mut total_tables = 0usize;
-            let mut total_compacted = 0usize;
-            let mut total_failed = 0usize;
-
-            // Scan each DB group sequentially
-            for r in stores
-                .content_store
-                .scan_and_compact_managed_content_tables(&config)
-                .await
-            {
-                total_tables += 1;
-                if r.compacted {
-                    total_compacted += 1;
-                }
-
-                if let Some(err) = r.error {
-                    total_failed += 1;
-                    tracing::warn!(
-                        "compactor content/{} action={} compacted={} pruned={} small_fragments={} \
-                         elapsed_ms={} error={}",
-                        r.table,
-                        r.action.as_str(),
-                        r.compacted,
-                        r.pruned,
-                        r.small_fragments,
-                        r.elapsed_ms,
-                        err
-                    );
-                } else {
-                    tracing::info!(
-                        "compactor content/{} action={} compacted={} pruned={} small_fragments={} \
-                         elapsed_ms={}",
-                        r.table,
-                        r.action.as_str(),
-                        r.compacted,
-                        r.pruned,
-                        r.small_fragments,
-                        r.elapsed_ms
-                    );
-                }
-            }
-
-            for (db_label, conn, tables) in [
-                (
-                    "content",
-                    stores.article_request_store.connection(),
-                    article_request_store::ARTICLE_REQUEST_TABLE_NAMES,
-                ),
-                (
-                    "content",
-                    stores.interactive_store.connection(),
-                    interactive_store::INTERACTIVE_TABLE_NAMES,
-                ),
-                (
-                    "content",
-                    stores.llm_gateway_store.connection(),
-                    llm_gateway_store::LLM_GATEWAY_TABLE_NAMES,
-                ),
-                (
-                    "comments",
-                    stores.comment_store.connection(),
-                    comments_store::COMMENT_TABLE_NAMES,
-                ),
-                ("music", stores.music_store.connection(), music_store::MUSIC_TABLE_NAMES),
-                (
-                    "music",
-                    stores.music_wish_store.connection(),
-                    music_wish_store::MUSIC_WISH_TABLE_NAMES,
-                ),
-            ] {
-                let results = scan_and_compact_tables(conn, tables, &config).await;
-                for r in results {
-                    total_tables += 1;
-                    if r.compacted {
-                        total_compacted += 1;
-                    }
-
-                    if let Some(err) = r.error {
-                        total_failed += 1;
-                        tracing::warn!(
-                            "compactor {db_label}/{} action={} compacted={} pruned={} \
-                             small_fragments={} elapsed_ms={} error={}",
-                            r.table,
-                            r.action.as_str(),
-                            r.compacted,
-                            r.pruned,
-                            r.small_fragments,
-                            r.elapsed_ms,
-                            err
-                        );
-                    } else {
-                        tracing::info!(
-                            "compactor {db_label}/{} action={} compacted={} pruned={} \
-                             small_fragments={} elapsed_ms={}",
-                            r.table,
-                            r.action.as_str(),
-                            r.compacted,
-                            r.pruned,
-                            r.small_fragments,
-                            r.elapsed_ms
-                        );
-                    }
-                }
-            }
-
-            tracing::info!(
-                "compactor cycle done: tables={} compacted={} failed={} elapsed_ms={} enabled={} \
-                 scan_interval={}s threshold={} prune_older_than_hours={}",
-                total_tables,
-                total_compacted,
-                total_failed,
-                started.elapsed().as_millis(),
-                runtime.enabled,
-                runtime.scan_interval_seconds,
-                runtime.fragment_threshold,
-                runtime.prune_older_than_hours
-            );
-
-            if total_compacted > 0 {
-                // SAFETY: forcing a mimalloc collection is an FFI call with no
-                // borrowed Rust references involved, and it only touches the
-                // allocator's own global state.
-                unsafe {
-                    better_mimalloc_sys::mi_collect(true);
-                }
-                tracing::info!(
-                    "compactor forced mimalloc collection after {} compacted table(s)",
-                    total_compacted
-                );
-            }
-
-            // Wait for next cycle or shutdown
-            tokio::select! {
-                biased;
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        tracing::info!("table compactor shutting down");
-                        return;
-                    }
-                }
-                _ = tokio::time::sleep(Duration::from_secs(runtime.scan_interval_seconds)) => {}
-            }
-        }
-    });
 }
 
 #[cfg(test)]

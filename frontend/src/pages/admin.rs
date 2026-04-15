@@ -32,10 +32,11 @@ use crate::{
         fetch_admin_comment_task_ai_output, fetch_admin_comment_tasks_grouped,
         fetch_admin_compaction_runtime_config, fetch_admin_memory_profiler_functions,
         fetch_admin_memory_profiler_modules, fetch_admin_memory_profiler_overview,
-        fetch_admin_memory_profiler_stacks, fetch_admin_music_wishes,
-        fetch_admin_published_comments, fetch_admin_view_analytics_config,
-        patch_admin_comment_task, patch_admin_published_comment, update_admin_api_behavior_config,
-        update_admin_comment_runtime_config, update_admin_compaction_runtime_config,
+        fetch_admin_memory_profiler_stacks, fetch_admin_music_runtime_config,
+        fetch_admin_music_wishes, fetch_admin_published_comments,
+        fetch_admin_view_analytics_config, patch_admin_comment_task, patch_admin_published_comment,
+        update_admin_api_behavior_config, update_admin_comment_runtime_config,
+        update_admin_compaction_runtime_config, update_admin_music_runtime_config,
         update_admin_view_analytics_config, AdminApiBehaviorCleanupRequest, AdminApiBehaviorEvent,
         AdminApiBehaviorEventsQuery, AdminApiBehaviorOverviewResponse, AdminCleanupRequest,
         AdminCommentAuditLog, AdminCommentTask, AdminCommentTaskAiOutputResponse,
@@ -44,7 +45,8 @@ use crate::{
         ArticleRequestItem, ArticleViewPoint, CommentRuntimeConfig, CompactionRuntimeConfig,
         MemoryFunctionEntry, MemoryFunctionReport, MemoryModuleEntry, MemoryModuleReport,
         MemoryProfilerConfigSnapshot, MemoryProfilerConfigUpdate, MemoryProfilerOverview,
-        MemoryStackEntry, MemoryStackReport, MusicWishItem, ViewAnalyticsConfig,
+        MemoryStackEntry, MemoryStackReport, MusicRuntimeConfig, MusicWishItem,
+        ViewAnalyticsConfig,
     },
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
@@ -326,6 +328,7 @@ pub fn admin_page() -> Html {
     let load_error = use_state(|| None::<String>);
     let view_config = use_state(|| None::<ViewAnalyticsConfig>);
     let comment_config = use_state(|| None::<CommentRuntimeConfig>);
+    let music_config = use_state(|| None::<MusicRuntimeConfig>);
     let behavior_config = use_state(|| None::<ApiBehaviorConfig>);
     let compaction_config = use_state(|| None::<CompactionRuntimeConfig>);
     let behavior_overview = use_state(|| None::<AdminApiBehaviorOverviewResponse>);
@@ -841,6 +844,7 @@ pub fn admin_page() -> Html {
         let load_error = load_error.clone();
         let view_config = view_config.clone();
         let comment_config = comment_config.clone();
+        let music_config = music_config.clone();
         let behavior_config = behavior_config.clone();
         let compaction_config = compaction_config.clone();
         let task_groups = task_groups.clone();
@@ -866,6 +870,7 @@ pub fn admin_page() -> Html {
             let load_error = load_error.clone();
             let view_config = view_config.clone();
             let comment_config = comment_config.clone();
+            let music_config = music_config.clone();
             let behavior_config = behavior_config.clone();
             let compaction_config = compaction_config.clone();
             let task_groups = task_groups.clone();
@@ -904,6 +909,7 @@ pub fn admin_page() -> Html {
                 let p_offset = (p_page - 1) * PAGE_SIZE;
                 let view_result = fetch_admin_view_analytics_config().await;
                 let comment_result = fetch_admin_comment_runtime_config().await;
+                let music_result = fetch_admin_music_runtime_config().await;
                 let behavior_result = fetch_admin_api_behavior_config().await;
                 let compaction_result = fetch_admin_compaction_runtime_config().await;
                 let grouped_result = fetch_admin_comment_tasks_grouped(
@@ -923,6 +929,7 @@ pub fn admin_page() -> Html {
                 match (
                     view_result,
                     comment_result,
+                    music_result,
                     behavior_result,
                     compaction_result,
                     grouped_result,
@@ -931,6 +938,7 @@ pub fn admin_page() -> Html {
                     (
                         Ok(view),
                         Ok(comment),
+                        Ok(music),
                         Ok(behavior),
                         Ok(compaction),
                         Ok(grouped),
@@ -941,6 +949,7 @@ pub fn admin_page() -> Html {
                         }
                         view_config.set(Some(view));
                         comment_config.set(Some(comment));
+                        music_config.set(Some(music));
                         behavior_config.set(Some(behavior));
                         compaction_config.set(Some(compaction));
                         grouped_status_counts.set(grouped.status_counts);
@@ -1008,6 +1017,7 @@ pub fn admin_page() -> Html {
                     (
                         view_err,
                         comment_err,
+                        music_err,
                         behavior_err,
                         compaction_err,
                         grouped_err,
@@ -1017,10 +1027,11 @@ pub fn admin_page() -> Html {
                             return;
                         }
                         load_error.set(Some(format!(
-                            "Admin API unavailable. view={:?}, comment={:?}, behavior={:?}, \
-                             compaction={:?}, grouped={:?}, published={:?}",
+                            "Admin API unavailable. view={:?}, comment={:?}, music={:?}, \
+                             behavior={:?}, compaction={:?}, grouped={:?}, published={:?}",
                             view_err.err(),
                             comment_err.err(),
+                            music_err.err(),
                             behavior_err.err(),
                             compaction_err.err(),
                             grouped_err.err(),
@@ -1112,6 +1123,7 @@ pub fn admin_page() -> Html {
     let on_save_configs = {
         let view_config = view_config.clone();
         let comment_config = comment_config.clone();
+        let music_config = music_config.clone();
         let behavior_config = behavior_config.clone();
         let compaction_config = compaction_config.clone();
         let load_error = load_error.clone();
@@ -1123,6 +1135,9 @@ pub fn admin_page() -> Html {
                 return;
             };
             let Some(comment_config_value) = (*comment_config).clone() else {
+                return;
+            };
+            let Some(music_config_value) = (*music_config).clone() else {
                 return;
             };
             let Some(behavior_config_value) = (*behavior_config).clone() else {
@@ -1141,21 +1156,30 @@ pub fn admin_page() -> Html {
                 let view_result = update_admin_view_analytics_config(&view_config_value).await;
                 let comment_result =
                     update_admin_comment_runtime_config(&comment_config_value).await;
+                let music_result = update_admin_music_runtime_config(&music_config_value).await;
                 let behavior_result =
                     update_admin_api_behavior_config(&behavior_config_value).await;
                 let compaction_result =
                     update_admin_compaction_runtime_config(&compaction_config_value).await;
-                match (view_result, comment_result, behavior_result, compaction_result) {
-                    (Ok(_), Ok(_), Ok(_), Ok(_)) => {
+                match (
+                    view_result,
+                    comment_result,
+                    music_result,
+                    behavior_result,
+                    compaction_result,
+                ) {
+                    (Ok(_), Ok(_), Ok(_), Ok(_), Ok(_)) => {
                         load_error.set(None);
                         refresh_all.emit((None, None));
                         refresh_behavior.emit(None);
                     },
-                    (view_err, comment_err, behavior_err, compaction_err) => {
+                    (view_err, comment_err, music_err, behavior_err, compaction_err) => {
                         load_error.set(Some(format!(
-                            "Save failed. view={:?}, comment={:?}, behavior={:?}, compaction={:?}",
+                            "Save failed. view={:?}, comment={:?}, music={:?}, behavior={:?}, \
+                             compaction={:?}",
                             view_err.err(),
                             comment_err.err(),
+                            music_err.err(),
                             behavior_err.err(),
                             compaction_err.err()
                         )));
@@ -1940,7 +1964,7 @@ pub fn admin_page() -> Html {
                     <div>
                         <h1 class={classes!("m-0", "text-xl", "font-semibold")}>{ "Admin Console" }</h1>
                         <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>
-                            { "Manage runtime config, comments workflows, and API behavior analytics." }
+                            { "Manage global site runtime config, storage maintenance, comments, music, and API behavior analytics." }
                         </p>
                     </div>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
@@ -1986,7 +2010,12 @@ pub fn admin_page() -> Html {
                 "p-5",
                 "mb-5"
             )}>
-                <h2 class={classes!("m-0", "mb-4", "text-lg", "font-semibold")}>{ "Runtime Config" }</h2>
+                <div class={classes!("mb-4")}>
+                    <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Global Runtime Config" }</h2>
+                    <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                        { "Global site and storage knobs live here. Gateway-specific settings stay in the dedicated LLM Gateway and Kiro Gateway pages above." }
+                    </p>
+                </div>
                 <div class={classes!("grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-4")}>
                     <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
                         <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
@@ -2129,6 +2158,82 @@ pub fn admin_page() -> Html {
                                                         cfg.cleanup_retention_days = v;
                                                     }
                                                     comment_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                        } else {
+                            <p class={classes!("text-sm", "text-[var(--muted)]", "m-0")}>{ "Unavailable" }</p>
+                        }
+                    </div>
+
+                    <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
+                        <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
+                            { "Music Runtime" }
+                        </h3>
+                        if let Some(cfg) = (*music_config).clone() {
+                            <label class={classes!("block", "text-sm", "mb-2")}>
+                                { "play_dedupe_window_seconds" }
+                                <input
+                                    type="number"
+                                    value={cfg.play_dedupe_window_seconds.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let music_config = music_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<u64>() {
+                                                    let mut next = (*music_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.play_dedupe_window_seconds = v;
+                                                    }
+                                                    music_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm", "mb-2")}>
+                                { "comment_rate_limit_seconds" }
+                                <input
+                                    type="number"
+                                    value={cfg.comment_rate_limit_seconds.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let music_config = music_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<u64>() {
+                                                    let mut next = (*music_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.comment_rate_limit_seconds = v;
+                                                    }
+                                                    music_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm")}>
+                                { "list_default_limit" }
+                                <input
+                                    type="number"
+                                    value={cfg.list_default_limit.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let music_config = music_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*music_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.list_default_limit = v;
+                                                    }
+                                                    music_config.set(next);
                                                 }
                                             }
                                         })
@@ -2287,8 +2392,11 @@ pub fn admin_page() -> Html {
 
                     <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-3")}>
                         <h3 class={classes!("m-0", "mb-2", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                            { "Table Compaction" }
+                            { "Storage Maintenance" }
                         </h3>
+                        <p class={classes!("m-0", "mb-3", "text-xs", "text-[var(--muted)]")}>
+                            { "Controls the global background compact/prune scheduler for Lance tables." }
+                        </p>
                         if let Some(cfg) = (*compaction_config).clone() {
                             <label class={classes!("mb-3", "flex", "items-center", "gap-2", "text-sm")}>
                                 <input
@@ -2368,6 +2476,29 @@ pub fn admin_page() -> Html {
                                                     let mut next = (*compaction_config).clone();
                                                     if let Some(cfg) = next.as_mut() {
                                                         cfg.prune_older_than_hours = v;
+                                                    }
+                                                    compaction_config.set(next);
+                                                }
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("block", "text-sm", "mt-2")}>
+                                { "worker_count" }
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={cfg.worker_count.to_string()}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    oninput={{
+                                        let compaction_config = compaction_config.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                if let Ok(v) = target.value().parse::<usize>() {
+                                                    let mut next = (*compaction_config).clone();
+                                                    if let Some(cfg) = next.as_mut() {
+                                                        cfg.worker_count = v.max(1);
                                                     }
                                                     compaction_config.set(next);
                                                 }

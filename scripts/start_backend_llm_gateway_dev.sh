@@ -16,6 +16,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_local_media_proxy_env.sh"
 
 STATE_DIR="${STATE_DIR:-/tmp/staticflow-llm-gateway-e2e}"
 DB_ROOT="${DB_ROOT:-$STATE_DIR}"
@@ -95,6 +96,8 @@ while [[ $# -gt 0 ]]; do
     *) fail "Unknown option: $1 (use --help)" ;;
   esac
 done
+
+sf_apply_local_media_proxy_defaults
 
 realish_path() {
   python3 - "$1" <<'PY'
@@ -291,6 +294,8 @@ log "Using HOST=$HOST PORT=$PORT"
 log "Using LOG_FILE=$LOG_FILE"
 log "Using TABLE_COMPACT_ENABLED=$TABLE_COMPACT_ENABLED"
 log "Using STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL=$STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL"
+log "Using LOCAL_MEDIA_MODE=$LOCAL_MEDIA_MODE"
+log "Using STATICFLOW_MEDIA_PROXY_BASE_URL=${STATICFLOW_MEDIA_PROXY_BASE_URL:-<unset>}"
 
 run_backend() {
   RUST_ENV=development \
@@ -304,6 +309,7 @@ run_backend() {
   ADMIN_LOCAL_ONLY="$ADMIN_LOCAL_ONLY" \
   TABLE_COMPACT_ENABLED="$TABLE_COMPACT_ENABLED" \
   STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL="$STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL" \
+  STATICFLOW_MEDIA_PROXY_BASE_URL="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}" \
   MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}" \
   "${BACKEND_BIN_PATH}"
 }
@@ -321,6 +327,7 @@ if [[ "$DAEMON" == "true" ]]; then
     ADMIN_LOCAL_ONLY="$ADMIN_LOCAL_ONLY" \
     TABLE_COMPACT_ENABLED="$TABLE_COMPACT_ENABLED" \
     STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL="$STATICFLOW_LLM_GATEWAY_UPSTREAM_PROXY_URL" \
+    STATICFLOW_MEDIA_PROXY_BASE_URL="${STATICFLOW_MEDIA_PROXY_BASE_URL:-}" \
     MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}" \
     "$BACKEND_BIN_PATH" >"$LOG_FILE" 2>&1 < /dev/null &
   BACKEND_PID=$!

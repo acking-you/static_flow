@@ -27,6 +27,10 @@ use static_flow_shared::{
         reembed_image_vectors as reembed_image_vectors_in_table, ImageReembedOptions,
         ImageReembedScope,
     },
+    llm_gateway_store::{
+        now_ms, query_usage_event_rebuild_rows_from_connection, LlmGatewayStore,
+        DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS, LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    },
     optimize::{compact_table_with_fallback, prune_table_versions},
 };
 
@@ -1231,6 +1235,173 @@ async fn rebuild_table_with_target_schema(
     Ok(())
 }
 
+pub async fn rebuild_llm_gateway_usage_events(
+    db_path: &Path,
+    batch_size: usize,
+    source_db_path: Option<&Path>,
+    source_table: Option<&str>,
+) -> Result<()> {
+    let db_uri = db_path.to_string_lossy().to_string();
+    let store = LlmGatewayStore::connect(&db_uri).await?;
+    let mut runtime_config = store.get_runtime_config_or_default().await?;
+    if runtime_config.usage_event_detail_retention_days < 0 {
+        runtime_config.usage_event_detail_retention_days =
+            DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS;
+        runtime_config.updated_at = now_ms();
+        store
+            .upsert_runtime_config(&runtime_config)
+            .await
+            .context("failed to persist migrated llm gateway usage-event retention default")?;
+        tracing::info!(
+            retention_days = runtime_config.usage_event_detail_retention_days,
+            "updated legacy llm gateway usage-event detail retention to finite default"
+        );
+    }
+
+    let source_db_path = source_db_path.unwrap_or(db_path);
+    let source_table = source_table.unwrap_or(LLM_GATEWAY_USAGE_EVENTS_TABLE);
+    let source_db = connect_db(source_db_path).await?;
+    let source_table_handle = open_table(&source_db, source_table).await?;
+    let row_count_before = source_table_handle
+        .count_rows(None)
+        .await
+        .with_context(|| format!("failed to count source usage-events table `{source_table}`"))?
+        as usize;
+    let tmp_db_path = temp_rebuild_db_path(db_path, LLM_GATEWAY_USAGE_EVENTS_TABLE)?;
+    if tmp_db_path.exists() {
+        fs::remove_dir_all(&tmp_db_path).with_context(|| {
+            format!(
+                "failed to remove stale llm gateway rebuild temp dir `{}`",
+                tmp_db_path.display()
+            )
+        })?;
+    }
+
+    let tmp_uri = tmp_db_path.to_string_lossy().to_string();
+    let tmp_store = LlmGatewayStore::connect(&tmp_uri).await?;
+    let mut offset = 0usize;
+    let mut copied = 0usize;
+    loop {
+        // Rebuild from the summary-oriented projection instead of copying raw
+        // table files. This keeps one logical event row per record while
+        // discarding heavyweight payload columns that caused the table to bloat.
+        let batch = query_usage_event_rebuild_rows_from_connection(
+            &source_db,
+            source_table,
+            None,
+            None,
+            Some(batch_size),
+            Some(offset),
+        )
+        .await
+        .with_context(|| {
+            format!("failed to query compact usage-event rows from `{source_table}`")
+        })?;
+        if batch.is_empty() {
+            break;
+        }
+        tmp_store
+            .append_usage_events(&batch)
+            .await
+            .context("failed to append rebuilt llm gateway usage-event batch")?;
+        copied += batch.len();
+        offset += batch.len();
+    }
+    tracing::info!(
+        copied,
+        row_count_before,
+        source_db_path = %source_db_path.display(),
+        source_table,
+        "rebuilt llm gateway usage events into compact temp table"
+    );
+    let tmp_db = connect_db(&tmp_db_path).await?;
+    let tmp_table = open_table(&tmp_db, LLM_GATEWAY_USAGE_EVENTS_TABLE).await?;
+    let tmp_schema = tmp_table.schema().await?;
+    let stable_tmp_db_path = tmp_db_path.with_file_name(format!(
+        "{}-stable",
+        tmp_db_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("llm-gateway-usage-rebuild")
+    ));
+    if stable_tmp_db_path.exists() {
+        fs::remove_dir_all(&stable_tmp_db_path).with_context(|| {
+            format!(
+                "failed to remove stale llm gateway stable temp dir `{}`",
+                stable_tmp_db_path.display()
+            )
+        })?;
+    }
+    // The compact temp table may still carry non-stable row-id layout from the
+    // original write path. Rebuild once more into a clean temp database so the
+    // swapped production table always comes back with stable row ids.
+    rebuild_table_into_temp_db(
+        &tmp_table,
+        &tmp_schema,
+        &stable_tmp_db_path,
+        LLM_GATEWAY_USAGE_EVENTS_TABLE,
+        batch_size,
+    )
+    .await
+    .context("failed to convert rebuilt llm gateway usage-events temp table to stable row ids")?;
+
+    let stable_tmp_db = connect_db(&stable_tmp_db_path).await?;
+    ensure_indexes_for_table(&stable_tmp_db, LLM_GATEWAY_USAGE_EVENTS_TABLE).await?;
+    let stable_tmp_table = open_table(&stable_tmp_db, LLM_GATEWAY_USAGE_EVENTS_TABLE).await?;
+    let tmp_count = stable_tmp_table
+        .count_rows(None)
+        .await
+        .context("failed to count rebuilt llm gateway usage-event rows")?
+        as usize;
+    if tmp_count != row_count_before {
+        bail!(
+            "rebuilt llm gateway usage-event row count mismatch: before={} after={}",
+            row_count_before,
+            tmp_count
+        );
+    }
+    if !table_uses_stable_row_ids(&stable_tmp_table).await? {
+        bail!("rebuilt llm gateway usage-events table does not use stable row ids");
+    }
+
+    let backup_dir = table_backup_path(db_path, LLM_GATEWAY_USAGE_EVENTS_TABLE)?;
+    let original_dir = db_path.join(format!("{LLM_GATEWAY_USAGE_EVENTS_TABLE}.lance"));
+    fs::create_dir_all(
+        backup_dir
+            .parent()
+            .ok_or_else(|| anyhow!("invalid backup path `{}`", backup_dir.display()))?,
+    )
+    .with_context(|| format!("failed to create backup parent for `{}`", backup_dir.display()))?;
+    fs::rename(&original_dir, &backup_dir).with_context(|| {
+        format!("failed to move `{}` to backup `{}`", original_dir.display(), backup_dir.display())
+    })?;
+
+    let tmp_table_dir = stable_tmp_db_path.join(format!("{LLM_GATEWAY_USAGE_EVENTS_TABLE}.lance"));
+    if let Err(err) = fs::rename(&tmp_table_dir, &original_dir) {
+        // Swapping the directory is the only destructive step. Roll back to the
+        // previous table before returning so operators never end up with an
+        // empty production path after a failed rename.
+        let rollback_err = fs::rename(&backup_dir, &original_dir).with_context(|| {
+            format!(
+                "rebuild swap failed and rollback also failed; backup remains at `{}`",
+                backup_dir.display()
+            )
+        });
+        let _ = fs::remove_dir_all(&tmp_db_path);
+        let _ = fs::remove_dir_all(&stable_tmp_db_path);
+        rollback_err?;
+        return Err(err)
+            .context("failed to move rebuilt llm gateway usage-events table into place");
+    }
+    let _ = fs::remove_dir_all(&tmp_db_path);
+    let _ = fs::remove_dir_all(&stable_tmp_db_path);
+
+    optimize_table(db_path, LLM_GATEWAY_USAGE_EVENTS_TABLE, false, true)
+        .await
+        .context("failed to optimize rebuilt llm gateway usage-events table")?;
+    Ok(())
+}
+
 pub async fn upsert_image_json(db_path: &Path, json: &str) -> Result<()> {
     let mut record: ImageRecord = serde_json::from_str(json).context("invalid image JSON")?;
     if record.created_at == 0 {
@@ -1681,6 +1852,12 @@ fn table_policy(table_name: &str) -> Option<TablePolicy> {
         }),
         "api_behavior_events" => Some(TablePolicy {
             scalar_indexes: &["event_id", "occurred_at", "method", "status_code", "device_type"],
+            vector_indexes: &[],
+            fts_indexes: &[],
+            storage_options: DEFAULT_STORAGE_OPTIONS,
+        }),
+        "llm_gateway_usage_events" => Some(TablePolicy {
+            scalar_indexes: &["id", "key_id", "provider_type", "created_at"],
             vector_indexes: &[],
             fts_indexes: &[],
             storage_options: DEFAULT_STORAGE_OPTIONS,
@@ -2417,4 +2594,194 @@ pub async fn verify_audio(db_path: &Path, ids: Option<String>, limit: Option<usi
         bail!("{err_count} song(s) failed audio verification");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use static_flow_shared::llm_gateway_store::{
+        LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
+        LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+    };
+
+    use super::*;
+
+    fn temp_db_path(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("staticflow-cli-{prefix}-{nanos}"))
+    }
+
+    fn sample_key() -> LlmGatewayKeyRecord {
+        LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "sfk_test".to_string(),
+            key_hash: "hash".to_string(),
+            status: LLM_GATEWAY_KEY_STATUS_ACTIVE.to_string(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            protocol_family: LLM_GATEWAY_PROTOCOL_OPENAI.to_string(),
+            public_visible: false,
+            quota_billable_limit: 1_000_000,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            account_group_id: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+        }
+    }
+
+    #[test]
+    fn llm_gateway_usage_events_is_supported_for_index_management() {
+        let policy = table_policy("llm_gateway_usage_events")
+            .expect("usage events table should be index-managed");
+        assert_eq!(policy.scalar_indexes, ["id", "key_id", "provider_type", "created_at"]);
+    }
+
+    #[tokio::test]
+    async fn rebuild_llm_gateway_usage_events_redacts_success_payloads_and_old_failures() {
+        let dir = temp_db_path("rebuild-llm-usage-events");
+        let db_uri = dir.to_string_lossy().to_string();
+        let store = LlmGatewayStore::connect(&db_uri)
+            .await
+            .expect("connect llm gateway store");
+        let key = sample_key();
+        store.create_key(&key).await.expect("create key");
+
+        let legacy_config = LlmGatewayRuntimeConfigRecord {
+            usage_event_detail_retention_days: -1,
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&legacy_config)
+            .await
+            .expect("upsert runtime config");
+
+        let now = now_ms();
+        let success_event = LlmGatewayUsageEventRecord {
+            id: "evt-success".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: key.provider_type.clone(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 11,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 1,
+            output_tokens: 2,
+            billable_tokens: 21,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{\"x-test\":\"1\"}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some("{\"input\":[\"hello\"]}".to_string()),
+            full_request_json: Some("{\"messages\":[]}".to_string()),
+            created_at: now,
+        };
+        let old_failure = LlmGatewayUsageEventRecord {
+            id: "evt-old-failure".to_string(),
+            status_code: 502,
+            created_at: now - (8 * 24 * 60 * 60 * 1000),
+            ..success_event.clone()
+        };
+        let recent_failure = LlmGatewayUsageEventRecord {
+            id: "evt-recent-failure".to_string(),
+            status_code: 502,
+            created_at: now - (2 * 24 * 60 * 60 * 1000),
+            ..success_event.clone()
+        };
+        store
+            .append_usage_events(&[
+                success_event.clone(),
+                old_failure.clone(),
+                recent_failure.clone(),
+            ])
+            .await
+            .expect("append usage events");
+
+        rebuild_llm_gateway_usage_events(&dir, 32, None, None)
+            .await
+            .expect("rebuild usage events");
+
+        let reopened = LlmGatewayStore::connect(&db_uri)
+            .await
+            .expect("reconnect llm gateway store");
+        let migrated = reopened
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(
+            migrated.usage_event_detail_retention_days,
+            DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS
+        );
+
+        let success = reopened
+            .get_usage_event_detail_by_id(&success_event.id)
+            .await
+            .expect("load success event")
+            .expect("success event exists");
+        assert_eq!(success.request_headers_json, success_event.request_headers_json);
+        assert_eq!(success.client_request_body_json, None);
+        assert_eq!(success.upstream_request_body_json, None);
+        assert_eq!(success.full_request_json, None);
+
+        let old = reopened
+            .get_usage_event_detail_by_id(&old_failure.id)
+            .await
+            .expect("load old failure event")
+            .expect("old failure event exists");
+        assert_eq!(old.request_headers_json, old_failure.request_headers_json);
+        assert_eq!(old.client_request_body_json, None);
+        assert_eq!(old.upstream_request_body_json, None);
+        assert_eq!(old.full_request_json, None);
+
+        let recent = reopened
+            .get_usage_event_detail_by_id(&recent_failure.id)
+            .await
+            .expect("load recent failure event")
+            .expect("recent failure event exists");
+        assert_eq!(recent.request_headers_json, recent_failure.request_headers_json);
+        assert_eq!(recent.client_request_body_json, None);
+        assert_eq!(recent.upstream_request_body_json, None);
+        assert_eq!(recent.full_request_json, None);
+
+        let filtered = reopened
+            .query_usage_events_since(
+                Some(&key.id),
+                None,
+                Some(now - (3 * 24 * 60 * 60 * 1000)),
+                None,
+                None,
+            )
+            .await
+            .expect("query rebuilt usage events with filters");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|event| event.key_id == key.id));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

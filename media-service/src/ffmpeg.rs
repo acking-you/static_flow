@@ -93,6 +93,7 @@ pub fn build_hls_command(
         PlaybackStrategy::Raw {
             ..
         } => {},
+        PlaybackStrategy::Mp4Remux => unreachable!("mp4 remux uses build_mp4_remux_command"),
         PlaybackStrategy::HlsCopy => {
             command.arg("-c:v").arg("copy");
             if has_audio {
@@ -137,10 +138,48 @@ pub fn build_hls_command(
         .arg("-hls_playlist_type")
         .arg("event")
         .arg("-hls_flags")
-        .arg("independent_segments+temp_file")
+        .arg("independent_segments")
         .arg("-hls_segment_filename")
         .arg(output_dir.join("segment_%05d.ts"))
         .arg(output_dir.join("index.m3u8"));
+
+    command
+}
+
+pub fn build_mp4_remux_command(
+    bins: &BinaryPaths,
+    source: &Path,
+    output_path: &Path,
+    has_audio: bool,
+) -> Command {
+    let mut command = Command::new(&bins.ffmpeg);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-i")
+        .arg(source)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-map")
+        .arg("0:a:0?")
+        .arg("-sn")
+        .arg("-dn")
+        .arg("-c:v")
+        .arg("copy");
+
+    if has_audio {
+        command.arg("-c:a").arg("copy");
+    } else {
+        command.arg("-an");
+    }
+
+    command.arg("-movflags").arg("+faststart").arg(output_path);
 
     command
 }
@@ -181,7 +220,7 @@ pub fn build_poster_command(
 mod tests {
     use std::path::PathBuf;
 
-    use super::{build_hls_command, build_poster_command, BinaryPaths};
+    use super::{build_hls_command, build_mp4_remux_command, build_poster_command, BinaryPaths};
     use crate::probe::PlaybackStrategy;
 
     #[test]
@@ -207,7 +246,34 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["-hls_playlist_type", "event"]));
+        assert!(!args.iter().any(|arg| arg == "temp_file"));
         assert!(!args.iter().any(|arg| arg == "vod"));
+    }
+
+    #[test]
+    fn build_mp4_remux_command_copies_streams_into_mp4_output() {
+        let bins = BinaryPaths {
+            ffmpeg: PathBuf::from("ffmpeg"),
+            ffprobe: PathBuf::from("ffprobe"),
+        };
+        let command = build_mp4_remux_command(
+            &bins,
+            PathBuf::from("/tmp/input.mkv").as_path(),
+            PathBuf::from("/tmp/output.mp4").as_path(),
+            true,
+        );
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.windows(2).any(|pair| pair == ["-c:v", "copy"]));
+        assert!(args.windows(2).any(|pair| pair == ["-c:a", "copy"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-movflags", "+faststart"]));
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/output.mp4"));
     }
 
     #[test]

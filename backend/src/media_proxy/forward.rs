@@ -4,7 +4,8 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::Response,
 };
-use static_flow_media_types::{PosterQuery, RawPlaybackQuery};
+use bytes::Bytes;
+use static_flow_media_types::{PosterQuery, RawPlaybackQuery, UploadChunkQuery};
 
 fn join_internal_url(base_url: &reqwest::Url, relative: &str) -> Result<reqwest::Url> {
     base_url
@@ -72,6 +73,18 @@ pub async fn forward_hls_request(
     forward(with_range_header(upstream, headers)).await
 }
 
+pub async fn forward_mp4_request(
+    client: &reqwest::Client,
+    base_url: &reqwest::Url,
+    job_id: &str,
+    file_name: &str,
+    headers: &HeaderMap,
+) -> Result<Response> {
+    let relative = format!("internal/local-media/playback/mp4/{job_id}/{file_name}");
+    let upstream = client.get(join_internal_url(base_url, &relative)?);
+    forward(with_range_header(upstream, headers)).await
+}
+
 pub async fn forward_poster_request(
     client: &reqwest::Client,
     base_url: &reqwest::Url,
@@ -85,14 +98,34 @@ pub async fn forward_poster_request(
     forward(upstream).await
 }
 
+pub async fn forward_upload_chunk_request(
+    client: &reqwest::Client,
+    base_url: &reqwest::Url,
+    task_id: &str,
+    offset: u64,
+    content_type: reqwest::header::HeaderValue,
+    body: Bytes,
+) -> Result<Response> {
+    let relative = format!("internal/local-media/uploads/tasks/{task_id}/chunks");
+    let upstream = client
+        .put(join_internal_url(base_url, &relative)?)
+        .query(&UploadChunkQuery {
+            offset,
+        })
+        .header(reqwest::header::CONTENT_TYPE, content_type)
+        .body(body);
+    forward(upstream).await
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{
         body::to_bytes,
         http::{header, HeaderMap},
     };
+    use bytes::Bytes;
 
-    use super::forward_raw_request;
+    use super::{forward_raw_request, forward_upload_chunk_request};
 
     #[tokio::test]
     async fn forward_raw_request_preserves_range_header() {
@@ -129,5 +162,39 @@ mod tests {
             .await
             .expect("body bytes");
         assert_eq!(&body[..], b"0123456789abcdef");
+    }
+
+    #[tokio::test]
+    async fn forward_upload_chunk_preserves_body_and_content_type() {
+        let upstream = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path(
+                "/internal/local-media/uploads/tasks/task-1/chunks",
+            ))
+            .and(wiremock::matchers::query_param("offset", "4"))
+            .and(wiremock::matchers::header(
+                "content-type",
+                "application/octet-stream",
+            ))
+            .and(wiremock::matchers::body_bytes(b"chunk".to_vec()))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+                r#"{"task":{"task_id":"task-1","resume_key":"k","status":"partial","target_dir":"","source_file_name":"clip.mp4","target_file_name":"clip.mp4","target_relative_path":"clip.mp4","file_size":10,"uploaded_bytes":9,"last_modified_ms":1,"mime_type":null,"error":null,"created_at_ms":1,"updated_at_ms":1}}"#,
+                "application/json",
+            ))
+            .mount(&upstream)
+            .await;
+
+        let response = forward_upload_chunk_request(
+            &reqwest::Client::new(),
+            &reqwest::Url::parse(&upstream.uri()).expect("base url"),
+            "task-1",
+            4,
+            reqwest::header::HeaderValue::from_static("application/octet-stream"),
+            Bytes::from_static(b"chunk"),
+        )
+        .await
+        .expect("forward response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 }

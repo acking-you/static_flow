@@ -22,6 +22,7 @@ impl MediaProbe {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackStrategy {
     Raw { mime_type: &'static str },
+    Mp4Remux,
     HlsCopy,
     HlsTranscode,
 }
@@ -116,10 +117,10 @@ pub fn choose_playback_strategy(path: &Path, probe: &MediaProbe) -> PlaybackStra
     }
 
     if video == "h264" && audio_is_mp4_safe(audio) {
-        PlaybackStrategy::HlsCopy
-    } else {
-        PlaybackStrategy::HlsTranscode
+        return PlaybackStrategy::HlsCopy;
     }
+
+    PlaybackStrategy::HlsTranscode
 }
 
 pub fn cache_profile_for_strategy(strategy: PlaybackStrategy) -> &'static str {
@@ -127,6 +128,7 @@ pub fn cache_profile_for_strategy(strategy: PlaybackStrategy) -> &'static str {
         PlaybackStrategy::Raw {
             ..
         } => "raw",
+        PlaybackStrategy::Mp4Remux => "mp4-remux-copy",
         PlaybackStrategy::HlsCopy => "hls-copy",
         PlaybackStrategy::HlsTranscode => "hls-x264-aac",
     }
@@ -140,7 +142,27 @@ pub fn mode_for_strategy(strategy: PlaybackStrategy) -> PlaybackMode {
     match strategy {
         PlaybackStrategy::Raw {
             ..
-        } => PlaybackMode::Raw,
+        }
+        | PlaybackStrategy::Mp4Remux => PlaybackMode::Raw,
         PlaybackStrategy::HlsCopy | PlaybackStrategy::HlsTranscode => PlaybackMode::Hls,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{choose_playback_strategy, MediaProbe, PlaybackStrategy};
+
+    #[test]
+    fn choose_playback_strategy_prefers_incremental_hls_for_mp4_safe_mkv() {
+        let probe = MediaProbe {
+            video_codec: Some("h264".to_string()),
+            audio_codec: Some("aac".to_string()),
+            duration_seconds: Some(123.0),
+        };
+
+        let strategy = choose_playback_strategy(Path::new("demo.mkv"), &probe);
+        assert_eq!(strategy, PlaybackStrategy::HlsCopy);
     }
 }

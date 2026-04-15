@@ -43,10 +43,7 @@ pub(crate) use status_cache::{refresh_cached_status, spawn_status_refresher};
 use self::{
     anthropic::supported_model_ids,
     auth_file::KiroAuthRecord,
-    cache_policy::{
-        resolve_effective_kiro_cache_policy, should_capture_full_kiro_request_bodies,
-        uses_global_kiro_cache_policy,
-    },
+    cache_policy::{resolve_effective_kiro_cache_policy, uses_global_kiro_cache_policy},
     status_cache::{
         refresh_cached_status_for_account, remove_cached_status_for_account,
         KiroCachedAccountStatus,
@@ -554,15 +551,11 @@ pub async fn list_admin_usage_events(
     Query(query): Query<AdminKiroUsageQuery>,
 ) -> Result<Json<AdminKiroUsageEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
-    let total = query
-        .key_id
-        .as_deref()
-        .map(|key_id| state.llm_gateway.usage_event_count_for_key(key_id))
-        .unwrap_or_else(|| {
-            state
-                .llm_gateway
-                .usage_event_count_for_provider(LLM_GATEWAY_PROVIDER_KIRO)
-        });
+    let total = state
+        .llm_gateway_store
+        .count_usage_events_for_provider(query.key_id.as_deref(), Some(LLM_GATEWAY_PROVIDER_KIRO))
+        .await
+        .map_err(|err| internal_error("Failed to count Kiro usage events", err))?;
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     if total == 0 || offset >= total {
@@ -1051,7 +1044,7 @@ pub async fn record_messages_usage(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
     event_context: &KiroEventContext,
-    effective_policy: &static_flow_shared::llm_gateway_store::KiroCachePolicy,
+    _effective_policy: &static_flow_shared::llm_gateway_store::KiroCachePolicy,
     usage: KiroUsageSummary,
     usage_missing: bool,
 ) -> anyhow::Result<()> {
@@ -1067,7 +1060,6 @@ pub async fn record_messages_usage(
         .min(i32::MAX as u128) as i32;
     let event = build_kiro_usage_event_record(
         KiroUsageEventBuild {
-            effective_policy,
             current: &current,
             event_context,
         },
@@ -1100,7 +1092,7 @@ pub async fn record_messages_usage(
 }
 
 pub struct FailedKiroRequestEvent<'a> {
-    pub effective_policy: &'a static_flow_shared::llm_gateway_store::KiroCachePolicy,
+    pub _effective_policy: &'a static_flow_shared::llm_gateway_store::KiroCachePolicy,
     pub status_code: i32,
     pub diagnostic_payload: String,
     pub usage: KiroUsageSummary,
@@ -1125,7 +1117,6 @@ pub async fn record_failed_request_event(
         .min(i32::MAX as u128) as i32;
     let event = build_kiro_usage_event_record(
         KiroUsageEventBuild {
-            effective_policy: failure.effective_policy,
             current: &current,
             event_context,
         },
@@ -1156,7 +1147,6 @@ pub async fn record_failed_request_event(
 }
 
 struct KiroUsageEventBuild<'a> {
-    effective_policy: &'a static_flow_shared::llm_gateway_store::KiroCachePolicy,
     current: &'a LlmGatewayKeyRecord,
     event_context: &'a KiroEventContext,
 }
@@ -1169,8 +1159,7 @@ fn build_kiro_usage_event_record(
     usage_missing: bool,
     last_message_content: Option<String>,
 ) -> LlmGatewayUsageEventRecord {
-    let capture_diagnostic_request_bodies =
-        should_capture_full_kiro_request_bodies(build.effective_policy, usage.credit_usage);
+    let capture_request_details = status_code >= 400;
     LlmGatewayUsageEventRecord {
         id: generate_task_id("kiro-usage"),
         key_id: build.current.id.clone(),
@@ -1198,15 +1187,15 @@ fn build_kiro_usage_event_record(
         ip_region: build.event_context.ip_region.clone(),
         request_headers_json: build.event_context.request_headers_json.clone(),
         last_message_content,
-        client_request_body_json: capture_diagnostic_request_bodies
+        client_request_body_json: capture_request_details
             .then(|| build.event_context.client_request_body_json.clone())
             .flatten(),
-        upstream_request_body_json: capture_diagnostic_request_bodies
+        upstream_request_body_json: capture_request_details
             .then(|| build.event_context.upstream_request_body_json.clone())
             .flatten(),
-        // Keep the canonical raw client request for every JSON usage event.
-        // The policy threshold only gates the extra diagnostic request copies.
-        full_request_json: build.event_context.client_request_body_json.clone(),
+        full_request_json: capture_request_details
+            .then(|| build.event_context.client_request_body_json.clone())
+            .flatten(),
         created_at: now_ms(),
     }
 }
@@ -1713,8 +1702,7 @@ mod tests {
 
     use axum::http::StatusCode;
     use static_flow_shared::llm_gateway_store::{
-        default_kiro_cache_policy, default_kiro_cache_policy_json, merge_kiro_cache_policy,
-        KiroCachePolicyOverride, LlmGatewayKeyRecord,
+        default_kiro_cache_policy, default_kiro_cache_policy_json, LlmGatewayKeyRecord,
     };
 
     use super::{
@@ -2092,7 +2080,7 @@ mod tests {
     }
 
     #[test]
-    fn build_kiro_failure_usage_event_preserves_status_and_diagnostic_payload() {
+    fn build_kiro_failure_usage_event_preserves_status_and_full_request_payloads() {
         let key = LlmGatewayKeyRecord {
             id: "key-1".to_string(),
             name: "test-key".to_string(),
@@ -2133,8 +2121,10 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "[]".to_string(),
             last_message_content: Some("hello".to_string()),
-            client_request_body_json: None,
-            upstream_request_body_json: None,
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some(
+                "{\"conversationState\":{\"conversationId\":\"conv-1\"}}".to_string(),
+            ),
             conversation_id: Some("conv-1".to_string()),
             session_resolution: Some("request_header".to_string()),
             session_source_name: Some("x-claude-code-session-id".to_string()),
@@ -2145,7 +2135,6 @@ mod tests {
 
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
-                effective_policy: &default_kiro_cache_policy(),
                 current: &key,
                 event_context: &event_context,
             },
@@ -2166,13 +2155,17 @@ mod tests {
         assert_eq!(record.last_message_content.as_deref(), Some(diagnostic.as_str()));
         assert_eq!(record.account_name.as_deref(), Some("acct-a"));
         assert_eq!(record.billable_tokens, 0);
-        assert!(record.client_request_body_json.is_none());
-        assert!(record.upstream_request_body_json.is_none());
-        assert!(record.full_request_json.is_none());
+        assert_eq!(record.request_headers_json, "[]");
+        assert_eq!(record.client_request_body_json.as_deref(), Some("{\"messages\":[]}"));
+        assert_eq!(
+            record.upstream_request_body_json.as_deref(),
+            Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
+        );
+        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
     }
 
     #[test]
-    fn build_kiro_success_usage_event_captures_full_request_for_high_credit() {
+    fn build_kiro_success_usage_event_skips_full_request_payloads_for_high_credit() {
         let key = LlmGatewayKeyRecord {
             id: "key-1".to_string(),
             name: "test-key".to_string(),
@@ -2226,7 +2219,6 @@ mod tests {
 
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
-                effective_policy: &default_kiro_cache_policy(),
                 current: &key,
                 event_context: &event_context,
             },
@@ -2243,17 +2235,15 @@ mod tests {
             event_context.last_message_content.clone(),
         );
 
-        assert_eq!(record.client_request_body_json.as_deref(), Some("{\"messages\":[]}"));
-        assert_eq!(
-            record.upstream_request_body_json.as_deref(),
-            Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
-        );
-        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
+        assert_eq!(record.request_headers_json, "[]");
+        assert!(record.client_request_body_json.is_none());
+        assert!(record.upstream_request_body_json.is_none());
+        assert!(record.full_request_json.is_none());
         assert_eq!(record.billable_tokens, 54_679);
     }
 
     #[test]
-    fn build_kiro_success_usage_event_skips_diagnostic_request_bodies_for_normal_credit() {
+    fn build_kiro_success_usage_event_skips_full_request_payloads_for_normal_credit() {
         let key = LlmGatewayKeyRecord {
             id: "key-1".to_string(),
             name: "test-key".to_string(),
@@ -2307,7 +2297,6 @@ mod tests {
 
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
-                effective_policy: &default_kiro_cache_policy(),
                 current: &key,
                 event_context: &event_context,
             },
@@ -2324,13 +2313,14 @@ mod tests {
             event_context.last_message_content.clone(),
         );
 
+        assert_eq!(record.request_headers_json, "[]");
         assert!(record.client_request_body_json.is_none());
         assert!(record.upstream_request_body_json.is_none());
-        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
+        assert!(record.full_request_json.is_none());
     }
 
     #[test]
-    fn build_kiro_success_usage_event_uses_override_threshold_for_diagnostic_capture() {
+    fn build_kiro_success_usage_event_override_settings_do_not_restore_full_request_payloads() {
         let key = LlmGatewayKeyRecord {
             id: "key-1".to_string(),
             name: "test-key".to_string(),
@@ -2381,18 +2371,8 @@ mod tests {
             session_source_value_preview: Some("conv-1".to_string()),
             started_at: std::time::Instant::now(),
         };
-        let effective_policy = merge_kiro_cache_policy(
-            &default_kiro_cache_policy(),
-            Some(&KiroCachePolicyOverride {
-                high_credit_diagnostic_threshold: Some(1.2),
-                ..KiroCachePolicyOverride::default()
-            }),
-        )
-        .expect("override should merge");
-
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
-                effective_policy: &effective_policy,
                 current: &key,
                 event_context: &event_context,
             },
@@ -2409,11 +2389,9 @@ mod tests {
             event_context.last_message_content.clone(),
         );
 
-        assert_eq!(record.client_request_body_json.as_deref(), Some("{\"messages\":[]}"));
-        assert_eq!(
-            record.upstream_request_body_json.as_deref(),
-            Some("{\"conversationState\":{\"conversationId\":\"conv-1\"}}")
-        );
-        assert_eq!(record.full_request_json.as_deref(), Some("{\"messages\":[]}"));
+        assert_eq!(record.request_headers_json, "[]");
+        assert!(record.client_request_body_json.is_none());
+        assert!(record.upstream_request_body_json.is_none());
+        assert!(record.full_request_json.is_none());
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 
@@ -22,7 +22,23 @@ pub fn create_router(state: Arc<LocalMediaState>) -> Router {
             "/internal/local-media/playback/hls/:job_id/:file_name",
             get(handlers::stream_local_media_hls_artifact),
         )
+        .route(
+            "/internal/local-media/playback/mp4/:job_id/:file_name",
+            get(handlers::stream_local_media_mp4_artifact),
+        )
         .route("/internal/local-media/poster", get(handlers::stream_local_media_poster))
+        .route(
+            "/internal/local-media/uploads/tasks",
+            post(handlers::create_upload_task).get(handlers::list_upload_tasks),
+        )
+        .route(
+            "/internal/local-media/uploads/tasks/:task_id",
+            get(handlers::get_upload_task).delete(handlers::delete_upload_task),
+        )
+        .route(
+            "/internal/local-media/uploads/tasks/:task_id/chunks",
+            put(handlers::append_upload_chunk),
+        )
         .with_state(state)
 }
 
@@ -49,6 +65,26 @@ mod tests {
         .oneshot(
             Request::builder()
                 .uri("/internal/local-media/list")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("route response");
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn media_router_registers_upload_routes() {
+        let root = tempdir().expect("root tempdir");
+        let cache = tempdir().expect("cache tempdir");
+        let response = create_router(LocalMediaState::new_for_test(
+            root.path().to_path_buf(),
+            cache.path().to_path_buf(),
+        ))
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/internal/local-media/uploads/tasks")
                 .body(Body::empty())
                 .expect("request"),
         )

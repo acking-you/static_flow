@@ -774,7 +774,7 @@ pub(super) async fn map_provider_error(
         ctx.key_record,
         &diagnostic_event_context,
         FailedKiroRequestEvent {
-            effective_policy: ctx.effective_cache_policy,
+            _effective_policy: ctx.effective_cache_policy,
             status_code: status.as_u16() as i32,
             diagnostic_payload,
             usage: zero_usage_summary(),
@@ -1428,7 +1428,7 @@ async fn handle_messages(
                 &key_record,
                 &event_context,
                 FailedKiroRequestEvent {
-                    effective_policy: &effective_cache_policy,
+                    _effective_policy: &effective_cache_policy,
                     status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
                     diagnostic_payload,
                     usage: zero_usage_summary(),
@@ -1530,7 +1530,7 @@ async fn handle_messages(
                 &key_record,
                 &event_context,
                 FailedKiroRequestEvent {
-                    effective_policy: &effective_cache_policy,
+                    _effective_policy: &effective_cache_policy,
                     status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
                     diagnostic_payload,
                     usage: zero_usage_summary(),
@@ -1770,7 +1770,7 @@ async fn handle_stream_request(
                         &usage_ctx.key_record,
                         &usage_ctx.event_context,
                         FailedKiroRequestEvent {
-                            effective_policy: &usage_ctx.effective_cache_policy,
+                            _effective_policy: &usage_ctx.effective_cache_policy,
                             status_code,
                             diagnostic_payload,
                             usage: summary,
@@ -1846,7 +1846,7 @@ async fn handle_stream_request_buffered(
                         &usage_ctx.key_record,
                         &usage_ctx.event_context,
                         FailedKiroRequestEvent {
-                            effective_policy: &usage_ctx.effective_cache_policy,
+                            _effective_policy: &usage_ctx.effective_cache_policy,
                             status_code,
                             diagnostic_payload,
                             usage: summary,
@@ -1917,7 +1917,7 @@ async fn handle_non_stream_request(
                 &key_record,
                 &event_context,
                 FailedKiroRequestEvent {
-                    effective_policy: &request_ctx.simulation.effective_cache_policy,
+                    _effective_policy: &request_ctx.simulation.effective_cache_policy,
                     status_code: StatusCode::BAD_GATEWAY.as_u16() as i32,
                     diagnostic_payload,
                     usage: zero_usage_summary(),

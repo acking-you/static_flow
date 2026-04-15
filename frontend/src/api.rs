@@ -19,6 +19,9 @@ pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
     None => "http://localhost:3000/api",
 };
 
+#[cfg(not(feature = "mock"))]
+const LOCAL_MEDIA_API_BASE_OVERRIDE: Option<&str> = option_env!("STATICFLOW_LOCAL_MEDIA_API_BASE");
+
 #[cfg(feature = "mock")]
 pub const API_BASE: &str = "http://localhost:3000/api";
 
@@ -68,6 +71,105 @@ fn api_patch(url: &str) -> RequestBuilder {
 #[cfg(not(feature = "mock"))]
 fn api_delete(url: &str) -> RequestBuilder {
     with_behavior_headers(Request::delete(url))
+}
+
+#[cfg(not(feature = "mock"))]
+fn local_media_api_base() -> String {
+    if let Some(override_base) = LOCAL_MEDIA_API_BASE_OVERRIDE {
+        let trimmed = override_base.trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    derive_local_media_api_base_from_api_base(API_BASE)
+}
+
+#[cfg(not(feature = "mock"))]
+fn derive_local_media_api_base_from_api_base(api_base: &str) -> String {
+    let trimmed = api_base.trim();
+    if trimmed.is_empty() {
+        return "/admin/local-media/api".to_string();
+    }
+
+    let without_trailing = trimmed.trim_end_matches('/');
+    if let Some(prefix) = without_trailing.strip_suffix("/api") {
+        return format!("{prefix}/admin/local-media/api");
+    }
+
+    if without_trailing.starts_with("http://") || without_trailing.starts_with("https://") {
+        return format!("{without_trailing}/admin/local-media/api");
+    }
+
+    format!("{}/admin/local-media/api", without_trailing.trim_end_matches('/'))
+}
+
+#[cfg(not(feature = "mock"))]
+fn resolve_local_media_asset_url(url: String) -> String {
+    resolve_local_media_asset_url_for_base(&local_media_api_base(), &url)
+}
+
+#[cfg(not(feature = "mock"))]
+fn derive_local_media_origin(base: &str) -> Option<String> {
+    if !(base.starts_with("http://") || base.starts_with("https://")) {
+        return None;
+    }
+    let trimmed = base.trim_end_matches('/');
+    let admin_suffix = "/admin/local-media/api";
+    if let Some(origin) = trimmed.strip_suffix(admin_suffix) {
+        return Some(origin.to_string());
+    }
+    let api_suffix = "/api";
+    if let Some(origin) = trimmed.strip_suffix(api_suffix) {
+        return Some(origin.to_string());
+    }
+    Some(trimmed.to_string())
+}
+
+#[cfg(not(feature = "mock"))]
+fn resolve_local_media_asset_url_for_base(local_media_api_base: &str, url: &str) -> String {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return url.to_string();
+    }
+    if !url.starts_with('/') {
+        return url.to_string();
+    }
+    match derive_local_media_origin(local_media_api_base) {
+        Some(origin) => format!("{origin}{url}"),
+        None => url.to_string(),
+    }
+}
+
+#[cfg(not(feature = "mock"))]
+fn normalize_local_media_list_response(
+    mut response: LocalMediaListResponse,
+) -> LocalMediaListResponse {
+    for entry in &mut response.entries {
+        if let Some(poster_url) = entry.poster_url.take() {
+            entry.poster_url = Some(resolve_local_media_asset_url(poster_url));
+        }
+    }
+    response
+}
+
+#[cfg(not(feature = "mock"))]
+fn normalize_local_media_playback_response(
+    mut response: LocalMediaPlaybackOpenResponse,
+) -> LocalMediaPlaybackOpenResponse {
+    if let Some(player_url) = response.player_url.take() {
+        response.player_url = Some(resolve_local_media_asset_url(player_url));
+    }
+    response
+}
+
+#[cfg(not(feature = "mock"))]
+fn normalize_local_media_job_response(
+    mut response: LocalMediaPlaybackJobResponse,
+) -> LocalMediaPlaybackJobResponse {
+    if let Some(player_url) = response.player_url.take() {
+        response.player_url = Some(resolve_local_media_asset_url(player_url));
+    }
+    response
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -570,6 +672,8 @@ pub struct LocalMediaPlaybackOpenResponse {
     pub job_id: Option<String>,
     pub player_url: Option<String>,
     pub title: String,
+    pub duration_seconds: Option<f64>,
+    pub detail: Option<String>,
     pub error: Option<String>,
 }
 
@@ -580,6 +684,8 @@ pub struct LocalMediaPlaybackJobResponse {
     pub status: LocalMediaPlaybackStatus,
     pub mode: Option<LocalMediaPlaybackMode>,
     pub player_url: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub detail: Option<String>,
     pub error: Option<String>,
 }
 
@@ -587,6 +693,45 @@ pub struct LocalMediaPlaybackJobResponse {
 #[derive(Debug, Serialize)]
 struct LocalMediaPlaybackOpenRequest<'a> {
     file: &'a str,
+}
+
+#[cfg(all(feature = "local-media", not(feature = "mock")))]
+pub fn build_admin_local_media_raw_playback(file: &str) -> LocalMediaPlaybackOpenResponse {
+    let title = std::path::Path::new(file)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| file.to_string());
+    let player_url =
+        format!("{}/playback/raw?file={}", local_media_api_base(), urlencoding::encode(file));
+    LocalMediaPlaybackOpenResponse {
+        status: LocalMediaPlaybackStatus::Ready,
+        mode: Some(LocalMediaPlaybackMode::Raw),
+        job_id: None,
+        player_url: Some(player_url),
+        title,
+        duration_seconds: None,
+        detail: Some(
+            "Streaming the original file directly. Switch to compatibility mode only if this \
+             browser cannot play it."
+                .to_string(),
+        ),
+        error: None,
+    }
+}
+
+#[cfg(all(feature = "local-media", feature = "mock"))]
+pub fn build_admin_local_media_raw_playback(file: &str) -> LocalMediaPlaybackOpenResponse {
+    LocalMediaPlaybackOpenResponse {
+        status: LocalMediaPlaybackStatus::Failed,
+        mode: Some(LocalMediaPlaybackMode::Raw),
+        job_id: None,
+        player_url: None,
+        title: file.to_string(),
+        duration_seconds: None,
+        detail: None,
+        error: Some("Local media is unavailable in mock mode".to_string()),
+    }
 }
 
 #[cfg(feature = "local-media")]
@@ -613,7 +758,7 @@ pub async fn fetch_admin_local_media_list(
         if let Some(offset) = offset {
             params.push(format!("offset={offset}"));
         }
-        let mut url = "/admin/local-media/api/list".to_string();
+        let mut url = format!("{}/list", local_media_api_base());
         if !params.is_empty() {
             url.push('?');
             url.push_str(&params.join("&"));
@@ -622,7 +767,8 @@ pub async fn fetch_admin_local_media_list(
         if !response.ok() {
             return Err(format!("Failed to load local media: HTTP {}", response.status()));
         }
-        response.json().await.map_err(|err| err.to_string())
+        let response = response.json().await.map_err(|err| err.to_string())?;
+        Ok(normalize_local_media_list_response(response))
     }
 }
 
@@ -638,7 +784,7 @@ pub async fn open_admin_local_media_playback(
 
     #[cfg(not(feature = "mock"))]
     {
-        let response = api_post("/admin/local-media/api/playback/open")
+        let response = api_post(&format!("{}/playback/open", local_media_api_base()))
             .json(&LocalMediaPlaybackOpenRequest {
                 file,
             })
@@ -649,7 +795,8 @@ pub async fn open_admin_local_media_playback(
         if !response.ok() {
             return Err(format!("Failed to open local media playback: HTTP {}", response.status()));
         }
-        response.json().await.map_err(|err| err.to_string())
+        let response = response.json().await.map_err(|err| err.to_string())?;
+        Ok(normalize_local_media_playback_response(response))
     }
 }
 
@@ -665,10 +812,159 @@ pub async fn fetch_admin_local_media_job_status(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("/admin/local-media/api/playback/jobs/{job_id}");
+        let url = format!("{}/playback/jobs/{job_id}", local_media_api_base());
         let response = api_get(&url).send().await.map_err(|err| err.to_string())?;
         if !response.ok() {
             return Err(format!("Failed to fetch playback job status: HTTP {}", response.status()));
+        }
+        let response = response.json().await.map_err(|err| err.to_string())?;
+        Ok(normalize_local_media_job_response(response))
+    }
+}
+
+#[cfg(feature = "local-media")]
+#[derive(Debug, Deserialize)]
+struct LocalMediaApiErrorResponse {
+    error: String,
+}
+
+#[cfg(feature = "local-media")]
+async fn local_media_api_error(response: gloo_net::http::Response, fallback: &str) -> String {
+    let status = response.status();
+    match response.json::<LocalMediaApiErrorResponse>().await {
+        Ok(payload) if !payload.error.trim().is_empty() => payload.error,
+        _ => format!("{fallback}: HTTP {status}"),
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub fn build_admin_local_media_upload_tasks_url() -> String {
+    format!("{}/uploads/tasks", local_media_api_base())
+}
+
+#[cfg(feature = "local-media")]
+pub async fn create_admin_local_media_upload_task(
+    request: &static_flow_media_types::CreateUploadTaskRequest,
+) -> Result<static_flow_media_types::UploadTaskRecord, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let response = api_post(&build_admin_local_media_upload_tasks_url())
+            .json(request)
+            .map_err(|err| err.to_string())?
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(local_media_api_error(response, "Failed to create upload task").await);
+        }
+        let payload: static_flow_media_types::CreateUploadTaskResponse =
+            response.json().await.map_err(|err| err.to_string())?;
+        Ok(payload.task)
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub async fn fetch_admin_local_media_upload_tasks(
+    dir: Option<&str>,
+) -> Result<static_flow_media_types::ListUploadTasksResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = dir;
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = build_admin_local_media_upload_tasks_url();
+        if let Some(dir) = dir.filter(|value| !value.trim().is_empty()) {
+            url.push_str(&format!("?dir={}", urlencoding::encode(dir)));
+        }
+        let response = api_get(&url).send().await.map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(local_media_api_error(response, "Failed to load upload tasks").await);
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub async fn fetch_admin_local_media_upload_task(
+    task_id: &str,
+) -> Result<static_flow_media_types::UploadTaskRecord, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = task_id;
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/{}", build_admin_local_media_upload_tasks_url(), task_id);
+        let response = api_get(&url).send().await.map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(local_media_api_error(response, "Failed to load upload task").await);
+        }
+        response.json().await.map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub async fn append_admin_local_media_upload_chunk(
+    task_id: &str,
+    offset: u64,
+    bytes: Vec<u8>,
+) -> Result<static_flow_media_types::UploadTaskRecord, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (task_id, offset, bytes);
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/uploads/tasks/{task_id}/chunks?offset={offset}", local_media_api_base());
+        let response = gloo_net::http::Request::put(&url)
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes)
+            .map_err(|err| err.to_string())?
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(local_media_api_error(response, "Failed to append upload chunk").await);
+        }
+        let payload: static_flow_media_types::UploadChunkResponse =
+            response.json().await.map_err(|err| err.to_string())?;
+        Ok(payload.task)
+    }
+}
+
+#[cfg(feature = "local-media")]
+pub async fn delete_admin_local_media_upload_task(
+    task_id: &str,
+) -> Result<static_flow_media_types::UploadTaskRecord, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = task_id;
+        Err("Local media is unavailable in mock mode".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/{}", build_admin_local_media_upload_tasks_url(), task_id);
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.ok() {
+            return Err(local_media_api_error(response, "Failed to delete upload task").await);
         }
         response.json().await.map_err(|err| err.to_string())
     }
@@ -1319,6 +1615,13 @@ pub struct CommentRuntimeConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MusicRuntimeConfig {
+    pub play_dedupe_window_seconds: u64,
+    pub comment_rate_limit_seconds: u64,
+    pub list_default_limit: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ViewAnalyticsConfig {
     pub dedupe_window_seconds: u64,
     pub trend_default_days: usize,
@@ -1341,6 +1644,7 @@ pub struct CompactionRuntimeConfig {
     pub scan_interval_seconds: u64,
     pub fragment_threshold: usize,
     pub prune_older_than_hours: i64,
+    pub worker_count: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -2035,6 +2339,7 @@ pub async fn fetch_admin_compaction_runtime_config() -> Result<CompactionRuntime
             scan_interval_seconds: 900,
             fragment_threshold: 128,
             prune_older_than_hours: 1,
+            worker_count: 2,
         })
     }
 
@@ -4487,14 +4792,6 @@ const fn default_true() -> bool {
     true
 }
 
-const fn default_usage_event_maintenance_interval_seconds() -> u64 {
-    60 * 60
-}
-
-const fn default_usage_event_detail_retention_days() -> i64 {
-    -1
-}
-
 fn default_kiro_cache_policy_json() -> String {
     r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string()
 }
@@ -4877,12 +5174,6 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
-    #[serde(default = "default_true")]
-    pub usage_event_maintenance_enabled: bool,
-    #[serde(default = "default_usage_event_maintenance_interval_seconds")]
-    pub usage_event_maintenance_interval_seconds: u64,
-    #[serde(default = "default_usage_event_detail_retention_days")]
-    pub usage_event_detail_retention_days: i64,
     pub kiro_cache_kmodels_json: String,
     #[serde(default = "default_kiro_cache_policy_json")]
     pub kiro_cache_policy_json: String,
@@ -5453,6 +5744,61 @@ pub async fn fetch_llm_gateway_sponsors() -> Result<PublicLlmGatewaySponsorsResp
     }
 }
 
+pub async fn fetch_admin_music_runtime_config() -> Result<MusicRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(MusicRuntimeConfig {
+            play_dedupe_window_seconds: 60,
+            comment_rate_limit_seconds: 60,
+            list_default_limit: 20,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/music-config", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn update_admin_music_runtime_config(
+    config: &MusicRuntimeConfig,
+) -> Result<MusicRuntimeConfig, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(config.clone())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/music-config", admin_base());
+        let response = api_post(&url)
+            .header("Content-Type", "application/json")
+            .json(config)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 /// Fetch the current admin runtime configuration for the gateway cache.
 pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig, String> {
     #[cfg(feature = "mock")]
@@ -5470,9 +5816,6 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
-            usage_event_maintenance_enabled: true,
-            usage_event_maintenance_interval_seconds: 60 * 60,
-            usage_event_detail_retention_days: -1,
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
             kiro_prefix_cache_mode: "prefix_tree".to_string(),
@@ -7908,5 +8251,122 @@ mod tests {
         assert!(url.contains("prefix=alpha%20team"));
         assert!(url.contains("limit=24"));
         assert!(url.contains("offset=48"));
+    }
+
+    #[test]
+    fn derive_local_media_api_base_from_http_api_base_uses_backend_origin() {
+        let base = derive_local_media_api_base_from_api_base("http://127.0.0.1:39080/api");
+        assert_eq!(base, "http://127.0.0.1:39080/admin/local-media/api");
+    }
+
+    #[test]
+    fn derive_local_media_api_base_from_same_origin_falls_back_to_relative_admin_path() {
+        let base = derive_local_media_api_base_from_api_base("");
+        assert_eq!(base, "/admin/local-media/api");
+    }
+
+    #[test]
+    fn resolve_local_media_asset_url_for_base_rewrites_relative_admin_asset_to_backend_origin() {
+        let url = resolve_local_media_asset_url_for_base(
+            "http://127.0.0.1:39080/admin/local-media/api",
+            "/admin/local-media/api/poster?file=demo.mp4",
+        );
+        assert_eq!(url, "http://127.0.0.1:39080/admin/local-media/api/poster?file=demo.mp4");
+    }
+
+    #[test]
+    fn resolve_local_media_asset_url_for_base_keeps_same_origin_relative_path_when_base_is_relative(
+    ) {
+        let url = resolve_local_media_asset_url_for_base(
+            "/admin/local-media/api",
+            "/admin/local-media/api/playback/raw?file=demo.mp4",
+        );
+        assert_eq!(url, "/admin/local-media/api/playback/raw?file=demo.mp4");
+    }
+
+    #[test]
+    fn build_admin_local_media_raw_playback_uses_raw_mode_and_encoded_url() {
+        let response = build_admin_local_media_raw_playback("未归类/demo clip.mp4");
+        assert_eq!(response.status, LocalMediaPlaybackStatus::Ready);
+        assert_eq!(response.mode, Some(LocalMediaPlaybackMode::Raw));
+        assert_eq!(response.title, "demo clip.mp4");
+        assert!(response
+            .player_url
+            .as_deref()
+            .unwrap_or_default()
+            .contains("playback/raw?file=%E6%9C%AA%E5%BD%92%E7%B1%BB%2Fdemo%20clip.mp4"));
+    }
+
+    #[test]
+    fn build_admin_local_media_upload_tasks_url_uses_admin_prefix() {
+        assert!(build_admin_local_media_upload_tasks_url()
+            .ends_with("/admin/local-media/api/uploads/tasks"));
+    }
+
+    #[test]
+    fn compaction_runtime_config_deserializes_worker_count() {
+        let config: CompactionRuntimeConfig = serde_json::from_str(
+            r#"{
+                "enabled": true,
+                "scan_interval_seconds": 900,
+                "fragment_threshold": 128,
+                "prune_older_than_hours": 1,
+                "worker_count": 4
+            }"#,
+        )
+        .expect("compaction config should parse");
+
+        assert_eq!(config.worker_count, 4);
+    }
+
+    #[test]
+    fn music_runtime_config_deserializes_admin_payload() {
+        let config: MusicRuntimeConfig = serde_json::from_str(
+            r#"{
+                "play_dedupe_window_seconds": 60,
+                "comment_rate_limit_seconds": 90,
+                "list_default_limit": 20
+            }"#,
+        )
+        .expect("music config should parse");
+
+        assert_eq!(config.play_dedupe_window_seconds, 60);
+        assert_eq!(config.comment_rate_limit_seconds, 90);
+        assert_eq!(config.list_default_limit, 20);
+    }
+
+    #[test]
+    fn llm_gateway_runtime_config_ignores_legacy_usage_maintenance_fields() {
+        let config: LlmGatewayRuntimeConfig = serde_json::from_str(
+            r#"{
+                "auth_cache_ttl_seconds": 60,
+                "max_request_body_bytes": 8388608,
+                "account_failure_retry_limit": 3,
+                "kiro_channel_max_concurrency": 1,
+                "kiro_channel_min_start_interval_ms": 0,
+                "codex_status_refresh_min_interval_seconds": 240,
+                "codex_status_refresh_max_interval_seconds": 300,
+                "codex_status_account_jitter_max_seconds": 10,
+                "kiro_status_refresh_min_interval_seconds": 240,
+                "kiro_status_refresh_max_interval_seconds": 300,
+                "kiro_status_account_jitter_max_seconds": 10,
+                "usage_event_flush_batch_size": 256,
+                "usage_event_flush_interval_seconds": 15,
+                "usage_event_flush_max_buffer_bytes": 8388608,
+                "usage_event_maintenance_enabled": true,
+                "usage_event_maintenance_interval_seconds": 3600,
+                "usage_event_detail_retention_days": 7,
+                "kiro_cache_kmodels_json": "{}",
+                "kiro_cache_policy_json": "{}",
+                "kiro_prefix_cache_mode": "prefix_tree",
+                "kiro_prefix_cache_max_tokens": 4000000,
+                "kiro_prefix_cache_entry_ttl_seconds": 21600,
+                "kiro_conversation_anchor_max_entries": 20000,
+                "kiro_conversation_anchor_ttl_seconds": 86400
+            }"#,
+        )
+        .expect("llm gateway runtime config should parse");
+
+        assert_eq!(config.usage_event_flush_interval_seconds, 15);
     }
 }

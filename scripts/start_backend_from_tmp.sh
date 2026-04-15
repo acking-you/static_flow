@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_local_media_proxy_env.sh"
 
 # DB path resolution (highest priority to lowest):
 # 1) explicit DB_PATH / COMMENTS_DB_PATH
@@ -46,11 +47,15 @@ Environment variables:
   BACKEND_FEATURES           Extra cargo feature list for backend build
   BACKEND_BIN_NAME           Output binary name under ./bin
   BACKEND_BIN                Explicit backend binary path (skips make bin-backend)
+  LOCAL_MEDIA_MODE           enabled|disabled (default: enabled)
   STATICFLOW_MEDIA_PROXY_BASE_URL
+  STATICFLOW_MEDIA_PROXY_HOST Default proxy host when base URL is unset (default: 127.0.0.1)
+  STATICFLOW_MEDIA_PROXY_PORT Default proxy port when base URL is unset (default: 39085)
 
 Behavior:
   - Always builds via `make bin-backend` unless BACKEND_BIN is provided.
   - Starts the backend on a free local high port.
+  - Does not start or wait for the media service; it only preconfigures the proxy URL.
 EOF
 }
 
@@ -58,6 +63,8 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   usage
   exit 0
 fi
+
+sf_apply_local_media_proxy_defaults
 
 is_port_busy() {
   local port="$1"
@@ -336,6 +343,7 @@ log "Using MUSIC_DB_PATH=$MUSIC_DB_PATH"
 log "Using BACKEND_BIN=$BACKEND_BIN_PATH"
 log "Using HOST=$HOST PORT=$PORT_CHOSEN"
 log "Using BACKEND_DEFAULT_FEATURES=$BACKEND_DEFAULT_FEATURES BACKEND_FEATURES=${BACKEND_FEATURES:-<none>} BACKEND_BIN_NAME=$BACKEND_BIN_NAME"
+log "Using LOCAL_MEDIA_MODE=$LOCAL_MEDIA_MODE"
 log "Comment AI env: COMMENT_AI_CONTENT_API_BASE=$COMMENT_AI_CONTENT_API_BASE_EFFECTIVE COMMENT_AI_CODEX_SANDBOX=$COMMENT_AI_CODEX_SANDBOX_EFFECTIVE COMMENT_AI_CODEX_JSON_STREAM=$COMMENT_AI_CODEX_JSON_STREAM_EFFECTIVE COMMENT_AI_CODEX_BYPASS=$COMMENT_AI_CODEX_BYPASS_EFFECTIVE COMMENT_AI_RESULT_DIR=$COMMENT_AI_RESULT_DIR_EFFECTIVE COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS=$COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS_EFFECTIVE"
 log "Media proxy env: STATICFLOW_MEDIA_PROXY_BASE_URL=${STATICFLOW_MEDIA_PROXY_BASE_URL_EFFECTIVE:-<unset>}"
 log "GeoIP env passthrough: GEOIP_DB_PATH=${GEOIP_DB_PATH:-<default>} ENABLE_GEOIP_AUTO_DOWNLOAD=${ENABLE_GEOIP_AUTO_DOWNLOAD:-<default>} ENABLE_GEOIP_FALLBACK_API=${ENABLE_GEOIP_FALLBACK_API:-<default>} GEOIP_PROXY_URL=${GEOIP_PROXY_URL:-<none>}"

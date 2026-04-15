@@ -392,6 +392,19 @@ pub async fn run(cli: Cli) -> Result<()> {
                 force,
                 batch_size,
             } => db_manage::rebuild_table_stable(&db_path, &table, force, batch_size).await,
+            DbCommands::RebuildLlmGatewayUsageEvents {
+                batch_size,
+                source_db_path,
+                source_table,
+            } => {
+                db_manage::rebuild_llm_gateway_usage_events(
+                    &db_path,
+                    batch_size,
+                    source_db_path.as_deref(),
+                    source_table.as_deref(),
+                )
+                .await
+            },
             DbCommands::TestBlobCompact {
                 count,
                 blob_size,

@@ -7,12 +7,17 @@ use axum::{
 };
 use serde::de::DeserializeOwned;
 use static_flow_media_types::{
-    LocalMediaListQuery, LocalMediaListResponse, OpenPlaybackRequest, PlaybackJobStatusResponse,
-    PlaybackOpenResponse, PosterQuery, RawPlaybackQuery,
+    CreateUploadTaskRequest, CreateUploadTaskResponse, ListUploadTasksQuery,
+    ListUploadTasksResponse, LocalMediaListQuery, LocalMediaListResponse, OpenPlaybackRequest,
+    PlaybackJobStatusResponse, PlaybackOpenResponse, PosterQuery, RawPlaybackQuery,
+    UploadChunkQuery, UploadTaskRecord,
 };
 
 use super::{
-    forward::{forward_hls_request, forward_poster_request, forward_raw_request},
+    forward::{
+        forward_hls_request, forward_mp4_request, forward_poster_request, forward_raw_request,
+        forward_upload_chunk_request,
+    },
     MediaProxyState,
 };
 use crate::{
@@ -56,6 +61,57 @@ pub async fn open_local_media_playback(
             .client()
             .post(join_internal_url(media_proxy.as_ref(), "internal/local-media/playback/open")?)
             .json(&request),
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+pub async fn list_upload_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<ListUploadTasksQuery>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<ListUploadTasksResponse>> {
+    ensure_admin_access(&state, &headers)?;
+    let media_proxy = configured_media_proxy(&state)?;
+    let response = send_json(
+        media_proxy
+            .client()
+            .get(join_internal_url(media_proxy.as_ref(), "internal/local-media/uploads/tasks")?)
+            .query(&query),
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+pub async fn create_upload_task(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateUploadTaskRequest>,
+) -> HandlerResult<Json<CreateUploadTaskResponse>> {
+    ensure_admin_access(&state, &headers)?;
+    let media_proxy = configured_media_proxy(&state)?;
+    let response = send_json(
+        media_proxy
+            .client()
+            .post(join_internal_url(media_proxy.as_ref(), "internal/local-media/uploads/tasks")?)
+            .json(&request),
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+pub async fn get_upload_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<UploadTaskRecord>> {
+    ensure_admin_access(&state, &headers)?;
+    let media_proxy = configured_media_proxy(&state)?;
+    let relative = format!("internal/local-media/uploads/tasks/{task_id}");
+    let response = send_json(
+        media_proxy
+            .client()
+            .get(join_internal_url(media_proxy.as_ref(), &relative)?),
     )
     .await?;
     Ok(Json(response))
@@ -111,6 +167,27 @@ pub async fn stream_local_media_hls_artifact(
     .map_err(bad_gateway)
 }
 
+pub async fn stream_local_media_mp4_artifact(
+    State(state): State<AppState>,
+    Path((job_id, file_name)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> HandlerResult<Response> {
+    ensure_admin_access(&state, &headers)?;
+    let media_proxy = configured_media_proxy(&state)?;
+    if file_name.contains('/') || file_name.contains('\\') {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Invalid MP4 file name"));
+    }
+    forward_mp4_request(
+        media_proxy.client(),
+        &media_proxy.config().base_url,
+        &job_id,
+        &file_name,
+        &headers,
+    )
+    .await
+    .map_err(bad_gateway)
+}
+
 pub async fn stream_local_media_poster(
     State(state): State<AppState>,
     Query(query): Query<PosterQuery>,
@@ -121,6 +198,50 @@ pub async fn stream_local_media_poster(
     forward_poster_request(media_proxy.client(), &media_proxy.config().base_url, &query.file)
         .await
         .map_err(bad_gateway)
+}
+
+pub async fn append_upload_chunk(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Query(query): Query<UploadChunkQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> HandlerResult<Response> {
+    ensure_admin_access(&state, &headers)?;
+    let media_proxy = configured_media_proxy(&state)?;
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| axum::http::HeaderValue::from_static("application/octet-stream"));
+    let content_type = reqwest::header::HeaderValue::from_bytes(content_type.as_bytes())
+        .map_err(|err| internal_error(format!("invalid content type header: {err}")))?;
+    forward_upload_chunk_request(
+        media_proxy.client(),
+        &media_proxy.config().base_url,
+        &task_id,
+        query.offset,
+        content_type,
+        body,
+    )
+    .await
+    .map_err(bad_gateway)
+}
+
+pub async fn delete_upload_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<UploadTaskRecord>> {
+    ensure_admin_access(&state, &headers)?;
+    let media_proxy = configured_media_proxy(&state)?;
+    let relative = format!("internal/local-media/uploads/tasks/{task_id}");
+    let response = send_json(
+        media_proxy
+            .client()
+            .delete(join_internal_url(media_proxy.as_ref(), &relative)?),
+    )
+    .await?;
+    Ok(Json(response))
 }
 
 fn configured_media_proxy(

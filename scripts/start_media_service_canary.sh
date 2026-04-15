@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_media_service_common.sh"
 
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-39085}"
@@ -11,9 +12,9 @@ BUILD_MEDIA="false"
 LOG_FILE="${LOG_FILE:-}"
 CANARY_BIN_PATH="${CANARY_BIN_PATH:-$ROOT_DIR/bin/static-flow-media-canary}"
 PID_FILE="${PID_FILE:-}"
-STATICFLOW_LOCAL_MEDIA_ROOT="${STATICFLOW_LOCAL_MEDIA_ROOT:-/mnt/e/videos/static/未归类}"
+STATICFLOW_LOCAL_MEDIA_ROOT="${STATICFLOW_LOCAL_MEDIA_ROOT:-}"
 STATICFLOW_LOCAL_MEDIA_CACHE_DIR="${STATICFLOW_LOCAL_MEDIA_CACHE_DIR:-$ROOT_DIR/tmp/local-media-cache-canary}"
-STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG="${STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG:-1}"
+STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG="${STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG:-}"
 
 log() { echo "[media-canary] $*"; }
 fail() { echo "[media-canary][ERROR] $*" >&2; exit 1; }
@@ -28,6 +29,21 @@ Options:
   --host <addr>    Override HOST (default: 127.0.0.1)
   --build          Build release binary before starting
   -h, --help       Show this help
+
+Environment variables (all optional):
+  HOST                               Bind address (default: 127.0.0.1)
+  PORT                               Fixed canary port (default: 39085)
+  LOG_FILE                           Daemon log path (default: ./tmp/staticflow-media-canary-$PORT.log)
+  PID_FILE                           Daemon pid file (default: ./tmp/staticflow-media-canary-$PORT.pid)
+  CANARY_BIN_PATH                    Output binary path (default: ./bin/static-flow-media-canary)
+  MEDIA_BIN                          Explicit media binary path
+  STATICFLOW_LOCAL_MEDIA_ROOT        Media root (default: /mnt/e/videos/static)
+  STATICFLOW_LOCAL_MEDIA_CACHE_DIR   Media cache dir (default: ./tmp/local-media-cache-canary)
+  STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG Optional; default 1
+
+Behavior:
+  - Uses a fixed canary port unless PORT is overridden.
+  - Waits for the standalone media service readiness before returning.
 EOF
 }
 
@@ -41,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     *) fail "Unknown option: $1 (use --help)" ;;
   esac
 done
+
+sf_apply_media_service_defaults
 
 LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-media-canary-${PORT}.log}"
 PID_FILE="${PID_FILE:-$ROOT_DIR/tmp/staticflow-media-canary-${PORT}.pid}"
@@ -78,11 +96,11 @@ if [[ "$BUILD_MEDIA" == "true" ]]; then
 fi
 
 MEDIA_BIN_PATH="$(resolve_media_bin)"
-log "Binary:   $MEDIA_BIN_PATH"
-log "Listen:   $HOST:$PORT"
-log "Media root: $STATICFLOW_LOCAL_MEDIA_ROOT"
-log "Media cache: $STATICFLOW_LOCAL_MEDIA_CACHE_DIR"
-log "Auto download ffmpeg: $STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG"
+log "Using MEDIA_BIN=$MEDIA_BIN_PATH"
+log "Using HOST=$HOST PORT=$PORT"
+log "Using STATICFLOW_LOCAL_MEDIA_ROOT=$STATICFLOW_LOCAL_MEDIA_ROOT"
+log "Using STATICFLOW_LOCAL_MEDIA_CACHE_DIR=$STATICFLOW_LOCAL_MEDIA_CACHE_DIR"
+log "Using STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG=$STATICFLOW_LOCAL_MEDIA_AUTO_DOWNLOAD_FFMPEG"
 
 export HOST
 export PORT
@@ -96,14 +114,34 @@ if [[ "$DAEMON" == "true" ]]; then
   setsid "$MEDIA_BIN_PATH" < /dev/null >> "$LOG_FILE" 2>&1 &
   local_pid=$!
   echo "$local_pid" > "$PID_FILE"
-  log "Started in background (pid=$local_pid, log=$LOG_FILE)"
-  sleep 2
-  if kill -0 "$local_pid" 2>/dev/null; then
-    log "Media service is running. Verify: curl http://${HOST}:${PORT}/internal/local-media/list?limit=2"
-  else
+  if ! sf_wait_media_service_ready "$HOST" "$PORT"; then
+    if kill -0 "$local_pid" 2>/dev/null; then
+      fail "Media service failed to become ready: $(sf_media_service_health_url "$HOST" "$PORT" 1)"
+    fi
     fail "Media service exited immediately. Check $LOG_FILE"
   fi
+  log "Media service is ready at $(sf_media_service_health_url "$HOST" "$PORT" 1)"
+  log "Verification URL: $(sf_media_service_health_url "$HOST" "$PORT" 2)"
+  log "Daemon pid=$local_pid log=$LOG_FILE pid_file=$PID_FILE"
+  exit 0
 else
-  log "Starting in foreground (Ctrl+C to stop, log=$LOG_FILE)..."
-  exec "$MEDIA_BIN_PATH"
+  "$MEDIA_BIN_PATH" &
+  local_pid=$!
+
+  cleanup() {
+    if kill -0 "$local_pid" >/dev/null 2>&1; then
+      log "Stopping media service (pid=$local_pid)..."
+      kill "$local_pid" >/dev/null 2>&1 || true
+      wait "$local_pid" 2>/dev/null || true
+    fi
+  }
+  trap cleanup EXIT INT TERM
+
+  if ! sf_wait_media_service_ready "$HOST" "$PORT"; then
+    fail "Media service failed to become ready: $(sf_media_service_health_url "$HOST" "$PORT" 1)"
+  fi
+
+  log "Media service is ready."
+  log "Verification URL: $(sf_media_service_health_url "$HOST" "$PORT" 2)"
+  wait "$local_pid"
 fi

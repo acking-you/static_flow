@@ -146,9 +146,6 @@ const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 3_600;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
-const MIN_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60;
-const MAX_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 7 * 24 * 60 * 60;
-const MAX_RUNTIME_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 3650;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
@@ -196,9 +193,6 @@ fn build_runtime_config_response(
         usage_event_flush_batch_size: config.usage_event_flush_batch_size,
         usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
-        usage_event_maintenance_enabled: config.usage_event_maintenance_enabled,
-        usage_event_maintenance_interval_seconds: config.usage_event_maintenance_interval_seconds,
-        usage_event_detail_retention_days: config.usage_event_detail_retention_days,
         kiro_cache_kmodels_json: config.kiro_cache_kmodels_json.clone(),
         kiro_cache_policy_json: config.kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: config.kiro_prefix_cache_mode.clone(),
@@ -241,17 +235,6 @@ fn validate_positive_u64(
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     if value == 0 {
         return Err(bad_request(&format!("{field_name} must be positive")));
-    }
-    Ok(())
-}
-
-fn validate_usage_event_detail_retention_days(
-    value: i64,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if value != -1 && !(1..=MAX_RUNTIME_USAGE_EVENT_DETAIL_RETENTION_DAYS).contains(&value) {
-        return Err(bad_request(
-            "usage_event_detail_retention_days must be -1 or between 1 and 3650",
-        ));
     }
     Ok(())
 }
@@ -380,6 +363,11 @@ pub async fn update_admin_runtime_config(
     Json(request): Json<UpdateLlmGatewayRuntimeConfigRequest>,
 ) -> Result<Json<LlmGatewayRuntimeConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
+    let current_record = state
+        .llm_gateway_store
+        .get_runtime_config_or_default()
+        .await
+        .map_err(|err| internal_error("Failed to load llm gateway config", err))?;
     let current = state.llm_gateway_runtime_config.read().clone();
     let ttl = request
         .auth_cache_ttl_seconds
@@ -462,22 +450,6 @@ pub async fn update_admin_runtime_config(
     {
         return Err(bad_request("usage_event_flush_max_buffer_bytes is out of range"));
     }
-    let usage_event_maintenance_enabled = request
-        .usage_event_maintenance_enabled
-        .unwrap_or(current.usage_event_maintenance_enabled);
-    let usage_event_maintenance_interval_seconds = request
-        .usage_event_maintenance_interval_seconds
-        .unwrap_or(current.usage_event_maintenance_interval_seconds);
-    if !(MIN_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS
-        ..=MAX_RUNTIME_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS)
-        .contains(&usage_event_maintenance_interval_seconds)
-    {
-        return Err(bad_request("usage_event_maintenance_interval_seconds is out of range"));
-    }
-    let usage_event_detail_retention_days = request
-        .usage_event_detail_retention_days
-        .unwrap_or(current.usage_event_detail_retention_days);
-    validate_usage_event_detail_retention_days(usage_event_detail_retention_days)?;
     let kiro_cache_kmodels_json = request
         .kiro_cache_kmodels_json
         .clone()
@@ -536,9 +508,10 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
-        usage_event_maintenance_enabled,
-        usage_event_maintenance_interval_seconds,
-        usage_event_detail_retention_days,
+        usage_event_maintenance_enabled: current_record.usage_event_maintenance_enabled,
+        usage_event_maintenance_interval_seconds: current_record
+            .usage_event_maintenance_interval_seconds,
+        usage_event_detail_retention_days: current_record.usage_event_detail_retention_days,
         kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
         kiro_cache_policy_json: kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
@@ -570,9 +543,6 @@ pub async fn update_admin_runtime_config(
             usage_event_flush_batch_size,
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
-            usage_event_maintenance_enabled,
-            usage_event_maintenance_interval_seconds,
-            usage_event_detail_retention_days,
             kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
             kiro_cache_kmodels,
             kiro_cache_policy_json: kiro_cache_policy_json.clone(),
@@ -598,9 +568,6 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
-        usage_event_maintenance_enabled,
-        usage_event_maintenance_interval_seconds,
-        usage_event_detail_retention_days,
         kiro_cache_kmodels_json = %kiro_cache_kmodels_json,
         kiro_cache_policy_json = %kiro_cache_policy_json,
         kiro_prefix_cache_mode = %kiro_prefix_cache_mode,
@@ -1228,11 +1195,11 @@ pub async fn list_admin_usage_events(
         limit,
         "Listing admin LLM gateway usage events"
     );
-    let total = query
-        .key_id
-        .as_deref()
-        .map(|key_id| state.llm_gateway.usage_event_count_for_key(key_id))
-        .unwrap_or_else(|| state.llm_gateway.total_usage_event_count());
+    let total = state
+        .llm_gateway_store
+        .count_usage_events_for_provider(query.key_id.as_deref(), None)
+        .await
+        .map_err(|err| internal_error("Failed to count llm gateway usage events", err))?;
     let activity_snapshot = state
         .llm_gateway
         .request_activity_snapshot(query.key_id.as_deref());
@@ -2071,6 +2038,7 @@ struct GatewayFailureUsageRequest<'a> {
 fn build_gateway_usage_event_record(
     args: GatewayUsageEventBuild<'_>,
 ) -> LlmGatewayUsageEventRecord {
+    let capture_request_details = args.status_code >= 400;
     LlmGatewayUsageEventRecord {
         id: generate_id("llm-usage"),
         key_id: args.current.id.clone(),
@@ -2102,7 +2070,9 @@ fn build_gateway_usage_event_record(
         last_message_content: args.last_message_content,
         client_request_body_json: None,
         upstream_request_body_json: None,
-        full_request_json: maybe_raw_request_body_text(&args.prepared.client_request_body),
+        full_request_json: capture_request_details
+            .then(|| maybe_raw_request_body_text(&args.prepared.client_request_body))
+            .flatten(),
         created_at: now_ms(),
     }
 }
@@ -5989,6 +5959,11 @@ mod tests {
 
         assert_eq!(event.status_code, 502);
         assert_eq!(event.last_message_content.as_deref(), Some(diagnostic.as_str()));
+        assert_eq!(event.request_headers_json, context.request_headers_json);
+        assert_eq!(
+            event.full_request_json,
+            maybe_raw_request_body_text(&prepared.client_request_body)
+        );
     }
 
     #[test]
@@ -6047,7 +6022,8 @@ mod tests {
     }
 
     #[test]
-    fn build_codex_usage_event_uses_weighted_billable_formula() {
+    fn build_codex_success_usage_event_uses_weighted_billable_formula_without_full_request_payloads(
+    ) {
         let key = sample_public_lookup_key();
         let prepared = sample_prepared_gateway_request();
         let context = sample_gateway_event_context();
@@ -6069,6 +6045,10 @@ mod tests {
         });
 
         assert_eq!(event.billable_tokens, 138);
+        assert_eq!(event.request_headers_json, context.request_headers_json);
+        assert_eq!(event.client_request_body_json, None);
+        assert_eq!(event.upstream_request_body_json, None);
+        assert_eq!(event.full_request_json, None);
     }
 
     #[test]
@@ -6162,13 +6142,6 @@ mod tests {
 
         let err = validate_positive_u64("kiro_conversation_anchor_max_entries", 0)
             .expect_err("zero max entries should fail");
-        assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn update_runtime_config_rejects_invalid_usage_event_detail_retention_days() {
-        let err = validate_usage_event_detail_retention_days(0)
-            .expect_err("zero retention days should fail");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
     }
 

@@ -7307,6 +7307,7 @@ dependencies = [
  "pulldown-cmark 0.13.0",
  "serde",
  "serde_json",
+ "static-flow-media-types",
  "static-flow-shared",
  "url",
  "urlencoding",
@@ -7334,12 +7335,14 @@ dependencies = [
  "sha2",
  "static-flow-media-types",
  "tempfile",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-util",
  "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
@@ -7347,6 +7350,7 @@ name = "static-flow-media-types"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

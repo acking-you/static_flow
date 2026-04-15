@@ -12,6 +12,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_local_media_proxy_env.sh"
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -50,6 +51,10 @@ Environment variables (all optional):
   SITE_BASE_URL        Public URL (default: https://ackingliu.top)
   FRONTEND_DIST_DIR    Frontend dist path (default: ./frontend/dist)
   LOG_FILE             Runtime log path (default: ./tmp/staticflow-backend.log)
+  LOCAL_MEDIA_MODE     enabled|disabled (default: enabled)
+  STATICFLOW_MEDIA_PROXY_BASE_URL Default proxy base URL (default: http://127.0.0.1:39085)
+  STATICFLOW_MEDIA_PROXY_HOST Default proxy host when base URL is unset
+  STATICFLOW_MEDIA_PROXY_PORT Default proxy port when base URL is unset
   ADMIN_TOKEN          If set, allows remote admin access with this token
   ADMIN_LOCAL_ONLY     Default true; set to false to disable IP check
 
@@ -77,6 +82,8 @@ while [[ $# -gt 0 ]]; do
     *)           fail "Unknown option: $1 (use --help)" ;;
   esac
 done
+
+sf_apply_local_media_proxy_defaults
 
 mkdir -p "$ROOT_DIR/tmp" "$(dirname "$LOG_FILE")"
 if [[ "$DAEMON" != "true" ]]; then
@@ -153,6 +160,8 @@ log "DB root:  $DB_ROOT"
 log "Listen:   $HOST:$PORT"
 log "Site URL: $SITE_BASE_URL"
 log "Frontend: $FRONTEND_DIST_DIR"
+log "Local media mode: $LOCAL_MEDIA_MODE"
+log "Media proxy base URL: ${STATICFLOW_MEDIA_PROXY_BASE_URL:-<unset>}"
 
 # ---------------------------------------------------------------------------
 # Export and run
@@ -173,6 +182,11 @@ export COMMENT_AI_CODEX_JSON_STREAM
 export COMMENT_AI_CODEX_BYPASS
 export COMMENT_AI_RESULT_DIR
 export COMMENT_AI_RESULT_CLEANUP_ON_SUCCESS
+if [[ -n "${STATICFLOW_MEDIA_PROXY_BASE_URL:-}" ]]; then
+  export STATICFLOW_MEDIA_PROXY_BASE_URL
+else
+  unset STATICFLOW_MEDIA_PROXY_BASE_URL
+fi
 
 if [[ "$DAEMON" == "true" ]]; then
   : > "$LOG_FILE"

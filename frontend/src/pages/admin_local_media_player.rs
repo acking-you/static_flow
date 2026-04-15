@@ -10,8 +10,9 @@ use yew_router::prelude::*;
 use super::admin_local_media::AdminLocalMediaPlayerQuery;
 use crate::{
     api::{
-        fetch_admin_local_media_job_status, open_admin_local_media_playback,
-        LocalMediaPlaybackMode, LocalMediaPlaybackOpenResponse, LocalMediaPlaybackStatus,
+        build_admin_local_media_raw_playback, fetch_admin_local_media_job_status,
+        open_admin_local_media_playback, LocalMediaPlaybackMode, LocalMediaPlaybackOpenResponse,
+        LocalMediaPlaybackStatus,
     },
     router::Route,
 };
@@ -44,14 +45,16 @@ pub fn admin_local_media_player_page() -> Html {
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
     let playback = use_state(|| None::<LocalMediaPlaybackOpenResponse>);
+    let selected_mode = use_state(|| PlaybackOpenMode::Raw);
     let player_host = use_node_ref();
 
     {
         let loading = loading.clone();
         let error = error.clone();
         let playback = playback.clone();
+        let selected_mode = selected_mode.clone();
         let file = file.clone();
-        use_effect_with(file.clone(), move |file| {
+        use_effect_with((file.clone(), *selected_mode), move |(file, selected_mode)| {
             let has_file = !file.trim().is_empty();
             if !has_file {
                 loading.set(false);
@@ -60,13 +63,21 @@ pub fn admin_local_media_player_page() -> Html {
                 loading.set(true);
                 error.set(None);
                 let file = file.clone();
-                spawn_local(async move {
-                    match open_admin_local_media_playback(&file).await {
-                        Ok(response) => playback.set(Some(response)),
-                        Err(err) => error.set(Some(err)),
-                    }
-                    loading.set(false);
-                });
+                match selected_mode {
+                    PlaybackOpenMode::Raw => {
+                        playback.set(Some(build_admin_local_media_raw_playback(&file)));
+                        loading.set(false);
+                    },
+                    PlaybackOpenMode::Compatible => {
+                        spawn_local(async move {
+                            match open_admin_local_media_playback(&file).await {
+                                Ok(response) => playback.set(Some(response)),
+                                Err(err) => error.set(Some(err)),
+                            }
+                            loading.set(false);
+                        });
+                    },
+                }
             }
             || ()
         });
@@ -99,6 +110,8 @@ pub fn admin_local_media_player_page() -> Html {
                                             .as_ref()
                                             .map(|value| value.title.clone())
                                             .unwrap_or_else(|| "Preparing".to_string()),
+                                        duration_seconds: job.duration_seconds,
+                                        detail: job.detail,
                                         error: job.error,
                                     };
                                     playback.set(Some(next));
@@ -169,6 +182,16 @@ pub fn admin_local_media_player_page() -> Html {
         })
     };
 
+    let select_raw = {
+        let selected_mode = selected_mode.clone();
+        Callback::from(move |_| selected_mode.set(PlaybackOpenMode::Raw))
+    };
+
+    let select_compatible = {
+        let selected_mode = selected_mode.clone();
+        Callback::from(move |_| selected_mode.set(PlaybackOpenMode::Compatible))
+    };
+
     let body = if *loading {
         html! {
             <div class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--muted)]">
@@ -187,8 +210,13 @@ pub fn admin_local_media_player_page() -> Html {
                 <div class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-6">
                     <div class="text-base font-semibold text-[var(--text)]">{ playback.title }</div>
                     <p class="mt-2 text-sm text-[var(--muted)]">
-                        { "The backend is preparing a mobile-friendly playback stream. This avoids buffering the whole file in memory and keeps MKV playback consistent." }
+                        { playback.detail.unwrap_or_else(|| "The backend is preparing a mobile-friendly playback stream.".to_string()) }
                     </p>
+                    if let Some(duration_seconds) = playback.duration_seconds {
+                        <div class="mt-3 text-xs text-[var(--muted)]">
+                            { format!("Duration: {}", format_duration(duration_seconds)) }
+                        </div>
+                    }
                     if let Some(job_id) = playback.job_id {
                         <div class="mt-3 text-xs text-[var(--muted)] break-all">{ format!("job: {job_id}") }</div>
                     }
@@ -228,10 +256,24 @@ pub fn admin_local_media_player_page() -> Html {
                         </div>
                         <h1 class="mt-2 text-xl font-semibold text-[var(--text)] break-all">{ file.clone() }</h1>
                         <p class="mt-1 text-sm text-[var(--muted)]">
-                            { "This page stays focused on playback. The browser page remains lightweight, while heavy media work is delegated to the backend and disk cache." }
+                            { "Default is raw browser playback. Only switch to compatibility mode when the browser cannot play the file correctly." }
                         </p>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            class={mode_button_classes(*selected_mode == PlaybackOpenMode::Raw)}
+                            onclick={select_raw}
+                        >
+                            { "Raw" }
+                        </button>
+                        <button
+                            type="button"
+                            class={mode_button_classes(*selected_mode == PlaybackOpenMode::Compatible)}
+                            onclick={select_compatible}
+                        >
+                            { "Compatible" }
+                        </button>
                         <button type="button" class="btn-fluent-secondary" onclick={back_to_browser}>
                             <i class="fas fa-arrow-left mr-2" aria-hidden="true"></i>
                             { "Back To Folder" }
@@ -241,6 +283,54 @@ pub fn admin_local_media_player_page() -> Html {
             </section>
             { body }
         </main>
+    }
+}
+
+fn format_duration(duration_seconds: f64) -> String {
+    let total_seconds = duration_seconds.max(0.0).round() as u64;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlaybackOpenMode {
+    Raw,
+    Compatible,
+}
+
+fn mode_button_classes(active: bool) -> Classes {
+    if active {
+        classes!(
+            "rounded-full",
+            "border",
+            "border-sky-500/60",
+            "bg-sky-500/15",
+            "px-3",
+            "py-1.5",
+            "text-sm",
+            "font-semibold",
+            "text-sky-700",
+            "dark:text-sky-200"
+        )
+    } else {
+        classes!(
+            "rounded-full",
+            "border",
+            "border-[var(--border)]",
+            "bg-[var(--surface)]",
+            "px-3",
+            "py-1.5",
+            "text-sm",
+            "font-semibold",
+            "text-[var(--muted)]",
+            "hover:text-[var(--text)]"
+        )
     }
 }
 

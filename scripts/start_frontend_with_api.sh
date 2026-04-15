@@ -7,6 +7,7 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-39080}"
 API_BASE="${API_BASE:-http://${BACKEND_HOST}:${BACKEND_PORT}/api}"
+LOCAL_MEDIA_API_BASE="${LOCAL_MEDIA_API_BASE:-}"
 FRONTEND_PORT="${FRONTEND_PORT:-38080}"
 OPEN_BROWSER="${OPEN_BROWSER:-false}"
 TRUNK_EXTRA_ARGS=()
@@ -42,6 +43,7 @@ Environment variables (optional):
   HOST=<host> / PORT=<port> / PORT_BASE=<port> (compatible with backend script vars)
   FRONTEND_PORT=<port>
   OPEN_BROWSER=true|false
+  LOCAL_MEDIA_API_BASE=<url> Optional local-media API base override
   NPM_CACHE_DIR=<dir> (default: ./tmp/npm-cache, avoid ~/.npm permission issues)
 
 Examples:
@@ -164,6 +166,12 @@ fi
 log "Project root: $ROOT_DIR"
 log "Frontend dir: $FRONTEND_DIR"
 log "Using STATICFLOW_API_BASE=$API_BASE"
+if [[ -n "$LOCAL_MEDIA_API_BASE" ]]; then
+  log "Using STATICFLOW_LOCAL_MEDIA_API_BASE=$LOCAL_MEDIA_API_BASE"
+else
+  local_media_base="${API_BASE%/api}/admin/local-media/api"
+  log "Using derived local-media API base=$local_media_base"
+fi
 log "Using NPM cache: $NPM_CACHE_DIR"
 log "Frontend URL: http://127.0.0.1:$FRONTEND_PORT"
 log "Tip: press Ctrl+C to stop frontend"
@@ -171,4 +179,5 @@ log "Tip: press Ctrl+C to stop frontend"
 cd "$FRONTEND_DIR"
 NPM_CONFIG_CACHE="$NPM_CACHE_DIR" \
 STATICFLOW_API_BASE="$API_BASE" \
+STATICFLOW_LOCAL_MEDIA_API_BASE="$LOCAL_MEDIA_API_BASE" \
 "${TRUNK_CMD[@]}"

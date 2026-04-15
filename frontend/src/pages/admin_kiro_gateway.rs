@@ -3188,7 +3188,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     <div>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Cache Simulation" }</h2>
                         <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "这里统一管理 Kiro 的全局 cache policy、cache 模拟模式、prefix tree 容量/TTL，以及按模型的保守 Kmodel 系数。prefix tree 模式会基于修正后的 ConversationState 做共享前缀匹配；formula 模式继续走旧的保守 credit 反推。" }
+                            { "这里统一管理 Kiro 的全局 cache policy、cache 模拟模式、prefix tree 容量/TTL，以及按模型的保守 Kmodel 系数。prefix tree 模式会基于修正后的 ConversationState 做共享前缀匹配；formula 模式继续走旧的保守 credit 反推。这个入口是 Kiro cache 全局参数的唯一前端编辑面。" }
                         </p>
                     </div>
                     <button

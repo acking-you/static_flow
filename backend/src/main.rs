@@ -17,6 +17,7 @@ mod request_context;
 mod routes;
 mod seo;
 mod state;
+mod table_maintenance;
 mod upstream_proxy;
 
 use std::{env, time::Duration};

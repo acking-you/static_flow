@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderValue, Method},
     middleware,
     response::{Html, IntoResponse},
-    routing::{any, delete, get, patch, post},
+    routing::{any, delete, get, patch, post, put},
     Router,
 };
 use tower_http::{
@@ -466,8 +466,26 @@ pub fn create_router(state: AppState) -> Router {
             get(crate::media_proxy::handlers::stream_local_media_hls_artifact),
         )
         .route(
+            "/admin/local-media/api/playback/mp4/:job_id/:file_name",
+            get(crate::media_proxy::handlers::stream_local_media_mp4_artifact),
+        )
+        .route(
             "/admin/local-media/api/poster",
             get(crate::media_proxy::handlers::stream_local_media_poster),
+        )
+        .route(
+            "/admin/local-media/api/uploads/tasks",
+            post(crate::media_proxy::handlers::create_upload_task)
+                .get(crate::media_proxy::handlers::list_upload_tasks),
+        )
+        .route(
+            "/admin/local-media/api/uploads/tasks/:task_id",
+            get(crate::media_proxy::handlers::get_upload_task)
+                .delete(crate::media_proxy::handlers::delete_upload_task),
+        )
+        .route(
+            "/admin/local-media/api/uploads/tasks/:task_id/chunks",
+            put(crate::media_proxy::handlers::append_upload_chunk),
         );
 
     #[cfg(not(feature = "local-media"))]

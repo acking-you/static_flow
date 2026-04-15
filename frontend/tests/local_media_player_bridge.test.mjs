@@ -13,6 +13,8 @@ function createEnvironment({ nativeHls = false } = {}) {
 
   function Player(config) {
     this.config = config;
+    this.playbackRate = 1;
+    this.volume = 1;
     this.destroy = () => {};
     this.on = () => {};
     this.once = () => {};
@@ -23,6 +25,48 @@ function createEnvironment({ nativeHls = false } = {}) {
   function HlsPlayerPlugin() {}
   HlsPlayerPlugin.pluginName = 'hls';
   HlsPlayerPlugin.isSupported = () => true;
+
+  function createNode(tag = 'div') {
+    return {
+      tagName: tag.toUpperCase(),
+      style: {},
+      children: [],
+      parentNode: null,
+      textContent: '',
+      innerHTML: '',
+      listeners: new Map(),
+      appendChild(child) {
+        child.parentNode = this;
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        this.children = this.children.filter((value) => value !== child);
+        if (child) {
+          child.parentNode = null;
+        }
+      },
+      addEventListener(type, handler) {
+        const current = this.listeners.get(type) || [];
+        current.push(handler);
+        this.listeners.set(type, current);
+      },
+      removeEventListener(type, handler) {
+        const current = this.listeners.get(type) || [];
+        this.listeners.set(
+          type,
+          current.filter((value) => value !== handler),
+        );
+      },
+      dispatch(type, event = {}) {
+        const handlers = this.listeners.get(type) || [];
+        handlers.forEach((handler) => handler(event));
+      },
+      setAttribute(name, value) {
+        this[name] = value;
+      },
+    };
+  }
 
   const window = {
     Player,
@@ -44,18 +88,19 @@ function createEnvironment({ nativeHls = false } = {}) {
       fn();
       return 1;
     },
+    clearTimeout() {},
   };
 
   const document = {
     createElement(tag) {
-      if (tag !== 'video') {
-        throw new Error(`unexpected tag: ${tag}`);
+      if (tag === 'video') {
+        return {
+          canPlayType(mime) {
+            return nativeHls && mime === 'application/vnd.apple.mpegurl' ? 'probably' : '';
+          },
+        };
       }
-      return {
-        canPlayType(mime) {
-          return nativeHls && mime === 'application/vnd.apple.mpegurl' ? 'probably' : '';
-        },
-      };
+      return createNode(tag);
     },
   };
 
@@ -68,10 +113,8 @@ function createEnvironment({ nativeHls = false } = {}) {
   });
   vm.runInContext(bridgeSource, context, { filename: bridgePath });
 
-  const element = {
-    __sfLocalMediaPlayer: null,
-    innerHTML: '',
-  };
+  const element = createNode('div');
+  element.__sfLocalMediaPlayer = null;
 
   return { window, mounts, element };
 }
@@ -109,4 +152,32 @@ test('player bridge uses Player.defaultPreset when available', () => {
   assert.equal(mounts.length, 1);
   assert.equal(mounts[0].config.presets.length, 1);
   assert.equal(mounts[0].config.presets[0], window.Player.defaultPreset);
+});
+
+test('coarse-pointer long press switches to 2x and shows centered badge until release', () => {
+  const { mounts, element, window } = createEnvironment({ nativeHls: false });
+
+  window.sfLocalMediaPlayerMount(
+    element,
+    '/admin/local-media/api/playback/raw?file=demo.mp4',
+    'raw',
+    'Demo',
+    'sf-local-media-progress:demo',
+  );
+
+  const player = mounts[0].instance;
+  assert.equal(player.playbackRate, 1);
+
+  element.dispatch('touchstart', {
+    touches: [{ clientX: 32, clientY: 48 }],
+  });
+
+  assert.equal(player.playbackRate, 2);
+  assert.equal(element.children.at(-1).textContent, '2x');
+  assert.equal(element.children.at(-1).style.opacity, '1');
+
+  element.dispatch('touchend', {});
+
+  assert.equal(player.playbackRate, 1);
+  assert.equal(element.children.at(-1).style.opacity, '0');
 });
