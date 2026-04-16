@@ -145,7 +145,9 @@ bin-backend:
 	echo "📦 $$cmd"; \
 	eval "$$cmd"
 	@mkdir -p $(BIN_DIR)
-	@cp ./target/release-backend/static-flow-backend $(BIN_DIR)/$(BACKEND_BIN_NAME)
+	@tmp_bin="$(BIN_DIR)/.$(BACKEND_BIN_NAME).tmp"; \
+	cp ./target/release-backend/static-flow-backend "$$tmp_bin"; \
+	mv -f "$$tmp_bin" $(BIN_DIR)/$(BACKEND_BIN_NAME)
 	@echo "✅ 输出: $(BIN_DIR)/$(BACKEND_BIN_NAME)"
 
 # 编译 media service binary (release-backend profile for consistency with backend deployments)

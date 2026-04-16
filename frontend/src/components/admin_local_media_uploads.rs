@@ -4,7 +4,7 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{Event, File, HtmlInputElement};
 use yew::prelude::*;
 
-const CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+const CHUNK_BYTES: u64 = static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES as u64;
 
 #[derive(Properties, PartialEq, Clone)]
 pub struct AdminLocalMediaUploadsProps {

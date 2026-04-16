@@ -3,11 +3,23 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
+    handler::Handler,
     routing::{get, post, put},
     Router,
 };
 
 use crate::{handlers, state::LocalMediaState};
+
+fn upload_chunk_route<H, T, S>(handler: H) -> axum::routing::MethodRouter<S>
+where
+    H: Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    put(handler)
+        .layer(DefaultBodyLimit::max(static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES))
+}
 
 pub fn create_router(state: Arc<LocalMediaState>) -> Router {
     Router::new()
@@ -37,7 +49,7 @@ pub fn create_router(state: Arc<LocalMediaState>) -> Router {
         )
         .route(
             "/internal/local-media/uploads/tasks/:task_id/chunks",
-            put(handlers::append_upload_chunk),
+            upload_chunk_route(handlers::append_upload_chunk),
         )
         .with_state(state)
 }
@@ -46,7 +58,7 @@ pub fn create_router(state: Arc<LocalMediaState>) -> Router {
 mod tests {
     use axum::{
         body::Body,
-        http::{Request, StatusCode},
+        http::{header, Request, StatusCode},
     };
     use tempfile::tempdir;
     use tower::ServiceExt;
@@ -91,5 +103,30 @@ mod tests {
         .await
         .expect("route response");
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn upload_chunk_route_accepts_full_chunk_body_without_413() {
+        let root = tempdir().expect("root tempdir");
+        let cache = tempdir().expect("cache tempdir");
+        let response = create_router(LocalMediaState::new_for_test(
+            root.path().to_path_buf(),
+            cache.path().to_path_buf(),
+        ))
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/internal/local-media/uploads/tasks/task-1/chunks?offset=0")
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(vec![
+                    0_u8;
+                    static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES
+                ]))
+                .expect("request"),
+        )
+        .await
+        .expect("route response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

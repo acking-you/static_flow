@@ -1,5 +1,6 @@
 use axum::{
-    extract::OriginalUri,
+    extract::{DefaultBodyLimit, OriginalUri},
+    handler::Handler,
     http::{HeaderValue, Method},
     middleware,
     response::{Html, IntoResponse},
@@ -14,6 +15,17 @@ use tower_http::{
 use crate::{
     behavior_analytics, handlers, kiro_gateway, llm_gateway, request_context, seo, state::AppState,
 };
+
+#[cfg(feature = "local-media")]
+fn local_media_upload_chunk_route<H, T, S>(handler: H) -> axum::routing::MethodRouter<S>
+where
+    H: Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    put(handler)
+        .layer(DefaultBodyLimit::max(static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES))
+}
 
 /// Build the full application router, including public APIs, admin APIs, and
 /// SPA fallbacks.
@@ -485,7 +497,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/admin/local-media/api/uploads/tasks/:task_id/chunks",
-            put(crate::media_proxy::handlers::append_upload_chunk),
+            local_media_upload_chunk_route(crate::media_proxy::handlers::append_upload_chunk),
         );
 
     #[cfg(not(feature = "local-media"))]
@@ -558,16 +570,29 @@ fn parse_allowed_origins(value: Option<&str>) -> Option<Vec<HeaderValue>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "local-media")]
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+        Router,
+    };
     #[cfg(not(feature = "local-media"))]
     use axum::{
         body::{to_bytes, Body},
         http::{header, Request, StatusCode},
         routing::any,
     };
+    #[cfg(feature = "local-media")]
+    use tower::Service;
     #[cfg(not(feature = "local-media"))]
     use tower::Service;
 
     use super::parse_allowed_origins;
+
+    #[cfg(feature = "local-media")]
+    async fn accept_chunk(_: axum::body::Bytes) -> StatusCode {
+        StatusCode::OK
+    }
 
     #[test]
     fn parse_allowed_origins_returns_none_for_empty_input() {
@@ -579,6 +604,31 @@ mod tests {
     fn parse_allowed_origins_parses_comma_separated_values() {
         let origins = parse_allowed_origins(Some("https://a.com, https://b.com")).unwrap();
         assert_eq!(origins.len(), 2);
+    }
+
+    #[cfg(feature = "local-media")]
+    #[tokio::test]
+    async fn local_media_upload_chunk_route_accepts_full_chunk_body() {
+        let mut app = Router::new()
+            .route("/chunks", super::local_media_upload_chunk_route(accept_chunk))
+            .into_service();
+
+        let response = app
+            .call(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/chunks")
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(vec![
+                        0_u8;
+                        static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES
+                    ]))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[cfg(not(feature = "local-media"))]

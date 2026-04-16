@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const LOCAL_MEDIA_UPLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalMediaEntryKind {
@@ -207,8 +209,7 @@ mod upload_type_tests {
             mime_type: Some("video/mp4".to_string()),
         };
         let value = serde_json::to_value(&request).expect("serialize");
-        let decoded: CreateUploadTaskRequest =
-            serde_json::from_value(value).expect("deserialize");
+        let decoded: CreateUploadTaskRequest = serde_json::from_value(value).expect("deserialize");
         assert_eq!(decoded.target_dir, "movies/demo");
         assert_eq!(decoded.source_file_name, "clip.mp4");
         assert_eq!(decoded.file_size, 42);
