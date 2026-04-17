@@ -25,10 +25,10 @@ use super::{
         llm_gateway_usage_events_schema,
     },
     types::{
-        compute_billable_tokens, default_kiro_cache_kmodels_json,
-        LlmGatewayAccountContributionRequestRecord, LlmGatewayAccountGroupRecord,
-        LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
-        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
+        compute_billable_tokens, default_kiro_billable_model_multipliers_json,
+        default_kiro_cache_kmodels_json, LlmGatewayAccountContributionRequestRecord,
+        LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
+        LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
         LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         LlmGatewayUsageEventSummaryRecord, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
@@ -85,6 +85,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut kiro_request_validation_enabled = BooleanBuilder::new();
     let mut kiro_cache_estimation_enabled = BooleanBuilder::new();
     let mut kiro_cache_policy_override_json = StringBuilder::new();
+    let mut kiro_billable_model_multipliers_override_json = StringBuilder::new();
 
     for record in records {
         id.append_value(&record.id);
@@ -127,6 +128,12 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
             &mut kiro_cache_policy_override_json,
             record.kiro_cache_policy_override_json.as_deref(),
         );
+        append_optional_str(
+            &mut kiro_billable_model_multipliers_override_json,
+            record
+                .kiro_billable_model_multipliers_override_json
+                .as_deref(),
+        );
     }
 
     RecordBatch::try_new(schema, vec![
@@ -158,6 +165,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(kiro_request_validation_enabled.finish()),
         Arc::new(kiro_cache_estimation_enabled.finish()),
         Arc::new(kiro_cache_policy_override_json.finish()),
+        Arc::new(kiro_billable_model_multipliers_override_json.finish()),
     ])
     .context("failed to build llm gateway keys batch")
 }
@@ -324,6 +332,7 @@ pub fn build_runtime_config_batch(
     let mut usage_event_maintenance_interval_seconds = UInt64Builder::new();
     let mut usage_event_detail_retention_days = Int64Builder::new();
     let mut kiro_cache_kmodels_json = StringBuilder::new();
+    let mut kiro_billable_model_multipliers_json = StringBuilder::new();
     let mut kiro_cache_policy_json = StringBuilder::new();
     let mut kiro_prefix_cache_mode = StringBuilder::new();
     let mut kiro_prefix_cache_max_tokens = UInt64Builder::new();
@@ -359,6 +368,8 @@ pub fn build_runtime_config_batch(
             .append_value(record.usage_event_maintenance_interval_seconds);
         usage_event_detail_retention_days.append_value(record.usage_event_detail_retention_days);
         kiro_cache_kmodels_json.append_value(&record.kiro_cache_kmodels_json);
+        kiro_billable_model_multipliers_json
+            .append_value(&record.kiro_billable_model_multipliers_json);
         kiro_cache_policy_json.append_value(&record.kiro_cache_policy_json);
         kiro_prefix_cache_mode.append_value(&record.kiro_prefix_cache_mode);
         kiro_prefix_cache_max_tokens.append_value(record.kiro_prefix_cache_max_tokens);
@@ -391,6 +402,7 @@ pub fn build_runtime_config_batch(
         Arc::new(usage_event_maintenance_interval_seconds.finish()),
         Arc::new(usage_event_detail_retention_days.finish()),
         Arc::new(kiro_cache_kmodels_json.finish()),
+        Arc::new(kiro_billable_model_multipliers_json.finish()),
         Arc::new(kiro_cache_policy_json.finish()),
         Arc::new(kiro_prefix_cache_mode.finish()),
         Arc::new(kiro_prefix_cache_max_tokens.finish()),
@@ -724,6 +736,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let kiro_cache_policy_override_json = batch
             .column_by_name("kiro_cache_policy_override_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let kiro_billable_model_multipliers_override_json = batch
+            .column_by_name("kiro_billable_model_multipliers_override_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
 
         for idx in 0..batch.num_rows() {
             let raw_billable_tokens = compute_billable_tokens(
@@ -785,6 +800,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                     .unwrap_or(true),
                 kiro_cache_policy_override_json: kiro_cache_policy_override_json
                     .and_then(|column| value_string_opt(column, idx)),
+                kiro_billable_model_multipliers_override_json:
+                    kiro_billable_model_multipliers_override_json
+                        .and_then(|column| value_string_opt(column, idx)),
             });
         }
     }
@@ -1145,6 +1163,9 @@ pub fn batches_to_runtime_config(
         let kiro_cache_kmodels_json = batch
             .column_by_name("kiro_cache_kmodels_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let kiro_billable_model_multipliers_json = batch
+            .column_by_name("kiro_billable_model_multipliers_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let kiro_cache_policy_json = batch
             .column_by_name("kiro_cache_policy_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -1221,6 +1242,9 @@ pub fn batches_to_runtime_config(
                 kiro_cache_kmodels_json: kiro_cache_kmodels_json
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(default_kiro_cache_kmodels_json),
+                kiro_billable_model_multipliers_json: kiro_billable_model_multipliers_json
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(default_kiro_billable_model_multipliers_json),
                 kiro_cache_policy_json: kiro_cache_policy_json
                     .and_then(|column| value_string_opt(column, idx))
                     .unwrap_or_else(default_kiro_cache_policy_json),

@@ -60,6 +60,7 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("kiro_request_validation_enabled", DataType::Boolean, true),
         Field::new("kiro_cache_estimation_enabled", DataType::Boolean, true),
         Field::new("kiro_cache_policy_override_json", DataType::Utf8, true),
+        Field::new("kiro_billable_model_multipliers_override_json", DataType::Utf8, true),
     ]))
 }
 
@@ -137,6 +138,7 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         Field::new("usage_event_maintenance_interval_seconds", DataType::UInt64, false),
         Field::new("usage_event_detail_retention_days", DataType::Int64, false),
         Field::new("kiro_cache_kmodels_json", DataType::Utf8, false),
+        Field::new("kiro_billable_model_multipliers_json", DataType::Utf8, false),
         Field::new("kiro_cache_policy_json", DataType::Utf8, false),
         Field::new("kiro_prefix_cache_mode", DataType::Utf8, false),
         Field::new("kiro_prefix_cache_max_tokens", DataType::UInt64, false),
@@ -284,6 +286,7 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_nullable_bool_column(&table, "kiro_request_validation_enabled").await?;
     ensure_nullable_bool_column(&table, "kiro_cache_estimation_enabled").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_policy_override_json").await?;
+    ensure_nullable_utf8_column(&table, "kiro_billable_model_multipliers_override_json").await?;
     ensure_scalar_index(&table, "id").await?;
     ensure_scalar_index(&table, "key_hash").await?;
     ensure_scalar_index(&table, "status").await?;
@@ -363,6 +366,7 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
     ensure_nullable_u64_column(&table, "usage_event_maintenance_interval_seconds").await?;
     ensure_nullable_i64_column(&table, "usage_event_detail_retention_days").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_kmodels_json").await?;
+    ensure_nullable_utf8_column(&table, "kiro_billable_model_multipliers_json").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_policy_json").await?;
     ensure_nullable_utf8_column(&table, "kiro_prefix_cache_mode").await?;
     ensure_nullable_u64_column(&table, "kiro_prefix_cache_max_tokens").await?;
@@ -673,7 +677,7 @@ async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
 }
 
 /// Ordered projection used when reading key rows back from LanceDB.
-pub fn key_columns() -> [&'static str; 28] {
+pub fn key_columns() -> [&'static str; 29] {
     [
         "id",
         "name",
@@ -703,6 +707,40 @@ pub fn key_columns() -> [&'static str; 28] {
         "kiro_request_validation_enabled",
         "kiro_cache_estimation_enabled",
         "kiro_cache_policy_override_json",
+        "kiro_billable_model_multipliers_override_json",
+    ]
+}
+
+/// Ordered projection used when reading runtime-config rows back from LanceDB.
+pub fn runtime_config_columns() -> [&'static str; 27] {
+    [
+        "id",
+        "auth_cache_ttl_seconds",
+        "max_request_body_bytes",
+        "account_failure_retry_limit",
+        "kiro_channel_max_concurrency",
+        "kiro_channel_min_start_interval_ms",
+        "codex_status_refresh_min_interval_seconds",
+        "codex_status_refresh_max_interval_seconds",
+        "codex_status_account_jitter_max_seconds",
+        "kiro_status_refresh_min_interval_seconds",
+        "kiro_status_refresh_max_interval_seconds",
+        "kiro_status_account_jitter_max_seconds",
+        "usage_event_flush_batch_size",
+        "usage_event_flush_interval_seconds",
+        "usage_event_flush_max_buffer_bytes",
+        "usage_event_maintenance_enabled",
+        "usage_event_maintenance_interval_seconds",
+        "usage_event_detail_retention_days",
+        "kiro_cache_kmodels_json",
+        "kiro_billable_model_multipliers_json",
+        "kiro_cache_policy_json",
+        "kiro_prefix_cache_mode",
+        "kiro_prefix_cache_max_tokens",
+        "kiro_prefix_cache_entry_ttl_seconds",
+        "kiro_conversation_anchor_max_entries",
+        "kiro_conversation_anchor_ttl_seconds",
+        "updated_at",
     ]
 }
 

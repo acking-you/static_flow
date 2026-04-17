@@ -16,6 +16,7 @@ use static_flow_shared::{
         CategoryInfo, NewApiBehaviorEventInput, StaticFlowDataStore, StatsResponse, TagInfo,
     },
     llm_gateway_store::{
+        default_kiro_billable_model_multipliers, default_kiro_billable_model_multipliers_json,
         default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, default_kiro_cache_policy,
         default_kiro_cache_policy_json, now_ms, parse_kiro_cache_policy_json, KiroCachePolicy,
         LlmGatewayAccountGroupRecord, LlmGatewayStore,
@@ -217,6 +218,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_max_buffer_bytes: u64,
     pub kiro_cache_kmodels_json: String,
     pub kiro_cache_kmodels: BTreeMap<String, f64>,
+    pub kiro_billable_model_multipliers_json: String,
+    pub kiro_billable_model_multipliers: BTreeMap<String, f64>,
     pub kiro_cache_policy_json: String,
     pub kiro_cache_policy: KiroCachePolicy,
     pub kiro_prefix_cache_mode: String,
@@ -252,6 +255,8 @@ impl Default for LlmGatewayRuntimeConfig {
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_cache_kmodels: default_kiro_cache_kmodels(),
+            kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
+            kiro_billable_model_multipliers: default_kiro_billable_model_multipliers(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
             kiro_cache_policy: default_kiro_cache_policy(),
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
@@ -278,6 +283,24 @@ pub fn parse_kiro_cache_kmodels_json(value: &str) -> Result<BTreeMap<String, f64
         }
     }
     Ok(map)
+}
+
+pub fn parse_kiro_billable_model_multipliers_json(value: &str) -> Result<BTreeMap<String, f64>> {
+    let overrides: BTreeMap<String, f64> =
+        serde_json::from_str(value).map_err(|err| anyhow!("invalid json: {err}"))?;
+    let mut merged = default_kiro_billable_model_multipliers();
+    for (family, multiplier) in overrides {
+        if !matches!(family.as_str(), "opus" | "sonnet" | "haiku") {
+            return Err(anyhow!(
+                "billable multiplier family `{family}` must be one of `opus`, `sonnet`, `haiku`"
+            ));
+        }
+        if !multiplier.is_finite() || multiplier <= 0.0 {
+            return Err(anyhow!("billable multiplier `{family}` must be a positive finite number"));
+        }
+        merged.insert(family, multiplier);
+    }
+    Ok(merged)
 }
 
 fn sanitize_kiro_cache_policy_json(value: String) -> (String, KiroCachePolicy) {
@@ -417,6 +440,8 @@ impl AppState {
         let usage_event_flush_max_buffer_bytes =
             llm_gateway_runtime_config_record.usage_event_flush_max_buffer_bytes;
         let kiro_cache_kmodels_json = llm_gateway_runtime_config_record.kiro_cache_kmodels_json;
+        let kiro_billable_model_multipliers_json =
+            llm_gateway_runtime_config_record.kiro_billable_model_multipliers_json;
         let (kiro_cache_policy_json, kiro_cache_policy) = sanitize_kiro_cache_policy_json(
             llm_gateway_runtime_config_record.kiro_cache_policy_json,
         );
@@ -437,6 +462,16 @@ impl AppState {
                 );
                 default_kiro_cache_kmodels()
             });
+        let kiro_billable_model_multipliers = parse_kiro_billable_model_multipliers_json(
+            &kiro_billable_model_multipliers_json,
+        )
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                "invalid kiro billable multiplier json in runtime config; falling back to defaults"
+            );
+            default_kiro_billable_model_multipliers()
+        });
         tracing::info!(
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
@@ -453,6 +488,7 @@ impl AppState {
             usage_event_flush_interval_seconds,
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json,
+            kiro_billable_model_multipliers_json,
             kiro_cache_policy_json,
             kiro_prefix_cache_mode,
             kiro_prefix_cache_max_tokens,
@@ -478,6 +514,8 @@ impl AppState {
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json,
             kiro_cache_kmodels,
+            kiro_billable_model_multipliers_json,
+            kiro_billable_model_multipliers,
             kiro_cache_policy_json,
             kiro_cache_policy,
             kiro_prefix_cache_mode,
@@ -1050,5 +1088,25 @@ mod tests {
 
         assert_eq!(json, default_kiro_cache_policy_json());
         assert_eq!(policy, default_kiro_cache_policy());
+    }
+
+    #[test]
+    fn parse_kiro_billable_model_multipliers_json_merges_partial_overrides() {
+        let parsed = parse_kiro_billable_model_multipliers_json(r#"{"opus":1.6,"haiku":0.8}"#)
+            .expect("partial overrides should parse");
+
+        assert_eq!(parsed.get("opus"), Some(&1.6));
+        assert_eq!(parsed.get("haiku"), Some(&0.8));
+        assert_eq!(parsed.get("sonnet"), Some(&1.0));
+    }
+
+    #[test]
+    fn parse_kiro_billable_model_multipliers_json_rejects_unknown_family() {
+        let err = parse_kiro_billable_model_multipliers_json(r#"{"gpt":1.2}"#)
+            .expect_err("unknown family should be rejected");
+
+        assert!(err
+            .to_string()
+            .contains("must be one of `opus`, `sonnet`, `haiku`"));
     }
 }

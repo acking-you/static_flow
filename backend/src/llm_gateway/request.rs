@@ -1344,8 +1344,14 @@ pub(crate) fn normalize_responses_request(
     root: &mut serde_json::Map<String, Value>,
     thread_anchor: Option<&str>,
 ) {
-    root.entry("instructions".to_string())
-        .or_insert_with(|| Value::String(String::new()));
+    if root
+        .get("instructions")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.trim().is_empty())
+        || matches!(root.get("instructions"), Some(Value::Null))
+    {
+        root.remove("instructions");
+    }
     if path == "/v1/responses" {
         root.insert("store".to_string(), Value::Bool(false));
     }
@@ -1620,5 +1626,51 @@ mod tests {
         assert_eq!(upstream["input"][0]["content"][0]["type"], "input_text");
         assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
         assert_eq!(upstream["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_compact_preserves_remote_compact_parameters() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":"hello compact",
+                "tools":[{"type":"web_search"}],
+                "parallel_tool_calls":true,
+                "reasoning":{"effort":"high","summary":"auto"},
+                "text":{"verbosity":"low"}
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses/compact",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("compact request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["input"][0]["type"], "message");
+        assert_eq!(upstream["input"][0]["role"], "user");
+        assert_eq!(upstream["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "hello compact");
+        assert_eq!(upstream["tools"], json!([{ "type": "web_search" }]));
+        assert_eq!(upstream["parallel_tool_calls"], json!(true));
+        assert_eq!(upstream["reasoning"], json!({"effort":"high","summary":"auto"}));
+        assert_eq!(upstream["text"], json!({"verbosity":"low"}));
+        assert!(
+            upstream.get("instructions").is_none(),
+            "compact requests should omit empty instructions to match current codex payloads"
+        );
+        assert!(
+            upstream.get("stream").is_none(),
+            "compact requests should not inject stream control"
+        );
     }
 }

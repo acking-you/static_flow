@@ -44,7 +44,7 @@ pub mod types;
 pub mod websearch;
 
 use static_flow_shared::llm_gateway_store::{
-    compute_billable_tokens, KiroCachePolicy, LlmGatewayKeyRecord,
+    compute_kiro_billable_tokens, KiroCachePolicy, LlmGatewayKeyRecord,
 };
 
 use self::{
@@ -358,10 +358,12 @@ fn log_high_credit_usage_anomaly(
         input_uncached_tokens = usage.input_uncached_tokens,
         input_cached_tokens = usage.input_cached_tokens,
         output_tokens = usage.output_tokens,
-        billable_tokens = compute_billable_tokens(
+        billable_tokens = compute_kiro_billable_tokens(
+            event_context.model.as_deref(),
             usage.input_uncached_tokens.max(0) as u64,
             usage.input_cached_tokens.max(0) as u64,
             usage.output_tokens.max(0) as u64,
+            &simulation.runtime_config.kiro_billable_model_multipliers,
         ),
         stable_prefix_page_count = simulation.projection.stable_prefix_pages.len(),
         stable_prefix_token_count = simulation.projection.stable_prefix_token_count(),
@@ -2741,6 +2743,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         }
     }
 

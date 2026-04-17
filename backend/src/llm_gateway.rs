@@ -118,7 +118,10 @@ use crate::{
         build_client_fingerprint, build_submit_rate_limit_key, enforce_public_submit_rate_limit,
         extract_client_ip,
     },
-    state::{parse_kiro_cache_kmodels_json, AppState, LlmGatewayRuntimeConfig},
+    state::{
+        parse_kiro_billable_model_multipliers_json, parse_kiro_cache_kmodels_json, AppState,
+        LlmGatewayRuntimeConfig,
+    },
     upstream_proxy::{
         parse_account_proxy_selection_patch, validate_proxy_url, ResolvedUpstreamProxy,
     },
@@ -194,6 +197,7 @@ fn build_runtime_config_response(
         usage_event_flush_interval_seconds: config.usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes: config.usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json: config.kiro_cache_kmodels_json.clone(),
+        kiro_billable_model_multipliers_json: config.kiro_billable_model_multipliers_json.clone(),
         kiro_cache_policy_json: config.kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: config.kiro_prefix_cache_mode.clone(),
         kiro_prefix_cache_max_tokens: config.kiro_prefix_cache_max_tokens,
@@ -456,6 +460,17 @@ pub async fn update_admin_runtime_config(
         .unwrap_or_else(|| current.kiro_cache_kmodels_json.clone());
     let kiro_cache_kmodels = parse_kiro_cache_kmodels_json(&kiro_cache_kmodels_json)
         .map_err(|_| bad_request("kiro_cache_kmodels_json is invalid"))?;
+    let kiro_billable_model_multipliers_json = request
+        .kiro_billable_model_multipliers_json
+        .clone()
+        .unwrap_or_else(|| current.kiro_billable_model_multipliers_json.clone());
+    let kiro_billable_model_multipliers =
+        parse_kiro_billable_model_multipliers_json(&kiro_billable_model_multipliers_json)
+            .map_err(|_| bad_request("kiro_billable_model_multipliers_json is invalid"))?;
+    let kiro_billable_model_multipliers_json =
+        serde_json::to_string(&kiro_billable_model_multipliers).map_err(|err| {
+            internal_error("Failed to normalize kiro billable multiplier config", err)
+        })?;
     let kiro_cache_policy_json = request
         .kiro_cache_policy_json
         .clone()
@@ -513,6 +528,7 @@ pub async fn update_admin_runtime_config(
             .usage_event_maintenance_interval_seconds,
         usage_event_detail_retention_days: current_record.usage_event_detail_retention_days,
         kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
+        kiro_billable_model_multipliers_json: kiro_billable_model_multipliers_json.clone(),
         kiro_cache_policy_json: kiro_cache_policy_json.clone(),
         kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
         kiro_prefix_cache_max_tokens,
@@ -545,6 +561,8 @@ pub async fn update_admin_runtime_config(
             usage_event_flush_max_buffer_bytes,
             kiro_cache_kmodels_json: kiro_cache_kmodels_json.clone(),
             kiro_cache_kmodels,
+            kiro_billable_model_multipliers_json: kiro_billable_model_multipliers_json.clone(),
+            kiro_billable_model_multipliers,
             kiro_cache_policy_json: kiro_cache_policy_json.clone(),
             kiro_cache_policy,
             kiro_prefix_cache_mode: kiro_prefix_cache_mode.clone(),
@@ -569,6 +587,7 @@ pub async fn update_admin_runtime_config(
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
         kiro_cache_kmodels_json = %kiro_cache_kmodels_json,
+        kiro_billable_model_multipliers_json = %kiro_billable_model_multipliers_json,
         kiro_cache_policy_json = %kiro_cache_policy_json,
         kiro_prefix_cache_mode = %kiro_prefix_cache_mode,
         kiro_prefix_cache_max_tokens,
@@ -1041,6 +1060,7 @@ async fn create_managed_key_record(
         kiro_request_validation_enabled: true,
         kiro_cache_estimation_enabled: true,
         kiro_cache_policy_override_json: None,
+        kiro_billable_model_multipliers_override_json: None,
     };
     state
         .llm_gateway_store
@@ -5700,6 +5720,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         }
     }
 

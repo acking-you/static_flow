@@ -4796,6 +4796,10 @@ fn default_kiro_cache_policy_json() -> String {
     r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string()
 }
 
+fn default_kiro_billable_model_multipliers_json() -> String {
+    r#"{"haiku":1.0,"opus":1.0,"sonnet":1.0}"#.to_string()
+}
+
 /// Admin-only editable representation of a gateway key.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
@@ -4830,10 +4834,16 @@ pub struct AdminLlmGatewayKeyView {
     pub kiro_cache_estimation_enabled: bool,
     #[serde(default)]
     pub kiro_cache_policy_override_json: Option<String>,
+    #[serde(default)]
+    pub kiro_billable_model_multipliers_override_json: Option<String>,
     #[serde(default = "default_kiro_cache_policy_json")]
     pub effective_kiro_cache_policy_json: String,
     #[serde(default = "default_true")]
     pub uses_global_kiro_cache_policy: bool,
+    #[serde(default = "default_kiro_billable_model_multipliers_json")]
+    pub effective_kiro_billable_model_multipliers_json: String,
+    #[serde(default = "default_true")]
+    pub uses_global_kiro_billable_model_multipliers: bool,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -5175,6 +5185,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
     pub kiro_cache_kmodels_json: String,
+    #[serde(default = "default_kiro_billable_model_multipliers_json")]
+    pub kiro_billable_model_multipliers_json: String,
     #[serde(default = "default_kiro_cache_policy_json")]
     pub kiro_cache_policy_json: String,
     pub kiro_prefix_cache_mode: String,
@@ -5817,6 +5829,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
+            kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
             kiro_prefix_cache_mode: "prefix_tree".to_string(),
             kiro_prefix_cache_max_tokens: 4_000_000,
@@ -6528,8 +6541,12 @@ pub async fn create_admin_llm_gateway_key(
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
             uses_global_kiro_cache_policy: true,
+            effective_kiro_billable_model_multipliers_json:
+                default_kiro_billable_model_multipliers_json(),
+            uses_global_kiro_billable_model_multipliers: true,
         })
     }
 
@@ -6576,6 +6593,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
     pub kiro_cache_policy_override_json: Option<Option<&'a str>>,
+    pub kiro_billable_model_multipliers_override_json: Option<Option<&'a str>>,
     pub request_max_concurrency_unlimited: bool,
     pub request_min_start_interval_ms_unlimited: bool,
 }
@@ -6602,6 +6620,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_cache_policy_override_json,
+            request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -6698,6 +6717,16 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "kiro_cache_policy_override_json".to_string(),
                 kiro_cache_policy_override_json
+                    .map(|raw| serde_json::Value::String(raw.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+        if let Some(kiro_billable_model_multipliers_override_json) =
+            request.kiro_billable_model_multipliers_override_json
+        {
+            body.insert(
+                "kiro_billable_model_multipliers_override_json".to_string(),
+                kiro_billable_model_multipliers_override_json
                     .map(|raw| serde_json::Value::String(raw.to_string()))
                     .unwrap_or(serde_json::Value::Null),
             );
@@ -7768,8 +7797,12 @@ pub async fn create_admin_kiro_key(
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
             uses_global_kiro_cache_policy: true,
+            effective_kiro_billable_model_multipliers_json:
+                default_kiro_billable_model_multipliers_json(),
+            uses_global_kiro_billable_model_multipliers: true,
         })
     }
 
@@ -8357,6 +8390,7 @@ mod tests {
                 "usage_event_maintenance_interval_seconds": 3600,
                 "usage_event_detail_retention_days": 7,
                 "kiro_cache_kmodels_json": "{}",
+                "kiro_billable_model_multipliers_json": "{\"haiku\":1.0,\"opus\":1.0,\"sonnet\":1.0}",
                 "kiro_cache_policy_json": "{}",
                 "kiro_prefix_cache_mode": "prefix_tree",
                 "kiro_prefix_cache_max_tokens": 4000000,

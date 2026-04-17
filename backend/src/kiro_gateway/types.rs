@@ -137,8 +137,12 @@ pub struct AdminKiroKeyView {
     pub kiro_cache_estimation_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kiro_cache_policy_override_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kiro_billable_model_multipliers_override_json: Option<String>,
     pub effective_kiro_cache_policy_json: String,
     pub uses_global_kiro_cache_policy: bool,
+    pub effective_kiro_billable_model_multipliers_json: String,
+    pub uses_global_kiro_billable_model_multipliers: bool,
 }
 
 impl AdminKiroKeyView {
@@ -146,6 +150,8 @@ impl AdminKiroKeyView {
         value: &LlmGatewayKeyRecord,
         effective_policy: &KiroCachePolicy,
         uses_global_kiro_cache_policy: bool,
+        effective_billable_model_multipliers: &BTreeMap<String, f64>,
+        uses_global_kiro_billable_model_multipliers: bool,
     ) -> Self {
         Self {
             id: value.id.clone(),
@@ -172,9 +178,17 @@ impl AdminKiroKeyView {
             kiro_request_validation_enabled: value.kiro_request_validation_enabled,
             kiro_cache_estimation_enabled: value.kiro_cache_estimation_enabled,
             kiro_cache_policy_override_json: value.kiro_cache_policy_override_json.clone(),
+            kiro_billable_model_multipliers_override_json: value
+                .kiro_billable_model_multipliers_override_json
+                .clone(),
             effective_kiro_cache_policy_json: serde_json::to_string_pretty(effective_policy)
                 .expect("effective kiro cache policy should serialize"),
             uses_global_kiro_cache_policy,
+            effective_kiro_billable_model_multipliers_json: serde_json::to_string_pretty(
+                effective_billable_model_multipliers,
+            )
+            .expect("effective kiro billable multipliers should serialize"),
+            uses_global_kiro_billable_model_multipliers,
         }
     }
 }
@@ -392,6 +406,8 @@ pub struct PatchKiroKeyRequest {
     pub kiro_cache_estimation_enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable_string")]
     pub kiro_cache_policy_override_json: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_nullable_string")]
+    pub kiro_billable_model_multipliers_override_json: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -668,6 +684,28 @@ mod tests {
         assert_eq!(
             set.kiro_cache_policy_override_json,
             Some(Some("{\"high_credit_diagnostic_threshold\":1.6}".to_string()))
+        );
+    }
+
+    #[test]
+    fn patch_kiro_key_request_distinguishes_absent_null_and_value_for_billable_multiplier_override()
+    {
+        let absent: PatchKiroKeyRequest =
+            serde_json::from_value(json!({})).expect("parse absent request");
+        let clear: PatchKiroKeyRequest = serde_json::from_value(json!({
+            "kiro_billable_model_multipliers_override_json": null
+        }))
+        .expect("parse clear request");
+        let set: PatchKiroKeyRequest = serde_json::from_value(json!({
+            "kiro_billable_model_multipliers_override_json": "{\"opus\":1.6}"
+        }))
+        .expect("parse set request");
+
+        assert_eq!(absent.kiro_billable_model_multipliers_override_json, None);
+        assert_eq!(clear.kiro_billable_model_multipliers_override_json, Some(None));
+        assert_eq!(
+            set.kiro_billable_model_multipliers_override_json,
+            Some(Some("{\"opus\":1.6}".to_string()))
         );
     }
 

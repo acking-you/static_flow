@@ -42,8 +42,8 @@ use self::{
         ensure_proxy_bindings_table, ensure_proxy_configs_table, ensure_runtime_config_table,
         ensure_sponsor_requests_table, ensure_token_requests_table, ensure_usage_events_table,
         escape_literal, key_columns, proxy_binding_columns, proxy_config_columns,
-        sponsor_request_columns, token_request_columns, usage_event_columns,
-        usage_event_rebuild_columns, usage_event_summary_columns,
+        runtime_config_columns, sponsor_request_columns, token_request_columns,
+        usage_event_columns, usage_event_rebuild_columns, usage_event_summary_columns,
     },
 };
 pub use self::{
@@ -56,7 +56,9 @@ pub use self::{
         KiroSmallInputHighCreditBoostPolicy,
     },
     types::{
-        compute_billable_tokens, default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
+        compute_billable_tokens, compute_kiro_billable_tokens,
+        default_kiro_billable_model_multipliers, default_kiro_billable_model_multipliers_json,
+        default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
         is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountContributionRequestRecord,
         LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord,
         LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
@@ -65,7 +67,9 @@ pub use self::{
         NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
-        DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
+        DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+        DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_HAIKU, DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_OPUS,
+        DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_SONNET, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
         DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
         DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS, DEFAULT_KIRO_PREFIX_CACHE_MODE,
@@ -391,31 +395,7 @@ impl LlmGatewayStore {
             .query()
             .only_if("id = 'default'")
             .limit(1)
-            .select(Select::columns(&[
-                "id",
-                "auth_cache_ttl_seconds",
-                "max_request_body_bytes",
-                "account_failure_retry_limit",
-                "kiro_channel_max_concurrency",
-                "kiro_channel_min_start_interval_ms",
-                "codex_status_refresh_min_interval_seconds",
-                "codex_status_refresh_max_interval_seconds",
-                "codex_status_account_jitter_max_seconds",
-                "kiro_status_refresh_min_interval_seconds",
-                "kiro_status_refresh_max_interval_seconds",
-                "kiro_status_account_jitter_max_seconds",
-                "usage_event_flush_batch_size",
-                "usage_event_flush_interval_seconds",
-                "usage_event_flush_max_buffer_bytes",
-                "kiro_cache_kmodels_json",
-                "kiro_cache_policy_json",
-                "kiro_prefix_cache_mode",
-                "kiro_prefix_cache_max_tokens",
-                "kiro_prefix_cache_entry_ttl_seconds",
-                "kiro_conversation_anchor_max_entries",
-                "kiro_conversation_anchor_ttl_seconds",
-                "updated_at",
-            ]))
+            .select(Select::columns(&runtime_config_columns()))
             .execute()
             .await?;
         let batch_list = batches.try_collect::<Vec<_>>().await?;
@@ -1833,6 +1813,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         }
     }
 
@@ -2110,6 +2091,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_config_round_trip_preserves_kiro_billable_model_multipliers_json() {
+        let dir = temp_store_dir("runtime-config-kiro-billable-multipliers");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let config = LlmGatewayRuntimeConfigRecord {
+            kiro_billable_model_multipliers_json: r#"{"haiku":0.8,"opus":1.6,"sonnet":1.2}"#
+                .to_string(),
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&config)
+            .await
+            .expect("upsert runtime config");
+
+        let loaded = store
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(
+            loaded.kiro_billable_model_multipliers_json,
+            config.kiro_billable_model_multipliers_json
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn runtime_config_round_trip_preserves_kiro_prefix_cache_and_anchor_fields() {
         let dir = temp_store_dir("runtime-config-kiro-prefix-cache-anchor");
         let store = LlmGatewayStore::connect(&dir.to_string_lossy())
@@ -2189,6 +2200,34 @@ mod tests {
             .expect("load key")
             .expect("created key exists");
         assert_eq!(loaded.kiro_cache_policy_override_json, key.kiro_cache_policy_override_json,);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn key_round_trip_preserves_kiro_billable_model_multipliers_override_json() {
+        let dir = temp_store_dir("key-kiro-billable-multipliers-override");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let mut key = sample_key_record("test-key-billable-multipliers", "Multiplier override key");
+        key.kiro_billable_model_multipliers_override_json =
+            Some(r#"{"haiku":0.8,"opus":1.6}"#.to_string());
+        store
+            .create_key(&key)
+            .await
+            .expect("create key with billable multiplier override");
+
+        let loaded = store
+            .get_key_by_id(&key.id)
+            .await
+            .expect("load key")
+            .expect("created key exists");
+        assert_eq!(
+            loaded.kiro_billable_model_multipliers_override_json,
+            key.kiro_billable_model_multipliers_override_json,
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

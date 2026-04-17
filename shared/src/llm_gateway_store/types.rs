@@ -75,6 +75,9 @@ pub const DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 7;
 pub const DEFAULT_KIRO_CACHE_KMODEL_OPUS_46: f64 = 8.061927916785985e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_SONNET_46: f64 = 5.055065250835128e-06;
 pub const DEFAULT_KIRO_CACHE_KMODEL_HAIKU_45: f64 = 2.3681034438052206e-06;
+pub const DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_OPUS: f64 = 1.0;
+pub const DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_SONNET: f64 = 1.0;
+pub const DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_HAIKU: f64 = 1.0;
 pub const KIRO_PREFIX_CACHE_MODE_FORMULA: &str = "formula";
 pub const KIRO_PREFIX_CACHE_MODE_PREFIX_TREE: &str = "prefix_tree";
 pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = KIRO_PREFIX_CACHE_MODE_PREFIX_TREE;
@@ -124,6 +127,53 @@ pub fn default_kiro_cache_kmodels() -> BTreeMap<String, f64> {
 pub fn default_kiro_cache_kmodels_json() -> String {
     serde_json::to_string(&default_kiro_cache_kmodels())
         .expect("default kiro cache kmodels should serialize")
+}
+
+pub fn default_kiro_billable_model_multipliers() -> BTreeMap<String, f64> {
+    BTreeMap::from([
+        ("haiku".to_string(), DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_HAIKU),
+        ("opus".to_string(), DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_OPUS),
+        ("sonnet".to_string(), DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_SONNET),
+    ])
+}
+
+pub fn default_kiro_billable_model_multipliers_json() -> String {
+    serde_json::to_string(&default_kiro_billable_model_multipliers())
+        .expect("default kiro billable model multipliers should serialize")
+}
+
+fn kiro_billable_model_family(model_name: &str) -> Option<&'static str> {
+    let normalized = model_name.trim().to_ascii_lowercase();
+    if normalized.contains("opus") {
+        Some("opus")
+    } else if normalized.contains("sonnet") {
+        Some("sonnet")
+    } else if normalized.contains("haiku") {
+        Some("haiku")
+    } else {
+        None
+    }
+}
+
+pub fn compute_kiro_billable_tokens(
+    model_name: Option<&str>,
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
+    multipliers: &BTreeMap<String, f64>,
+) -> u64 {
+    let base = compute_billable_tokens(input_uncached_tokens, input_cached_tokens, output_tokens);
+    if base == 0 {
+        return 0;
+    }
+
+    let multiplier = model_name
+        .and_then(kiro_billable_model_family)
+        .and_then(|family| multipliers.get(family).copied())
+        .unwrap_or(1.0);
+    ((base as f64) * multiplier)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64
 }
 
 pub fn is_valid_kiro_prefix_cache_mode(value: &str) -> bool {
@@ -189,6 +239,9 @@ pub struct LlmGatewayKeyRecord {
     pub kiro_cache_estimation_enabled: bool,
     /// Optional per-key override for the global Kiro cache policy JSON.
     pub kiro_cache_policy_override_json: Option<String>,
+    /// Optional per-key override for the global Kiro billable-token model
+    /// family multipliers.
+    pub kiro_billable_model_multipliers_override_json: Option<String>,
 }
 
 /// Persisted reusable account-pool group shared by keys of one provider.
@@ -495,6 +548,9 @@ pub struct LlmGatewayRuntimeConfigRecord {
     /// JSON object mapping Kiro model ids to conservative cache-estimation
     /// coefficients.
     pub kiro_cache_kmodels_json: String,
+    /// JSON object mapping Kiro model families (`opus`, `sonnet`, `haiku`)
+    /// to billable-token multipliers.
+    pub kiro_billable_model_multipliers_json: String,
     /// Raw JSON string for the default/global Kiro cache-policy. Invalid values
     /// are ignored and recovered to `default_kiro_cache_policy()` at runtime.
     pub kiro_cache_policy_json: String,
@@ -547,6 +603,7 @@ impl Default for LlmGatewayRuntimeConfigRecord {
             usage_event_detail_retention_days:
                 DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
+            kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: crate::llm_gateway_store::default_kiro_cache_policy_json(),
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
             kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
@@ -561,4 +618,55 @@ impl Default for LlmGatewayRuntimeConfigRecord {
 /// Convenience helper returning the current Unix timestamp in milliseconds.
 pub fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{
+        compute_billable_tokens, compute_kiro_billable_tokens,
+        default_kiro_billable_model_multipliers_json,
+    };
+
+    #[test]
+    fn compute_kiro_billable_tokens_applies_opus_multiplier() {
+        let multipliers = BTreeMap::from([
+            ("opus".to_string(), 2.0),
+            ("sonnet".to_string(), 1.0),
+            ("haiku".to_string(), 1.0),
+        ]);
+
+        let base = compute_billable_tokens(100, 20, 5);
+        let adjusted =
+            compute_kiro_billable_tokens(Some("claude-opus-4-6"), 100, 20, 5, &multipliers);
+
+        assert_eq!(adjusted, base * 2);
+    }
+
+    #[test]
+    fn compute_kiro_billable_tokens_defaults_for_unknown_models() {
+        let multipliers = BTreeMap::from([
+            ("opus".to_string(), 2.0),
+            ("sonnet".to_string(), 3.0),
+            ("haiku".to_string(), 0.5),
+        ]);
+
+        let base = compute_billable_tokens(80, 10, 4);
+        let adjusted =
+            compute_kiro_billable_tokens(Some("claude-unknown-1"), 80, 10, 4, &multipliers);
+
+        assert_eq!(adjusted, base);
+    }
+
+    #[test]
+    fn default_kiro_billable_model_multipliers_json_contains_all_families() {
+        let parsed: BTreeMap<String, f64> =
+            serde_json::from_str(&default_kiro_billable_model_multipliers_json())
+                .expect("default billable multiplier json should parse");
+
+        assert_eq!(parsed.get("opus"), Some(&1.0));
+        assert_eq!(parsed.get("sonnet"), Some(&1.0));
+        assert_eq!(parsed.get("haiku"), Some(&1.0));
+    }
 }

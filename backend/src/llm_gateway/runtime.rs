@@ -983,6 +983,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         }
     }
 

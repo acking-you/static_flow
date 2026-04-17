@@ -410,6 +410,109 @@ fn build_kiro_cache_policy_override_patch(
     }
 }
 
+fn default_kiro_billable_multiplier_map() -> BTreeMap<String, f64> {
+    BTreeMap::from([
+        ("haiku".to_string(), 1.0),
+        ("opus".to_string(), 1.0),
+        ("sonnet".to_string(), 1.0),
+    ])
+}
+
+fn parse_kiro_billable_multiplier_json_with_base(
+    raw: &str,
+    base: &BTreeMap<String, f64>,
+) -> Result<BTreeMap<String, f64>, String> {
+    let overrides = serde_json::from_str::<BTreeMap<String, f64>>(raw)
+        .map_err(|err| format!("Failed to parse kiro billable multiplier JSON: {err}"))?;
+    let mut merged = base.clone();
+    for (family, multiplier) in overrides {
+        if !matches!(family.as_str(), "opus" | "sonnet" | "haiku") {
+            return Err(format!(
+                "Unsupported multiplier family `{family}`. Use only `opus`, `sonnet`, `haiku`."
+            ));
+        }
+        if !multiplier.is_finite() || multiplier <= 0.0 {
+            return Err(format!("Multiplier `{family}` must be a positive finite number."));
+        }
+        merged.insert(family, multiplier);
+    }
+    Ok(merged)
+}
+
+fn build_kiro_billable_multiplier_override_json(
+    global_raw: &str,
+    edited_raw: &str,
+) -> Result<Option<String>, String> {
+    let defaults = default_kiro_billable_multiplier_map();
+    let global = parse_kiro_billable_multiplier_json_with_base(global_raw, &defaults)?;
+    let edited = parse_kiro_billable_multiplier_json_with_base(edited_raw, &global)?;
+    let mut overrides = BTreeMap::new();
+    for family in ["haiku", "opus", "sonnet"] {
+        if edited.get(family) != global.get(family) {
+            overrides.insert(
+                family.to_string(),
+                *edited
+                    .get(family)
+                    .expect("billable multiplier family should always exist"),
+            );
+        }
+    }
+    if overrides.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::to_string(&overrides)
+            .map(Some)
+            .map_err(|err| format!("Failed to serialize kiro billable multiplier override: {err}"))
+    }
+}
+
+fn build_kiro_billable_multiplier_override_patch(
+    persisted_global_raw: &str,
+    initial_override_enabled: bool,
+    initial_effective_raw: &str,
+    edited_override_enabled: bool,
+    edited_effective_raw: &str,
+) -> Result<Option<Option<String>>, String> {
+    let initial_effective = parse_kiro_billable_multiplier_json_with_base(
+        initial_effective_raw,
+        &default_kiro_billable_multiplier_map(),
+    )?;
+    let edited_effective = parse_kiro_billable_multiplier_json_with_base(
+        edited_effective_raw,
+        &default_kiro_billable_multiplier_map(),
+    )?;
+    let editor_state_changed = edited_override_enabled != initial_override_enabled
+        || (edited_override_enabled && edited_effective != initial_effective);
+    if !editor_state_changed {
+        return Ok(None);
+    }
+    if !edited_override_enabled {
+        return Ok(initial_override_enabled.then_some(None));
+    }
+    match build_kiro_billable_multiplier_override_json(persisted_global_raw, edited_effective_raw)?
+    {
+        Some(json) => Ok(Some(Some(json))),
+        None if initial_override_enabled => Ok(Some(None)),
+        None => Ok(None),
+    }
+}
+
+fn format_kiro_billable_multiplier_summary(uses_global: bool, effective_raw: &str) -> String {
+    match parse_kiro_billable_multiplier_json_with_base(
+        effective_raw,
+        &default_kiro_billable_multiplier_map(),
+    ) {
+        Ok(effective) => format!(
+            "{} · opus {} · sonnet {} · haiku {}",
+            if uses_global { "inherit global" } else { "override" },
+            format_float4(*effective.get("opus").unwrap_or(&1.0)),
+            format_float4(*effective.get("sonnet").unwrap_or(&1.0)),
+            format_float4(*effective.get("haiku").unwrap_or(&1.0)),
+        ),
+        Err(err) => format!("invalid effective multiplier json · {err}"),
+    }
+}
+
 fn should_reset_kiro_cache_policy_editor(
     is_initial_load: bool,
     editable_form: &KiroCachePolicyForm,
@@ -1265,6 +1368,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
 struct KiroKeyEditorCardProps {
     key_item: AdminLlmGatewayKeyView,
     persisted_global_policy_form: KiroCachePolicyForm,
+    persisted_global_billable_multiplier_json: String,
     available_models: Vec<KiroModelView>,
     accounts: Vec<KiroAccountView>,
     account_groups: Vec<AdminAccountGroupView>,
@@ -1282,6 +1386,20 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         .clone()
         .unwrap_or_else(|_| KiroCachePolicyForm::default());
     let initial_override_enabled = !props.key_item.uses_global_kiro_cache_policy;
+    let initial_effective_billable_multiplier_json = format_json_for_textarea(
+        &props
+            .key_item
+            .effective_kiro_billable_model_multipliers_json,
+    );
+    let effective_billable_multiplier_parse_error = parse_kiro_billable_multiplier_json_with_base(
+        &props
+            .key_item
+            .effective_kiro_billable_model_multipliers_json,
+        &default_kiro_billable_multiplier_map(),
+    )
+    .err();
+    let initial_billable_multiplier_override_enabled =
+        !props.key_item.uses_global_kiro_billable_model_multipliers;
     let name = use_state(|| props.key_item.name.clone());
     let quota = use_state(|| props.key_item.quota_billable_limit.to_string());
     let status = use_state(|| props.key_item.status.clone());
@@ -1306,6 +1424,13 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let policy_override_enabled = use_state(|| initial_override_enabled);
     let key_policy_form = use_state(|| initial_effective_policy_form.clone());
     let key_policy_effective_baseline = use_state(|| initial_effective_policy_form.clone());
+    let billable_multiplier_override_enabled =
+        use_state(|| initial_billable_multiplier_override_enabled);
+    let key_billable_multiplier_json =
+        use_state(|| initial_effective_billable_multiplier_json.clone());
+    let key_billable_multiplier_effective_baseline =
+        use_state(|| initial_effective_billable_multiplier_json.clone());
+    let billable_multiplier_settings_expanded = use_state(|| false);
     let route_settings_expanded = use_state(|| false);
     let model_mapping_expanded = use_state(|| false);
     let saving = use_state(|| false);
@@ -1326,6 +1451,13 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let policy_override_enabled = policy_override_enabled.clone();
         let key_policy_form = key_policy_form.clone();
         let key_policy_effective_baseline = key_policy_effective_baseline.clone();
+        let billable_multiplier_override_enabled = billable_multiplier_override_enabled.clone();
+        let key_billable_multiplier_json = key_billable_multiplier_json.clone();
+        let key_billable_multiplier_effective_baseline =
+            key_billable_multiplier_effective_baseline.clone();
+        let billable_multiplier_settings_expanded = billable_multiplier_settings_expanded.clone();
+        let initial_effective_billable_multiplier_json_for_effect =
+            initial_effective_billable_multiplier_json.clone();
         use_effect_with((props.key_item.clone(), props.account_groups.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
@@ -1347,6 +1479,12 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             policy_override_enabled.set(initial_override_enabled);
             key_policy_form.set(initial_effective_policy_form.clone());
             key_policy_effective_baseline.set(initial_effective_policy_form.clone());
+            billable_multiplier_override_enabled.set(initial_billable_multiplier_override_enabled);
+            key_billable_multiplier_json
+                .set(initial_effective_billable_multiplier_json_for_effect.clone());
+            key_billable_multiplier_effective_baseline
+                .set(initial_effective_billable_multiplier_json_for_effect.clone());
+            billable_multiplier_settings_expanded.set(false);
             || ()
         });
     }
@@ -1355,8 +1493,14 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let key_id = props.key_item.id.clone();
         let key_name = props.key_item.name.clone();
         let persisted_global_policy_form = props.persisted_global_policy_form.clone();
+        let persisted_global_billable_multiplier_json =
+            props.persisted_global_billable_multiplier_json.clone();
         let initial_effective_policy_form = initial_effective_policy_form.clone();
         let has_effective_policy_parse_error = effective_policy_parse_error.is_some();
+        let initial_effective_billable_multiplier_json =
+            initial_effective_billable_multiplier_json.clone();
+        let has_effective_billable_multiplier_parse_error =
+            effective_billable_multiplier_parse_error.is_some();
         let name = name.clone();
         let quota = quota.clone();
         let status = status.clone();
@@ -1367,6 +1511,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let policy_override_enabled = policy_override_enabled.clone();
         let key_policy_form = key_policy_form.clone();
+        let billable_multiplier_override_enabled = billable_multiplier_override_enabled.clone();
+        let key_billable_multiplier_json = key_billable_multiplier_json.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -1375,7 +1521,11 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let key_id = key_id.clone();
             let key_name = key_name.clone();
             let persisted_global_policy_form = persisted_global_policy_form.clone();
+            let persisted_global_billable_multiplier_json =
+                persisted_global_billable_multiplier_json.clone();
             let initial_effective_policy_form = initial_effective_policy_form.clone();
+            let initial_effective_billable_multiplier_json =
+                initial_effective_billable_multiplier_json.clone();
             let name_value = (*name).clone();
             let quota_value = (*quota).clone();
             let status_value = (*status).clone();
@@ -1386,6 +1536,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let policy_override_enabled_value = *policy_override_enabled;
             let key_policy_form_value = (*key_policy_form).clone();
+            let billable_multiplier_override_enabled_value = *billable_multiplier_override_enabled;
+            let key_billable_multiplier_json_value = (*key_billable_multiplier_json).clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -1418,6 +1570,25 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         },
                     }
                 };
+                let billable_multiplier_override_json =
+                    if has_effective_billable_multiplier_parse_error {
+                        None
+                    } else {
+                        match build_kiro_billable_multiplier_override_patch(
+                            &persisted_global_billable_multiplier_json,
+                            initial_billable_multiplier_override_enabled,
+                            &initial_effective_billable_multiplier_json,
+                            billable_multiplier_override_enabled_value,
+                            &key_billable_multiplier_json_value,
+                        ) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                feedback.set(Some(err.clone()));
+                                on_flash.emit((err, true));
+                                return;
+                            },
+                        }
+                    };
                 saving.set(true);
                 feedback.set(None);
                 match patch_admin_kiro_key(&key_id, PatchAdminLlmGatewayKeyRequest {
@@ -1437,6 +1608,10 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_cache_policy_override_json: policy_override_json
                         .as_ref()
                         .map(|value| value.as_deref()),
+                    kiro_billable_model_multipliers_override_json:
+                        billable_multiplier_override_json
+                            .as_ref()
+                            .map(|value| value.as_deref()),
                     request_max_concurrency_unlimited: false,
                     request_min_start_interval_ms_unlimited: false,
                 })
@@ -1511,6 +1686,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
                     kiro_cache_policy_override_json: None,
+                    kiro_billable_model_multipliers_override_json: None,
                     request_max_concurrency_unlimited: false,
                     request_min_start_interval_ms_unlimited: false,
                 })
@@ -1667,6 +1843,26 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             )
         });
     let policy_controls_disabled = effective_policy_parse_error.is_some() || *saving;
+    let global_billable_multiplier_summary = format_kiro_billable_multiplier_summary(
+        true,
+        &props.persisted_global_billable_multiplier_json,
+    );
+    let displayed_effective_billable_multiplier_json = if *billable_multiplier_override_enabled {
+        (*key_billable_multiplier_json).clone()
+    } else {
+        props.persisted_global_billable_multiplier_json.clone()
+    };
+    let effective_billable_multiplier_summary = effective_billable_multiplier_parse_error
+        .as_ref()
+        .map(|err| format!("invalid backend multiplier json · {err}"))
+        .unwrap_or_else(|| {
+            format_kiro_billable_multiplier_summary(
+                !*billable_multiplier_override_enabled,
+                &displayed_effective_billable_multiplier_json,
+            )
+        });
+    let billable_multiplier_controls_disabled =
+        effective_billable_multiplier_parse_error.is_some() || *saving;
 
     let key_ratio = kiro_key_usage_ratio(
         props.key_item.remaining_billable,
@@ -1893,6 +2089,98 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
                             { "This key inherits the global cache policy. Enable override to replace only changed scalar fields or the full bands block." }
                         </p>
+                    }
+                </div>
+                <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "space-y-3")}>
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                        <div class={classes!("space-y-1")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Billable Multipliers" }</div>
+                            <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                { format!("global: {global_billable_multiplier_summary}") }
+                            </div>
+                            <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                { format!("effective: {effective_billable_multiplier_summary}") }
+                            </div>
+                        </div>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                <input
+                                    type="checkbox"
+                                    checked={*billable_multiplier_override_enabled}
+                                    disabled={billable_multiplier_controls_disabled}
+                                    onchange={{
+                                        let billable_multiplier_override_enabled =
+                                            billable_multiplier_override_enabled.clone();
+                                        let key_billable_multiplier_json =
+                                            key_billable_multiplier_json.clone();
+                                        let key_billable_multiplier_effective_baseline =
+                                            key_billable_multiplier_effective_baseline.clone();
+                                        Callback::from(move |event: Event| {
+                                            let input: HtmlInputElement =
+                                                event.target_unchecked_into();
+                                            let checked = input.checked();
+                                            billable_multiplier_override_enabled.set(checked);
+                                            if checked {
+                                                key_billable_multiplier_json.set(
+                                                    (*key_billable_multiplier_effective_baseline)
+                                                        .clone(),
+                                                );
+                                            }
+                                        })
+                                    }}
+                                />
+                                <span>{ "Override Global Multipliers" }</span>
+                            </label>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "text-xs")}
+                                onclick={{
+                                    let billable_multiplier_settings_expanded =
+                                        billable_multiplier_settings_expanded.clone();
+                                    Callback::from(move |_| {
+                                        billable_multiplier_settings_expanded
+                                            .set(!*billable_multiplier_settings_expanded)
+                                    })
+                                }}
+                            >
+                                { if *billable_multiplier_settings_expanded {
+                                    "Hide Multiplier Settings"
+                                } else {
+                                    "Show Multiplier Settings"
+                                } }
+                            </button>
+                        </div>
+                    </div>
+                    if let Some(multiplier_error) = effective_billable_multiplier_parse_error.clone() {
+                        <p class={classes!("m-0", "text-xs", "text-red-600", "dark:text-red-300")}>
+                            { format!("Backend effective multiplier JSON is invalid: {multiplier_error}") }
+                        </p>
+                    }
+                    if *billable_multiplier_settings_expanded {
+                        if *billable_multiplier_override_enabled {
+                            <div class={classes!("space-y-2")}>
+                                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                    { "只支持 `opus` / `sonnet` / `haiku`。这里编辑的是 key 的有效倍率，保存时只会写入相对全局发生变化的 key。" }
+                                </div>
+                                <textarea
+                                    class={classes!("min-h-[10rem]", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-3", "font-mono", "text-xs", "leading-6")}
+                                    value={(*key_billable_multiplier_json).clone()}
+                                    oninput={{
+                                        let key_billable_multiplier_json =
+                                            key_billable_multiplier_json.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            let input: HtmlTextAreaElement =
+                                                event.target_unchecked_into();
+                                            key_billable_multiplier_json.set(input.value());
+                                        })
+                                    }}
+                                />
+                            </div>
+                        } else {
+                            <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>
+                                { "This key inherits the global billable multipliers. Enable override to change only the model families that differ from the global defaults." }
+                            </p>
+                        }
                     }
                 </div>
                 <div class={classes!("flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}>
@@ -2380,6 +2668,8 @@ pub fn admin_kiro_gateway_page() -> Html {
     let kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let persisted_kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let kiro_cache_kmodels_json = use_state(String::new);
+    let kiro_billable_model_multipliers_json = use_state(String::new);
+    let persisted_kiro_billable_model_multipliers_json = use_state(String::new);
     let saving_kmodel_config = use_state(|| false);
     let kiro_prefix_cache_mode = use_state(String::new);
     let kiro_prefix_cache_max_tokens = use_state(String::new);
@@ -2485,6 +2775,9 @@ pub fn admin_kiro_gateway_page() -> Html {
         let kiro_cache_policy_form = kiro_cache_policy_form.clone();
         let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+        let kiro_billable_model_multipliers_json = kiro_billable_model_multipliers_json.clone();
+        let persisted_kiro_billable_model_multipliers_json =
+            persisted_kiro_billable_model_multipliers_json.clone();
         let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
         let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -2503,6 +2796,9 @@ pub fn admin_kiro_gateway_page() -> Html {
             let kiro_cache_policy_form = kiro_cache_policy_form.clone();
             let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
             let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+            let kiro_billable_model_multipliers_json = kiro_billable_model_multipliers_json.clone();
+            let persisted_kiro_billable_model_multipliers_json =
+                persisted_kiro_billable_model_multipliers_json.clone();
             let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
             let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
             let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -2569,6 +2865,14 @@ pub fn admin_kiro_gateway_page() -> Html {
                         persisted_kiro_cache_policy_form.set(policy_form);
                         kiro_cache_kmodels_json
                             .set(format_json_for_textarea(&config_resp.kiro_cache_kmodels_json));
+                        kiro_billable_model_multipliers_json.set(format_json_for_textarea(
+                            &config_resp.kiro_billable_model_multipliers_json,
+                        ));
+                        persisted_kiro_billable_model_multipliers_json.set(
+                            format_json_for_textarea(
+                                &config_resp.kiro_billable_model_multipliers_json,
+                            ),
+                        );
                         kiro_prefix_cache_mode.set(config_resp.kiro_prefix_cache_mode.clone());
                         kiro_prefix_cache_max_tokens
                             .set(config_resp.kiro_prefix_cache_max_tokens.to_string());
@@ -2632,6 +2936,11 @@ pub fn admin_kiro_gateway_page() -> Html {
         let persisted_kiro_cache_policy_form_input = persisted_kiro_cache_policy_form.clone();
         let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
+        let kiro_billable_model_multipliers_json_input =
+            kiro_billable_model_multipliers_json.clone();
+        let kiro_billable_model_multipliers_json = kiro_billable_model_multipliers_json.clone();
+        let persisted_kiro_billable_model_multipliers_json_input =
+            persisted_kiro_billable_model_multipliers_json.clone();
         let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens.clone();
         let kiro_prefix_cache_entry_ttl_seconds_input = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -2651,6 +2960,12 @@ pub fn admin_kiro_gateway_page() -> Html {
                 persisted_kiro_cache_policy_form_input.clone();
             let kiro_cache_kmodels_json = (*kiro_cache_kmodels_json).clone();
             let kiro_cache_kmodels_json_input = kiro_cache_kmodels_json_input.clone();
+            let kiro_billable_model_multipliers_json =
+                (*kiro_billable_model_multipliers_json).clone();
+            let kiro_billable_model_multipliers_json_input =
+                kiro_billable_model_multipliers_json_input.clone();
+            let persisted_kiro_billable_model_multipliers_json_input =
+                persisted_kiro_billable_model_multipliers_json_input.clone();
             let kiro_prefix_cache_mode_value = (*kiro_prefix_cache_mode_input).clone();
             let kiro_prefix_cache_max_tokens_value = (*kiro_prefix_cache_max_tokens_input).clone();
             let kiro_prefix_cache_entry_ttl_seconds_value =
@@ -2737,6 +3052,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                         },
                     };
                 next_config.kiro_cache_kmodels_json = kiro_cache_kmodels_json;
+                next_config.kiro_billable_model_multipliers_json =
+                    kiro_billable_model_multipliers_json;
                 next_config.kiro_cache_policy_json = kiro_cache_policy_json;
                 next_config.kiro_prefix_cache_mode = mode.to_string();
                 next_config.kiro_prefix_cache_max_tokens = prefix_cache_max_tokens;
@@ -2762,6 +3079,12 @@ pub fn admin_kiro_gateway_page() -> Html {
                         persisted_kiro_cache_policy_form_input.set(saved_policy_form);
                         kiro_cache_kmodels_json_input
                             .set(format_json_for_textarea(&saved.kiro_cache_kmodels_json));
+                        kiro_billable_model_multipliers_json_input.set(format_json_for_textarea(
+                            &saved.kiro_billable_model_multipliers_json,
+                        ));
+                        persisted_kiro_billable_model_multipliers_json_input.set(
+                            format_json_for_textarea(&saved.kiro_billable_model_multipliers_json),
+                        );
                         kiro_prefix_cache_mode_input.set(saved.kiro_prefix_cache_mode.clone());
                         kiro_prefix_cache_max_tokens_input
                             .set(saved.kiro_prefix_cache_max_tokens.to_string());
@@ -3301,10 +3624,31 @@ pub fn admin_kiro_gateway_page() -> Html {
                         }}
                     />
                 </label>
+                <label class={classes!("mt-4", "block", "text-sm")}>
+                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Billable Multiplier JSON" }</div>
+                    <div class={classes!("mb-2", "text-xs", "text-[var(--muted)]")}>
+                        { "只识别 `opus` / `sonnet` / `haiku` 三个 key。默认都是 1.0；这里会在 Kiro 的基础 billable token 上按模型族再乘一次。" }
+                    </div>
+                    <textarea
+                        class={classes!("min-h-[10rem]", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "font-mono", "text-xs", "leading-6")}
+                        value={(*kiro_billable_model_multipliers_json).clone()}
+                        oninput={{
+                            let kiro_billable_model_multipliers_json =
+                                kiro_billable_model_multipliers_json.clone();
+                            Callback::from(move |event: InputEvent| {
+                                let input: HtmlTextAreaElement = event.target_unchecked_into();
+                                kiro_billable_model_multipliers_json.set(input.value());
+                            })
+                        }}
+                    />
+                </label>
                 if let Some(config) = (*runtime_config).clone() {
                     <div class={classes!("mt-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]", "space-y-1")}>
                         <div class={classes!("font-mono")}>
                             { format!("current stored bytes: {}", config.kiro_cache_kmodels_json.len()) }
+                        </div>
+                        <div class={classes!("font-mono")}>
+                            { format!("current billable multiplier bytes: {}", config.kiro_billable_model_multipliers_json.len()) }
                         </div>
                         <div class={classes!("font-mono")}>
                             { format!("current policy bytes: {}", config.kiro_cache_policy_json.len()) }
@@ -3593,6 +3937,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                                         key_item={key_item.clone()}
                                         persisted_global_policy_form={
                                             (*persisted_kiro_cache_policy_form).clone()
+                                        }
+                                        persisted_global_billable_multiplier_json={
+                                            (*persisted_kiro_billable_model_multipliers_json).clone()
                                         }
                                         available_models={(*kiro_models).clone()}
                                         accounts={(*accounts).clone()}
@@ -3896,10 +4243,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_kiro_cache_policy_override_json, build_kiro_cache_policy_override_patch,
-        format_kiro_cache_policy_summary, kiro_account_status_cta_text, kiro_account_status_route,
-        kiro_key_candidate_credit_summary, kiro_key_route_summary,
-        parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
+        build_kiro_billable_multiplier_override_json,
+        build_kiro_billable_multiplier_override_patch, build_kiro_cache_policy_override_json,
+        build_kiro_cache_policy_override_patch, format_kiro_cache_policy_summary,
+        kiro_account_status_cta_text, kiro_account_status_route, kiro_key_candidate_credit_summary,
+        kiro_key_route_summary, parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
         should_load_kiro_usage_preview, should_reset_kiro_cache_policy_editor, TAB_GROUPS,
         TAB_KEYS, TAB_OVERVIEW, TAB_USAGE,
     };
@@ -4231,6 +4579,40 @@ mod tests {
 
         let patch = build_kiro_cache_policy_override_patch(&global, true, &global, false, &global)
             .expect("patch should build");
+
+        assert_eq!(patch, Some(None));
+    }
+
+    #[test]
+    fn build_kiro_billable_multiplier_override_json_only_emits_changed_families() {
+        let override_json = build_kiro_billable_multiplier_override_json(
+            r#"{"haiku":1.0,"opus":2.0,"sonnet":1.0}"#,
+            r#"{"haiku":0.8,"opus":2.0,"sonnet":1.3}"#,
+        )
+        .expect("override json should build")
+        .expect("changed families should emit override json");
+        let override_value: serde_json::Value =
+            serde_json::from_str(&override_json).expect("override json should parse");
+
+        assert_eq!(
+            override_value,
+            json!({
+                "haiku": 0.8,
+                "sonnet": 1.3
+            })
+        );
+    }
+
+    #[test]
+    fn build_kiro_billable_multiplier_override_patch_clears_when_restoring_inherit() {
+        let patch = build_kiro_billable_multiplier_override_patch(
+            r#"{"haiku":1.0,"opus":2.0,"sonnet":1.0}"#,
+            true,
+            r#"{"haiku":1.0,"opus":1.5,"sonnet":1.0}"#,
+            false,
+            r#"{"haiku":1.0,"opus":1.5,"sonnet":1.0}"#,
+        )
+        .expect("patch should build");
 
         assert_eq!(patch, Some(None));
     }

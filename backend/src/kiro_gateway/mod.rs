@@ -2,6 +2,7 @@
 //! usage tracking, and admin CRUD for the Kiro provider backend.
 
 pub(crate) mod auth_file;
+mod billable_multipliers;
 mod cache_policy;
 pub(crate) mod cache_sim;
 mod local_import;
@@ -32,7 +33,7 @@ pub(crate) use runtime::KiroGatewayRuntimeState;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use static_flow_shared::llm_gateway_store::{
-    compute_billable_tokens, now_ms, parse_kiro_cache_policy_override_json,
+    compute_kiro_billable_tokens, now_ms, parse_kiro_cache_policy_override_json,
     LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
     DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY, DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
     LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
@@ -43,6 +44,11 @@ pub(crate) use status_cache::{refresh_cached_status, spawn_status_refresher};
 use self::{
     anthropic::supported_model_ids,
     auth_file::KiroAuthRecord,
+    billable_multipliers::{
+        canonicalize_kiro_billable_model_multipliers_override_json,
+        resolve_effective_kiro_billable_model_multipliers,
+        uses_global_kiro_billable_model_multipliers,
+    },
     cache_policy::{resolve_effective_kiro_cache_policy, uses_global_kiro_cache_policy},
     status_cache::{
         refresh_cached_status_for_account, remove_cached_status_for_account,
@@ -213,10 +219,16 @@ fn build_admin_kiro_key_view(
 ) -> KiroAdminResult<AdminKiroKeyView> {
     let effective_policy = resolve_effective_kiro_cache_policy(runtime_config, key)
         .map_err(|err| internal_error("Failed to resolve effective Kiro cache policy", err))?;
+    let effective_billable_model_multipliers =
+        resolve_effective_kiro_billable_model_multipliers(runtime_config, key).map_err(|err| {
+            internal_error("Failed to resolve effective Kiro billable multiplier config", err)
+        })?;
     Ok(AdminKiroKeyView::from_key_and_effective_policy(
         key,
         &effective_policy,
         uses_global_kiro_cache_policy(key),
+        &effective_billable_model_multipliers,
+        uses_global_kiro_billable_model_multipliers(key),
     ))
 }
 
@@ -229,6 +241,19 @@ fn validate_kiro_cache_policy_override_update(
     candidate.kiro_cache_policy_override_json = override_json.map(ToString::to_string);
     resolve_effective_kiro_cache_policy(runtime_config, &candidate)
         .map_err(|_| bad_request("kiro_cache_policy_override_json is invalid"))?;
+    Ok(())
+}
+
+fn validate_kiro_billable_model_multipliers_override_update(
+    runtime_config: &crate::state::LlmGatewayRuntimeConfig,
+    key: &LlmGatewayKeyRecord,
+    override_json: Option<&str>,
+) -> KiroAdminResult<()> {
+    let mut candidate = key.clone();
+    candidate.kiro_billable_model_multipliers_override_json =
+        override_json.map(ToString::to_string);
+    resolve_effective_kiro_billable_model_multipliers(runtime_config, &candidate)
+        .map_err(|_| bad_request("kiro_billable_model_multipliers_override_json is invalid"))?;
     Ok(())
 }
 
@@ -418,6 +443,7 @@ pub async fn create_admin_key(
         kiro_request_validation_enabled: true,
         kiro_cache_estimation_enabled: true,
         kiro_cache_policy_override_json: None,
+        kiro_billable_model_multipliers_override_json: None,
     };
     state
         .llm_gateway_store
@@ -509,6 +535,20 @@ pub async fn patch_admin_key(
             override_json.as_deref(),
         )?;
         key.kiro_cache_policy_override_json = override_json;
+    }
+    if let Some(kiro_billable_model_multipliers_override_json) =
+        request.kiro_billable_model_multipliers_override_json
+    {
+        let override_json = canonicalize_kiro_billable_model_multipliers_override_json(
+            kiro_billable_model_multipliers_override_json.as_deref(),
+        )
+        .map_err(|_| bad_request("kiro_billable_model_multipliers_override_json is invalid"))?;
+        validate_kiro_billable_model_multipliers_override_update(
+            &runtime_config,
+            &key,
+            override_json.as_deref(),
+        )?;
+        key.kiro_billable_model_multipliers_override_json = override_json;
     }
     key.public_visible = false;
     materialize_legacy_kiro_route_group_if_needed(&state, &mut key).await?;
@@ -1058,10 +1098,14 @@ pub async fn record_messages_usage(
         .elapsed()
         .as_millis()
         .min(i32::MAX as u128) as i32;
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    let effective_billable_model_multipliers =
+        resolve_effective_kiro_billable_model_multipliers(&runtime_config, &current)?;
     let event = build_kiro_usage_event_record(
         KiroUsageEventBuild {
             current: &current,
             event_context,
+            effective_billable_model_multipliers: &effective_billable_model_multipliers,
         },
         latency_ms,
         200,
@@ -1115,10 +1159,14 @@ pub async fn record_failed_request_event(
         .elapsed()
         .as_millis()
         .min(i32::MAX as u128) as i32;
+    let runtime_config = state.llm_gateway_runtime_config.read().clone();
+    let effective_billable_model_multipliers =
+        resolve_effective_kiro_billable_model_multipliers(&runtime_config, &current)?;
     let event = build_kiro_usage_event_record(
         KiroUsageEventBuild {
             current: &current,
             event_context,
+            effective_billable_model_multipliers: &effective_billable_model_multipliers,
         },
         latency_ms,
         failure.status_code,
@@ -1149,6 +1197,7 @@ pub async fn record_failed_request_event(
 struct KiroUsageEventBuild<'a> {
     current: &'a LlmGatewayKeyRecord,
     event_context: &'a KiroEventContext,
+    effective_billable_model_multipliers: &'a BTreeMap<String, f64>,
 }
 
 fn build_kiro_usage_event_record(
@@ -1175,10 +1224,12 @@ fn build_kiro_usage_event_record(
         input_uncached_tokens: usage.input_uncached_tokens.max(0) as u64,
         input_cached_tokens: usage.input_cached_tokens.max(0) as u64,
         output_tokens: usage.output_tokens.max(0) as u64,
-        billable_tokens: compute_billable_tokens(
+        billable_tokens: compute_kiro_billable_tokens(
+            build.event_context.model.as_deref(),
             usage.input_uncached_tokens.max(0) as u64,
             usage.input_cached_tokens.max(0) as u64,
             usage.output_tokens.max(0) as u64,
+            build.effective_billable_model_multipliers,
         ),
         usage_missing,
         credit_usage: usage.credit_usage,
@@ -1710,6 +1761,7 @@ mod tests {
         filter_kiro_account_views_by_prefix, normalize_key_route_config,
         normalize_kiro_key_route_config_for_patch, normalize_model_name_map,
         paginate_kiro_account_views, public_kiro_access_accounts,
+        resolve_effective_kiro_billable_model_multipliers,
         validate_kiro_cache_policy_override_update, AdminKiroAccountStatusesQuery,
         KiroAccessResponse, KiroAccountView, KiroCacheView, KiroEventContext, KiroUsageEventBuild,
         KiroUsageSummary,
@@ -2048,6 +2100,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         };
 
         let err = validate_kiro_cache_policy_override_update(
@@ -2110,6 +2163,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -2132,11 +2186,14 @@ mod tests {
             started_at: std::time::Instant::now(),
         };
         let diagnostic = r#"{"kind":"kiro_failure_diagnostic","error":"boom"}"#.to_string();
+        let runtime_config = crate::state::LlmGatewayRuntimeConfig::default();
 
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
                 current: &key,
                 event_context: &event_context,
+                effective_billable_model_multipliers: &runtime_config
+                    .kiro_billable_model_multipliers,
             },
             12,
             502,
@@ -2195,6 +2252,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -2216,11 +2274,14 @@ mod tests {
             session_source_value_preview: Some("conv-1".to_string()),
             started_at: std::time::Instant::now(),
         };
+        let runtime_config = crate::state::LlmGatewayRuntimeConfig::default();
 
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
                 current: &key,
                 event_context: &event_context,
+                effective_billable_model_multipliers: &runtime_config
+                    .kiro_billable_model_multipliers,
             },
             42,
             200,
@@ -2240,6 +2301,173 @@ mod tests {
         assert!(record.upstream_request_body_json.is_none());
         assert!(record.full_request_json.is_none());
         assert_eq!(record.billable_tokens, 54_679);
+    }
+
+    #[test]
+    fn build_kiro_success_usage_event_applies_configured_model_multiplier() {
+        let key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+        };
+        let event_context = KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some(
+                "{\"conversationState\":{\"conversationId\":\"conv-1\"}}".to_string(),
+            ),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("metadata_json".to_string()),
+            session_source_name: Some("session_id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
+            started_at: std::time::Instant::now(),
+        };
+        let mut runtime_config = crate::state::LlmGatewayRuntimeConfig::default();
+        runtime_config
+            .kiro_billable_model_multipliers
+            .insert("opus".to_string(), 2.0);
+        let effective_billable_model_multipliers =
+            resolve_effective_kiro_billable_model_multipliers(&runtime_config, &key)
+                .expect("key override should resolve");
+
+        let record = build_kiro_usage_event_record(
+            KiroUsageEventBuild {
+                current: &key,
+                event_context: &event_context,
+                effective_billable_model_multipliers: &effective_billable_model_multipliers,
+            },
+            42,
+            200,
+            KiroUsageSummary {
+                input_uncached_tokens: 50_049,
+                input_cached_tokens: 0,
+                output_tokens: 926,
+                credit_usage: Some(2.5598),
+                credit_usage_missing: false,
+            },
+            false,
+            event_context.last_message_content.clone(),
+        );
+
+        assert_eq!(record.billable_tokens, 109_358);
+    }
+
+    #[test]
+    fn build_kiro_success_usage_event_prefers_key_multiplier_override_over_global() {
+        let mut key = LlmGatewayKeyRecord {
+            id: "key-1".to_string(),
+            name: "test-key".to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: false,
+            quota_billable_limit: 100,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_billable_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+        };
+        key.kiro_billable_model_multipliers_override_json = Some(r#"{"opus":1.5}"#.to_string());
+        let event_context = KiroEventContext {
+            account_name: Some("acct-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            endpoint: "/generateAssistantResponse".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "[]".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: Some("{\"messages\":[]}".to_string()),
+            upstream_request_body_json: Some(
+                "{\"conversationState\":{\"conversationId\":\"conv-1\"}}".to_string(),
+            ),
+            conversation_id: Some("conv-1".to_string()),
+            session_resolution: Some("metadata_json".to_string()),
+            session_source_name: Some("session_id".to_string()),
+            session_source_value_preview: Some("conv-1".to_string()),
+            started_at: std::time::Instant::now(),
+        };
+        let mut runtime_config = crate::state::LlmGatewayRuntimeConfig::default();
+        runtime_config
+            .kiro_billable_model_multipliers
+            .insert("opus".to_string(), 2.0);
+        let effective_billable_model_multipliers =
+            resolve_effective_kiro_billable_model_multipliers(&runtime_config, &key)
+                .expect("key override should resolve");
+
+        let record = build_kiro_usage_event_record(
+            KiroUsageEventBuild {
+                current: &key,
+                event_context: &event_context,
+                effective_billable_model_multipliers: &effective_billable_model_multipliers,
+            },
+            42,
+            200,
+            KiroUsageSummary {
+                input_uncached_tokens: 50_049,
+                input_cached_tokens: 0,
+                output_tokens: 926,
+                credit_usage: Some(2.5598),
+                credit_usage_missing: false,
+            },
+            false,
+            event_context.last_message_content.clone(),
+        );
+
+        assert_eq!(record.billable_tokens, 82_019);
     }
 
     #[test]
@@ -2273,6 +2501,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -2294,11 +2523,14 @@ mod tests {
             session_source_value_preview: Some("conv-1".to_string()),
             started_at: std::time::Instant::now(),
         };
+        let runtime_config = crate::state::LlmGatewayRuntimeConfig::default();
 
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
                 current: &key,
                 event_context: &event_context,
+                effective_billable_model_multipliers: &runtime_config
+                    .kiro_billable_model_multipliers,
             },
             42,
             200,
@@ -2350,6 +2582,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
         };
         let event_context = KiroEventContext {
             account_name: Some("acct-a".to_string()),
@@ -2371,10 +2604,13 @@ mod tests {
             session_source_value_preview: Some("conv-1".to_string()),
             started_at: std::time::Instant::now(),
         };
+        let runtime_config = crate::state::LlmGatewayRuntimeConfig::default();
         let record = build_kiro_usage_event_record(
             KiroUsageEventBuild {
                 current: &key,
                 event_context: &event_context,
+                effective_billable_model_multipliers: &runtime_config
+                    .kiro_billable_model_multipliers,
             },
             42,
             200,
