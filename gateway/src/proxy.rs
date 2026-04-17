@@ -121,46 +121,22 @@ impl ProxyHttp for StaticFlowGateway {
 
     async fn upstream_request_filter(
         &self,
-        session: &mut Session,
-        upstream_request: &mut RequestHeader,
-        ctx: &mut Self::CTX,
+        _session: &mut Session,
+        _upstream_request: &mut RequestHeader,
+        _ctx: &mut Self::CTX,
     ) -> Result<()> {
-        let request_id_header = ctx.config.request_id_header().to_string();
-        let trace_id_header = ctx.config.trace_id_header().to_string();
-        upstream_request.insert_header(request_id_header, ctx.request_id.as_str())?;
-        upstream_request.insert_header(trace_id_header, ctx.trace_id.as_str())?;
-
-        if ctx.config.add_forwarded_headers() {
-            upstream_request.insert_header("x-forwarded-proto", "http")?;
-            if let Some(host) = session
-                .req_header()
-                .headers
-                .get("host")
-                .and_then(|value| value.to_str().ok())
-            {
-                upstream_request.insert_header("x-forwarded-host", host)?;
-            }
-            if let Some(addr) = session.client_addr().and_then(|value| value.as_inet()) {
-                upstream_request.insert_header("x-forwarded-for", addr.ip().to_string())?;
-            }
-        }
-
         Ok(())
     }
 
     async fn response_filter(
         &self,
         _session: &mut Session,
-        downstream_response: &mut ResponseHeader,
-        ctx: &mut Self::CTX,
+        _downstream_response: &mut ResponseHeader,
+        _ctx: &mut Self::CTX,
     ) -> Result<()>
     where
         Self::CTX: Send + Sync,
     {
-        let request_id_header = ctx.config.request_id_header().to_string();
-        let trace_id_header = ctx.config.trace_id_header().to_string();
-        downstream_response.insert_header(request_id_header, ctx.request_id.as_str())?;
-        downstream_response.insert_header(trace_id_header, ctx.trace_id.as_str())?;
         Ok(())
     }
 
