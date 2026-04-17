@@ -20,3 +20,7 @@
 [submodule "deps/ffmpeg-sidecar"]
 	path = deps/ffmpeg-sidecar
 	url = git@github.com:acking-you/ffmpeg-sidecar.git
+[submodule "deps/pingora"]
+	path = deps/pingora
+	url = git@github.com:acking-you/pingora.git
+	branch = feat/static-flow
