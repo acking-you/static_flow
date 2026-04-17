@@ -335,6 +335,15 @@ pub(crate) struct TableCompactorStores {
     pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
 }
 
+/// Immutable runtime metadata exposed by health and diagnostics endpoints.
+#[derive(Debug, Clone)]
+pub struct RuntimeMetadata {
+    /// Unix timestamp in milliseconds for process startup.
+    pub started_at_ms: i64,
+    /// Build identifier exposed by `/api/healthz`.
+    pub build_id: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub(crate) store: Arc<StaticFlowDataStore>,
@@ -373,6 +382,7 @@ pub struct AppState {
     pub(crate) shutdown_tx: watch::Sender<bool>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) index_html_template: Arc<String>,
+    pub(crate) runtime_metadata: Arc<RuntimeMetadata>,
     #[cfg(feature = "local-media")]
     pub(crate) media_proxy: Option<Arc<MediaProxyState>>,
 }
@@ -403,6 +413,12 @@ impl AppState {
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
         let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
+        let runtime_metadata = Arc::new(RuntimeMetadata {
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
+            build_id: option_env!("STATICFLOW_BUILD_ID")
+                .unwrap_or(env!("CARGO_PKG_VERSION"))
+                .to_string(),
+        });
 
         let comment_runtime_config = Arc::new(RwLock::new(read_comment_runtime_config_from_env()));
         let api_behavior_runtime_config =
@@ -717,6 +733,7 @@ impl AppState {
             shutdown_tx,
             shutdown_rx: app_shutdown_rx,
             index_html_template: Arc::new(index_html_template),
+            runtime_metadata,
             #[cfg(feature = "local-media")]
             media_proxy,
         })

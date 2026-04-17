@@ -1,0 +1,20 @@
+version: 1
+daemon: false
+threads: 2
+pid_file: tmp/staticflow-gateway.pid
+error_log: tmp/runtime-logs/gateway/daemon-stderr.log
+upgrade_sock: tmp/staticflow-gateway-upgrade.sock
+
+staticflow:
+  listen_addr: 127.0.0.1:39180
+  request_id_header: x-request-id
+  trace_id_header: x-trace-id
+  add_forwarded_headers: true
+  upstreams:
+    blue: 127.0.0.1:39080
+    green: 127.0.0.1:39081
+  active_upstream: blue
+  connect_timeout_ms: 3000
+  read_idle_timeout_ms: 1800000
+  write_idle_timeout_ms: 1800000
+  retry_count: 0

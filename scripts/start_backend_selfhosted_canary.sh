@@ -31,6 +31,7 @@ FRONTEND_FEATURES="${FRONTEND_FEATURES:-}"
 LOG_FILE="${LOG_FILE:-}"
 CANARY_BIN_PATH="${CANARY_BIN_PATH:-$ROOT_DIR/bin/static-flow-backend-canary}"
 PID_FILE="${PID_FILE:-}"
+STATICFLOW_LOG_DIR="${STATICFLOW_LOG_DIR:-$ROOT_DIR/tmp/runtime-logs}"
 
 log() { echo "[canary] $*"; }
 fail() { echo "[canary][ERROR] $*" >&2; exit 1; }
@@ -40,7 +41,7 @@ usage() {
 Usage: ./scripts/start_backend_selfhosted_canary.sh [options]
 
 Options:
-  --daemon         Run in background (nohup), log to LOG_FILE
+  --daemon         Run in background (nohup), backend logs roll under STATICFLOW_LOG_DIR
   --port <port>    Override PORT (default: 39081)
   --host <addr>    Override BIND_ADDR (default: 127.0.0.1)
   --build          Build release binary before starting
@@ -54,9 +55,12 @@ Environment variables (all optional):
   MUSIC_DB_PATH        Music DB override
   SITE_BASE_URL        Public URL override (default: http://127.0.0.1:$PORT)
   FRONTEND_DIST_DIR    Frontend dist path (default: ./frontend/dist)
-  LOG_FILE             Runtime log path (default: ./tmp/staticflow-backend-canary.log)
+  LOG_FILE             Legacy wrapper log path (backend runtime logs now roll under STATICFLOW_LOG_DIR)
   CANARY_BIN_PATH      Output binary path (default: ./bin/static-flow-backend-canary)
   PID_FILE             Daemon pid file (default: ./tmp/staticflow-backend-canary.pid)
+  STATICFLOW_LOG_DIR   Runtime log root (default: ./tmp/runtime-logs)
+  STATICFLOW_LOG_SERVICE Service log folder name (default: backend-canary-$PORT)
+  STATICFLOW_LOG_STDOUT Mirror backend logs to stdout; script overrides to 0 in daemon mode
   LOCAL_MEDIA_MODE     enabled|disabled (default: enabled)
   STATICFLOW_MEDIA_PROXY_BASE_URL Upstream media service base URL (default when enabled: http://127.0.0.1:39085)
   STATICFLOW_MEDIA_PROXY_HOST Default proxy host when base URL is unset
@@ -111,12 +115,10 @@ sf_apply_local_media_proxy_defaults
 SITE_BASE_URL="${SITE_BASE_URL:-http://127.0.0.1:${PORT}}"
 LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary-${PORT}.log}"
 PID_FILE="${PID_FILE:-$ROOT_DIR/tmp/staticflow-backend-canary-${PORT}.pid}"
+STATICFLOW_LOG_SERVICE="${STATICFLOW_LOG_SERVICE:-backend-canary-${PORT}}"
 
 mkdir -p "$ROOT_DIR/tmp" "$(dirname "$LOG_FILE")" "$(dirname "$CANARY_BIN_PATH")" "$(dirname "$PID_FILE")"
-if [[ "$DAEMON" != "true" ]]; then
-  : > "$LOG_FILE"
-  exec > >(tee -a "$LOG_FILE") 2>&1
-fi
+mkdir -p "$STATICFLOW_LOG_DIR"
 
 resolve_backend_bin() {
   if [[ -n "${BACKEND_BIN:-}" && -x "$BACKEND_BIN" ]]; then
@@ -194,6 +196,8 @@ export MUSIC_LANCEDB_URI="$MUSIC_DB_PATH"
 export SITE_BASE_URL
 export FRONTEND_DIST_DIR
 export COMMENT_AI_CONTENT_API_BASE
+export STATICFLOW_LOG_DIR
+export STATICFLOW_LOG_SERVICE
 export MEM_PROF_ENABLED="${MEM_PROF_ENABLED:-0}"
 export COMMENT_AI_CODEX_SANDBOX
 export COMMENT_AI_CODEX_JSON_STREAM
@@ -207,19 +211,20 @@ else
 fi
 
 if [[ "$DAEMON" == "true" ]]; then
-  : > "$LOG_FILE"
+  export STATICFLOW_LOG_STDOUT=0
   rm -f "$PID_FILE"
-  setsid "$BACKEND_BIN_PATH" < /dev/null >> "$LOG_FILE" 2>&1 &
+  setsid "$BACKEND_BIN_PATH" < /dev/null >/dev/null 2>&1 &
   local_pid=$!
   echo "$local_pid" > "$PID_FILE"
-  log "Started in background (pid=$local_pid, log=$LOG_FILE)"
+  log "Started in background (pid=$local_pid, runtime_logs=$STATICFLOW_LOG_DIR/$STATICFLOW_LOG_SERVICE)"
   sleep 2
   if kill -0 "$local_pid" 2>/dev/null; then
     log "Backend is running. Verify: curl http://${HOST}:${PORT}/api/articles"
   else
-    fail "Backend exited immediately. Check $LOG_FILE"
+    fail "Backend exited immediately. Check $STATICFLOW_LOG_DIR/$STATICFLOW_LOG_SERVICE"
   fi
 else
-  log "Starting in foreground (Ctrl+C to stop, log=$LOG_FILE)..."
+  export STATICFLOW_LOG_STDOUT="${STATICFLOW_LOG_STDOUT:-1}"
+  log "Starting in foreground (Ctrl+C to stop, runtime_logs=$STATICFLOW_LOG_DIR/$STATICFLOW_LOG_SERVICE)..."
   exec "$BACKEND_BIN_PATH"
 fi

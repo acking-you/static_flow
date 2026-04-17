@@ -3,6 +3,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Request/trace id helpers shared by backend and gateway.
+pub mod request_ids;
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Native runtime logging helpers shared by backend and gateway.
+pub mod runtime_logging;
+
 /// Embedding helpers shared by content indexing and retrieval flows.
 #[allow(
     missing_docs,

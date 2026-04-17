@@ -6,6 +6,7 @@ mod comment_worker;
 mod email;
 mod geoip;
 mod handlers;
+mod health;
 mod kiro_gateway;
 mod llm_gateway;
 #[cfg(feature = "local-media")]
@@ -20,12 +21,12 @@ mod state;
 mod table_maintenance;
 mod upstream_proxy;
 
-use std::{env, time::Duration};
+use std::{env, net::SocketAddr, time::Duration};
 
 use anyhow::Result;
 use better_mimalloc_rs::MiMalloc;
 use memory_profiler::ProfiledMiMalloc;
-use tracing_subscriber::EnvFilter;
+use static_flow_shared::runtime_logging::init_runtime_logging;
 
 const DEFAULT_LOG_FILTER: &str =
     "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";
@@ -37,19 +38,11 @@ static GLOBAL_MIMALLOC: ProfiledMiMalloc = ProfiledMiMalloc::new(MiMalloc);
 #[tokio::main]
 async fn main() -> Result<()> {
     MiMalloc::init();
+    let _log_guards = init_runtime_logging("backend", DEFAULT_LOG_FILTER)?;
     // Initialize memory profiler as early as possible so all subsequent
     // allocations (tracing, LanceDB, etc.) are tracked from the start.
     let mem_profiler = memory_profiler::init_from_env();
     let mem_profiler_cfg = mem_profiler.config_snapshot();
-
-    // Default: suppress verbose dependency info logs.
-    // Override with RUST_LOG for troubleshooting.
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
-    tracing_subscriber::fmt()
-        .compact()
-        .with_env_filter(filter)
-        .init();
 
     tracing::info!(
         "Memory profiler: enabled={}, sample_rate={}, min_alloc_bytes={}, \
@@ -111,7 +104,7 @@ async fn main() -> Result<()> {
 
     let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let mut server = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async move {
                 let _ = server_shutdown_rx.await;
             })

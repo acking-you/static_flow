@@ -13,7 +13,8 @@ use tower_http::{
 };
 
 use crate::{
-    behavior_analytics, handlers, kiro_gateway, llm_gateway, request_context, seo, state::AppState,
+    behavior_analytics, handlers, health, kiro_gateway, llm_gateway, request_context, seo,
+    state::AppState,
 };
 
 #[cfg(feature = "local-media")]
@@ -78,6 +79,7 @@ pub fn create_router(state: AppState) -> Router {
     // API and admin routes have the highest priority so they cannot be
     // shadowed by the SPA history fallback below.
     let api_router = Router::new()
+        .route("/api/healthz", get(health::get_healthz))
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
         .route("/api/llm-gateway/access", get(llm_gateway::get_public_access))

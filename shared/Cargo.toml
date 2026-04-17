@@ -23,6 +23,9 @@ lancedb = { workspace = true }
 rand = "0.8"
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-log = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

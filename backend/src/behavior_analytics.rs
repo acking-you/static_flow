@@ -14,13 +14,13 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use static_flow_shared::lancedb_api::NewApiBehaviorEventInput;
+use static_flow_shared::{
+    lancedb_api::NewApiBehaviorEventInput,
+    request_ids::{REQUEST_ID_HEADER, TRACE_ID_HEADER},
+};
 use tokio::sync::Semaphore;
 
-use crate::{
-    request_context::{REQUEST_ID_HEADER, TRACE_ID_HEADER},
-    state::AppState,
-};
+use crate::state::AppState;
 
 const CLIENT_SOURCE_HEADER: &str = "x-sf-client";
 const PAGE_PATH_HEADER: &str = "x-sf-page";
