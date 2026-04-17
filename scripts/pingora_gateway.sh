@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_pingora_gateway_conf.sh"
+source "$ROOT_DIR/scripts/lib_port_process.sh"
+source "$ROOT_DIR/scripts/lib_script_lock.sh"
 
 CONF_FILE="${CONF_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml}"
 GATEWAY_BIN="${GATEWAY_BIN:-$ROOT_DIR/target/release-backend/staticflow-pingora-gateway}"
@@ -17,7 +20,7 @@ fail() { echo "[gateway][ERROR] $*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/pingora_gateway.sh {run|start|check|reload|status|stop|switch <blue|green>}
+Usage: ./scripts/pingora_gateway.sh {run|start|check|reload|status|stop|switch <blue|green>|stop-backend <blue|green>}
 
 Environment variables:
   CONF_FILE               Gateway YAML path
@@ -59,13 +62,13 @@ check_gateway_conf() {
 top_level_conf_value() {
   local conf_file="$1"
   local key="$2"
-  rg "^${key}:" "$conf_file" | awk '{print $2}'
+  pingora_top_level_conf_value "$conf_file" "$key"
 }
 
 staticflow_conf_value() {
   local conf_file="$1"
   local key="$2"
-  rg "^[[:space:]]+${key}:" "$conf_file" | awk '{print $2}'
+  pingora_staticflow_conf_value "$conf_file" "$key"
 }
 
 listen_addr() {
@@ -91,18 +94,18 @@ current_pid() {
 }
 
 active_upstream() {
-  rg '^[[:space:]]+active_upstream:' "$CONF_FILE" | awk '{print $2}'
+  pingora_staticflow_conf_value "$CONF_FILE" "active_upstream"
 }
 
 active_upstream_from_file() {
   local conf_file="$1"
-  rg '^[[:space:]]+active_upstream:' "$conf_file" | awk '{print $2}'
+  pingora_staticflow_conf_value "$conf_file" "active_upstream"
 }
 
 slot_addr_from_file() {
   local conf_file="$1"
   local slot="$2"
-  rg "^[[:space:]]+${slot}:" "$conf_file" | awk '{print $2}'
+  pingora_staticflow_upstream_addr "$conf_file" "$slot"
 }
 
 slot_port_from_file() {
@@ -155,6 +158,24 @@ wait_gateway_port() {
     sleep 0.25
   done
   return 1
+}
+
+stop_backend_slot() {
+  local slot="$1"
+  local active_slot="" port="" pid=""
+  active_slot="$(active_upstream)"
+  [[ "$slot" != "$active_slot" ]] || fail "refusing to stop active slot $slot"
+  port="$(slot_port_from_file "$CONF_FILE" "$slot")"
+  pid="$(listener_pid_for_port "$port")"
+  [[ -n "$pid" ]] || fail "no backend listener found for slot $slot on port $port"
+  log "stopping backend slot=$slot pid=$pid port=$port"
+  kill -TERM "$pid"
+  if ! wait_for_exit "$pid"; then
+    log "backend slot=$slot pid=$pid did not exit after SIGTERM; forcing SIGKILL"
+    kill -KILL "$pid" 2>/dev/null || true
+    wait_for_exit "$pid" || fail "backend slot=$slot pid $pid did not exit after SIGKILL"
+  fi
+  log "backend slot=$slot stopped"
 }
 
 clear_stale_pid() {
@@ -219,6 +240,7 @@ case "${1:-}" in
     build_gateway_bin
     export STATICFLOW_LOG_DIR STATICFLOW_LOG_SERVICE
     export STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR
+    release_lock_fd 9
     exec "$GATEWAY_BIN" --conf "$CONF_FILE"
     ;;
   start)
@@ -230,6 +252,7 @@ case "${1:-}" in
     check_gateway_conf >/dev/null
     export STATICFLOW_LOG_DIR STATICFLOW_LOG_SERVICE STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR
     log "starting gateway on $(active_upstream) via $CONF_FILE"
+    release_lock_fd 9
     nohup "$GATEWAY_BIN" --conf "$CONF_FILE" >>"$(error_log_file)" 2>&1 &
     pid="$!"
     echo "$pid" >"$(pid_file)"
@@ -273,6 +296,11 @@ case "${1:-}" in
     rm -f "$(pid_file)"
     log "gateway stopped"
     ;;
+  stop-backend)
+    [[ $# -eq 2 ]] || fail "usage: $0 stop-backend <blue|green>"
+    [[ "$2" == "blue" || "$2" == "green" ]] || fail "slot must be blue or green"
+    stop_backend_slot "$2"
+    ;;
   switch)
     [[ $# -eq 2 ]] || fail "usage: $0 switch <blue|green>"
     [[ "$2" == "blue" || "$2" == "green" ]] || fail "slot must be blue or green"
@@ -304,6 +332,6 @@ case "${1:-}" in
     usage
     ;;
   *)
-    fail "usage: $0 {run|start|check|reload|status|stop|switch <blue|green>}"
+    fail "usage: $0 {run|start|check|reload|status|stop|switch <blue|green>|stop-backend <blue|green>}"
     ;;
 esac

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib_pingora_gateway_conf.sh"
+source "$ROOT_DIR/scripts/lib_backend_gateway_upgrade.sh"
 
 CONF_FILE="${CONF_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml}"
 GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:39180}"
@@ -27,12 +29,12 @@ EOF
 }
 
 active_slot() {
-  rg '^[[:space:]]+active_upstream:' "$CONF_FILE" | awk '{print $2}'
+  pingora_staticflow_conf_value "$CONF_FILE" "active_upstream"
 }
 
 slot_addr() {
   local slot="$1"
-  rg "^[[:space:]]+${slot}:" "$CONF_FILE" | awk '{print $2}'
+  pingora_staticflow_upstream_addr "$CONF_FILE" "$slot"
 }
 
 slot_port() {
@@ -59,11 +61,6 @@ wait_health() {
     sleep 0.25
   done
   return 1
-}
-
-json_field() {
-  local field="$1"
-  python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$field"
 }
 
 build_candidate_backend() {
@@ -120,7 +117,14 @@ else
 fi
 
 wait_health "http://127.0.0.1:${NEW_PORT}/api/healthz" || fail "candidate backend failed healthz on port $NEW_PORT"
-OLD_PID="$(curl -fsS "http://127.0.0.1:${old_port}/api/healthz" | json_field pid)"
+OLD_PID="$(
+  healthz_json_field "http://127.0.0.1:${old_port}/api/healthz" pid 2>/dev/null || true
+)"
+if [[ -z "$OLD_PID" ]]; then
+  OLD_PID="$(listener_pid_for_port "$old_port")"
+  [[ -n "$OLD_PID" ]] || fail "current active backend on port $old_port returned non-json /api/healthz and listener pid could not be determined"
+  log "current active backend on port=$old_port returned non-json /api/healthz; using listener pid fallback old_pid=$OLD_PID"
+fi
 log "candidate backend healthy; old_pid=$OLD_PID"
 
 log "switching gateway active_upstream: $OLD_SLOT -> $NEW_SLOT"
@@ -128,7 +132,7 @@ bash "$ROOT_DIR/scripts/pingora_gateway.sh" switch "$NEW_SLOT"
 ROLLBACK_NEEDED="1"
 wait_health "${GATEWAY_URL}/api/healthz" || fail "gateway did not recover after switch"
 
-gateway_port="$(curl -fsS "${GATEWAY_URL}/api/healthz" | json_field port)"
+gateway_port="$(healthz_json_field "${GATEWAY_URL}/api/healthz" port)"
 [[ "$gateway_port" == "$NEW_PORT" ]] || fail "gateway still points to old backend"
 
 log "gateway now serves new port=$gateway_port; stopping old pid=$OLD_PID"
