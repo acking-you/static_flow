@@ -110,11 +110,19 @@ impl UserInputMessage {
 
     pub fn with_images(mut self, images: Vec<KiroImage>) -> Self {
         self.images = images;
+        if !self.images.is_empty() {
+            // Kiro rejects current-turn image payloads when `origin` is present.
+            self.origin = None;
+        }
         self
     }
 
     pub fn with_origin(mut self, origin: impl Into<String>) -> Self {
-        self.origin = Some(origin.into());
+        if self.images.is_empty() {
+            self.origin = Some(origin.into());
+        } else {
+            self.origin = None;
+        }
         self
     }
 }
@@ -221,11 +229,6 @@ impl UserMessage {
             images: Vec::new(),
             user_input_message_context: UserInputMessageContext::default(),
         }
-    }
-
-    pub fn with_images(mut self, images: Vec<KiroImage>) -> Self {
-        self.images = images;
-        self
     }
 
     pub fn with_context(mut self, context: UserInputMessageContext) -> Self {

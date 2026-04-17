@@ -138,6 +138,7 @@ pub struct ConversionResult {
     pub conversation_state: ConversationState,
     pub tool_name_map: HashMap<String, String>,
     pub session_tracking: SessionTracking,
+    pub has_history_images: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,14 +467,13 @@ fn schema_contains_multimodal_unsupported_keywords(value: &serde_json::Value) ->
     }
 }
 
-fn conversation_contains_images(current: &UserInputMessage, history: &[Message]) -> bool {
-    if !current.images.is_empty() {
-        return true;
+fn request_message_contains_image(message: &super::types::Message) -> bool {
+    match &message.content {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .any(|item| item.get("type").and_then(|value| value.as_str()) == Some("image")),
+        _ => false,
     }
-    history.iter().any(|message| match message {
-        Message::User(message) => !message.user_input_message.images.is_empty(),
-        Message::Assistant(_) => false,
-    })
 }
 
 fn apply_multimodal_tool_schema_compatibility(tools: &mut [Tool], has_images: bool) {
@@ -1050,6 +1050,9 @@ pub(crate) fn convert_normalized_request_with_resolved_session(
     }
     let current_range = current_user_message_range(messages)?;
     let current_messages = messages[current_range.clone()].iter().collect::<Vec<_>>();
+    let has_history_images = messages[..current_range.start]
+        .iter()
+        .any(request_message_contains_image);
 
     let agent_continuation_id = Uuid::new_v4().to_string();
     let mut user_input = merge_current_user_messages(&current_messages, &model_id)?;
@@ -1076,7 +1079,7 @@ pub(crate) fn convert_normalized_request_with_resolved_session(
     }
     apply_multimodal_tool_schema_compatibility(
         &mut tools,
-        conversation_contains_images(&user_input, &history),
+        !user_input.images.is_empty() || has_history_images,
     );
 
     let mut context = user_input.user_input_message_context.clone();
@@ -1095,6 +1098,7 @@ pub(crate) fn convert_normalized_request_with_resolved_session(
             .with_history(history),
         tool_name_map,
         session_tracking: resolved_conversation.session_tracking,
+        has_history_images,
     })
 }
 
@@ -1700,7 +1704,6 @@ fn merge_user_messages(
     model_id: &str,
 ) -> Result<HistoryUserMessage, ConversionError> {
     let mut content_parts = Vec::new();
-    let mut images = Vec::new();
     let mut tool_results = Vec::new();
     for message in messages {
         let (text, message_images, message_tool_results) =
@@ -1708,14 +1711,14 @@ fn merge_user_messages(
         if !text.is_empty() {
             content_parts.push(text);
         }
-        images.extend(message_images);
+        let _ = message_images;
         tool_results.extend(message_tool_results);
     }
     let content = content_parts.join("\n");
     let mut user_message = UserMessage::new(&content, model_id);
-    if !images.is_empty() {
-        user_message = user_message.with_images(images);
-    }
+    // Kiro rejects replaying image payloads inside history user turns. We keep
+    // the textual turn content and rely on a stable upstream session for any
+    // prior multimodal context.
     if !tool_results.is_empty() {
         user_message = user_message
             .with_context(UserInputMessageContext::new().with_tool_results(tool_results));
@@ -2689,6 +2692,48 @@ mod tests {
         assert_eq!(current.content, "Describe this image");
         assert_eq!(current.images.len(), 1);
         assert_eq!(current.images[0].format, "png");
+        assert!(current.origin.is_none());
+    }
+
+    #[test]
+    fn convert_request_drops_images_from_history_turns() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": "Describe this image"
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("I can help"),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("继续"),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("history image request should still convert");
+        assert!(result.has_history_images);
+        let history_user = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message,
+            other => panic!("expected user history entry, got {other:?}"),
+        };
+        assert_eq!(history_user.content, "Describe this image");
+        assert!(history_user.images.is_empty());
+        assert_eq!(history_user.origin.as_deref(), Some("AI_EDITOR"));
     }
 
     #[test]

@@ -703,9 +703,54 @@ fn log_kiro_stream_read_error(
     );
 }
 
+fn request_value_contains_images(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map.iter().any(|(key, child)| {
+            (key == "images" && child.as_array().is_some_and(|items| !items.is_empty()))
+                || (key == "type" && child.as_str() == Some("image"))
+                || request_value_contains_images(child)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(request_value_contains_images),
+        _ => false,
+    }
+}
+
+fn request_body_contains_images(raw_body: Option<&str>) -> bool {
+    let Some(raw_body) = raw_body else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(raw_body)
+        .map(|value| request_value_contains_images(&value))
+        .unwrap_or_else(|_| {
+            raw_body.contains("\"images\"") || raw_body.contains("\"type\":\"image\"")
+        })
+}
+
+fn history_images_require_stable_session(
+    has_history_images: bool,
+    session_tracking: &SessionTracking,
+) -> bool {
+    has_history_images && matches!(session_tracking.source, SessionIdSource::GeneratedFallback(_))
+}
+
+fn unsupported_history_image_replay_message(
+    has_history_images: bool,
+    session_tracking: &SessionTracking,
+) -> Option<String> {
+    history_images_require_stable_session(has_history_images, session_tracking).then(|| {
+        "Historical image turns require a stable session id. Re-send the image in the current \
+         message or provide a stable session id via request headers or metadata."
+            .to_string()
+    })
+}
+
 /// Maps a Kiro provider error into an appropriate HTTP error response.
-/// Recognizes context-length, input-length, and quota-exhaustion errors.
-fn classify_provider_error(err_text: &str) -> (StatusCode, &'static str, String) {
+/// Recognizes context-length, input-length, quota, and malformed-request
+/// errors.
+fn classify_provider_error(
+    err_text: &str,
+    request_contains_images: bool,
+) -> (StatusCode, &'static str, String) {
     if err_text.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") {
         (
             StatusCode::BAD_REQUEST,
@@ -735,13 +780,24 @@ fn classify_provider_error(err_text: &str) -> (StatusCode, &'static str, String)
              threshold."
                 .to_string(),
         )
+    } else if err_text.contains("Improperly formed request") {
+        let message = if request_contains_images {
+            "Kiro rejected the image request as malformed. Current-turn images cannot include \
+             `origin`, and historical image turns require a stable session id."
+                .to_string()
+        } else {
+            "Kiro upstream rejected the request as malformed. Check tool schema, session history, \
+             and multimodal content."
+                .to_string()
+        };
+        (StatusCode::BAD_REQUEST, "invalid_request_error", message)
     } else {
         (StatusCode::BAD_GATEWAY, "api_error", format!("Kiro upstream request failed: {err_text}"))
     }
 }
 
-fn provider_error_response(err_text: &str) -> Response {
-    let (status, error_type, message) = classify_provider_error(err_text);
+fn provider_error_response(err_text: &str, request_contains_images: bool) -> Response {
+    let (status, error_type, message) = classify_provider_error(err_text, request_contains_images);
     tracing::error!(
         status = status.as_u16(),
         error_type,
@@ -758,7 +814,14 @@ pub(super) async fn map_provider_error(
     failure_stage: &str,
 ) -> Response {
     let err_text = err.to_string();
-    let (status, _, _) = classify_provider_error(&err_text);
+    let request_contains_images = request_body_contains_images(err.request_body.as_deref())
+        || request_body_contains_images(
+            ctx.diagnostic
+                .event_context
+                .client_request_body_json
+                .as_deref(),
+        );
+    let (status, _, _) = classify_provider_error(&err_text, request_contains_images);
     let diagnostic_event_context =
         provider_failure_event_context(ctx.diagnostic.event_context, err.request_body.as_deref());
     let diagnostic_payload = build_failure_diagnostic_payload(
@@ -787,7 +850,7 @@ pub(super) async fn map_provider_error(
     {
         tracing::warn!("failed to persist kiro failure usage event: {persist_err:#}");
     }
-    provider_error_response(&err_text)
+    provider_error_response(&err_text, request_contains_images)
 }
 
 fn provider_failure_event_context(
@@ -1568,6 +1631,7 @@ async fn handle_messages(
             "rewrote kiro tool name before upstream call"
         );
     }
+    let has_history_images = conversion.has_history_images;
     let tool_name_map = conversion.tool_name_map;
     let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
         &state,
@@ -1607,6 +1671,65 @@ async fn handle_messages(
         .map(Thinking::is_enabled)
         .unwrap_or(false);
     event_context.endpoint = "/generateAssistantResponse".to_string();
+    if let Some(message) =
+        unsupported_history_image_replay_message(has_history_images, &session_tracking)
+    {
+        tracing::error!(
+            key_id = %key_record.id,
+            key_name = %key_record.name,
+            route = public_path,
+            requested_model = %requested_model,
+            effective_model = %payload.model,
+            session_resolution = session_resolution_label(&session_tracking.source),
+            stream = payload.stream,
+            buffered_for_cc,
+            error = %message,
+            "rejected kiro public request because historical image turns cannot be replayed \
+             without a stable upstream session"
+        );
+        let diagnostic_payload = build_failure_diagnostic_payload(
+            DiagnosticRequestContext {
+                event_context: &event_context,
+                request_validation_enabled,
+                stream: payload.stream,
+                buffered_for_cc,
+            },
+            "request_validation",
+            &message,
+            StatusCode::BAD_REQUEST.as_u16() as i32,
+            Some(serde_json::json!({
+                "public_route": public_path,
+                "requested_model": requested_model,
+                "effective_model": payload.model,
+                "session_resolution": session_resolution_label(&session_tracking.source),
+                "has_history_images": true,
+            })),
+        );
+        if let Err(persist_err) = crate::kiro_gateway::record_failed_request_event(
+            &state,
+            &key_record,
+            &event_context,
+            FailedKiroRequestEvent {
+                _effective_policy: &effective_cache_policy,
+                status_code: StatusCode::BAD_REQUEST.as_u16() as i32,
+                diagnostic_payload,
+                usage: zero_usage_summary(),
+                usage_missing: false,
+            },
+        )
+        .await
+        {
+            tracing::warn!(
+                "failed to persist kiro history-image validation failure usage event: \
+                 {persist_err:#}"
+            );
+        }
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("invalid_request_error", message)),
+        )
+            .into_response();
+    }
     let _activity_guard = state.llm_gateway.start_request_activity(&key_record.id);
 
     if payload.stream {
@@ -2927,11 +3050,45 @@ mod tests {
         let (status, error_type, message) = classify_provider_error(
             "all configured kiro accounts are below the configured minimum remaining credits \
              threshold",
+            false,
         );
 
         assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
         assert_eq!(error_type, "rate_limit_error");
         assert!(message.contains("minimum remaining credits threshold"));
+    }
+
+    #[test]
+    fn classify_provider_error_maps_improperly_formed_image_request_to_bad_request() {
+        let (status, error_type, message) = classify_provider_error(
+            "kiro upstream rejected request: 400 Bad Request {\"message\":\"Improperly formed \
+             request.\",\"reason\":null}",
+            true,
+        );
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error_type, "invalid_request_error");
+        assert!(message.contains("image request"));
+    }
+
+    #[test]
+    fn unsupported_history_image_replay_requires_stable_session() {
+        let generated_fallback = SessionTracking {
+            source: SessionIdSource::GeneratedFallback(SessionFallbackReason::MissingMetadata),
+            source_name: None,
+            source_value_preview: None,
+        };
+        let header_session = SessionTracking {
+            source: SessionIdSource::RequestHeader,
+            source_name: Some("x-claude-code-session-id"),
+            source_value_preview: Some("conv-1".to_string()),
+        };
+
+        let message = unsupported_history_image_replay_message(true, &generated_fallback)
+            .expect("fallback session should reject historical image replay");
+        assert!(message.contains("Historical image turns require a stable session id"));
+        assert!(unsupported_history_image_replay_message(true, &header_session).is_none());
+        assert!(unsupported_history_image_replay_message(false, &generated_fallback).is_none());
     }
 
     #[test]
