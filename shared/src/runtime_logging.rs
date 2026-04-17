@@ -9,7 +9,6 @@ use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
 };
-use tracing_log::LogTracer;
 use tracing_subscriber::{
     filter::{filter_fn, EnvFilter, Targets},
     layer::SubscriberExt,
@@ -77,7 +76,6 @@ pub fn init_runtime_logging(service: &str, default_filter: &str) -> Result<Runti
     let opts = RuntimeLogOptions::for_service(service);
     fs::create_dir_all(opts.app_dir())?;
     fs::create_dir_all(opts.access_dir())?;
-    LogTracer::builder().ignore_crate("tracing").init()?;
 
     let app_writer = RollingFileAppender::builder()
         .rotation(Rotation::HOURLY)

@@ -11,6 +11,7 @@ OLD_SLOT=""
 NEW_SLOT=""
 OLD_PID=""
 NEW_PORT=""
+CANDIDATE_BACKEND_BIN=""
 
 log() { echo "[upgrade] $*"; }
 fail() { echo "[upgrade][ERROR] $*" >&2; exit 1; }
@@ -62,11 +63,14 @@ wait_health() {
 
 json_field() {
   local field="$1"
-  python3 - "$field" <<'PY'
-import json, sys
-field = sys.argv[1]
-print(json.load(sys.stdin)[field])
-PY
+  python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$field"
+}
+
+build_candidate_backend() {
+  log "building candidate backend artifact via cargo"
+  cargo build --profile release-backend -p static-flow-backend
+  CANDIDATE_BACKEND_BIN="$ROOT_DIR/target/release-backend/static-flow-backend"
+  [[ -x "$CANDIDATE_BACKEND_BIN" ]] || fail "missing candidate backend binary: $CANDIDATE_BACKEND_BIN"
 }
 
 rollback() {
@@ -103,13 +107,16 @@ NEW_PORT="$(slot_port "$NEW_SLOT")"
 log "old_slot=$OLD_SLOT new_slot=$NEW_SLOT old_port=$old_port new_port=$NEW_PORT"
 
 wait_health "http://127.0.0.1:${old_port}/api/healthz" || fail "current active backend on port $old_port failed healthz before upgrade"
+build_candidate_backend
 
 if [[ "$NEW_SLOT" == "blue" ]]; then
-  log "building and starting candidate backend via primary launcher on port=$NEW_PORT"
-  bash "$ROOT_DIR/scripts/start_backend_selfhosted.sh" --daemon --build --port "$NEW_PORT"
+  log "starting candidate backend via primary launcher on port=$NEW_PORT"
+  BACKEND_BIN="$CANDIDATE_BACKEND_BIN" \
+    bash "$ROOT_DIR/scripts/start_backend_selfhosted.sh" --daemon --port "$NEW_PORT"
 else
-  log "building and starting candidate backend via canary launcher on port=$NEW_PORT"
-  bash "$ROOT_DIR/scripts/start_backend_selfhosted_canary.sh" --daemon --build --port "$NEW_PORT"
+  log "starting candidate backend via canary launcher on port=$NEW_PORT"
+  BACKEND_BIN="$CANDIDATE_BACKEND_BIN" \
+    bash "$ROOT_DIR/scripts/start_backend_selfhosted_canary.sh" --daemon --port "$NEW_PORT"
 fi
 
 wait_health "http://127.0.0.1:${NEW_PORT}/api/healthz" || fail "candidate backend failed healthz on port $NEW_PORT"

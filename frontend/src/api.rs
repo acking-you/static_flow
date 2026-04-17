@@ -7851,6 +7851,7 @@ pub async fn patch_admin_kiro_key(
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_cache_policy_override_json,
+            request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
             request.request_min_start_interval_ms_unlimited,
         );
@@ -7935,6 +7936,16 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "kiro_cache_policy_override_json".to_string(),
                 kiro_cache_policy_override_json
+                    .map(|raw| serde_json::Value::String(raw.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+        if let Some(kiro_billable_model_multipliers_override_json) =
+            request.kiro_billable_model_multipliers_override_json
+        {
+            body.insert(
+                "kiro_billable_model_multipliers_override_json".to_string(),
+                kiro_billable_model_multipliers_override_json
                     .map(|raw| serde_json::Value::String(raw.to_string()))
                     .unwrap_or(serde_json::Value::Null),
             );

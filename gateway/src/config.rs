@@ -1,6 +1,12 @@
 //! Gateway configuration parsing.
 
-use std::{collections::BTreeMap, fs, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::RwLock,
+    time::Duration,
+};
 
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
@@ -23,6 +29,13 @@ pub struct GatewayConfig {
     read_idle_timeout_ms: u64,
     write_idle_timeout_ms: u64,
     retry_count: usize,
+}
+
+/// Shared gateway config state that can be reloaded from disk in-process.
+#[derive(Debug)]
+pub struct GatewayConfigStore {
+    path: PathBuf,
+    current: RwLock<GatewayConfig>,
 }
 
 impl GatewayConfig {
@@ -97,6 +110,37 @@ impl GatewayConfig {
     }
 }
 
+impl GatewayConfigStore {
+    /// Load one config file and prepare it for future hot reloads.
+    pub fn load(path: &Path) -> Result<Self> {
+        let config = load_gateway_config(path)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            current: RwLock::new(config),
+        })
+    }
+
+    /// Return the current in-memory snapshot used for new requests.
+    pub fn snapshot(&self) -> GatewayConfig {
+        self.current
+            .read()
+            .expect("gateway config store poisoned")
+            .clone()
+    }
+
+    /// Reload the config from disk and atomically publish it for new requests.
+    pub fn reload(&self) -> Result<GatewayConfig> {
+        let next = load_gateway_config(&self.path)?;
+        *self.current.write().expect("gateway config store poisoned") = next.clone();
+        Ok(next)
+    }
+
+    /// Path of the backing YAML config file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Load gateway settings from one YAML file.
 pub fn load_gateway_config(path: &Path) -> Result<GatewayConfig> {
     let raw = fs::read_to_string(path)?;
@@ -132,7 +176,9 @@ pub fn load_gateway_config_from_str(raw: &str) -> Result<GatewayConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::load_gateway_config_from_str;
+    use std::fs;
+
+    use super::{load_gateway_config_from_str, GatewayConfigStore};
 
     #[test]
     fn parse_gateway_config_accepts_valid_blue_green_setup() {
@@ -157,5 +203,108 @@ staticflow:
         .expect("valid config");
         assert_eq!(cfg.active_upstream, "blue");
         assert_eq!(cfg.upstreams["green"], "127.0.0.1:39081");
+    }
+
+    #[test]
+    fn gateway_config_store_reload_switches_active_upstream() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        fs::write(
+            &path,
+            r#"
+version: 1
+staticflow:
+  listen_addr: 127.0.0.1:39180
+  request_id_header: x-request-id
+  trace_id_header: x-trace-id
+  add_forwarded_headers: true
+  upstreams:
+    blue: 127.0.0.1:39080
+    green: 127.0.0.1:39081
+  active_upstream: blue
+  connect_timeout_ms: 3000
+  read_idle_timeout_ms: 1800000
+  write_idle_timeout_ms: 1800000
+  retry_count: 0
+"#,
+        )
+        .expect("write config");
+
+        let store = GatewayConfigStore::load(&path).expect("load config store");
+        assert_eq!(store.snapshot().active_upstream_name(), "blue");
+
+        fs::write(
+            &path,
+            r#"
+version: 1
+staticflow:
+  listen_addr: 127.0.0.1:39180
+  request_id_header: x-request-id
+  trace_id_header: x-trace-id
+  add_forwarded_headers: true
+  upstreams:
+    blue: 127.0.0.1:39080
+    green: 127.0.0.1:39081
+  active_upstream: green
+  connect_timeout_ms: 3000
+  read_idle_timeout_ms: 1800000
+  write_idle_timeout_ms: 1800000
+  retry_count: 0
+"#,
+        )
+        .expect("write updated config");
+
+        store.reload().expect("reload config");
+        assert_eq!(store.snapshot().active_upstream_name(), "green");
+    }
+
+    #[test]
+    fn gateway_config_store_reload_keeps_previous_config_on_invalid_update() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        fs::write(
+            &path,
+            r#"
+version: 1
+staticflow:
+  listen_addr: 127.0.0.1:39180
+  request_id_header: x-request-id
+  trace_id_header: x-trace-id
+  add_forwarded_headers: true
+  upstreams:
+    blue: 127.0.0.1:39080
+    green: 127.0.0.1:39081
+  active_upstream: blue
+  connect_timeout_ms: 3000
+  read_idle_timeout_ms: 1800000
+  write_idle_timeout_ms: 1800000
+  retry_count: 0
+"#,
+        )
+        .expect("write config");
+
+        let store = GatewayConfigStore::load(&path).expect("load config store");
+        fs::write(
+            &path,
+            r#"
+version: 1
+staticflow:
+  listen_addr: 127.0.0.1:39180
+  request_id_header: x-request-id
+  trace_id_header: x-trace-id
+  add_forwarded_headers: true
+  upstreams:
+    blue: 127.0.0.1:39080
+  active_upstream: green
+  connect_timeout_ms: 3000
+  read_idle_timeout_ms: 1800000
+  write_idle_timeout_ms: 1800000
+  retry_count: 0
+"#,
+        )
+        .expect("write invalid config");
+
+        assert!(store.reload().is_err());
+        assert_eq!(store.snapshot().active_upstream_name(), "blue");
     }
 }

@@ -1,22 +1,22 @@
 //! StaticFlow local Pingora gateway binary.
 
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{env, fs, path::PathBuf, sync::Arc, thread};
 
 use anyhow::{anyhow, Context, Result};
 use pingora::server::{configuration::Opt, Server};
 use pingora_core::server::configuration::ServerConf;
 use pingora_proxy::http_proxy_service;
+use signal_hook::{consts::signal::SIGHUP, iterator::Signals};
 use static_flow_shared::runtime_logging::init_runtime_logging;
 use staticflow_pingora_gateway::{
-    config::{load_gateway_config, load_gateway_config_from_str},
+    config::{load_gateway_config_from_str, GatewayConfigStore},
     proxy::StaticFlowGateway,
 };
 
 const DEFAULT_LOG_FILTER: &str =
     "warn,staticflow_pingora_gateway=info,pingora=info,pingora_core=info,pingora_proxy=info";
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let opt = Opt::parse_args();
     let conf_path = opt
         .conf
@@ -44,7 +44,14 @@ async fn main() -> Result<()> {
 
     let mut server_conf = ServerConf::from_yaml(&raw_conf)
         .map_err(|err| anyhow!("failed to parse pingora server config: {err}"))?;
-    server_conf.max_retries = gateway_config.retry_count();
+    let external_supervisor = env::var("STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    if external_supervisor {
+        server_conf.daemon = false;
+    }
+    let max_proxy_tries = gateway_config.retry_count().saturating_add(1);
+    server_conf.max_retries = max_proxy_tries;
 
     let listen_addr = gateway_config.listen_addr().to_string();
     let active_upstream = gateway_config.active_upstream_name().to_string();
@@ -53,7 +60,8 @@ async fn main() -> Result<()> {
     let read_idle_timeout_ms = gateway_config.read_idle_timeout_ms();
     let write_idle_timeout_ms = gateway_config.write_idle_timeout_ms();
     let retry_count = gateway_config.retry_count();
-    let gateway_config = Arc::new(load_gateway_config(&conf_path)?);
+    let gateway_config = Arc::new(GatewayConfigStore::load(&conf_path)?);
+    install_reload_signal_handler(Arc::clone(&gateway_config))?;
 
     tracing::info!(
         listen_addr,
@@ -63,6 +71,8 @@ async fn main() -> Result<()> {
         read_idle_timeout_ms,
         write_idle_timeout_ms,
         retry_count,
+        max_proxy_tries,
+        external_supervisor,
         conf = %conf_path.display(),
         "starting StaticFlow Pingora gateway"
     );
@@ -75,4 +85,43 @@ async fn main() -> Result<()> {
     proxy.add_tcp(listen_addr.as_str());
     server.add_service(proxy);
     server.run_forever()
+}
+
+fn install_reload_signal_handler(config_store: Arc<GatewayConfigStore>) -> Result<()> {
+    let mut signals = Signals::new([SIGHUP])?;
+    thread::Builder::new()
+        .name("gateway-config-reload".to_string())
+        .spawn(move || {
+            for _ in signals.forever() {
+                match config_store.reload() {
+                    Ok(config) => {
+                        let active_upstream = config.active_upstream_name().to_string();
+                        match config.active_upstream_addr() {
+                            Ok(active_upstream_addr) => tracing::info!(
+                                active_upstream,
+                                active_upstream_addr,
+                                connect_timeout_ms = config.connect_timeout_ms(),
+                                read_idle_timeout_ms = config.read_idle_timeout_ms(),
+                                write_idle_timeout_ms = config.write_idle_timeout_ms(),
+                                retry_count = config.retry_count(),
+                                conf = %config_store.path().display(),
+                                "reloaded gateway config from disk"
+                            ),
+                            Err(err) => tracing::error!(
+                                active_upstream,
+                                error = %err,
+                                conf = %config_store.path().display(),
+                                "reloaded gateway config but upstream resolution failed"
+                            ),
+                        }
+                    },
+                    Err(err) => tracing::error!(
+                        error = %err,
+                        conf = %config_store.path().display(),
+                        "failed to reload gateway config; keeping previous snapshot"
+                    ),
+                }
+            }
+        })?;
+    Ok(())
 }
