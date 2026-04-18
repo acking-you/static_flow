@@ -47,7 +47,7 @@ impl RuntimeLogOptions {
         Self {
             root_dir,
             service,
-            max_files: 24,
+            max_files: 4,
             stdout,
         }
     }
@@ -142,8 +142,8 @@ mod tests {
     use super::RuntimeLogOptions;
 
     #[test]
-    fn runtime_log_options_default_to_24_files() {
+    fn runtime_log_options_default_to_4_files() {
         let opts = RuntimeLogOptions::for_service("backend");
-        assert_eq!(opts.max_files, 24);
+        assert_eq!(opts.max_files, 4);
     }
 }
