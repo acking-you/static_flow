@@ -1,0 +1,22 @@
+[Unit]
+Description=@DESCRIPTION_PREFIX@ Backend Slot %i
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/acking-you/static_flow
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKDIR@
+EnvironmentFile=@COMMON_ENV@
+EnvironmentFile=-@BACKEND_ENV_PATTERN@
+ExecStart=/usr/bin/bash @WORKDIR@/scripts/start_backend_selfhosted_slot.sh %i
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

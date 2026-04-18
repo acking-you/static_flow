@@ -221,6 +221,12 @@ path while avoiding the initial websocket fallback delay.
 
 ## Quick Start
 
+推荐的长期运行自托管部署已经切到 `systemd + Pingora gateway + blue/green backend`。完整从 clone 到启动的流程见：
+
+- [docs/self-hosted-systemd-quick-start.zh.md](docs/self-hosted-systemd-quick-start.zh.md)
+
+下面这组命令仍然适合本地开发或最小化前台验证，不是新的推荐生产部署路径。
+
 ```bash
 # Prerequisites
 rustup target add wasm32-unknown-unknown
@@ -233,7 +239,7 @@ make bin-all
 cd cli
 ../target/release/sf-cli init --db-path ../data/lancedb
 
-# --- Self-hosted mode (recommended) ---
+# --- Minimal self-hosted run ---
 cd ..
 bash scripts/build_frontend_selfhosted.sh
 bash scripts/start_backend_selfhosted.sh --daemon

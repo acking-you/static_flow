@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib_pingora_gateway_conf.sh"
-source "$ROOT_DIR/scripts/lib_port_process.sh"
 source "$ROOT_DIR/scripts/lib_script_lock.sh"
 
 CONF_FILE="${CONF_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml}"
@@ -13,109 +12,77 @@ GATEWAY_BIN="${GATEWAY_BIN:-$ROOT_DIR/target/release-backend/staticflow-pingora-
 STATICFLOW_LOG_DIR="${STATICFLOW_LOG_DIR:-$ROOT_DIR/tmp/runtime-logs}"
 STATICFLOW_LOG_SERVICE="${STATICFLOW_LOG_SERVICE:-gateway}"
 STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR="${STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR:-1}"
-FORCE_BUILD_GATEWAY="${FORCE_BUILD_GATEWAY:-0}"
 LOCK_FILE="${LOCK_FILE:-$ROOT_DIR/tmp/staticflow-gateway.lock}"
+SYSTEMD_SCOPE="${SYSTEMD_SCOPE:-system}"
+SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
+JOURNALCTL_BIN="${JOURNALCTL_BIN:-journalctl}"
+STATICFLOW_GATEWAY_UNIT="${STATICFLOW_GATEWAY_UNIT:-staticflow-gateway.service}"
+STATICFLOW_BACKEND_SLOT_UNIT_TEMPLATE="${STATICFLOW_BACKEND_SLOT_UNIT_TEMPLATE:-staticflow-backend-slot@%s.service}"
+DEFAULT_LOG_LINES="${DEFAULT_LOG_LINES:-200}"
 
 log() { echo "[gateway] $*"; }
 fail() { echo "[gateway][ERROR] $*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/pingora_gateway.sh {run|start|restart|check|reload|status|stop|switch <blue|green>|stop-backend <blue|green>|logs <gateway|blue|green>|health}
+Usage:
+  ./scripts/pingora_gateway.sh run
+  ./scripts/pingora_gateway.sh check
+  ./scripts/pingora_gateway.sh start
+  ./scripts/pingora_gateway.sh stop
+  ./scripts/pingora_gateway.sh restart
+  ./scripts/pingora_gateway.sh reload
+  ./scripts/pingora_gateway.sh status [gateway|blue|green|all]
+  ./scripts/pingora_gateway.sh logs [gateway|blue|green] [--lines N] [--follow]
+  ./scripts/pingora_gateway.sh health
+  ./scripts/pingora_gateway.sh switch <blue|green>
+  ./scripts/pingora_gateway.sh start-backend <blue|green>
+  ./scripts/pingora_gateway.sh stop-backend <blue|green>
+  ./scripts/pingora_gateway.sh restart-backend <blue|green>
 
 Environment variables:
-  CONF_FILE               Gateway YAML path
-  PINGORA_CONF_TEMPLATE_FILE  Gateway YAML template path used when CONF_FILE is missing
-  GATEWAY_BIN             Gateway binary path
-  STATICFLOW_LOG_DIR      Runtime log root
-  STATICFLOW_LOG_SERVICE  Gateway runtime log folder name
-  STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR  Force shell-managed gateway lifecycle (default: 1)
-  FORCE_BUILD_GATEWAY     Rebuild gateway binary even when it already exists (default: 0)
-  LOCK_FILE               Lock file path used to serialize gateway operations
+  CONF_FILE                           Gateway YAML path
+  PINGORA_CONF_TEMPLATE_FILE          Gateway YAML template path when CONF_FILE is missing
+  GATEWAY_BIN                         Gateway binary path used by `run` and `check`
+  STATICFLOW_LOG_DIR                  Runtime log root exported to the gateway binary
+  STATICFLOW_LOG_SERVICE              Runtime log service name exported to the gateway binary
+  LOCK_FILE                           Lock file path used to serialize mutating operations
+  SYSTEMD_SCOPE                       `system` or `user` (default: system)
+  SYSTEMCTL_BIN                       systemctl binary path
+  JOURNALCTL_BIN                      journalctl binary path
+  STATICFLOW_GATEWAY_UNIT             Gateway systemd unit name
+  STATICFLOW_BACKEND_SLOT_UNIT_TEMPLATE printf-style backend slot unit template
+  DEFAULT_LOG_LINES                   Default `logs` line count (default: 200)
 EOF
+}
+
+ensure_gateway_conf() {
+  pingora_ensure_conf_file "$CONF_FILE" "$PINGORA_CONF_TEMPLATE_FILE"
 }
 
 ensure_layout() {
   mkdir -p "$ROOT_DIR/tmp" "$STATICFLOW_LOG_DIR/$STATICFLOW_LOG_SERVICE"
-  mkdir -p "$(dirname "$(pid_file)")"
-  mkdir -p "$(dirname "$(error_log_file)")"
 }
 
-build_gateway_bin() {
-  ensure_layout
-  if [[ "$FORCE_BUILD_GATEWAY" != "1" && -x "$GATEWAY_BIN" ]]; then
-    log "reusing gateway binary: $GATEWAY_BIN"
-    return
-  fi
-  log "building gateway binary: $GATEWAY_BIN"
-  cargo build -p staticflow-pingora-gateway --profile release-backend >/dev/null
-}
-
-force_build_gateway_bin() {
-  local previous_force_build="${FORCE_BUILD_GATEWAY:-0}"
-  FORCE_BUILD_GATEWAY=1
-  build_gateway_bin
-  FORCE_BUILD_GATEWAY="$previous_force_build"
+require_gateway_bin() {
+  [[ -x "$GATEWAY_BIN" ]] || fail "gateway binary not found or not executable: $GATEWAY_BIN"
 }
 
 check_gateway_conf() {
   local conf_file="${1:-$CONF_FILE}"
-  build_gateway_bin
-  log "checking gateway config: $conf_file"
+  require_gateway_bin
   STATICFLOW_LOG_DIR="$STATICFLOW_LOG_DIR" \
   STATICFLOW_LOG_SERVICE="$STATICFLOW_LOG_SERVICE" \
   STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR="$STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR" \
     "$GATEWAY_BIN" --conf "$conf_file" --test
 }
 
-top_level_conf_value() {
-  local conf_file="$1"
-  local key="$2"
-  pingora_top_level_conf_value "$conf_file" "$key"
-}
-
-staticflow_conf_value() {
-  local conf_file="$1"
-  local key="$2"
-  pingora_staticflow_conf_value "$conf_file" "$key"
-}
-
 listen_addr() {
-  staticflow_conf_value "$CONF_FILE" "listen_addr"
+  pingora_staticflow_conf_value "$CONF_FILE" "listen_addr"
 }
 
 listen_addr_from_file() {
-  staticflow_conf_value "$1" "listen_addr"
-}
-
-pid_file() {
-  top_level_conf_value "$CONF_FILE" "pid_file"
-}
-
-error_log_file() {
-  top_level_conf_value "$CONF_FILE" "error_log"
-}
-
-current_pid() {
-  local file
-  file="$(pid_file)"
-  [[ -f "$file" ]] && cat "$file"
-}
-
-gateway_bin_realpath() {
-  readlink -f "$GATEWAY_BIN"
-}
-
-pid_matches_gateway() {
-  local pid="$1"
-  local pid_exe="" gateway_exe=""
-  [[ -n "$pid" ]] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  pid_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-  gateway_exe="$(gateway_bin_realpath 2>/dev/null || true)"
-  [[ -n "$pid_exe" ]] || return 1
-  [[ -n "$gateway_exe" ]] || return 1
-  [[ "$pid_exe" == "$gateway_exe" ]]
+  pingora_staticflow_conf_value "$1" "listen_addr"
 }
 
 active_upstream() {
@@ -123,8 +90,7 @@ active_upstream() {
 }
 
 active_upstream_from_file() {
-  local conf_file="$1"
-  pingora_staticflow_conf_value "$conf_file" "active_upstream"
+  pingora_staticflow_conf_value "$1" "active_upstream"
 }
 
 slot_addr_from_file() {
@@ -142,101 +108,25 @@ slot_port_from_file() {
   echo "${addr##*:}"
 }
 
+slot_addr() {
+  slot_addr_from_file "$CONF_FILE" "$1"
+}
+
+slot_port() {
+  slot_port_from_file "$CONF_FILE" "$1"
+}
+
+gateway_base_url() {
+  echo "http://$(listen_addr)"
+}
+
+gateway_base_url_from_file() {
+  echo "http://$(listen_addr_from_file "$1")"
+}
+
 json_field() {
   local field="$1"
   python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$field"
-}
-
-wait_for_process() {
-  local pid="$1"
-  for _ in $(seq 1 40); do
-    if kill -0 "$pid" 2>/dev/null; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
-wait_for_exit() {
-  local pid="$1"
-  for _ in $(seq 1 40); do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
-wait_gateway_port() {
-  local gateway_base="$1"
-  local target_port="$2"
-  local body="" port=""
-  for _ in $(seq 1 80); do
-    if body="$(curl -fsS "${gateway_base}/api/healthz" 2>/dev/null)"; then
-      port="$(printf '%s' "$body" | json_field port 2>/dev/null || true)"
-      if [[ "$port" == "$target_port" ]]; then
-        return 0
-      fi
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
-slot_log_service() {
-  local slot="$1"
-  case "$slot" in
-    blue)
-      echo "backend"
-      ;;
-    green)
-      echo "backend-canary-$(slot_port_from_file "$CONF_FILE" "$slot")"
-      ;;
-    *)
-      fail "slot must be blue or green"
-      ;;
-  esac
-}
-
-resolve_log_files() {
-  local target="$1"
-  local -n out_files_ref="$2"
-  local log_dir="" daemon_log=""
-  local -a app_logs=() access_logs=()
-  shopt -s nullglob
-  case "$target" in
-    gateway)
-      log_dir="$STATICFLOW_LOG_DIR/$STATICFLOW_LOG_SERVICE"
-      app_logs=("$log_dir"/app/current*.log)
-      access_logs=("$log_dir"/access/current*.log)
-      daemon_log="$log_dir/daemon-stderr.log"
-      [[ ${#app_logs[@]} -gt 0 ]] || fail "missing gateway app logs under $log_dir/app/current*.log"
-      [[ ${#access_logs[@]} -gt 0 ]] || fail "missing gateway access logs under $log_dir/access/current*.log"
-      [[ -f "$daemon_log" ]] || fail "missing gateway daemon log: $daemon_log"
-      out_files_ref=("${app_logs[@]}" "${access_logs[@]}" "$daemon_log")
-      ;;
-    blue|green)
-      log_dir="$STATICFLOW_LOG_DIR/$(slot_log_service "$target")"
-      app_logs=("$log_dir"/app/current*.log)
-      access_logs=("$log_dir"/access/current*.log)
-      [[ ${#app_logs[@]} -gt 0 ]] || fail "missing $target app logs under $log_dir/app/current*.log"
-      [[ ${#access_logs[@]} -gt 0 ]] || fail "missing $target access logs under $log_dir/access/current*.log"
-      out_files_ref=("${app_logs[@]}" "${access_logs[@]}")
-      ;;
-    *)
-      fail "logs target must be gateway, blue, or green"
-      ;;
-  esac
-  shopt -u nullglob
-}
-
-tail_logs() {
-  local target="$1"
-  local -a log_files=()
-  resolve_log_files "$target" log_files
-  exec tail -n 200 -F "${log_files[@]}"
 }
 
 healthz_body() {
@@ -250,145 +140,248 @@ healthz_field_from_body() {
   printf '%s' "$body" | json_field "$field"
 }
 
-report_gateway_health() {
-  local active_slot="" expected_port="" gateway_base="" listen_port="" pid_file_value="" listener_pid=""
-  local body="" response_port="" response_pid=""
-  active_slot="$(active_upstream)"
-  expected_port="$(slot_port_from_file "$CONF_FILE" "$active_slot")"
-  gateway_base="http://$(listen_addr)"
-  listen_port="${gateway_base##*:}"
-  pid_file_value="$(current_pid || true)"
-  listener_pid="$(listener_pid_for_port "$listen_port" || true)"
-  if [[ -n "$listener_pid" ]] && body="$(healthz_body "$gateway_base" 2>/dev/null)"; then
-    response_port="$(healthz_field_from_body "$body" port 2>/dev/null || true)"
-    response_pid="$(healthz_field_from_body "$body" pid 2>/dev/null || true)"
-    if [[ "$response_port" == "$expected_port" ]]; then
-      echo "gateway: ok listen_port=$listen_port listener_pid=${listener_pid:-} pid_file=${pid_file_value:-} active_upstream=$active_slot response_pid=${response_pid:-} response_port=${response_port:-}"
-      return 0
+wait_gateway_port() {
+  local gateway_base="$1"
+  local target_port="$2"
+  local body="" response_port=""
+  for _ in $(seq 1 120); do
+    if body="$(healthz_body "$gateway_base" 2>/dev/null)"; then
+      response_port="$(healthz_field_from_body "$body" port 2>/dev/null || true)"
+      if [[ "$response_port" == "$target_port" ]]; then
+        return 0
+      fi
     fi
-  fi
-  echo "gateway: unhealthy listen_port=$listen_port listener_pid=${listener_pid:-<none>} pid_file=${pid_file_value:-<none>} active_upstream=$active_slot expected_port=$expected_port"
+    sleep 0.25
+  done
   return 1
 }
 
-report_slot_health() {
+wait_slot_health() {
   local slot="$1"
-  local addr="" port="" base_url="" listener_pid="" body="" response_port="" response_pid=""
-  addr="$(slot_addr_from_file "$CONF_FILE" "$slot")"
-  port="${addr##*:}"
-  base_url="http://$addr"
-  listener_pid="$(listener_pid_for_port "$port" || true)"
-  if [[ -n "$listener_pid" ]] && body="$(healthz_body "$base_url" 2>/dev/null)"; then
-    response_port="$(healthz_field_from_body "$body" port 2>/dev/null || true)"
-    response_pid="$(healthz_field_from_body "$body" pid 2>/dev/null || true)"
-    if [[ "$response_port" == "$port" ]]; then
-      echo "$slot: ok addr=$addr listener_pid=${listener_pid:-} response_pid=${response_pid:-} response_port=${response_port:-}"
+  local base_url="http://$(slot_addr "$slot")"
+  local expected_port
+  expected_port="$(slot_port "$slot")"
+  wait_gateway_port "$base_url" "$expected_port"
+}
+
+systemctl_cmd() {
+  local -a args=()
+  case "$SYSTEMD_SCOPE" in
+    system)
+      ;;
+    user)
+      args+=(--user)
+      ;;
+    *)
+      fail "SYSTEMD_SCOPE must be system or user"
+      ;;
+  esac
+  "$SYSTEMCTL_BIN" "${args[@]}" "$@"
+}
+
+journalctl_cmd() {
+  local -a args=(--no-pager)
+  case "$SYSTEMD_SCOPE" in
+    system)
+      ;;
+    user)
+      args+=(--user)
+      ;;
+    *)
+      fail "SYSTEMD_SCOPE must be system or user"
+      ;;
+  esac
+  "$JOURNALCTL_BIN" "${args[@]}" "$@"
+}
+
+validate_systemd_access() {
+  command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1 || fail "systemctl not found: $SYSTEMCTL_BIN"
+  command -v "$JOURNALCTL_BIN" >/dev/null 2>&1 || fail "journalctl not found: $JOURNALCTL_BIN"
+  if [[ "$SYSTEMD_SCOPE" == "user" ]]; then
+    systemctl_cmd show-environment >/dev/null 2>&1 \
+      || fail "systemd --user is not available for the current session"
+  fi
+}
+
+gateway_unit() {
+  echo "$STATICFLOW_GATEWAY_UNIT"
+}
+
+backend_slot_unit() {
+  local slot="$1"
+  case "$slot" in
+    blue|green)
+      printf "$STATICFLOW_BACKEND_SLOT_UNIT_TEMPLATE" "$slot"
+      ;;
+    *)
+      fail "slot must be blue or green"
+      ;;
+  esac
+}
+
+unit_for_target() {
+  local target="$1"
+  case "$target" in
+    gateway)
+      gateway_unit
+      ;;
+    blue|green)
+      backend_slot_unit "$target"
+      ;;
+    *)
+      fail "target must be gateway, blue, or green"
+      ;;
+  esac
+}
+
+unit_load_state() {
+  local unit="$1"
+  systemctl_cmd show --property=LoadState --value "$unit" 2>/dev/null || true
+}
+
+unit_active_state() {
+  local unit="$1"
+  systemctl_cmd show --property=ActiveState --value "$unit" 2>/dev/null || true
+}
+
+unit_sub_state() {
+  local unit="$1"
+  systemctl_cmd show --property=SubState --value "$unit" 2>/dev/null || true
+}
+
+require_unit_registered() {
+  local unit="$1"
+  local label="$2"
+  local load_state
+  load_state="$(unit_load_state "$unit")"
+  [[ -n "$load_state" && "$load_state" != "not-found" ]] \
+    || fail "$label unit is not registered for SYSTEMD_SCOPE=$SYSTEMD_SCOPE: $unit"
+}
+
+wait_unit_active() {
+  local unit="$1"
+  for _ in $(seq 1 80); do
+    if systemctl_cmd is-active --quiet "$unit"; then
       return 0
     fi
+    sleep 0.25
+  done
+  return 1
+}
+
+wait_unit_inactive() {
+  local unit="$1"
+  for _ in $(seq 1 80); do
+    if ! systemctl_cmd is-active --quiet "$unit"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+acquire_lock() {
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || fail "another gateway operation is already running"
+}
+
+release_lock() {
+  release_lock_fd 9
+}
+
+with_lock() {
+  acquire_lock
+  "$@"
+  release_lock
+}
+
+print_service_state() {
+  local target="$1"
+  local unit
+  unit="$(unit_for_target "$target")"
+  echo "$target: unit=$unit load=$(unit_load_state "$unit") active=$(unit_active_state "$unit") sub=$(unit_sub_state "$unit")"
+}
+
+print_gateway_health() {
+  local gateway_base="" expected_port="" body="" response_port="" response_pid=""
+  gateway_base="$(gateway_base_url)"
+  expected_port="$(slot_port "$(active_upstream)")"
+  if body="$(healthz_body "$gateway_base" 2>/dev/null)"; then
+    response_port="$(healthz_field_from_body "$body" port 2>/dev/null || true)"
+    response_pid="$(healthz_field_from_body "$body" pid 2>/dev/null || true)"
+    if [[ "$response_port" == "$expected_port" ]]; then
+      echo "gateway_health=ok url=$gateway_base expected_port=$expected_port response_port=$response_port response_pid=${response_pid:-}"
+      return 0
+    fi
+    echo "gateway_health=mismatch url=$gateway_base expected_port=$expected_port response_port=${response_port:-<none>} response_pid=${response_pid:-}"
+    return 1
   fi
-  echo "$slot: unhealthy addr=$addr listener_pid=${listener_pid:-<none>}"
+  echo "gateway_health=unreachable url=$gateway_base expected_port=$expected_port"
+  return 1
+}
+
+print_slot_health() {
+  local slot="$1"
+  local base_url="" expected_port="" body="" response_port="" response_pid=""
+  base_url="http://$(slot_addr "$slot")"
+  expected_port="$(slot_port "$slot")"
+  if body="$(healthz_body "$base_url" 2>/dev/null)"; then
+    response_port="$(healthz_field_from_body "$body" port 2>/dev/null || true)"
+    response_pid="$(healthz_field_from_body "$body" pid 2>/dev/null || true)"
+    if [[ "$response_port" == "$expected_port" ]]; then
+      echo "${slot}_health=ok url=$base_url expected_port=$expected_port response_port=$response_port response_pid=${response_pid:-}"
+      return 0
+    fi
+    echo "${slot}_health=mismatch url=$base_url expected_port=$expected_port response_port=${response_port:-<none>} response_pid=${response_pid:-}"
+    return 1
+  fi
+  echo "${slot}_health=unreachable url=$base_url expected_port=$expected_port"
   return 1
 }
 
 report_health() {
   local exit_code=0
-  report_gateway_health || exit_code=1
-  report_slot_health blue || exit_code=1
-  report_slot_health green || exit_code=1
+  print_service_state gateway
+  print_service_state blue
+  print_service_state green
+  print_gateway_health || exit_code=1
+  print_slot_health blue || exit_code=1
+  print_slot_health green || exit_code=1
   return "$exit_code"
 }
 
-stop_backend_slot() {
-  local slot="$1"
-  local active_slot="" port="" pid=""
-  active_slot="$(active_upstream)"
-  [[ "$slot" != "$active_slot" ]] || fail "refusing to stop active slot $slot"
-  port="$(slot_port_from_file "$CONF_FILE" "$slot")"
-  pid="$(listener_pid_for_port "$port")"
-  [[ -n "$pid" ]] || fail "no backend listener found for slot $slot on port $port"
-  log "stopping backend slot=$slot pid=$pid port=$port"
-  kill -TERM "$pid"
-  if ! wait_for_exit "$pid"; then
-    log "backend slot=$slot pid=$pid did not exit after SIGTERM; forcing SIGKILL"
-    kill -KILL "$pid" 2>/dev/null || true
-    wait_for_exit "$pid" || fail "backend slot=$slot pid $pid did not exit after SIGKILL"
-  fi
-  log "backend slot=$slot stopped"
+status_summary() {
+  echo "conf=$CONF_FILE"
+  echo "systemd_scope=$SYSTEMD_SCOPE"
+  echo "gateway_unit=$(gateway_unit)"
+  echo "blue_unit=$(backend_slot_unit blue)"
+  echo "green_unit=$(backend_slot_unit green)"
+  echo "listen_addr=$(listen_addr)"
+  echo "active_upstream=$(active_upstream)"
+  report_health || true
 }
 
-clear_stale_pid() {
-  local pid
-  pid="$(current_pid || true)"
-  if [[ -n "$pid" ]] && ! pid_matches_gateway "$pid"; then
-    rm -f "$(pid_file)"
-  fi
+show_unit_status() {
+  local target="$1"
+  local unit
+  unit="$(unit_for_target "$target")"
+  require_unit_registered "$unit" "$target"
+  systemctl_cmd --no-pager --full status "$unit"
 }
 
-start_gateway() {
-  local pid=""
-  build_gateway_bin
-  clear_stale_pid
-  if pid="$(current_pid || true)" && [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-    fail "gateway is already running (pid=$pid)"
+tail_unit_logs() {
+  local target="$1"
+  local lines="$2"
+  local follow="$3"
+  local unit
+  unit="$(unit_for_target "$target")"
+  require_unit_registered "$unit" "$target"
+  if [[ "$follow" == "true" ]]; then
+    journalctl_cmd -u "$unit" -n "$lines" -f
+    return
   fi
-  check_gateway_conf >/dev/null
-  export STATICFLOW_LOG_DIR STATICFLOW_LOG_SERVICE STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR
-  log "starting gateway on $(active_upstream) via $CONF_FILE"
-  release_lock_fd 9
-  nohup "$GATEWAY_BIN" --conf "$CONF_FILE" >>"$(error_log_file)" 2>&1 &
-  pid="$!"
-  echo "$pid" >"$(pid_file)"
-  sleep 0.5
-  wait_for_process "$pid" || {
-    rm -f "$(pid_file)"
-    fail "gateway failed to stay alive after start; inspect $(error_log_file)"
-  }
-  log "gateway started pid=$pid"
-}
-
-stop_gateway() {
-  local pid=""
-  require_running
-  pid="$(current_pid || true)"
-  log "stopping gateway pid=$pid"
-  kill -TERM "$pid"
-  if ! wait_for_exit "$pid"; then
-    log "gateway pid=$pid did not exit after SIGTERM; forcing SIGKILL"
-    kill -KILL "$pid" 2>/dev/null || true
-    wait_for_exit "$pid" || fail "gateway pid $pid did not exit after SIGKILL"
-  fi
-  rm -f "$(pid_file)"
-  log "gateway stopped"
-}
-
-restart_gateway() {
-  local gateway_base="" target_port=""
-  require_running
-  force_build_gateway_bin
-  check_gateway_conf >/dev/null
-  gateway_base="http://$(listen_addr)"
-  target_port="$(slot_port_from_file "$CONF_FILE" "$(active_upstream)")"
-  stop_gateway
-  start_gateway
-  wait_gateway_port "$gateway_base" "$target_port" \
-    || fail "gateway failed health verification after restart; inspect $(error_log_file)"
-  log "gateway restarted with rebuilt binary"
-}
-
-reload_gateway() {
-  local pid=""
-  pid="$(current_pid || true)"
-  if [[ -z "$pid" ]] || ! pid_matches_gateway "$pid"; then
-    echo "[gateway][ERROR] gateway is not running" >&2
-    return 1
-  fi
-  log "sending SIGHUP to gateway pid=$pid active_upstream=$(active_upstream)"
-  kill -HUP "$pid"
-  wait_for_process "$pid" || {
-    echo "[gateway][ERROR] gateway pid $pid exited after SIGHUP" >&2
-    return 1
-  }
-  log "gateway config reload signal delivered to pid=$pid"
+  journalctl_cmd -u "$unit" -n "$lines"
 }
 
 switch_upstream() {
@@ -396,7 +389,10 @@ switch_upstream() {
   local target_file="$2"
   local next="$3"
   python3 - "$source_file" "$target_file" "$next" <<'PY'
-import pathlib, re, sys
+import pathlib
+import re
+import sys
+
 source_path = pathlib.Path(sys.argv[1])
 target_path = pathlib.Path(sys.argv[2])
 next_value = sys.argv[3]
@@ -408,119 +404,242 @@ target_path.write_text(text)
 PY
 }
 
-require_running() {
-  clear_stale_pid
-  local pid
-  pid="$(current_pid || true)"
-  [[ -n "$pid" ]] || fail "gateway is not running"
-  pid_matches_gateway "$pid" || fail "gateway pid $pid is stale"
+require_gateway_active() {
+  local unit
+  unit="$(gateway_unit)"
+  require_unit_registered "$unit" "gateway"
+  systemctl_cmd is-active --quiet "$unit" \
+    || fail "gateway unit is not active: $unit"
 }
 
-acquire_lock() {
-  mkdir -p "$(dirname "$LOCK_FILE")"
-  exec 9>"$LOCK_FILE"
-  flock -n 9 || fail "another gateway operation is already running"
+start_gateway_service() {
+  local unit gateway_base target_port
+  unit="$(gateway_unit)"
+  validate_systemd_access
+  ensure_gateway_conf
+  check_gateway_conf >/dev/null
+  require_unit_registered "$unit" "gateway"
+  gateway_base="$(gateway_base_url)"
+  target_port="$(slot_port "$(active_upstream)")"
+  log "starting gateway unit=$unit scope=$SYSTEMD_SCOPE"
+  systemctl_cmd start "$unit"
+  wait_unit_active "$unit" || fail "gateway unit did not become active: $unit"
+  wait_gateway_port "$gateway_base" "$target_port" \
+    || fail "gateway failed health verification after start: unit=$unit target_port=$target_port"
 }
 
-acquire_lock
-
-ensure_gateway_conf() {
-  pingora_ensure_conf_file "$CONF_FILE" "$PINGORA_CONF_TEMPLATE_FILE"
+stop_gateway_service() {
+  local unit
+  unit="$(gateway_unit)"
+  validate_systemd_access
+  require_unit_registered "$unit" "gateway"
+  log "stopping gateway unit=$unit scope=$SYSTEMD_SCOPE"
+  systemctl_cmd stop "$unit"
+  wait_unit_inactive "$unit" || fail "gateway unit did not stop: $unit"
 }
+
+restart_gateway_service() {
+  local unit gateway_base target_port
+  unit="$(gateway_unit)"
+  validate_systemd_access
+  ensure_gateway_conf
+  check_gateway_conf >/dev/null
+  require_unit_registered "$unit" "gateway"
+  gateway_base="$(gateway_base_url)"
+  target_port="$(slot_port "$(active_upstream)")"
+  log "restarting gateway unit=$unit scope=$SYSTEMD_SCOPE"
+  systemctl_cmd restart "$unit"
+  wait_unit_active "$unit" || fail "gateway unit did not become active after restart: $unit"
+  wait_gateway_port "$gateway_base" "$target_port" \
+    || fail "gateway failed health verification after restart: unit=$unit target_port=$target_port"
+}
+
+reload_gateway_service() {
+  local unit gateway_base target_port
+  unit="$(gateway_unit)"
+  validate_systemd_access
+  ensure_gateway_conf
+  check_gateway_conf >/dev/null
+  require_gateway_active
+  gateway_base="$(gateway_base_url)"
+  target_port="$(slot_port "$(active_upstream)")"
+  log "reloading gateway unit=$unit scope=$SYSTEMD_SCOPE active_upstream=$(active_upstream)"
+  systemctl_cmd reload "$unit"
+  wait_gateway_port "$gateway_base" "$target_port" \
+    || fail "gateway failed health verification after reload: unit=$unit target_port=$target_port"
+}
+
+control_backend_slot() {
+  local action="$1"
+  local slot="$2"
+  local unit
+  unit="$(backend_slot_unit "$slot")"
+  validate_systemd_access
+  ensure_gateway_conf
+  require_unit_registered "$unit" "$slot"
+  case "$action" in
+    start)
+      log "starting backend slot=$slot unit=$unit scope=$SYSTEMD_SCOPE"
+      systemctl_cmd start "$unit"
+      wait_unit_active "$unit" || fail "backend unit did not become active: $unit"
+      wait_slot_health "$slot" || fail "backend slot failed health verification after start: $slot"
+      ;;
+    restart)
+      log "restarting backend slot=$slot unit=$unit scope=$SYSTEMD_SCOPE"
+      systemctl_cmd restart "$unit"
+      wait_unit_active "$unit" || fail "backend unit did not become active after restart: $unit"
+      wait_slot_health "$slot" || fail "backend slot failed health verification after restart: $slot"
+      ;;
+    stop)
+      if [[ "$(active_upstream)" == "$slot" ]]; then
+        fail "refusing to stop active backend slot $slot"
+      fi
+      log "stopping backend slot=$slot unit=$unit scope=$SYSTEMD_SCOPE"
+      systemctl_cmd stop "$unit"
+      wait_unit_inactive "$unit" || fail "backend unit did not stop: $unit"
+      ;;
+    *)
+      fail "unknown backend slot action: $action"
+      ;;
+  esac
+}
+
+switch_active_upstream() {
+  local next_slot="$1"
+  local old_slot="" tmp_conf="" backup_conf="" target_port="" old_port="" gateway_base=""
+  validate_systemd_access
+  ensure_gateway_conf
+  require_gateway_active
+  old_slot="$(active_upstream)"
+  [[ "$old_slot" != "$next_slot" ]] || fail "active_upstream is already $next_slot"
+  tmp_conf="$(mktemp "$ROOT_DIR/tmp/staticflow-gateway.XXXXXX.yaml")"
+  backup_conf="${tmp_conf}.bak"
+  cp "$CONF_FILE" "$backup_conf"
+  switch_upstream "$CONF_FILE" "$tmp_conf" "$next_slot"
+  check_gateway_conf "$tmp_conf" >/dev/null
+  target_port="$(slot_port_from_file "$tmp_conf" "$next_slot")"
+  old_port="$(slot_port "$old_slot")"
+  gateway_base="$(gateway_base_url_from_file "$tmp_conf")"
+  mv "$tmp_conf" "$CONF_FILE"
+  if ! systemctl_cmd reload "$(gateway_unit)" || ! wait_gateway_port "$gateway_base" "$target_port"; then
+    mv "$backup_conf" "$CONF_FILE"
+    systemctl_cmd reload "$(gateway_unit)" || true
+    wait_gateway_port "$gateway_base" "$old_port" || true
+    fail "gateway switch verification failed after switching active_upstream to $next_slot; reverted to $old_slot"
+  fi
+  rm -f "$backup_conf"
+  log "active_upstream switched: $old_slot -> $next_slot"
+}
+
+run_gateway_foreground() {
+  ensure_gateway_conf
+  ensure_layout
+  require_gateway_bin
+  export STATICFLOW_LOG_DIR STATICFLOW_LOG_SERVICE STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR
+  exec "$GATEWAY_BIN" --conf "$CONF_FILE"
+}
+
+status_target="${2:-summary}"
 
 case "${1:-}" in
   run)
-    ensure_gateway_conf
-    build_gateway_bin
-    export STATICFLOW_LOG_DIR STATICFLOW_LOG_SERVICE
-    export STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR
-    release_lock_fd 9
-    exec "$GATEWAY_BIN" --conf "$CONF_FILE"
-    ;;
-  start)
-    ensure_gateway_conf
-    start_gateway
-    ;;
-  restart)
-    ensure_gateway_conf
-    restart_gateway
+    run_gateway_foreground
     ;;
   check)
     ensure_gateway_conf
     check_gateway_conf
     ;;
+  start)
+    with_lock start_gateway_service
+    ;;
+  stop)
+    with_lock stop_gateway_service
+    ;;
+  restart)
+    with_lock restart_gateway_service
+    ;;
   reload)
-    ensure_gateway_conf
-    require_running
-    check_gateway_conf >/dev/null
-    reload_gateway
+    with_lock reload_gateway_service
     ;;
   status)
     ensure_gateway_conf
-    clear_stale_pid
-    pid="$(current_pid || true)"
-    if [[ -n "$pid" ]] && ! pid_matches_gateway "$pid"; then
-      pid="${pid} (stale)"
-    fi
-    echo "conf=$CONF_FILE"
-    echo "pid=${pid:-}"
-    echo "pid_file=$(pid_file)"
-    echo "listen_addr=$(listen_addr)"
-    echo "active_upstream=$(active_upstream)"
-    ;;
-  stop)
-    ensure_gateway_conf
-    stop_gateway
-    ;;
-  stop-backend)
-    ensure_gateway_conf
-    [[ $# -eq 2 ]] || fail "usage: $0 stop-backend <blue|green>"
-    [[ "$2" == "blue" || "$2" == "green" ]] || fail "slot must be blue or green"
-    stop_backend_slot "$2"
+    validate_systemd_access
+    case "$status_target" in
+      ""|summary)
+        status_summary
+        ;;
+      gateway|blue|green)
+        show_unit_status "$status_target"
+        ;;
+      all)
+        status_summary
+        printf '\n'
+        show_unit_status gateway
+        printf '\n'
+        show_unit_status blue
+        printf '\n'
+        show_unit_status green
+        ;;
+      *)
+        fail "usage: $0 status [gateway|blue|green|all]"
+        ;;
+    esac
     ;;
   logs)
     ensure_gateway_conf
-    [[ $# -eq 2 ]] || fail "usage: $0 logs <gateway|blue|green>"
-    release_lock_fd 9
-    tail_logs "$2"
+    validate_systemd_access
+    target="gateway"
+    lines="$DEFAULT_LOG_LINES"
+    follow="false"
+    shift
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+      target="$1"
+      shift
+    fi
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --follow|-f)
+          follow="true"
+          shift
+          ;;
+        --lines|-n)
+          [[ $# -ge 2 ]] || fail "--lines requires a value"
+          lines="$2"
+          shift 2
+          ;;
+        *)
+          fail "usage: $0 logs [gateway|blue|green] [--lines N] [--follow]"
+          ;;
+      esac
+    done
+    tail_unit_logs "$target" "$lines" "$follow"
     ;;
   health)
     ensure_gateway_conf
-    [[ $# -eq 1 ]] || fail "usage: $0 health"
+    validate_systemd_access
     report_health
     ;;
   switch)
-    ensure_gateway_conf
     [[ $# -eq 2 ]] || fail "usage: $0 switch <blue|green>"
     [[ "$2" == "blue" || "$2" == "green" ]] || fail "slot must be blue or green"
-    require_running
-    old_slot="$(active_upstream)"
-    [[ "$old_slot" != "$2" ]] || fail "active_upstream is already $2"
-    tmp_conf="$(mktemp "$ROOT_DIR/tmp/staticflow-gateway.XXXXXX.yaml")"
-    backup_conf="${tmp_conf}.bak"
-    cp "$CONF_FILE" "$backup_conf"
-    switch_upstream "$CONF_FILE" "$tmp_conf" "$2"
-    if ! check_gateway_conf "$tmp_conf" >/dev/null; then
-      rm -f "$tmp_conf"
-      fail "gateway config check failed after switching active_upstream to $2"
-    fi
-    target_port="$(slot_port_from_file "$tmp_conf" "$2")"
-    gateway_base="http://$(listen_addr_from_file "$tmp_conf")"
-    mv "$tmp_conf" "$CONF_FILE"
-    if ! reload_gateway || ! wait_gateway_port "$gateway_base" "$target_port"; then
-      mv "$backup_conf" "$CONF_FILE"
-      check_gateway_conf >/dev/null
-      reload_gateway || true
-      wait_gateway_port "$gateway_base" "$(slot_port_from_file "$CONF_FILE" "$old_slot")" || true
-      fail "gateway switch verification failed after switching active_upstream to $2; reverted to $old_slot"
-    fi
-    rm -f "$backup_conf"
-    log "active_upstream switched: $old_slot -> $2"
+    with_lock switch_active_upstream "$2"
+    ;;
+  start-backend)
+    [[ $# -eq 2 ]] || fail "usage: $0 start-backend <blue|green>"
+    with_lock control_backend_slot start "$2"
+    ;;
+  stop-backend)
+    [[ $# -eq 2 ]] || fail "usage: $0 stop-backend <blue|green>"
+    with_lock control_backend_slot stop "$2"
+    ;;
+  restart-backend)
+    [[ $# -eq 2 ]] || fail "usage: $0 restart-backend <blue|green>"
+    with_lock control_backend_slot restart "$2"
     ;;
   -h|--help|"")
     usage
     ;;
   *)
-    fail "usage: $0 {run|start|restart|check|reload|status|stop|switch <blue|green>|stop-backend <blue|green>|logs <gateway|blue|green>|health}"
+    fail "usage: $0 {run|check|start|stop|restart|reload|status [gateway|blue|green|all]|logs [gateway|blue|green] [--lines N] [--follow]|health|switch <blue|green>|start-backend <blue|green>|stop-backend <blue|green>|restart-backend <blue|green>}"
     ;;
 esac

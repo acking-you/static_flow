@@ -1,0 +1,24 @@
+[Unit]
+Description=@DESCRIPTION_PREFIX@ Pingora Gateway
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/acking-you/static_flow
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKDIR@
+EnvironmentFile=@COMMON_ENV@
+EnvironmentFile=-@GATEWAY_ENV@
+ExecStart=/usr/bin/bash @WORKDIR@/scripts/pingora_gateway.sh run
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

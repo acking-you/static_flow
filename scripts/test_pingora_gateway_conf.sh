@@ -58,12 +58,11 @@ assert_eq \
   "green upstream"
 
 status_output="$(
-  env PATH=/usr/bin:/bin PINGORA_CONF_TEMPLATE_FILE="$TEMPLATE_FILE" bash "$ROOT_DIR/scripts/pingora_gateway.sh" status
+  env PATH=/usr/bin:/bin PINGORA_CONF_TEMPLATE_FILE="$TEMPLATE_FILE" SYSTEMD_SCOPE=user \
+    STATICFLOW_GATEWAY_UNIT="missing-gateway.service" \
+    STATICFLOW_BACKEND_SLOT_UNIT_TEMPLATE="missing-backend-slot@%s.service" \
+    bash "$ROOT_DIR/scripts/pingora_gateway.sh" status
 )"
-assert_eq \
-  "$(printf '%s\n' "$status_output" | awk -F= '/^pid_file=/{print $2}')" \
-  "tmp/staticflow-gateway.pid" \
-  "status pid_file without rg"
 assert_eq \
   "$(printf '%s\n' "$status_output" | awk -F= '/^listen_addr=/{print $2}')" \
   "127.0.0.1:39180" \
@@ -72,5 +71,13 @@ assert_eq \
   "$(printf '%s\n' "$status_output" | awk -F= '/^active_upstream=/{print $2}')" \
   "$expected_active_upstream" \
   "status active_upstream without rg"
+assert_eq \
+  "$(printf '%s\n' "$status_output" | awk -F= '/^systemd_scope=/{print $2}')" \
+  "user" \
+  "status systemd_scope without rg"
+assert_eq \
+  "$(printf '%s\n' "$status_output" | awk -F= '/^gateway_unit=/{print $2}')" \
+  "missing-gateway.service" \
+  "status gateway_unit without rg"
 
 echo "[test-pingora-gateway-conf] ok"
