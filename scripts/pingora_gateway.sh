@@ -102,6 +102,22 @@ current_pid() {
   [[ -f "$file" ]] && cat "$file"
 }
 
+gateway_bin_realpath() {
+  readlink -f "$GATEWAY_BIN"
+}
+
+pid_matches_gateway() {
+  local pid="$1"
+  local pid_exe="" gateway_exe=""
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  pid_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+  gateway_exe="$(gateway_bin_realpath 2>/dev/null || true)"
+  [[ -n "$pid_exe" ]] || return 1
+  [[ -n "$gateway_exe" ]] || return 1
+  [[ "$pid_exe" == "$gateway_exe" ]]
+}
+
 active_upstream() {
   pingora_staticflow_conf_value "$CONF_FILE" "active_upstream"
 }
@@ -303,7 +319,7 @@ stop_backend_slot() {
 clear_stale_pid() {
   local pid
   pid="$(current_pid || true)"
-  if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+  if [[ -n "$pid" ]] && ! pid_matches_gateway "$pid"; then
     rm -f "$(pid_file)"
   fi
 }
@@ -362,7 +378,7 @@ restart_gateway() {
 reload_gateway() {
   local pid=""
   pid="$(current_pid || true)"
-  if [[ -z "$pid" ]]; then
+  if [[ -z "$pid" ]] || ! pid_matches_gateway "$pid"; then
     echo "[gateway][ERROR] gateway is not running" >&2
     return 1
   fi
@@ -397,7 +413,7 @@ require_running() {
   local pid
   pid="$(current_pid || true)"
   [[ -n "$pid" ]] || fail "gateway is not running"
-  kill -0 "$pid" 2>/dev/null || fail "gateway pid $pid is stale"
+  pid_matches_gateway "$pid" || fail "gateway pid $pid is stale"
 }
 
 acquire_lock() {
@@ -443,7 +459,7 @@ case "${1:-}" in
     ensure_gateway_conf
     clear_stale_pid
     pid="$(current_pid || true)"
-    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+    if [[ -n "$pid" ]] && ! pid_matches_gateway "$pid"; then
       pid="${pid} (stale)"
     fi
     echo "conf=$CONF_FILE"
