@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="$ROOT_DIR/scripts/lib_pingora_gateway_conf.sh"
 CONF_FILE="${CONF_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml}"
+TEMPLATE_FILE="${PINGORA_CONF_TEMPLATE_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml.template}"
 
 fail() {
   echo "[test-pingora-gateway-conf][ERROR] $*" >&2
@@ -20,8 +21,10 @@ assert_eq() {
 }
 
 [[ -f "$HELPER" ]] || fail "helper not found: $HELPER"
-[[ -f "$CONF_FILE" ]] || fail "config not found: $CONF_FILE"
+[[ -f "$TEMPLATE_FILE" ]] || fail "template not found: $TEMPLATE_FILE"
 source "$HELPER"
+pingora_ensure_conf_file "$CONF_FILE" "$TEMPLATE_FILE"
+[[ -f "$CONF_FILE" ]] || fail "config not found after bootstrap: $CONF_FILE"
 
 expected_active_upstream="$(
   awk -F': ' '/^[[:space:]]*active_upstream:/{print $2; exit}' "$CONF_FILE"
@@ -55,7 +58,7 @@ assert_eq \
   "green upstream"
 
 status_output="$(
-  env PATH=/usr/bin:/bin bash "$ROOT_DIR/scripts/pingora_gateway.sh" status
+  env PATH=/usr/bin:/bin PINGORA_CONF_TEMPLATE_FILE="$TEMPLATE_FILE" bash "$ROOT_DIR/scripts/pingora_gateway.sh" status
 )"
 assert_eq \
   "$(printf '%s\n' "$status_output" | awk -F= '/^pid_file=/{print $2}')" \

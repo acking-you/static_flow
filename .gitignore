@@ -82,6 +82,7 @@ bin/
 tmp/
 backend/.local/
 .worktrees/
+conf/pingora/staticflow-gateway.yaml
 
 # Local agent entry files (symlinked to external path)
 AGENTS.md

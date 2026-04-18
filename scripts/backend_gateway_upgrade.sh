@@ -7,6 +7,7 @@ source "$ROOT_DIR/scripts/lib_pingora_gateway_conf.sh"
 source "$ROOT_DIR/scripts/lib_backend_gateway_upgrade.sh"
 
 CONF_FILE="${CONF_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml}"
+PINGORA_CONF_TEMPLATE_FILE="${PINGORA_CONF_TEMPLATE_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml.template}"
 GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:39180}"
 ROLLBACK_NEEDED="0"
 OLD_SLOT=""
@@ -24,6 +25,7 @@ Usage: ./scripts/backend_gateway_upgrade.sh
 
 Environment variables:
   CONF_FILE    Gateway YAML path
+  PINGORA_CONF_TEMPLATE_FILE  Gateway YAML template path used when CONF_FILE is missing
   GATEWAY_URL  Gateway base URL used for post-switch verification
 EOF
 }
@@ -95,6 +97,8 @@ case "${1:-}" in
     fail "usage: $0"
     ;;
 esac
+
+pingora_ensure_conf_file "$CONF_FILE" "$PINGORA_CONF_TEMPLATE_FILE"
 
 OLD_SLOT="$(active_slot)"
 NEW_SLOT="$(other_slot "$OLD_SLOT")"

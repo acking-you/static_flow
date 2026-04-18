@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+pingora_ensure_conf_file() {
+  local conf_file="$1"
+  local template_file="$2"
+  if [[ -f "$conf_file" ]]; then
+    return 0
+  fi
+  [[ -f "$template_file" ]] || {
+    echo "[gateway][ERROR] missing gateway conf template: $template_file" >&2
+    return 1
+  }
+  mkdir -p "$(dirname "$conf_file")"
+  cp "$template_file" "$conf_file"
+  chmod 600 "$conf_file" 2>/dev/null || true
+}
+
 pingora_top_level_conf_value() {
   local conf_file="$1"
   local key="$2"

@@ -8,6 +8,7 @@ source "$ROOT_DIR/scripts/lib_port_process.sh"
 source "$ROOT_DIR/scripts/lib_script_lock.sh"
 
 CONF_FILE="${CONF_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml}"
+PINGORA_CONF_TEMPLATE_FILE="${PINGORA_CONF_TEMPLATE_FILE:-$ROOT_DIR/conf/pingora/staticflow-gateway.yaml.template}"
 GATEWAY_BIN="${GATEWAY_BIN:-$ROOT_DIR/target/release-backend/staticflow-pingora-gateway}"
 STATICFLOW_LOG_DIR="${STATICFLOW_LOG_DIR:-$ROOT_DIR/tmp/runtime-logs}"
 STATICFLOW_LOG_SERVICE="${STATICFLOW_LOG_SERVICE:-gateway}"
@@ -24,6 +25,7 @@ Usage: ./scripts/pingora_gateway.sh {run|start|restart|check|reload|status|stop|
 
 Environment variables:
   CONF_FILE               Gateway YAML path
+  PINGORA_CONF_TEMPLATE_FILE  Gateway YAML template path used when CONF_FILE is missing
   GATEWAY_BIN             Gateway binary path
   STATICFLOW_LOG_DIR      Runtime log root
   STATICFLOW_LOG_SERVICE  Gateway runtime log folder name
@@ -406,8 +408,13 @@ acquire_lock() {
 
 acquire_lock
 
+ensure_gateway_conf() {
+  pingora_ensure_conf_file "$CONF_FILE" "$PINGORA_CONF_TEMPLATE_FILE"
+}
+
 case "${1:-}" in
   run)
+    ensure_gateway_conf
     build_gateway_bin
     export STATICFLOW_LOG_DIR STATICFLOW_LOG_SERVICE
     export STATICFLOW_GATEWAY_EXTERNAL_SUPERVISOR
@@ -415,20 +422,25 @@ case "${1:-}" in
     exec "$GATEWAY_BIN" --conf "$CONF_FILE"
     ;;
   start)
+    ensure_gateway_conf
     start_gateway
     ;;
   restart)
+    ensure_gateway_conf
     restart_gateway
     ;;
   check)
+    ensure_gateway_conf
     check_gateway_conf
     ;;
   reload)
+    ensure_gateway_conf
     require_running
     check_gateway_conf >/dev/null
     reload_gateway
     ;;
   status)
+    ensure_gateway_conf
     clear_stale_pid
     pid="$(current_pid || true)"
     if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
@@ -441,23 +453,28 @@ case "${1:-}" in
     echo "active_upstream=$(active_upstream)"
     ;;
   stop)
+    ensure_gateway_conf
     stop_gateway
     ;;
   stop-backend)
+    ensure_gateway_conf
     [[ $# -eq 2 ]] || fail "usage: $0 stop-backend <blue|green>"
     [[ "$2" == "blue" || "$2" == "green" ]] || fail "slot must be blue or green"
     stop_backend_slot "$2"
     ;;
   logs)
+    ensure_gateway_conf
     [[ $# -eq 2 ]] || fail "usage: $0 logs <gateway|blue|green>"
     release_lock_fd 9
     tail_logs "$2"
     ;;
   health)
+    ensure_gateway_conf
     [[ $# -eq 1 ]] || fail "usage: $0 health"
     report_health
     ;;
   switch)
+    ensure_gateway_conf
     [[ $# -eq 2 ]] || fail "usage: $0 switch <blue|green>"
     [[ "$2" == "blue" || "$2" == "green" ]] || fail "slot must be blue or green"
     require_running
