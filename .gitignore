@@ -80,6 +80,7 @@ shared/.fastembed_cache/
 data/
 bin/
 tmp/
+.local/
 backend/.local/
 .worktrees/
 conf/pingora/staticflow-gateway.yaml
