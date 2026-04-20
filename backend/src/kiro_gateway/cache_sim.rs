@@ -28,6 +28,9 @@ use super::wire::{
 use crate::state::LlmGatewayRuntimeConfig;
 
 const PREFIX_CACHE_PAGE_SIZE: usize = 64;
+const CLAUDE_CODE_BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
+const CLAUDE_CODE_SYSTEM_IDENTITY_LINE: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // A canonical unit is the smallest semantic fragment we retain before packing
@@ -829,7 +832,21 @@ fn hash_token_atom(text: &str) -> u64 {
 }
 
 fn normalize_text(raw: &str) -> String {
-    raw.replace("\r\n", "\n").trim().to_string()
+    let normalized = raw.replace("\r\n", "\n").trim().to_string();
+    strip_volatile_claude_code_billing_header(&normalized)
+}
+
+fn strip_volatile_claude_code_billing_header(text: &str) -> String {
+    if !text.starts_with(CLAUDE_CODE_BILLING_HEADER_PREFIX) {
+        return text.to_string();
+    }
+    let Some((_, remainder)) = text.split_once('\n') else {
+        return text.to_string();
+    };
+    if !remainder.contains(CLAUDE_CODE_SYSTEM_IDENTITY_LINE) {
+        return text.to_string();
+    }
+    remainder.trim().to_string()
 }
 
 fn canonicalize_json(value: &Value) -> Value {
@@ -1034,6 +1051,66 @@ mod tests {
             left_projection.projected_input_token_count,
             right_projection.projected_input_token_count
         );
+    }
+
+    #[test]
+    fn cache_simulator_matches_when_claude_code_billing_header_hash_changes() {
+        let first_header = concat!(
+            "x-anthropic-billing-header: cc_version=2.1.114.069; ",
+            "cc_entrypoint=cli; cch=638d8;\n",
+            "You are Claude Code, Anthropic's official CLI for Claude.\n",
+            "You are an interactive agent that helps users with software engineering tasks."
+        );
+        let second_header = concat!(
+            "x-anthropic-billing-header: cc_version=2.1.114.069; ",
+            "cc_entrypoint=cli; cch=f5339;\n",
+            "You are Claude Code, Anthropic's official CLI for Claude.\n",
+            "You are an interactive agent that helps users with software engineering tasks."
+        );
+        let assistant = AssistantMessage::new("assistant reply");
+        let simulator = KiroCacheSimulator::default();
+        let config = KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::PrefixTree,
+            prefix_cache_max_tokens: 100_000,
+            prefix_cache_entry_ttl: Duration::from_secs(300),
+            conversation_anchor_max_entries: 32,
+            conversation_anchor_ttl: Duration::from_secs(300),
+        };
+        let now = Instant::now();
+        let first_state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(first_header), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+        let second_state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(second_header), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+
+        let first_projection = PromptProjection::from_conversation_state(&first_state);
+        simulator.record_success(&first_projection, &assistant, "real-conv", true, config, now);
+
+        let second_projection = PromptProjection::from_conversation_state(&second_state);
+        let matched =
+            simulator.match_prefix(&second_projection, config, now + Duration::from_secs(1));
+
+        assert_eq!(first_projection.lookup_anchor_hash, second_projection.lookup_anchor_hash);
+        assert_eq!(first_projection.stable_prefix_pages, second_projection.stable_prefix_pages);
+        assert_eq!(matched.matched_pages, second_projection.stable_prefix_pages.len());
+        assert!(matched.matched_tokens > 0);
     }
 
     #[test]
