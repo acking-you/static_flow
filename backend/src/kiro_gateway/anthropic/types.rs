@@ -58,8 +58,9 @@ const MAX_BUDGET_TOKENS: i32 = 24_576;
 
 /// Extended thinking configuration from the Anthropic request.
 ///
-/// Supports `"enabled"` (explicit budget) and `"adaptive"` (effort-based)
-/// modes.
+/// Supports:
+/// - `"enabled"`: budget-driven thinking without an explicit effort level
+/// - `"adaptive"`: effort-driven thinking controlled by [`OutputConfig`]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Thinking {
     #[serde(rename = "type")]
@@ -86,7 +87,29 @@ where
     Ok(value.min(MAX_BUDGET_TOKENS))
 }
 
-/// Output configuration controlling generation effort level.
+/// Output configuration controlling adaptive thinking effort.
+///
+/// The Anthropic-facing bridge accepts the full five-level effort ladder:
+/// - `low`
+/// - `medium`
+/// - `high`
+/// - `xhigh`
+/// - `max`
+///
+/// Observed locally on April 20, 2026 with `claude-opus-4-6` and a fixed
+/// cache-stability prompt:
+///
+/// | effort | non-stream thinking chars | stream thinking chars | observed effect |
+/// | --- | ---: | ---: | --- |
+/// | `low` | 5 | 5 | Opens the thinking channel, but may collapse to a minimal acknowledgement. |
+/// | `medium` | 5 | 5 | Similar to `low` for simple prompts; do not assume visibly deeper reasoning. |
+/// | `high` | 43 | 43 | Produces a short hidden rationale. |
+/// | `xhigh` | 3560 | 3215 | Large jump in hidden reasoning depth. |
+/// | `max` | 3303 | 3452 | Large jump in hidden reasoning depth with dense streaming deltas. |
+///
+/// The exact counts are prompt-dependent and can vary across runs, but the
+/// local validation consistently showed a real separation between
+/// `low`/`medium`, `high`, and `xhigh`/`max`.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OutputConfig {
     #[serde(default = "default_effort")]
@@ -94,7 +117,9 @@ pub struct OutputConfig {
 }
 
 fn default_effort() -> String {
-    "high".to_string()
+    // Keep `xhigh` as the implicit default for adaptive thinking when the
+    // caller enables thinking but omits an explicit effort level.
+    "xhigh".to_string()
 }
 
 /// Optional request metadata (e.g. session tracking via `user_id`).

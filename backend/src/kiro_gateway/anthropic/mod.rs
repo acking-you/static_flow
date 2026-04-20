@@ -55,7 +55,9 @@ use self::{
         NormalizationEvent, NormalizedRequest, ResolvedConversationId, SessionFallbackReason,
         SessionIdSource, SessionTracking, ToolNormalizationEvent,
     },
-    stream::{BufferedStreamContext, StreamContext},
+    stream::{
+        split_inline_thinking_content, BufferedStreamContext, InlineThinkingBlock, StreamContext,
+    },
     types::{
         CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Metadata, Model,
         ModelsResponse, OutputConfig, Thinking,
@@ -83,6 +85,9 @@ const KIRO_UPSTREAM_LOG_PREVIEW_CHARS: usize = 8_192;
 const KIRO_STREAM_FAILURE_STATUS_CODE: i32 = 599;
 const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 160;
 const KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS: usize = 1_024;
+const TARGETED_DEBUG_KEY_HASH: &str =
+    "16c6e5b7c8accc911719ea856027bda9fd3dd9ad98240a153dff6fb67d071df1";
+const CLAUDE_CODE_BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 const REQUEST_SESSION_ID_HEADERS: [&str; 8] = [
     "x-claude-code-session-id",
     "x-codex-session-id",
@@ -139,6 +144,7 @@ pub(super) struct ProviderFailureContext<'a> {
 struct NonStreamRequestContext {
     model: String,
     input_tokens: i32,
+    thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
     request_validation_enabled: bool,
     simulation: KiroSimulationRequestContext,
@@ -291,6 +297,125 @@ fn log_simulation_request_context(
         matched_token_count = simulation.prefix_cache_match.matched_tokens,
         matched_ratio_basis_points,
         "prepared kiro request context before upstream call"
+    );
+    if should_log_targeted_kiro_debug(key_record) {
+        tracing::info!(
+            key_id = %key_record.id,
+            key_name = %key_record.name,
+            route = ctx.public_path,
+            requested_model = ctx.requested_model,
+            effective_model = ctx.effective_model,
+            stream = ctx.stream,
+            buffered_for_cc = ctx.buffered_for_cc,
+            lookup_anchor_hash = %simulation.projection.lookup_anchor_hash,
+            history_anchor_segments = ?simulation.projection.history_anchor_segments(),
+            stable_prefix_segment_keys = ?simulation.projection.stable_prefix_segment_keys(),
+            current_turn_history_segments = ?simulation.projection.current_turn_history_segments(),
+            projection_contains_billing_header = projection_contains_volatile_claude_code_marker(
+                &simulation.projection
+            ),
+            "targeted kiro cache projection debug"
+        );
+    }
+}
+
+fn should_log_targeted_kiro_debug(key_record: &LlmGatewayKeyRecord) -> bool {
+    key_record.key_hash == TARGETED_DEBUG_KEY_HASH
+}
+
+fn request_body_contains_volatile_claude_code_marker(body: Option<&str>) -> bool {
+    body.is_some_and(|value| value.contains(CLAUDE_CODE_BILLING_HEADER_PREFIX))
+}
+
+fn projection_contains_volatile_claude_code_marker(projection: &PromptProjection) -> bool {
+    projection
+        .history_anchor_segments()
+        .iter()
+        .chain(projection.stable_prefix_segment_keys().iter())
+        .chain(projection.current_turn_history_segments().iter())
+        .any(|segment| segment.contains(CLAUDE_CODE_BILLING_HEADER_PREFIX))
+}
+
+fn log_targeted_request_rewrite_debug(
+    key_record: &LlmGatewayKeyRecord,
+    event_context: &KiroEventContext,
+    payload: &MessagesRequest,
+    requested_model: &str,
+    buffered_for_cc: bool,
+    input_tokens: i32,
+) {
+    if !should_log_targeted_kiro_debug(key_record) {
+        return;
+    }
+    let transformed_request_body = serde_json::to_string(payload).unwrap_or_default();
+    tracing::info!(
+        key_id = %key_record.id,
+        key_name = %key_record.name,
+        requested_model,
+        effective_model = %payload.model,
+        stream = payload.stream,
+        buffered_for_cc,
+        input_tokens,
+        thinking_enabled = payload
+            .thinking
+            .as_ref()
+            .map(Thinking::is_enabled)
+            .unwrap_or(false),
+        thinking_type = payload
+            .thinking
+            .as_ref()
+            .map(|thinking| thinking.thinking_type.as_str())
+            .unwrap_or(""),
+        thinking_budget_tokens = payload
+            .thinking
+            .as_ref()
+            .map(|thinking| thinking.budget_tokens)
+            .unwrap_or_default(),
+        thinking_effort = payload
+            .output_config
+            .as_ref()
+            .map(|config| config.effort.as_str())
+            .unwrap_or(""),
+        raw_client_contains_billing_header = request_body_contains_volatile_claude_code_marker(
+            event_context.client_request_body_json.as_deref()
+        ),
+        transformed_request_contains_billing_header =
+            request_body_contains_volatile_claude_code_marker(Some(&transformed_request_body)),
+        raw_client_request_body = event_context.client_request_body_json.as_deref().unwrap_or(""),
+        transformed_request_body,
+        "targeted kiro anthropic request debug before normalization"
+    );
+}
+
+fn log_targeted_non_stream_debug(
+    key_record: &LlmGatewayKeyRecord,
+    request_ctx: &NonStreamRequestContext,
+    stop_reason: &str,
+    raw_upstream_body: &str,
+    assistant_message: &AssistantMessage,
+    content: &[serde_json::Value],
+) {
+    if !should_log_targeted_kiro_debug(key_record) {
+        return;
+    }
+    tracing::info!(
+        key_id = %key_record.id,
+        key_name = %key_record.name,
+        model = %request_ctx.model,
+        thinking_enabled = request_ctx.thinking_enabled,
+        stop_reason,
+        raw_upstream_contains_thinking = raw_upstream_body.contains("<thinking>"),
+        assistant_message_contains_thinking = assistant_message.content.contains("<thinking>"),
+        emitted_thinking_blocks = content.iter().any(|block| {
+            block
+                .get("type")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value == "thinking")
+        }),
+        raw_upstream_response_body = raw_upstream_body,
+        assistant_message_content = %assistant_message.content,
+        anthropic_content_json = %serde_json::Value::Array(content.to_vec()),
+        "targeted kiro non-stream response debug"
     );
 }
 
@@ -1435,6 +1560,14 @@ async fn handle_messages(
         payload.tools.clone(),
     ) as i32;
     override_thinking_from_model_name(payload);
+    log_targeted_request_rewrite_debug(
+        &key_record,
+        &event_context,
+        payload,
+        &requested_model,
+        buffered_for_cc,
+        input_tokens,
+    );
     let provider = KiroProvider::new(state.kiro_gateway.clone());
     if pure_web_search {
         event_context.endpoint = "/mcp".to_string();
@@ -1835,6 +1968,7 @@ async fn handle_messages(
         NonStreamRequestContext {
             model: payload.model.clone(),
             input_tokens,
+            thinking_enabled,
             tool_name_map,
             request_validation_enabled,
             simulation,
@@ -2065,6 +2199,7 @@ async fn handle_non_stream_request(
                 .into_response();
         },
     };
+    let raw_upstream_body = String::from_utf8_lossy(&body).into_owned();
     let mut decoder = EventStreamDecoder::new();
     let _ = decoder.feed(&body);
     let mut text_content = String::new();
@@ -2166,17 +2301,50 @@ async fn handle_non_stream_request(
         stop_reason = "tool_use".to_string();
     }
     structured_tool_uses.sort_by_key(|(start_order, _)| *start_order);
-    let mut content = Vec::new();
-    if !text_content.is_empty() {
-        content.push(serde_json::json!({"type":"text","text":text_content.clone()}));
-    }
-    content.extend(tool_uses);
     let assistant_message = build_assistant_message(
-        text_content,
+        text_content.clone(),
         structured_tool_uses
             .into_iter()
             .map(|(_, tool_use)| tool_use)
             .collect(),
+    );
+    let mut content = Vec::new();
+    for block in split_inline_thinking_content(&text_content, request_ctx.thinking_enabled) {
+        match block {
+            InlineThinkingBlock::Thinking(thinking) => {
+                content.push(serde_json::json!({"type":"thinking","thinking":thinking}));
+            },
+            InlineThinkingBlock::Text(text) => {
+                if !text.is_empty() {
+                    content.push(serde_json::json!({"type":"text","text":text}));
+                }
+            },
+        }
+    }
+    content.extend(tool_uses);
+    let emitted_non_thinking_block = content.iter().any(|block| {
+        block
+            .get("type")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value == "text" || value == "tool_use")
+    });
+    let emitted_thinking_block = content.iter().any(|block| {
+        block
+            .get("type")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value == "thinking")
+    });
+    if request_ctx.thinking_enabled && emitted_thinking_block && !emitted_non_thinking_block {
+        stop_reason = "max_tokens".to_string();
+        content.push(serde_json::json!({"type":"text","text":" "}));
+    }
+    log_targeted_non_stream_debug(
+        &key_record,
+        &request_ctx,
+        &stop_reason,
+        &raw_upstream_body,
+        &assistant_message,
+        &content,
     );
     let output_tokens = token::estimate_output_tokens(&content);
     log_missing_upstream_input_tokens(MissingUpstreamInputLogContext {
@@ -2776,7 +2944,7 @@ fn apply_key_model_mapping(
 }
 
 /// If the model name contains "-thinking", auto-inject thinking configuration.
-/// Opus 4.6 gets adaptive/high; all others get enabled with 20K budget.
+/// Opus 4.6 gets adaptive/xhigh; all others get enabled with 20K budget.
 fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
     let model = payload.model.to_lowercase();
     if !model.contains("thinking") {
@@ -2787,9 +2955,9 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
         thinking_type: if is_opus_46 { "adaptive".to_string() } else { "enabled".to_string() },
         budget_tokens: 20_000,
     });
-    if is_opus_46 {
+    if is_opus_46 && payload.output_config.is_none() {
         payload.output_config = Some(OutputConfig {
-            effort: "high".to_string(),
+            effort: "xhigh".to_string(),
         });
     }
 }
@@ -3029,7 +3197,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_suffix_sets_adaptive_high_for_opus_46_models() {
+    fn thinking_suffix_sets_adaptive_xhigh_for_opus_46_models() {
         let mut payload = base_request("claude-opus-4-6-thinking");
         override_thinking_from_model_name(&mut payload);
 
@@ -3041,7 +3209,28 @@ mod tests {
                 .output_config
                 .as_ref()
                 .map(|config| config.effort.as_str()),
-            Some("high")
+            Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn thinking_suffix_preserves_existing_opus_46_effort() {
+        let mut payload = base_request("claude-opus-4-6-thinking");
+        payload.output_config = Some(OutputConfig {
+            effort: "max".to_string(),
+        });
+
+        override_thinking_from_model_name(&mut payload);
+
+        let thinking = payload.thinking.expect("thinking should be injected");
+        assert_eq!(thinking.thinking_type, "adaptive");
+        assert_eq!(thinking.budget_tokens, 20_000);
+        assert_eq!(
+            payload
+                .output_config
+                .as_ref()
+                .map(|config| config.effort.as_str()),
+            Some("max")
         );
     }
 

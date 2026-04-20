@@ -54,6 +54,12 @@ struct ToolUseAccumulator {
     input_buffer: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum InlineThinkingBlock {
+    Thinking(String),
+    Text(String),
+}
+
 impl BlockState {
     fn new(block_type: impl Into<String>) -> Self {
         Self {
@@ -953,6 +959,51 @@ fn find_real_tag(buffer: &str, tag: &str, require_double_newline_after: bool) ->
     None
 }
 
+pub(super) fn split_inline_thinking_content(
+    content: &str,
+    thinking_enabled: bool,
+) -> Vec<InlineThinkingBlock> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    if !thinking_enabled {
+        return vec![InlineThinkingBlock::Text(content.to_string())];
+    }
+
+    let Some(start_pos) = find_real_thinking_start_tag(content) else {
+        return vec![InlineThinkingBlock::Text(content.to_string())];
+    };
+
+    let mut blocks = Vec::new();
+    let before = &content[..start_pos];
+    if !before.trim().is_empty() {
+        blocks.push(InlineThinkingBlock::Text(before.to_string()));
+    }
+
+    let mut remaining = &content[start_pos + "<thinking>".len()..];
+    if remaining.starts_with('\n') {
+        remaining = &remaining[1..];
+    }
+
+    let end_pos = if let Some(end_pos) = find_real_thinking_end_tag(remaining) {
+        end_pos
+    } else if let Some(end_pos) = find_real_thinking_end_tag_at_buffer_end(remaining) {
+        end_pos
+    } else {
+        return vec![InlineThinkingBlock::Text(content.to_string())];
+    };
+
+    blocks.push(InlineThinkingBlock::Thinking(remaining[..end_pos].to_string()));
+
+    let after_tag = &remaining[end_pos + "</thinking>".len()..];
+    let after_thinking = after_tag.strip_prefix("\n\n").unwrap_or(after_tag);
+    if !after_thinking.is_empty() {
+        blocks.push(InlineThinkingBlock::Text(after_thinking.to_string()));
+    }
+
+    blocks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -976,6 +1027,19 @@ mod tests {
         assert!(sse.starts_with("event: message_start\n"));
         assert!(sse.contains("data: "));
         assert!(sse.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn split_inline_thinking_content_extracts_non_stream_blocks() {
+        let blocks = split_inline_thinking_content(
+            "<thinking>\nCount carefully.\n</thinking>\n\nbeta",
+            true,
+        );
+
+        assert_eq!(blocks, vec![
+            InlineThinkingBlock::Thinking("Count carefully.\n".to_string()),
+            InlineThinkingBlock::Text("beta".to_string()),
+        ]);
     }
 
     #[test]

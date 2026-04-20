@@ -29,8 +29,15 @@ use crate::state::LlmGatewayRuntimeConfig;
 
 const PREFIX_CACHE_PAGE_SIZE: usize = 64;
 const CLAUDE_CODE_BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
-const CLAUDE_CODE_SYSTEM_IDENTITY_LINE: &str =
+const CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE: &str =
     "You are Claude Code, Anthropic's official CLI for Claude.";
+const CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+const STABLE_THINKING_PREFIX_TAGS: [(&str, &str); 3] = [
+    ("<thinking_mode>", "</thinking_mode>"),
+    ("<thinking_effort>", "</thinking_effort>"),
+    ("<max_thinking_length>", "</max_thinking_length>"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // A canonical unit is the smallest semantic fragment we retain before packing
@@ -123,6 +130,18 @@ impl PromptProjection {
             .iter()
             .map(|page| u64::from(page.token_count))
             .sum()
+    }
+
+    pub fn stable_prefix_segment_keys(&self) -> &[String] {
+        &self.stable_prefix_segment_keys
+    }
+
+    pub fn history_anchor_segments(&self) -> &[String] {
+        &self.history_anchor_segments
+    }
+
+    pub fn current_turn_history_segments(&self) -> &[String] {
+        &self.current_turn_history_segments
     }
 }
 
@@ -837,16 +856,57 @@ fn normalize_text(raw: &str) -> String {
 }
 
 fn strip_volatile_claude_code_billing_header(text: &str) -> String {
-    if !text.starts_with(CLAUDE_CODE_BILLING_HEADER_PREFIX) {
-        return text.to_string();
-    }
-    let Some((_, remainder)) = text.split_once('\n') else {
+    let Some(billing_header_pos) = text.find(CLAUDE_CODE_BILLING_HEADER_PREFIX) else {
         return text.to_string();
     };
-    if !remainder.contains(CLAUDE_CODE_SYSTEM_IDENTITY_LINE) {
+    let stable_prefix = &text[..billing_header_pos];
+    if !stable_prefix.is_empty() && !contains_only_stable_thinking_prefix(stable_prefix) {
         return text.to_string();
     }
-    remainder.trim().to_string()
+    let Some((_, remainder)) = text[billing_header_pos..].split_once('\n') else {
+        return text.to_string();
+    };
+    let trimmed_remainder = remainder.trim_start();
+    if !trimmed_remainder.starts_with(CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE)
+        && !trimmed_remainder.starts_with(CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE)
+    {
+        return text.to_string();
+    }
+    let normalized_remainder = trimmed_remainder.trim();
+    if stable_prefix.is_empty() {
+        normalized_remainder.to_string()
+    } else if stable_prefix.ends_with('\n') {
+        format!("{stable_prefix}{normalized_remainder}")
+    } else {
+        format!("{stable_prefix}\n{normalized_remainder}")
+    }
+}
+
+fn contains_only_stable_thinking_prefix(prefix: &str) -> bool {
+    let mut remaining = prefix;
+    loop {
+        let trimmed = remaining.trim_start();
+        if trimmed.is_empty() {
+            return true;
+        }
+        remaining = trimmed;
+
+        let mut matched_tag = false;
+        for (start_tag, end_tag) in STABLE_THINKING_PREFIX_TAGS {
+            let Some(after_start) = remaining.strip_prefix(start_tag) else {
+                continue;
+            };
+            let Some(end_pos) = after_start.find(end_tag) else {
+                return false;
+            };
+            remaining = &after_start[end_pos + end_tag.len()..];
+            matched_tag = true;
+            break;
+        }
+        if !matched_tag {
+            return false;
+        }
+    }
 }
 
 fn canonicalize_json(value: &Value) -> Value {
@@ -1065,6 +1125,130 @@ mod tests {
             "x-anthropic-billing-header: cc_version=2.1.114.069; ",
             "cc_entrypoint=cli; cch=f5339;\n",
             "You are Claude Code, Anthropic's official CLI for Claude.\n",
+            "You are an interactive agent that helps users with software engineering tasks."
+        );
+        let assistant = AssistantMessage::new("assistant reply");
+        let simulator = KiroCacheSimulator::default();
+        let config = KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::PrefixTree,
+            prefix_cache_max_tokens: 100_000,
+            prefix_cache_entry_ttl: Duration::from_secs(300),
+            conversation_anchor_max_entries: 32,
+            conversation_anchor_ttl: Duration::from_secs(300),
+        };
+        let now = Instant::now();
+        let first_state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(first_header), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+        let second_state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(second_header), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+
+        let first_projection = PromptProjection::from_conversation_state(&first_state);
+        simulator.record_success(&first_projection, &assistant, "real-conv", true, config, now);
+
+        let second_projection = PromptProjection::from_conversation_state(&second_state);
+        let matched =
+            simulator.match_prefix(&second_projection, config, now + Duration::from_secs(1));
+
+        assert_eq!(first_projection.lookup_anchor_hash, second_projection.lookup_anchor_hash);
+        assert_eq!(first_projection.stable_prefix_pages, second_projection.stable_prefix_pages);
+        assert_eq!(matched.matched_pages, second_projection.stable_prefix_pages.len());
+        assert!(matched.matched_tokens > 0);
+    }
+
+    #[test]
+    fn cache_simulator_matches_when_agent_sdk_billing_header_hash_changes() {
+        let first_header = concat!(
+            "x-anthropic-billing-header: cc_version=2.1.114.eee; ",
+            "cc_entrypoint=sdk-cli; cch=fb0be;\n",
+            "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n",
+            "You are an interactive agent that helps users with software engineering tasks."
+        );
+        let second_header = concat!(
+            "x-anthropic-billing-header: cc_version=2.1.114.eee; ",
+            "cc_entrypoint=sdk-cli; cch=9ac44;\n",
+            "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n",
+            "You are an interactive agent that helps users with software engineering tasks."
+        );
+        let assistant = AssistantMessage::new("assistant reply");
+        let simulator = KiroCacheSimulator::default();
+        let config = KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::PrefixTree,
+            prefix_cache_max_tokens: 100_000,
+            prefix_cache_entry_ttl: Duration::from_secs(300),
+            conversation_anchor_max_entries: 32,
+            conversation_anchor_ttl: Duration::from_secs(300),
+        };
+        let now = Instant::now();
+        let first_state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(first_header), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+        let second_state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(second_header), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+
+        let first_projection = PromptProjection::from_conversation_state(&first_state);
+        simulator.record_success(&first_projection, &assistant, "real-conv", true, config, now);
+
+        let second_projection = PromptProjection::from_conversation_state(&second_state);
+        let matched =
+            simulator.match_prefix(&second_projection, config, now + Duration::from_secs(1));
+
+        assert_eq!(first_projection.lookup_anchor_hash, second_projection.lookup_anchor_hash);
+        assert_eq!(first_projection.stable_prefix_pages, second_projection.stable_prefix_pages);
+        assert_eq!(matched.matched_pages, second_projection.stable_prefix_pages.len());
+        assert!(matched.matched_tokens > 0);
+    }
+
+    #[test]
+    fn cache_simulator_matches_when_agent_sdk_billing_header_is_prefixed_by_thinking_tags() {
+        let first_header = concat!(
+            "<thinking_mode>adaptive</thinking_mode>",
+            "<thinking_effort>max</thinking_effort>\n",
+            "x-anthropic-billing-header: cc_version=2.1.114.eee; ",
+            "cc_entrypoint=sdk-cli; cch=fb0be;\n",
+            "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n",
+            "You are an interactive agent that helps users with software engineering tasks."
+        );
+        let second_header = concat!(
+            "<thinking_mode>adaptive</thinking_mode>",
+            "<thinking_effort>max</thinking_effort>\n",
+            "x-anthropic-billing-header: cc_version=2.1.114.eee; ",
+            "cc_entrypoint=sdk-cli; cch=9ac44;\n",
+            "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n",
             "You are an interactive agent that helps users with software engineering tasks."
         );
         let assistant = AssistantMessage::new("assistant reply");

@@ -1568,6 +1568,13 @@ fn convert_tools(
 
 // Generates the XML thinking-mode prefix to inject into the system prompt
 // based on the request's thinking configuration.
+//
+// For adaptive thinking, preserve the caller's exact effort label instead of
+// normalizing it. Local verification against Kiro showed that `low`,
+// `medium`, `high`, `xhigh`, and `max` are not interchangeable:
+// `low`/`medium` can stay minimal, `high` produces short hidden rationale, and
+// `xhigh`/`max` produce materially deeper hidden reasoning in both buffered and
+// streaming paths.
 fn generate_thinking_prefix(req: &MessagesRequest) -> Option<String> {
     if let Some(thinking) = &req.thinking {
         if thinking.thinking_type == "enabled" {
@@ -1582,7 +1589,7 @@ fn generate_thinking_prefix(req: &MessagesRequest) -> Option<String> {
                 .output_config
                 .as_ref()
                 .map(|config| config.effort.as_str())
-                .unwrap_or("high");
+                .unwrap_or("xhigh");
             return Some(format!(
                 "<thinking_mode>adaptive</thinking_mode><thinking_effort>{effort}</\
                  thinking_effort>"
@@ -2547,7 +2554,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_request_defaults_adaptive_thinking_effort_to_high() {
+    fn convert_request_defaults_adaptive_thinking_effort_to_xhigh() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!("Hello"),
@@ -2563,7 +2570,7 @@ mod tests {
             other => panic!("expected injected system user message, got {other:?}"),
         };
 
-        assert!(system_prefix.contains("<thinking_effort>high</thinking_effort>"));
+        assert!(system_prefix.contains("<thinking_effort>xhigh</thinking_effort>"));
     }
 
     #[test]
