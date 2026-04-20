@@ -5,6 +5,7 @@
 //! keeps an in-memory snapshot that the gateway proxy consults for routing.
 
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     env,
     path::{Path, PathBuf},
@@ -59,6 +60,10 @@ struct AccountSettingsFile {
     pub proxy_mode: AccountProxyMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_config_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_max_concurrency: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_min_start_interval_ms: Option<u64>,
 }
 
 impl AccountSettingsFile {
@@ -75,6 +80,8 @@ impl AccountSettingsFile {
 pub(crate) struct AccountSettingsPatch {
     pub map_gpt53_codex_to_spark: Option<bool>,
     pub proxy_selection: Option<AccountProxySelection>,
+    pub request_max_concurrency: Option<Option<u64>>,
+    pub request_min_start_interval_ms: Option<Option<u64>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +112,8 @@ pub(crate) struct CodexAccount {
     pub id_token: String,
     pub map_gpt53_codex_to_spark: bool,
     pub proxy_selection: AccountProxySelection,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
     pub last_refresh: Option<DateTime<Utc>>,
     pub status: AccountStatus,
 }
@@ -116,6 +125,14 @@ impl CodexAccount {
             self.account_id.clone(),
             self.proxy_selection.clone(),
         )
+    }
+
+    pub fn effective_request_max_concurrency(&self) -> Option<u64> {
+        self.request_max_concurrency.filter(|value| *value > 0)
+    }
+
+    pub fn effective_request_min_start_interval_ms(&self) -> Option<u64> {
+        self.request_min_start_interval_ms
     }
 }
 
@@ -184,6 +201,17 @@ pub(crate) struct AccountSummarySnapshot {
     pub last_refresh_ms: Option<i64>,
     pub map_gpt53_codex_to_spark: bool,
     pub proxy_selection: AccountProxySelection,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CodexRouteCandidate {
+    pub name: String,
+    pub snapshot: CodexAuthSnapshot,
+    pub map_gpt53_codex_to_spark: bool,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +223,8 @@ struct AccountSelectionCandidate {
     name: String,
     snapshot: CodexAuthSnapshot,
     map_gpt53_codex_to_spark: bool,
+    request_max_concurrency: Option<u64>,
+    request_min_start_interval_ms: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -382,23 +412,34 @@ impl AccountPool {
                 last_refresh_ms,
                 map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
                 proxy_selection: account.proxy_selection.clone(),
+                request_max_concurrency: account.effective_request_max_concurrency(),
+                request_min_start_interval_ms: account.effective_request_min_start_interval_ms(),
             });
         }
         out
     }
 
-    /// Select the best active account considering both 5h (primary) and weekly
-    /// (secondary) quota windows.
-    ///
-    /// Accounts where either window is exhausted (≤ 0%) are skipped entirely.
-    /// Among remaining candidates, those with effective remaining (min of both
-    /// windows) ≥ 10% are preferred over low-quota accounts. When all
-    /// candidates are below 10%, the one with the highest effective
-    /// remaining is chosen.
-    pub async fn select_best_account(
+    pub async fn account_candidate_by_name(&self, name: &str) -> Option<CodexRouteCandidate> {
+        let entry = self.accounts.read().get(name).cloned()?;
+        let account = entry.read().await;
+        if account.status != AccountStatus::Active {
+            return None;
+        }
+        Some(CodexRouteCandidate {
+            name: name.to_string(),
+            snapshot: account.to_auth_snapshot(),
+            map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+            request_max_concurrency: account.effective_request_max_concurrency(),
+            request_min_start_interval_ms: account.effective_request_min_start_interval_ms(),
+        })
+    }
+
+    /// Return eligible auto-routing candidates ordered by the existing quota
+    /// and fairness rules.
+    pub async fn ranked_routable_accounts(
         &self,
         allowed_names: Option<&HashSet<String>>,
-    ) -> Option<(String, CodexAuthSnapshot, bool)> {
+    ) -> Vec<CodexRouteCandidate> {
         /// Accounts with effective remaining below this threshold are
         /// deprioritized in favor of healthier ones.
         const LOW_QUOTA_THRESHOLD: f64 = 10.0;
@@ -453,11 +494,13 @@ impl AccountPool {
                 name,
                 snapshot: account.to_auth_snapshot(),
                 map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+                request_max_concurrency: account.effective_request_max_concurrency(),
+                request_min_start_interval_ms: account.effective_request_min_start_interval_ms(),
             });
         }
 
         if candidates.is_empty() {
-            return None;
+            return Vec::new();
         }
 
         if !invalid_remaining_names.is_empty() {
@@ -470,48 +513,48 @@ impl AccountPool {
 
         // Phase 2: partition into healthy (effective ≥ 10%) and low (< 10%).
         // Effective remaining is the tighter of the two windows.
-        let (healthy, low): (Vec<&AccountSelectionCandidate>, Vec<&AccountSelectionCandidate>) =
-            candidates.iter().partition(|candidate| {
-                !candidate.has_invalid_remaining
-                    && candidate
-                        .primary_remaining
-                        .min(candidate.secondary_remaining)
-                        >= LOW_QUOTA_THRESHOLD
-            });
+        let (mut healthy, mut low): (
+            Vec<AccountSelectionCandidate>,
+            Vec<AccountSelectionCandidate>,
+        ) = candidates.into_iter().partition(|candidate| {
+            !candidate.has_invalid_remaining
+                && candidate
+                    .primary_remaining
+                    .min(candidate.secondary_remaining)
+                    >= LOW_QUOTA_THRESHOLD
+        });
+        sort_account_candidates(&mut healthy);
+        sort_account_candidates(&mut low);
+        healthy
+            .into_iter()
+            .chain(low)
+            .map(|candidate| CodexRouteCandidate {
+                name: candidate.name,
+                snapshot: candidate.snapshot,
+                map_gpt53_codex_to_spark: candidate.map_gpt53_codex_to_spark,
+                request_max_concurrency: candidate.request_max_concurrency,
+                request_min_start_interval_ms: candidate.request_min_start_interval_ms,
+            })
+            .collect()
+    }
 
-        // Pick the best from the healthy set; fall back to the low set only
-        // when no healthy candidate exists.
-        let pool = if healthy.is_empty() { &low } else { &healthy };
-        let best = pool.iter().copied().reduce(|best, candidate| {
-            if account_candidate_preferred(candidate, best) {
-                candidate
-            } else {
-                best
-            }
-        })?;
-
-        let AccountSelectionCandidate {
-            has_invalid_remaining,
-            primary_remaining,
-            secondary_remaining,
-            routed_at_ms,
-            name,
-            snapshot,
-            map_gpt53_codex_to_spark,
-        } = best.clone();
+    /// Select the best active account considering both 5h (primary) and weekly
+    /// (secondary) quota windows.
+    pub async fn select_best_account(
+        &self,
+        allowed_names: Option<&HashSet<String>>,
+    ) -> Option<(String, CodexAuthSnapshot, bool)> {
+        let selected = self
+            .ranked_routable_accounts(allowed_names)
+            .await
+            .into_iter()
+            .next()?;
         tracing::info!(
-            account = %name,
-            primary_remaining_percent = primary_remaining,
-            secondary_remaining_percent = secondary_remaining,
-            effective_remaining_percent = primary_remaining.min(secondary_remaining),
-            last_routed_at_ms = routed_at_ms,
-            has_invalid_remaining,
-            healthy_count = healthy.len(),
-            low_count = low.len(),
+            account = %selected.name,
             allowed_names = ?allowed_names,
             "selected codex account from pool"
         );
-        Some((name, snapshot, map_gpt53_codex_to_spark))
+        Some((selected.name, selected.snapshot, selected.map_gpt53_codex_to_spark))
     }
 
     /// Record that `name` has been chosen for a routed Codex request.
@@ -546,6 +589,13 @@ impl AccountPool {
             }
             if let Some(proxy_selection) = patch.proxy_selection {
                 account.proxy_selection = proxy_selection.canonicalize();
+            }
+            if let Some(request_max_concurrency) = patch.request_max_concurrency {
+                account.request_max_concurrency =
+                    request_max_concurrency.filter(|value| *value > 0);
+            }
+            if let Some(request_min_start_interval_ms) = patch.request_min_start_interval_ms {
+                account.request_min_start_interval_ms = request_min_start_interval_ms;
             }
             account.clone()
         };
@@ -722,6 +772,8 @@ async fn load_account_from_file(path: &Path) -> Result<CodexAccount> {
         id_token,
         map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
         proxy_selection: settings.proxy_selection(),
+        request_max_concurrency: settings.request_max_concurrency.filter(|value| *value > 0),
+        request_min_start_interval_ms: settings.request_min_start_interval_ms,
         last_refresh: auth_file.last_refresh,
         status: AccountStatus::Active,
     })
@@ -759,7 +811,11 @@ async fn load_account_settings_from_file(auth_path: &Path) -> Result<AccountSett
 
 async fn persist_account_settings_to_file(auths_dir: &Path, account: &CodexAccount) -> Result<()> {
     let path = auths_dir.join(format!("{}.meta", account.name));
-    if !account.map_gpt53_codex_to_spark && account.proxy_selection.is_default() {
+    if !account.map_gpt53_codex_to_spark
+        && account.proxy_selection.is_default()
+        && account.request_max_concurrency.is_none()
+        && account.request_min_start_interval_ms.is_none()
+    {
         if path.is_file() {
             tokio::fs::remove_file(&path)
                 .await
@@ -772,6 +828,8 @@ async fn persist_account_settings_to_file(auths_dir: &Path, account: &CodexAccou
         map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
         proxy_mode: account.proxy_selection.proxy_mode,
         proxy_config_id: account.proxy_selection.proxy_config_id.clone(),
+        request_max_concurrency: account.effective_request_max_concurrency(),
+        request_min_start_interval_ms: account.effective_request_min_start_interval_ms(),
     };
     let json = serde_json::to_string_pretty(&settings)
         .context("failed to serialize account settings file")?;
@@ -843,6 +901,18 @@ fn account_candidate_preferred(
         return false;
     }
     candidate.name < current_best.name
+}
+
+fn sort_account_candidates(candidates: &mut [AccountSelectionCandidate]) {
+    candidates.sort_by(|left, right| {
+        if account_candidate_preferred(left, right) {
+            Ordering::Less
+        } else if account_candidate_preferred(right, left) {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    });
 }
 
 fn settings_path_for_auth_file(auth_path: &Path) -> PathBuf {
@@ -919,6 +989,8 @@ mod tests {
             id_token: format!("{name}-id"),
             map_gpt53_codex_to_spark: false,
             proxy_selection: Default::default(),
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             last_refresh: None,
             status: AccountStatus::Active,
         }
@@ -1198,6 +1270,52 @@ mod tests {
         pool.clear_consecutive_refresh_failures("alpha").await;
         assert_eq!(pool.consecutive_refresh_failures("alpha"), 0);
         assert_eq!(pool.increment_consecutive_refresh_failures("alpha").await, Some(1));
+
+        let _ = std::fs::remove_dir_all(auths_dir);
+    }
+
+    #[tokio::test]
+    async fn update_settings_persists_scheduler_limits_and_can_clear_them() {
+        let auths_dir = test_auths_dir("scheduler-settings");
+        let pool = AccountPool::new(auths_dir.clone());
+        pool.insert(sample_account("alpha"))
+            .await
+            .expect("insert alpha");
+
+        let updated = pool
+            .update_settings("alpha", AccountSettingsPatch {
+                request_max_concurrency: Some(Some(2)),
+                request_min_start_interval_ms: Some(Some(1_250)),
+                ..AccountSettingsPatch::default()
+            })
+            .await
+            .expect("update settings");
+        assert!(updated, "account should be updated");
+
+        let persisted_path = auth_file_path(&auths_dir, "alpha");
+        let mut persisted = load_account_from_file(&persisted_path)
+            .await
+            .expect("reload persisted account");
+        persisted.name = "alpha".to_string();
+        assert_eq!(persisted.request_max_concurrency, Some(2));
+        assert_eq!(persisted.request_min_start_interval_ms, Some(1_250));
+
+        let cleared = pool
+            .update_settings("alpha", AccountSettingsPatch {
+                request_max_concurrency: Some(None),
+                request_min_start_interval_ms: Some(None),
+                ..AccountSettingsPatch::default()
+            })
+            .await
+            .expect("clear settings");
+        assert!(cleared, "account should remain updateable");
+
+        let mut reloaded = load_account_from_file(&persisted_path)
+            .await
+            .expect("reload cleared account");
+        reloaded.name = "alpha".to_string();
+        assert_eq!(reloaded.request_max_concurrency, None);
+        assert_eq!(reloaded.request_min_start_interval_ms, None);
 
         let _ = std::fs::remove_dir_all(auths_dir);
     }

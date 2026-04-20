@@ -74,7 +74,8 @@ use self::{
     },
     runtime::{
         bearer_header, codex_upstream_client_profile, gateway_auth_cache_ttl, CachedKeyLease,
-        CodexAuthSnapshot, CodexKeyRequestLease, CodexKeyRequestLimitRejection,
+        CodexAccountRequestLease, CodexAuthSnapshot, CodexKeyRequestLease,
+        CodexKeyRequestLimitRejection,
     },
     types::{
         AccountListResponse, AccountSummaryView, AdminAccountGroupView, AdminAccountGroupsResponse,
@@ -982,7 +983,7 @@ pub async fn create_admin_key(
 ) -> Result<Json<AdminLlmGatewayKeyView>, (StatusCode, Json<ErrorResponse>)> {
     ensure_admin_access(&state, &headers)?;
     let name = normalize_name(&request.name)?;
-    validate_codex_key_request_limit_inputs(
+    validate_codex_request_limit_inputs(
         request.request_max_concurrency,
         request.request_min_start_interval_ms,
     )?;
@@ -1136,7 +1137,7 @@ pub async fn patch_admin_key(
         key.request_min_start_interval_ms = Some(value);
     }
 
-    validate_codex_key_request_limit_inputs(
+    validate_codex_request_limit_inputs(
         key.request_max_concurrency,
         key.request_min_start_interval_ms,
     )?;
@@ -1705,7 +1706,7 @@ async fn materialize_legacy_codex_route_group_if_needed(
     }
 }
 
-fn validate_codex_key_request_limit_inputs(
+fn validate_codex_request_limit_inputs(
     request_max_concurrency: Option<u64>,
     request_min_start_interval_ms: Option<u64>,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -3007,6 +3008,8 @@ pub async fn approve_and_issue_account_contribution_request(
             id_token: contribution_request.id_token.clone(),
             map_gpt53_codex_to_spark: false,
             proxy_selection: Default::default(),
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             last_refresh: Some(chrono::Utc::now()),
             status: accounts::AccountStatus::Active,
         };
@@ -3587,36 +3590,47 @@ pub async fn proxy_gateway_request(
     );
 
     let record_route_selection = !is_models_path;
-    let (auth_snapshot, selected_account_name, map_gpt53_codex_to_spark) =
-        match resolve_auth_for_key(&state, &key_lease.record, record_route_selection).await {
-            Ok(resolved) => resolved,
-            Err(err) => {
-                if !is_models_path {
-                    if let Err(persist_err) = persist_gateway_failure_usage(
-                        state.llm_gateway.as_ref(),
-                        key_lease.as_ref(),
-                        GatewayFailureUsageRequest {
-                            prepared: &failure_prepared,
-                            status_code: err.0.as_u16() as i32,
-                            usage: missing_usage_breakdown(),
-                            event_context: event_context.as_ref(),
-                            selected_account_name: None,
-                            failure_stage: "resolve_auth_for_key",
-                            error: &err.1 .0.error,
-                            details: Some(json!({ "error_code": err.1.0.code })),
-                        },
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            key_id = %key_lease.record.id,
-                            "failed to persist codex failure usage after auth resolution error: {persist_err:#}"
-                        );
-                    }
+    let resolved_route = match resolve_auth_for_key(
+        &state,
+        &key_lease.record,
+        record_route_selection,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            if !is_models_path {
+                if let Err(persist_err) = persist_gateway_failure_usage(
+                    state.llm_gateway.as_ref(),
+                    key_lease.as_ref(),
+                    GatewayFailureUsageRequest {
+                        prepared: &failure_prepared,
+                        status_code: err.0.as_u16() as i32,
+                        usage: missing_usage_breakdown(),
+                        event_context: event_context.as_ref(),
+                        selected_account_name: None,
+                        failure_stage: "resolve_auth_for_key",
+                        error: &err.1 .0.error,
+                        details: Some(json!({ "error_code": err.1.0.code })),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        "failed to persist codex failure usage after auth resolution error: {persist_err:#}"
+                    );
                 }
-                return Err(err);
-            },
-        };
+            }
+            return Err(err);
+        },
+    };
+    let ResolvedCodexRoute {
+        auth_snapshot,
+        selected_account_name,
+        map_gpt53_codex_to_spark,
+        account_request_limit_lease,
+    } = resolved_route;
 
     if is_models_path {
         return respond_local_models(
@@ -3776,15 +3790,16 @@ pub async fn proxy_gateway_request(
         },
     };
 
-    forward_upstream_response(
+    forward_upstream_response(ForwardUpstreamResponseArgs {
         state,
         key_lease,
+        account_request_limit_lease,
         request_limit_lease,
         prepared,
-        response,
+        upstream: response,
         event_context,
         selected_account_name,
-    )
+    })
     .await
 }
 
@@ -3836,13 +3851,21 @@ fn validate_cached_key(key: &LlmGatewayKeyRecord) -> Result<(), (StatusCode, Jso
 /// Group-based routing is the new source of truth. Legacy per-key account
 /// fields remain as a compatibility input only until startup migration has
 /// rewritten older rows.
+struct ResolvedCodexRoute {
+    auth_snapshot: CodexAuthSnapshot,
+    selected_account_name: Option<String>,
+    map_gpt53_codex_to_spark: bool,
+    account_request_limit_lease: CodexAccountRequestLease,
+}
+
 async fn resolve_auth_for_key(
     state: &AppState,
     key: &LlmGatewayKeyRecord,
     record_route_selection: bool,
-) -> Result<(CodexAuthSnapshot, Option<String>, bool), (StatusCode, Json<ErrorResponse>)> {
+) -> Result<ResolvedCodexRoute, (StatusCode, Json<ErrorResponse>)> {
     let pool = &state.llm_gateway.account_pool;
     let strategy = key.route_strategy.as_deref().unwrap_or("auto");
+    let queued_at = Instant::now();
 
     match strategy {
         "fixed" => {
@@ -3863,29 +3886,66 @@ async fn resolve_auth_for_key(
                 }
                 name.to_string()
             };
-            let selected = pool
-                .get_account(&resolved_name)
-                .await
-                .map(|(snapshot, map_gpt53_codex_to_spark)| {
-                    (snapshot, Some(resolved_name.clone()), map_gpt53_codex_to_spark)
-                })
-                .ok_or_else(|| {
-                    auth_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        &format!("bound account `{resolved_name}` is unavailable"),
-                    )
-                })?;
-            if record_route_selection {
-                pool.record_route_selection(&resolved_name).await;
+
+            loop {
+                let candidate = pool
+                    .account_candidate_by_name(&resolved_name)
+                    .await
+                    .ok_or_else(|| {
+                        auth_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            &format!("bound account `{resolved_name}` is unavailable"),
+                        )
+                    })?;
+                match state.llm_gateway.account_request_scheduler.try_acquire(
+                    &candidate.name,
+                    candidate.request_max_concurrency,
+                    candidate.request_min_start_interval_ms,
+                    queued_at,
+                ) {
+                    Ok(account_request_limit_lease) => {
+                        if record_route_selection {
+                            pool.record_route_selection(&resolved_name).await;
+                        }
+                        tracing::info!(
+                            key_id = %key.id,
+                            key_name = %key.name,
+                            strategy = "fixed",
+                            account = %resolved_name,
+                            queue_wait_ms = account_request_limit_lease.waited_ms(),
+                            request_max_concurrency = ?candidate.request_max_concurrency,
+                            request_min_start_interval_ms = ?candidate.request_min_start_interval_ms,
+                            "resolved codex upstream account for key"
+                        );
+                        return Ok(ResolvedCodexRoute {
+                            auth_snapshot: candidate.snapshot,
+                            selected_account_name: Some(resolved_name.clone()),
+                            map_gpt53_codex_to_spark: candidate.map_gpt53_codex_to_spark,
+                            account_request_limit_lease,
+                        });
+                    },
+                    Err(rejection) => {
+                        tracing::warn!(
+                            key_id = %key.id,
+                            key_name = %key.name,
+                            strategy = "fixed",
+                            account = %resolved_name,
+                            reason = rejection.reason,
+                            in_flight = rejection.in_flight,
+                            request_max_concurrency = ?rejection.max_concurrency,
+                            request_min_start_interval_ms = ?rejection.min_start_interval_ms,
+                            wait_ms = rejection.wait.map(|value| value.as_millis() as u64),
+                            elapsed_since_last_start_ms = rejection.elapsed_since_last_start_ms,
+                            "waiting for fixed codex account to clear local scheduler limits"
+                        );
+                        state
+                            .llm_gateway
+                            .account_request_scheduler
+                            .wait_for_available(rejection.wait)
+                            .await;
+                    },
+                }
             }
-            tracing::info!(
-                key_id = %key.id,
-                key_name = %key.name,
-                strategy = "fixed",
-                account = %resolved_name,
-                "resolved codex upstream account for key"
-            );
-            Ok(selected)
         },
         "auto" => {
             let subset_resolution = if let Some(group_id) = key.account_group_id.as_deref() {
@@ -3960,69 +4020,151 @@ async fn resolve_auth_for_key(
                 },
             );
 
-            if let Some(filter) = auto_account_filter.as_ref() {
-                if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
-                    pool.select_best_account(Some(filter)).await
-                {
-                    if record_route_selection {
-                        pool.record_route_selection(&name).await;
+            loop {
+                let candidates = if let Some(filter) = auto_account_filter.as_ref() {
+                    pool.ranked_routable_accounts(Some(filter)).await
+                } else {
+                    pool.ranked_routable_accounts(None).await
+                };
+
+                if candidates.is_empty() {
+                    if auto_account_filter.is_some() {
+                        let configured_subset = subset_resolution
+                            .as_ref()
+                            .map(
+                                |(
+                                    _existing_account_names,
+                                    _missing_names,
+                                    configured_account_names,
+                                )| {
+                                    configured_account_names.clone()
+                                },
+                            )
+                            .unwrap_or_default();
+                        tracing::warn!(
+                            key_id = %key.id,
+                            key_name = %key.name,
+                            account_group_id = ?key.account_group_id,
+                            auto_account_names = ?configured_subset,
+                            "configured codex account group had no usable accounts"
+                        );
+                        return Err(auth_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            &format!(
+                                "configured account group has no usable accounts: {}",
+                                configured_subset.join(", ")
+                            ),
+                        ));
                     }
-                    tracing::info!(
+                    return state
+                        .llm_gateway
+                        .auth_source
+                        .current()
+                        .await
+                        .map(|snapshot| ResolvedCodexRoute {
+                            auth_snapshot: snapshot,
+                            selected_account_name: None,
+                            map_gpt53_codex_to_spark: false,
+                            account_request_limit_lease: CodexAccountRequestLease::untracked(
+                                "legacy",
+                            ),
+                        })
+                        .map_err(|err| {
+                            internal_error("no accounts available and legacy auth failed", err)
+                        });
+                }
+
+                let strategy_label = if key.account_group_id.is_some() {
+                    "auto_group"
+                } else if auto_account_filter.is_some() {
+                    "auto_subset"
+                } else {
+                    "auto_global"
+                };
+                let mut saw_local_limit = false;
+                let mut shortest_wait: Option<Duration> = None;
+                let mut blocked_accounts = Vec::new();
+
+                for candidate in candidates {
+                    match state.llm_gateway.account_request_scheduler.try_acquire(
+                        &candidate.name,
+                        candidate.request_max_concurrency,
+                        candidate.request_min_start_interval_ms,
+                        queued_at,
+                    ) {
+                        Ok(account_request_limit_lease) => {
+                            if record_route_selection {
+                                pool.record_route_selection(&candidate.name).await;
+                            }
+                            tracing::info!(
+                                key_id = %key.id,
+                                key_name = %key.name,
+                                strategy = strategy_label,
+                                selected_account = %candidate.name,
+                                queue_wait_ms = account_request_limit_lease.waited_ms(),
+                                request_max_concurrency = ?candidate.request_max_concurrency,
+                                request_min_start_interval_ms = ?candidate.request_min_start_interval_ms,
+                                account_group_id = ?key.account_group_id,
+                                auto_account_names = ?key.auto_account_names,
+                                "resolved codex upstream account for key"
+                            );
+                            return Ok(ResolvedCodexRoute {
+                                auth_snapshot: candidate.snapshot,
+                                selected_account_name: Some(candidate.name),
+                                map_gpt53_codex_to_spark: candidate.map_gpt53_codex_to_spark,
+                                account_request_limit_lease,
+                            });
+                        },
+                        Err(rejection) => {
+                            saw_local_limit = true;
+                            if let Some(wait) = rejection.wait {
+                                shortest_wait = Some(match shortest_wait {
+                                    Some(current) => current.min(wait),
+                                    None => wait,
+                                });
+                            }
+                            blocked_accounts.push(format!(
+                                "{}: {} in_flight={} request_max_concurrency={} \
+                                 request_min_start_interval_ms={} wait_ms={} \
+                                 elapsed_since_last_start_ms={}",
+                                candidate.name,
+                                rejection.reason,
+                                rejection.in_flight,
+                                rejection
+                                    .max_concurrency
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "unlimited".to_string()),
+                                rejection
+                                    .min_start_interval_ms
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "unlimited".to_string()),
+                                rejection
+                                    .wait
+                                    .map(|value| value.as_millis() as u64)
+                                    .unwrap_or(0),
+                                rejection.elapsed_since_last_start_ms.unwrap_or(0)
+                            ));
+                        },
+                    }
+                }
+
+                if saw_local_limit {
+                    tracing::warn!(
                         key_id = %key.id,
                         key_name = %key.name,
-                        strategy = if key.account_group_id.is_some() { "auto_group" } else { "auto_subset" },
-                        selected_account = %name,
-                        account_group_id = ?key.account_group_id,
-                        auto_account_names = ?key.auto_account_names,
-                        "resolved codex upstream account for key"
+                        strategy = strategy_label,
+                        wait_ms = shortest_wait.map(|value| value.as_millis() as u64).unwrap_or(0),
+                        blocked_accounts = ?blocked_accounts,
+                        "all eligible codex accounts are locally throttled; waiting before retrying"
                     );
-                    return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
+                    state
+                        .llm_gateway
+                        .account_request_scheduler
+                        .wait_for_available(shortest_wait)
+                        .await;
+                    continue;
                 }
-                let configured_subset = subset_resolution
-                    .as_ref()
-                    .map(|(_existing_account_names, _missing_names, configured_account_names)| {
-                        configured_account_names.clone()
-                    })
-                    .unwrap_or_default();
-                tracing::warn!(
-                    key_id = %key.id,
-                    key_name = %key.name,
-                    account_group_id = ?key.account_group_id,
-                    auto_account_names = ?configured_subset,
-                    "configured codex account group had no usable accounts"
-                );
-                return Err(auth_error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    &format!(
-                        "configured account group has no usable accounts: {}",
-                        configured_subset.join(", ")
-                    ),
-                ));
             }
-
-            if let Some((name, snapshot, map_gpt53_codex_to_spark)) =
-                pool.select_best_account(None).await
-            {
-                if record_route_selection {
-                    pool.record_route_selection(&name).await;
-                }
-                tracing::info!(
-                    key_id = %key.id,
-                    key_name = %key.name,
-                    strategy = "auto_global",
-                    selected_account = %name,
-                    auto_account_names = ?key.auto_account_names,
-                    "resolved codex upstream account for key"
-                );
-                return Ok((snapshot, Some(name), map_gpt53_codex_to_spark));
-            }
-            state
-                .llm_gateway
-                .auth_source
-                .current()
-                .await
-                .map(|snapshot| (snapshot, None, false))
-                .map_err(|err| internal_error("no accounts available and legacy auth failed", err))
         },
         _ => Err(bad_request("route_strategy must be `auto` or `fixed`")),
     }
@@ -4256,16 +4398,31 @@ async fn reload_codex_auth_snapshot(
 
 // === Downstream response adaptation ===
 
-/// Adapt the upstream response back into the caller's requested wire format.
-async fn forward_upstream_response(
+struct ForwardUpstreamResponseArgs {
     state: AppState,
     key_lease: Arc<CachedKeyLease>,
+    account_request_limit_lease: CodexAccountRequestLease,
     request_limit_lease: CodexKeyRequestLease,
     prepared: PreparedGatewayRequest,
     upstream: reqwest::Response,
     event_context: Option<LlmGatewayEventContext>,
     selected_account_name: Option<String>,
+}
+
+/// Adapt the upstream response back into the caller's requested wire format.
+async fn forward_upstream_response(
+    args: ForwardUpstreamResponseArgs,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let ForwardUpstreamResponseArgs {
+        state,
+        key_lease,
+        account_request_limit_lease,
+        request_limit_lease,
+        prepared,
+        upstream,
+        event_context,
+        selected_account_name,
+    } = args;
     let status = upstream.status();
     let response_adapter = prepared.response_adapter;
     let upstream_headers = upstream.headers().clone();
@@ -4492,12 +4649,14 @@ async fn forward_upstream_response(
         let gateway = state.llm_gateway.clone();
         let mut shutdown_rx = state.shutdown_rx.clone();
         let stream_key_lease = key_lease.clone();
+        let stream_account_request_limit_lease = account_request_limit_lease;
         let stream_request_limit_lease = request_limit_lease;
         let stream_response_adapter = response_adapter;
         let stream_event_context = event_context.clone();
         let stream_selected_account_name = selected_account_name.clone();
         let stream_prepared = prepared.clone();
         let body_stream = stream! {
+            let _account_request_limit_lease = stream_account_request_limit_lease;
             let _request_limit_lease = stream_request_limit_lease;
             let mut collector = SseUsageCollector::default();
             let mut chat_metadata = types::ChatStreamMetadata::default();
@@ -5460,6 +5619,8 @@ pub async fn import_account(
         id_token,
         map_gpt53_codex_to_spark: false,
         proxy_selection: Default::default(),
+        request_max_concurrency: None,
+        request_min_start_interval_ms: None,
         last_refresh: Some(chrono::Utc::now()),
         status: accounts::AccountStatus::Active,
     };
@@ -5511,10 +5672,15 @@ pub async fn patch_account_settings(
         request.proxy_config_id.as_deref(),
     )
     .map_err(|err| bad_request(&err.to_string()))?;
-    if request.map_gpt53_codex_to_spark.is_none() && proxy_selection.is_none() {
-        return Err(bad_request(
-            "at least one of map_gpt53_codex_to_spark or proxy_mode must be provided",
-        ));
+    let scheduler_settings_requested = request.request_max_concurrency.is_some()
+        || request.request_min_start_interval_ms.is_some()
+        || request.request_max_concurrency_unlimited
+        || request.request_min_start_interval_ms_unlimited;
+    if request.map_gpt53_codex_to_spark.is_none()
+        && proxy_selection.is_none()
+        && !scheduler_settings_requested
+    {
+        return Err(bad_request("at least one account setting field must be provided"));
     }
     if let Some(proxy_selection) = proxy_selection.as_ref() {
         state
@@ -5532,6 +5698,20 @@ pub async fn patch_account_settings(
     if request.map_gpt53_codex_to_spark == Some(true) && !current.rate_limits.is_gpt_pro() {
         return Err(bad_request("Spark mapping is only available for accounts with plan_type=Pro"));
     }
+    let request_max_concurrency = if request.request_max_concurrency_unlimited {
+        Some(None)
+    } else {
+        request.request_max_concurrency.map(Some)
+    };
+    let request_min_start_interval_ms = if request.request_min_start_interval_ms_unlimited {
+        Some(None)
+    } else {
+        request.request_min_start_interval_ms.map(Some)
+    };
+    validate_codex_request_limit_inputs(
+        request_max_concurrency.flatten(),
+        request_min_start_interval_ms.flatten(),
+    )?;
 
     let updated = state
         .llm_gateway
@@ -5539,11 +5719,19 @@ pub async fn patch_account_settings(
         .update_settings(&name, AccountSettingsPatch {
             map_gpt53_codex_to_spark: request.map_gpt53_codex_to_spark,
             proxy_selection,
+            request_max_concurrency,
+            request_min_start_interval_ms,
         })
         .await
         .map_err(|err| internal_error("Failed to update account settings", err))?;
     if !updated {
         return Err(not_found("account not found"));
+    }
+    if scheduler_settings_requested {
+        state
+            .llm_gateway
+            .account_request_scheduler
+            .notify_config_changed();
     }
 
     let summary = state
@@ -5558,6 +5746,8 @@ pub async fn patch_account_settings(
     tracing::info!(
         account = summary.name,
         map_gpt53_codex_to_spark = summary.map_gpt53_codex_to_spark,
+        request_max_concurrency = ?summary.request_max_concurrency,
+        request_min_start_interval_ms = ?summary.request_min_start_interval_ms,
         proxy_mode = %summary.proxy_selection.proxy_mode.as_str(),
         proxy_config_id = ?summary.proxy_selection.proxy_config_id,
         "Updated Codex account settings"
@@ -5640,6 +5830,8 @@ fn account_summary_view_from_summary(
         primary_remaining_percent: summary.rate_limits.primary_remaining_percent(),
         secondary_remaining_percent: summary.rate_limits.secondary_remaining_percent(),
         map_gpt53_codex_to_spark: summary.map_gpt53_codex_to_spark,
+        request_max_concurrency: summary.request_max_concurrency,
+        request_min_start_interval_ms: summary.request_min_start_interval_ms,
         proxy_mode: summary.proxy_selection.proxy_mode.as_str().to_string(),
         proxy_config_id: summary.proxy_selection.proxy_config_id,
         effective_proxy_source,
@@ -5806,6 +5998,8 @@ mod tests {
             },
             last_refresh_ms: Some(1_710_000_110_000),
             map_gpt53_codex_to_spark: false,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             proxy_selection: AccountProxySelection::default(),
         }
     }

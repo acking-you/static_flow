@@ -880,6 +880,8 @@ pub struct AccountSummaryView {
     pub primary_remaining_percent: Option<f64>,
     pub secondary_remaining_percent: Option<f64>,
     pub map_gpt53_codex_to_spark: bool,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub effective_proxy_source: String,
@@ -906,6 +908,12 @@ pub struct PatchAccountSettingsRequest {
     pub proxy_mode: Option<String>,
     pub proxy_config_id: Option<String>,
     pub map_gpt53_codex_to_spark: Option<bool>,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub request_max_concurrency_unlimited: bool,
+    #[serde(default)]
+    pub request_min_start_interval_ms_unlimited: bool,
 }
 
 impl From<&LlmGatewayKeyRecord> for LlmGatewayPublicKeyView {

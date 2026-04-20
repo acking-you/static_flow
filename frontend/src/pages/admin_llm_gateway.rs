@@ -1618,6 +1618,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let importing = use_state(|| false);
     let account_action_inflight = use_state(HashSet::<String>::new);
     let account_proxy_inputs = use_state(BTreeMap::<String, String>::new);
+    let account_request_max_inputs = use_state(BTreeMap::<String, String>::new);
+    let account_request_min_inputs = use_state(BTreeMap::<String, String>::new);
     let show_import_form = use_state(|| false);
     let active_tab = use_state(|| TAB_OVERVIEW.to_string());
     let on_tab_click = {
@@ -1820,6 +1822,8 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_key_filter = usage_key_filter.clone();
         let accounts = accounts.clone();
         let account_proxy_inputs = account_proxy_inputs.clone();
+        let account_request_max_inputs = account_request_max_inputs.clone();
+        let account_request_min_inputs = account_request_min_inputs.clone();
         let reload_usage = reload_usage.clone();
         Callback::from(move |_| {
             let config = config.clone();
@@ -1847,6 +1851,8 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_key_filter = usage_key_filter.clone();
             let accounts = accounts.clone();
             let account_proxy_inputs = account_proxy_inputs.clone();
+            let account_request_max_inputs = account_request_max_inputs.clone();
+            let account_request_min_inputs = account_request_min_inputs.clone();
             let reload_usage = reload_usage.clone();
             loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
@@ -1954,8 +1960,36 @@ pub fn admin_llm_gateway_page() -> Html {
                                 (account.name.clone(), account_proxy_select_value(account))
                             })
                             .collect::<BTreeMap<_, _>>();
+                        let next_request_max_inputs = accounts_resp
+                            .accounts
+                            .iter()
+                            .map(|account| {
+                                (
+                                    account.name.clone(),
+                                    account
+                                        .request_max_concurrency
+                                        .map(|value| value.to_string())
+                                        .unwrap_or_default(),
+                                )
+                            })
+                            .collect::<BTreeMap<_, _>>();
+                        let next_request_min_inputs = accounts_resp
+                            .accounts
+                            .iter()
+                            .map(|account| {
+                                (
+                                    account.name.clone(),
+                                    account
+                                        .request_min_start_interval_ms
+                                        .map(|value| value.to_string())
+                                        .unwrap_or_default(),
+                                )
+                            })
+                            .collect::<BTreeMap<_, _>>();
                         accounts.set(accounts_resp.accounts);
                         account_proxy_inputs.set(next_proxy_inputs);
+                        account_request_max_inputs.set(next_request_max_inputs);
+                        account_request_min_inputs.set(next_request_min_inputs);
                         load_error.set(None);
                         reload_usage.emit((Some(current_page), Some(usage_filter_for_reload)));
                     },
@@ -2940,6 +2974,10 @@ pub fn admin_llm_gateway_page() -> Html {
                         map_gpt53_codex_to_spark: Some(enabled),
                         proxy_mode: None,
                         proxy_config_id: None,
+                        request_max_concurrency: None,
+                        request_min_start_interval_ms: None,
+                        request_max_concurrency_unlimited: false,
+                        request_min_start_interval_ms_unlimited: false,
                     },
                 )
                 .await
@@ -2963,14 +3001,18 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    let on_save_account_proxy = {
+    let on_save_account_settings = {
         let account_action_inflight = account_action_inflight.clone();
         let account_proxy_inputs = account_proxy_inputs.clone();
+        let account_request_max_inputs = account_request_max_inputs.clone();
+        let account_request_min_inputs = account_request_min_inputs.clone();
         let accounts = accounts.clone();
         let load_error = load_error.clone();
         Callback::from(move |account_name: String| {
             let account_action_inflight = account_action_inflight.clone();
             let account_proxy_inputs = account_proxy_inputs.clone();
+            let account_request_max_inputs = account_request_max_inputs.clone();
+            let account_request_min_inputs = account_request_min_inputs.clone();
             let accounts = accounts.clone();
             let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -2978,12 +3020,45 @@ pub fn admin_llm_gateway_page() -> Html {
                     .get(&account_name)
                     .cloned()
                     .unwrap_or_else(|| "inherit".to_string());
+                let request_max_raw = (*account_request_max_inputs)
+                    .get(&account_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let request_min_raw = (*account_request_min_inputs)
+                    .get(&account_name)
+                    .cloned()
+                    .unwrap_or_default();
                 let (proxy_mode, proxy_config_id) = if selection == "direct" {
                     (Some("direct".to_string()), None)
                 } else if let Some(proxy_config_id) = selection.strip_prefix("fixed:") {
                     (Some("fixed".to_string()), Some(proxy_config_id.to_string()))
                 } else {
                     (Some("inherit".to_string()), None)
+                };
+                let request_max_concurrency = if request_max_raw.trim().is_empty() {
+                    None
+                } else {
+                    match request_max_raw.trim().parse::<u64>() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            load_error
+                                .set(Some("账号并发上限必须是整数，留空表示不限制".to_string()));
+                            return;
+                        },
+                    }
+                };
+                let request_min_start_interval_ms = if request_min_raw.trim().is_empty() {
+                    None
+                } else {
+                    match request_min_raw.trim().parse::<u64>() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            load_error.set(Some(
+                                "账号请求起始间隔必须是整数毫秒，留空表示不限制".to_string(),
+                            ));
+                            return;
+                        },
+                    }
                 };
 
                 let mut inflight = (*account_action_inflight).clone();
@@ -2996,6 +3071,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         map_gpt53_codex_to_spark: None,
                         proxy_mode,
                         proxy_config_id,
+                        request_max_concurrency,
+                        request_min_start_interval_ms,
+                        request_max_concurrency_unlimited: request_max_concurrency.is_none(),
+                        request_min_start_interval_ms_unlimited: request_min_start_interval_ms
+                            .is_none(),
                     },
                 )
                 .await
@@ -3012,6 +3092,24 @@ pub fn admin_llm_gateway_page() -> Html {
                         next_inputs
                             .insert(updated.name.clone(), account_proxy_select_value(&updated));
                         account_proxy_inputs.set(next_inputs);
+                        let mut next_request_max_inputs = (*account_request_max_inputs).clone();
+                        next_request_max_inputs.insert(
+                            updated.name.clone(),
+                            updated
+                                .request_max_concurrency
+                                .map(|value| value.to_string())
+                                .unwrap_or_default(),
+                        );
+                        account_request_max_inputs.set(next_request_max_inputs);
+                        let mut next_request_min_inputs = (*account_request_min_inputs).clone();
+                        next_request_min_inputs.insert(
+                            updated.name.clone(),
+                            updated
+                                .request_min_start_interval_ms
+                                .map(|value| value.to_string())
+                                .unwrap_or_default(),
+                        );
+                        account_request_min_inputs.set(next_request_min_inputs);
                         load_error.set(None);
                     },
                     Err(err) => load_error.set(Some(err)),
@@ -4577,7 +4675,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let acc_name_for_delete = acc.name.clone();
                                 let acc_name_for_refresh = acc.name.clone();
                                 let acc_name_for_proxy_change = acc.name.clone();
-                                let acc_name_for_proxy_save = acc.name.clone();
+                                let acc_name_for_settings_save = acc.name.clone();
+                                let acc_name_for_request_max_change = acc.name.clone();
+                                let acc_name_for_request_min_change = acc.name.clone();
                                 let acc_name = acc.name.clone();
                                 let acc_status = acc.status.clone();
                                 let acc_plan_type = acc.plan_type.clone();
@@ -4587,11 +4687,36 @@ pub fn admin_llm_gateway_page() -> Html {
                                     .get(&acc_name)
                                     .cloned()
                                     .unwrap_or_else(|| account_proxy_select_value(acc));
+                                let selected_request_max_value = (*account_request_max_inputs)
+                                    .get(&acc_name)
+                                    .cloned()
+                                    .unwrap_or_else(|| {
+                                        acc.request_max_concurrency
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_default()
+                                    });
+                                let selected_request_min_value = (*account_request_min_inputs)
+                                    .get(&acc_name)
+                                    .cloned()
+                                    .unwrap_or_else(|| {
+                                        acc.request_min_start_interval_ms
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_default()
+                                    });
                                 let configured_proxy_line = account_configured_proxy_label(acc);
                                 let effective_proxy_line = format!(
                                     "effective: {} · {}",
                                     acc.effective_proxy_source,
                                     acc.effective_proxy_url.clone().unwrap_or_else(|| "direct".to_string())
+                                );
+                                let scheduler_line = format!(
+                                    "scheduler: concurrency {} · start interval {}",
+                                    acc.request_max_concurrency
+                                        .map(|value| value.to_string())
+                                        .unwrap_or_else(|| "∞".to_string()),
+                                    acc.request_min_start_interval_ms
+                                        .map(|value| format!("{} ms", value))
+                                        .unwrap_or_else(|| "∞".to_string())
                                 );
                                 let last_refresh_line = acc
                                     .last_refresh
@@ -4609,7 +4734,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let on_refresh_account = on_refresh_account.clone();
                                 let on_toggle_account_spark_mapping =
                                     on_toggle_account_spark_mapping.clone();
-                                let on_save_account_proxy = on_save_account_proxy.clone();
+                                let on_save_account_settings = on_save_account_settings.clone();
                                 let primary_pct = acc.primary_remaining_percent
                                     .map(|v| format!("{:.0}%", v))
                                     .unwrap_or_else(|| "-".to_string());
@@ -4645,6 +4770,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         { format!(" · {}", proxy_name) }
                                                     }
                                                 </div>
+                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                    { scheduler_line.clone() }
+                                                </div>
                                                 <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]", "flex", "gap-3", "flex-wrap")}>
                                                     <span>{ format!("token refresh {}", last_refresh_line) }</span>
                                                     <span>{ format!("usage checked {}", last_usage_checked_line) }</span>
@@ -4662,6 +4790,38 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 { format!("5h {} / wk {}", primary_pct, secondary_pct) }
                                             </span>
                                             <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                <input
+                                                    type="number"
+                                                    class={classes!("w-28", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-2", "text-xs")}
+                                                    placeholder="账号并发"
+                                                    value={selected_request_max_value.clone()}
+                                                    oninput={{
+                                                        let account_request_max_inputs = account_request_max_inputs.clone();
+                                                        Callback::from(move |event: InputEvent| {
+                                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                                let mut next = (*account_request_max_inputs).clone();
+                                                                next.insert(acc_name_for_request_max_change.clone(), target.value());
+                                                                account_request_max_inputs.set(next);
+                                                            }
+                                                        })
+                                                    }}
+                                                />
+                                                <input
+                                                    type="number"
+                                                    class={classes!("w-32", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-2", "text-xs")}
+                                                    placeholder="账号间隔 ms"
+                                                    value={selected_request_min_value.clone()}
+                                                    oninput={{
+                                                        let account_request_min_inputs = account_request_min_inputs.clone();
+                                                        Callback::from(move |event: InputEvent| {
+                                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                                let mut next = (*account_request_min_inputs).clone();
+                                                                next.insert(acc_name_for_request_min_change.clone(), target.value());
+                                                                account_request_min_inputs.set(next);
+                                                            }
+                                                        })
+                                                    }}
+                                                />
                                                 <select
                                                     class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-xs")}
                                                     value={selected_proxy_value.clone()}
@@ -4689,10 +4849,10 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 </select>
                                                 <button
                                                     class={classes!("btn-terminal")}
-                                                    onclick={Callback::from(move |_| on_save_account_proxy.emit(acc_name_for_proxy_save.clone()))}
+                                                    onclick={Callback::from(move |_| on_save_account_settings.emit(acc_name_for_settings_save.clone()))}
                                                     disabled={account_busy}
                                                 >
-                                                    { if account_busy { "处理中..." } else { "保存代理" } }
+                                                    { if account_busy { "处理中..." } else { "保存设置" } }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-terminal")}

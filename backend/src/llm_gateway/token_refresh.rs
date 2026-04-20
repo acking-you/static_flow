@@ -435,6 +435,8 @@ mod tests {
                 proxy_mode: AccountProxyMode::Direct,
                 proxy_config_id: None,
             },
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             last_refresh: None,
             status,
         }

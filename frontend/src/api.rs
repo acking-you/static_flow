@@ -7082,6 +7082,8 @@ pub struct AccountSummaryView {
     pub primary_remaining_percent: Option<f64>,
     pub secondary_remaining_percent: Option<f64>,
     pub map_gpt53_codex_to_spark: bool,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub effective_proxy_source: String,
@@ -7103,6 +7105,8 @@ impl Default for AccountSummaryView {
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
             map_gpt53_codex_to_spark: false,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -7167,6 +7171,8 @@ pub async fn import_admin_llm_gateway_account(
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
             map_gpt53_codex_to_spark: false,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -7237,6 +7243,10 @@ pub struct PatchAdminLlmGatewayAccountInput {
     pub map_gpt53_codex_to_spark: Option<bool>,
     pub proxy_mode: Option<String>,
     pub proxy_config_id: Option<String>,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
+    pub request_max_concurrency_unlimited: bool,
+    pub request_min_start_interval_ms_unlimited: bool,
 }
 
 pub async fn patch_admin_llm_gateway_account(
@@ -7253,6 +7263,8 @@ pub async fn patch_admin_llm_gateway_account(
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
             map_gpt53_codex_to_spark: input.map_gpt53_codex_to_spark.unwrap_or(false),
+            request_max_concurrency: input.request_max_concurrency,
+            request_min_start_interval_ms: input.request_min_start_interval_ms,
             proxy_mode: input
                 .proxy_mode
                 .clone()
@@ -7300,6 +7312,8 @@ pub async fn refresh_admin_llm_gateway_account(name: &str) -> Result<AccountSumm
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
             map_gpt53_codex_to_spark: false,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),

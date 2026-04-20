@@ -20,7 +20,7 @@ use static_flow_shared::llm_gateway_store::{
     LlmGatewayUsageEventRecord,
 };
 use tokio::{
-    sync::{mpsc, watch, RwLock as AsyncRwLock},
+    sync::{mpsc, watch, Notify, RwLock as AsyncRwLock},
     time::MissedTickBehavior,
 };
 
@@ -97,6 +97,7 @@ pub struct LlmGatewayRuntimeState {
     pub(crate) account_pool: Arc<AccountPool>,
     pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     pub(crate) key_cache: Arc<LlmGatewayKeyCache>,
+    pub(crate) account_request_scheduler: Arc<CodexAccountRequestScheduler>,
     pub(crate) request_scheduler: Arc<LlmGatewayKeyRequestScheduler>,
     pub(crate) rate_limit_status: Arc<RwLock<LlmGatewayRateLimitStatusResponse>>,
     /// In-memory per-key usage rollups aggregated from usage events.
@@ -136,6 +137,7 @@ impl LlmGatewayRuntimeState {
             account_pool,
             upstream_proxy_registry,
             key_cache: Arc::new(LlmGatewayKeyCache::new()),
+            account_request_scheduler: CodexAccountRequestScheduler::new(),
             request_scheduler: Arc::new(LlmGatewayKeyRequestScheduler::new()),
             rate_limit_status: Arc::new(RwLock::new(LlmGatewayRateLimitStatusResponse {
                 status: "loading".to_string(),
@@ -522,6 +524,173 @@ fn apply_event_to_rollup(
             .map(|current| current.max(event.created_at))
             .unwrap_or(event.created_at),
     );
+}
+
+#[derive(Debug, Clone)]
+struct AccountRequestState {
+    in_flight: usize,
+    next_start_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CodexAccountRequestLimitRejection {
+    pub reason: &'static str,
+    pub in_flight: usize,
+    pub max_concurrency: Option<u64>,
+    pub min_start_interval_ms: Option<u64>,
+    pub wait: Option<Duration>,
+    pub elapsed_since_last_start_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CodexAccountRequestScheduler {
+    states: Arc<Mutex<HashMap<String, AccountRequestState>>>,
+    notify: Arc<Notify>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodexAccountRequestLease {
+    scheduler: Option<Arc<CodexAccountRequestScheduler>>,
+    account_name: String,
+    released: bool,
+    waited_ms: u64,
+}
+
+impl CodexAccountRequestScheduler {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            states: Arc::new(Mutex::new(HashMap::new())),
+            notify: Arc::new(Notify::new()),
+        })
+    }
+
+    pub(crate) fn try_acquire(
+        self: &Arc<Self>,
+        account_name: &str,
+        max_concurrency: Option<u64>,
+        min_start_interval_ms: Option<u64>,
+        queued_at: Instant,
+    ) -> Result<CodexAccountRequestLease, CodexAccountRequestLimitRejection> {
+        let max_concurrency = max_concurrency.filter(|value| *value > 0);
+        if max_concurrency.is_none() && min_start_interval_ms.is_none() {
+            return Ok(CodexAccountRequestLease {
+                scheduler: None,
+                account_name: account_name.to_string(),
+                released: false,
+                waited_ms: queued_at.elapsed().as_millis() as u64,
+            });
+        }
+
+        let now = Instant::now();
+        let mut states = self.states.lock();
+        let state = states
+            .entry(account_name.to_string())
+            .or_insert_with(|| AccountRequestState {
+                in_flight: 0,
+                next_start_at: now,
+            });
+
+        if let Some(limit) = max_concurrency {
+            if state.in_flight >= limit as usize {
+                return Err(CodexAccountRequestLimitRejection {
+                    reason: "local_concurrency_limit",
+                    in_flight: state.in_flight,
+                    max_concurrency,
+                    min_start_interval_ms,
+                    wait: None,
+                    elapsed_since_last_start_ms: None,
+                });
+            }
+        }
+
+        if let Some(interval_ms) = min_start_interval_ms {
+            if now < state.next_start_at {
+                let wait = state.next_start_at.saturating_duration_since(now);
+                let elapsed_since_last_start_ms =
+                    interval_ms.saturating_sub(wait.as_millis() as u64);
+                return Err(CodexAccountRequestLimitRejection {
+                    reason: "local_start_interval",
+                    in_flight: state.in_flight,
+                    max_concurrency,
+                    min_start_interval_ms,
+                    wait: Some(wait),
+                    elapsed_since_last_start_ms: Some(elapsed_since_last_start_ms),
+                });
+            }
+        }
+
+        state.in_flight += 1;
+        state.next_start_at = min_start_interval_ms
+            .map(|value| now + Duration::from_millis(value))
+            .unwrap_or(now);
+
+        Ok(CodexAccountRequestLease {
+            scheduler: Some(self.clone()),
+            account_name: account_name.to_string(),
+            released: false,
+            waited_ms: queued_at.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub(crate) async fn wait_for_available(&self, wait: Option<Duration>) {
+        match wait {
+            Some(duration) => {
+                tokio::select! {
+                    _ = self.notify.notified() => {},
+                    _ = tokio::time::sleep(duration) => {},
+                }
+            },
+            None => self.notify.notified().await,
+        }
+    }
+
+    pub(crate) fn notify_config_changed(&self) {
+        self.notify.notify_waiters();
+    }
+
+    fn release(&self, account_name: &str) {
+        let now = Instant::now();
+        let mut states = self.states.lock();
+        let remove_entry = if let Some(state) = states.get_mut(account_name) {
+            if state.in_flight > 0 {
+                state.in_flight -= 1;
+            }
+            state.in_flight == 0 && state.next_start_at <= now
+        } else {
+            false
+        };
+        if remove_entry {
+            states.remove(account_name);
+        }
+        self.notify.notify_waiters();
+    }
+}
+
+impl CodexAccountRequestLease {
+    pub(crate) fn untracked(account_name: impl Into<String>) -> Self {
+        Self {
+            scheduler: None,
+            account_name: account_name.into(),
+            released: false,
+            waited_ms: 0,
+        }
+    }
+
+    pub(crate) fn waited_ms(&self) -> u64 {
+        self.waited_ms
+    }
+}
+
+impl Drop for CodexAccountRequestLease {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        if let Some(scheduler) = self.scheduler.as_ref() {
+            scheduler.release(&self.account_name);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1035,6 +1204,59 @@ mod tests {
         assert_eq!(pacing_rejection.min_start_interval_ms, Some(250));
         assert!(pacing_rejection.wait.is_some());
         assert!(pacing_rejection.elapsed_since_last_start_ms.is_some());
+    }
+
+    #[test]
+    fn codex_account_request_scheduler_allows_unlimited_accounts_without_tracking() {
+        let scheduler = CodexAccountRequestScheduler::new();
+        let queued_at = Instant::now();
+        let lease = scheduler
+            .try_acquire("alpha", None, None, queued_at)
+            .expect("unlimited account should acquire immediately");
+        assert_eq!(lease.account_name, "alpha");
+        assert!(lease.scheduler.is_none());
+    }
+
+    #[test]
+    fn codex_account_request_scheduler_enforces_per_account_concurrency_and_spacing() {
+        let scheduler = CodexAccountRequestScheduler::new();
+        let queued_at = Instant::now();
+        let first = scheduler
+            .try_acquire("alpha", Some(1), Some(200), queued_at)
+            .expect("first request should acquire");
+
+        let blocked = scheduler
+            .try_acquire("alpha", Some(1), Some(200), queued_at)
+            .expect_err("second in-flight request should be rejected");
+        assert_eq!(blocked.reason, "local_concurrency_limit");
+        assert_eq!(blocked.in_flight, 1);
+        assert_eq!(blocked.max_concurrency, Some(1));
+        assert_eq!(blocked.min_start_interval_ms, Some(200));
+
+        drop(first);
+
+        let pacing = scheduler
+            .try_acquire("alpha", Some(1), Some(200), queued_at)
+            .expect_err("account restart should honor min start interval");
+        assert_eq!(pacing.reason, "local_start_interval");
+        assert_eq!(pacing.in_flight, 0);
+        assert_eq!(pacing.max_concurrency, Some(1));
+        assert_eq!(pacing.min_start_interval_ms, Some(200));
+        assert!(pacing.wait.is_some());
+        assert!(pacing.elapsed_since_last_start_ms.is_some());
+    }
+
+    #[test]
+    fn codex_account_request_scheduler_is_isolated_per_account() {
+        let scheduler = CodexAccountRequestScheduler::new();
+        let queued_at = Instant::now();
+        let first = scheduler
+            .try_acquire("alpha", Some(1), Some(0), queued_at)
+            .expect("alpha should acquire");
+        scheduler
+            .try_acquire("beta", Some(1), Some(0), queued_at)
+            .expect("beta should remain available");
+        drop(first);
     }
 
     #[tokio::test]
