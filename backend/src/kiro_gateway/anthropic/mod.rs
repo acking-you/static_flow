@@ -55,9 +55,7 @@ use self::{
         NormalizationEvent, NormalizedRequest, ResolvedConversationId, SessionFallbackReason,
         SessionIdSource, SessionTracking, ToolNormalizationEvent,
     },
-    stream::{
-        split_inline_thinking_content, BufferedStreamContext, InlineThinkingBlock, StreamContext,
-    },
+    stream::{build_inline_thinking_content_blocks, BufferedStreamContext, StreamContext},
     types::{
         CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Metadata, Model,
         ModelsResponse, OutputConfig, Thinking,
@@ -146,6 +144,7 @@ struct NonStreamRequestContext {
     input_tokens: i32,
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
+    structured_output_tool_name: Option<String>,
     request_validation_enabled: bool,
     simulation: KiroSimulationRequestContext,
 }
@@ -374,7 +373,13 @@ fn log_targeted_request_rewrite_debug(
         thinking_effort = payload
             .output_config
             .as_ref()
-            .map(|config| config.effort.as_str())
+            .map(|config| config.effective_effort())
+            .unwrap_or(""),
+        output_format_type = payload
+            .output_config
+            .as_ref()
+            .and_then(|config| config.format.as_ref())
+            .map(|format| format.format_type.as_str())
             .unwrap_or(""),
         raw_client_contains_billing_header = request_body_contains_volatile_claude_code_marker(
             event_context.client_request_body_json.as_deref()
@@ -1381,6 +1386,15 @@ fn build_assistant_message(content: String, tool_uses: Vec<ToolUseEntry>) -> Ass
     assistant
 }
 
+fn canonicalize_structured_output_json(input: &str) -> String {
+    let value = if input.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}))
+    };
+    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+}
+
 fn record_successful_kiro_prefix_state(
     state: &AppState,
     simulation: &KiroSimulationRequestContext,
@@ -1766,6 +1780,7 @@ async fn handle_messages(
     }
     let has_history_images = conversion.has_history_images;
     let tool_name_map = conversion.tool_name_map;
+    let structured_output_tool_name = conversion.structured_output_tool_name;
     let (conversation_state, session_tracking, simulation) = prepare_simulation_request_context(
         &state,
         runtime_config,
@@ -1914,6 +1929,7 @@ async fn handle_messages(
                     input_tokens,
                     thinking_enabled,
                     tool_name_map,
+                    structured_output_tool_name.clone(),
                 ),
             )
             .await;
@@ -1932,6 +1948,7 @@ async fn handle_messages(
                 input_tokens,
                 thinking_enabled,
                 tool_name_map,
+                structured_output_tool_name.clone(),
             ),
         )
         .await;
@@ -1970,6 +1987,7 @@ async fn handle_messages(
             input_tokens,
             thinking_enabled,
             tool_name_map,
+            structured_output_tool_name,
             request_validation_enabled,
             simulation,
         },
@@ -2212,6 +2230,7 @@ async fn handle_non_stream_request(
     let mut tool_use_orders = std::collections::HashMap::<String, usize>::new();
     let mut next_tool_use_order = 0usize;
     let mut structured_tool_uses = Vec::<(usize, ToolUseEntry)>::new();
+    let mut structured_output_text = None::<String>;
     for result in decoder.decode_iter() {
         match result {
             Ok(frame) => match Event::from_frame(frame) {
@@ -2229,6 +2248,11 @@ async fn handle_non_stream_request(
                         .or_default();
                     buffer.push_str(&event.input);
                     if event.stop {
+                        if request_ctx.structured_output_tool_name.as_deref() == Some(&event.name) {
+                            structured_output_text =
+                                Some(canonicalize_structured_output_json(buffer));
+                            continue;
+                        }
                         let input = if buffer.is_empty() {
                             serde_json::json!({})
                         } else {
@@ -2297,6 +2321,11 @@ async fn handle_non_stream_request(
         }
     }
 
+    if let Some(json_text) = structured_output_text {
+        text_content = json_text;
+        tool_uses.clear();
+        structured_tool_uses.clear();
+    }
     if !tool_uses.is_empty() && stop_reason == "end_turn" {
         stop_reason = "tool_use".to_string();
     }
@@ -2308,19 +2337,11 @@ async fn handle_non_stream_request(
             .map(|(_, tool_use)| tool_use)
             .collect(),
     );
-    let mut content = Vec::new();
-    for block in split_inline_thinking_content(&text_content, request_ctx.thinking_enabled) {
-        match block {
-            InlineThinkingBlock::Thinking(thinking) => {
-                content.push(serde_json::json!({"type":"thinking","thinking":thinking}));
-            },
-            InlineThinkingBlock::Text(text) => {
-                if !text.is_empty() {
-                    content.push(serde_json::json!({"type":"text","text":text}));
-                }
-            },
-        }
-    }
+    let mut content = build_inline_thinking_content_blocks(
+        &text_content,
+        &request_ctx.model,
+        request_ctx.thinking_enabled,
+    );
     content.extend(tool_uses);
     let emitted_non_thinking_block = content.iter().any(|block| {
         block
@@ -2955,10 +2976,14 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
         thinking_type: if is_opus_46 { "adaptive".to_string() } else { "enabled".to_string() },
         budget_tokens: 20_000,
     });
-    if is_opus_46 && payload.output_config.is_none() {
-        payload.output_config = Some(OutputConfig {
-            effort: "xhigh".to_string(),
+    if is_opus_46 {
+        let output_config = payload.output_config.get_or_insert(OutputConfig {
+            effort: None,
+            format: None,
         });
+        if output_config.effort.is_none() {
+            output_config.effort = Some("xhigh".to_string());
+        }
     }
 }
 
@@ -3208,7 +3233,7 @@ mod tests {
             payload
                 .output_config
                 .as_ref()
-                .map(|config| config.effort.as_str()),
+                .and_then(|config| config.effort.as_deref()),
             Some("xhigh")
         );
     }
@@ -3217,7 +3242,8 @@ mod tests {
     fn thinking_suffix_preserves_existing_opus_46_effort() {
         let mut payload = base_request("claude-opus-4-6-thinking");
         payload.output_config = Some(OutputConfig {
-            effort: "max".to_string(),
+            effort: Some("max".to_string()),
+            format: None,
         });
 
         override_thinking_from_model_name(&mut payload);
@@ -3229,8 +3255,38 @@ mod tests {
             payload
                 .output_config
                 .as_ref()
-                .map(|config| config.effort.as_str()),
+                .and_then(|config| config.effort.as_deref()),
             Some("max")
+        );
+    }
+
+    #[test]
+    fn thinking_suffix_preserves_existing_output_format_when_backfilling_effort() {
+        let mut payload = base_request("claude-opus-4-6-thinking");
+        payload.output_config = Some(OutputConfig {
+            effort: None,
+            format: Some(types::OutputFormat {
+                format_type: "json_schema".to_string(),
+                schema: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "result": { "type": "integer" }
+                    },
+                    "required": ["result"],
+                    "additionalProperties": false
+                })),
+            }),
+        });
+
+        override_thinking_from_model_name(&mut payload);
+
+        let output_config = payload.output_config.expect("output_config should remain");
+        assert_eq!(output_config.effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            output_config
+                .json_schema()
+                .expect("json schema should remain preserved")["required"],
+            json!(["result"])
         );
     }
 
@@ -3288,7 +3344,8 @@ mod tests {
             budget_tokens: 8192,
         });
         payload.output_config = Some(OutputConfig {
-            effort: "medium".to_string(),
+            effort: Some("medium".to_string()),
+            format: None,
         });
 
         override_thinking_from_model_name(&mut payload);
@@ -3300,7 +3357,7 @@ mod tests {
             payload
                 .output_config
                 .as_ref()
-                .map(|config| config.effort.as_str()),
+                .and_then(|config| config.effort.as_deref()),
             Some("medium")
         );
     }

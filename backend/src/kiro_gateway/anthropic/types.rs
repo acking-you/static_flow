@@ -112,14 +112,36 @@ where
 /// `low`/`medium`, `high`, and `xhigh`/`max`.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OutputConfig {
-    #[serde(default = "default_effort")]
-    pub effort: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<OutputFormat>,
 }
 
-fn default_effort() -> String {
-    // Keep `xhigh` as the implicit default for adaptive thinking when the
-    // caller enables thinking but omits an explicit effort level.
-    "xhigh".to_string()
+impl OutputConfig {
+    pub fn effective_effort(&self) -> &str {
+        self.effort.as_deref().unwrap_or("xhigh")
+    }
+
+    pub fn json_schema(&self) -> Option<&serde_json::Value> {
+        self.format.as_ref().and_then(OutputFormat::json_schema)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct OutputFormat {
+    #[serde(rename = "type")]
+    pub format_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
+}
+
+impl OutputFormat {
+    pub fn json_schema(&self) -> Option<&serde_json::Value> {
+        (self.format_type == "json_schema")
+            .then_some(self.schema.as_ref())
+            .flatten()
+    }
 }
 
 /// Optional request metadata (e.g. session tracking via `user_id`).
@@ -303,4 +325,37 @@ pub struct CountTokensRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CountTokensResponse {
     pub input_tokens: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::OutputConfig;
+
+    #[test]
+    fn output_config_preserves_json_schema_format_without_default_effort() {
+        let config: OutputConfig = serde_json::from_value(json!({
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "result": { "type": "integer" }
+                    },
+                    "required": ["result"],
+                    "additionalProperties": false
+                }
+            }
+        }))
+        .expect("format-only output_config should deserialize");
+
+        assert!(config.effort.is_none());
+        assert_eq!(
+            config
+                .json_schema()
+                .expect("json_schema format should be preserved")["required"],
+            json!(["result"])
+        );
+    }
 }

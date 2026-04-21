@@ -9,6 +9,8 @@ use std::{
     ops::Range,
 };
 
+use base64::Engine as _;
+use lopdf::Document as PdfDocument;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -98,6 +100,12 @@ const SYSTEM_CHUNKED_POLICY: &str =
     "When the Write or Edit tool has content size limits, always comply silently. Never suggest \
      bypassing these limits via alternative tools. Never ask the user whether to switch \
      approaches. Complete all chunked operations without commentary.";
+const PDF_DOCUMENT_OPEN_TAG: &str = "<document media_type=\"application/pdf\">";
+const PDF_DOCUMENT_CLOSE_TAG: &str = "</document>";
+const STRUCTURED_OUTPUT_TOOL_NAME_BASE: &str = "sf_emit_structured_output";
+const STRUCTURED_OUTPUT_TOOL_DESCRIPTION: &str =
+    "Return the final answer as structured JSON that exactly matches the provided schema. Call \
+     this tool exactly once and do not emit any free-form text outside the tool call.";
 
 /// Maps an Anthropic model name (e.g. `"claude-sonnet-4-6"`) to the
 /// canonical Kiro model identifier. Returns `None` for unrecognized models.
@@ -139,6 +147,7 @@ pub struct ConversionResult {
     pub tool_name_map: HashMap<String, String>,
     pub session_tracking: SessionTracking,
     pub has_history_images: bool,
+    pub structured_output_tool_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +334,7 @@ fn normalize_message(
     message: &super::types::Message,
     message_index: usize,
     events: &mut Vec<NormalizationEvent>,
-) -> Option<super::types::Message> {
+) -> Result<Option<super::types::Message>, ConversionError> {
     match &message.content {
         serde_json::Value::String(text) => {
             if message.role == "assistant" && text.trim().is_empty() {
@@ -338,20 +347,34 @@ fn normalize_message(
                     "drop_message",
                     "whitespace_only_string_message",
                 );
-                None
+                Ok(None)
             } else {
-                Some(message.clone())
+                Ok(Some(message.clone()))
             }
         },
         serde_json::Value::Array(items) => {
-            let mut dropped_blocks = Vec::new();
+            let mut retained_items = Vec::with_capacity(items.len());
+            let mut normalized_any = false;
             for (block_index, item) in items.iter().enumerate() {
                 let Some(obj) = item.as_object() else {
+                    retained_items.push(item.clone());
                     continue;
                 };
                 let Some(block_type) = obj.get("type").and_then(serde_json::Value::as_str) else {
+                    retained_items.push(item.clone());
                     continue;
                 };
+
+                if message.role == "user" && block_type == "document" {
+                    retained_items.push(normalize_user_document_block(
+                        obj,
+                        message_index,
+                        block_index,
+                        events,
+                    )?);
+                    normalized_any = true;
+                    continue;
+                }
 
                 let drop_reason = match block_type {
                     "text" => obj
@@ -368,42 +391,31 @@ fn normalize_message(
                 };
 
                 if let Some(reason) = drop_reason {
-                    dropped_blocks.push((block_index, block_type, reason));
+                    push_normalization_event(
+                        events,
+                        message_index,
+                        &message.role,
+                        Some(block_index),
+                        Some(block_type),
+                        "drop_content_block",
+                        reason,
+                    );
+                    normalized_any = true;
+                    continue;
                 }
+
+                retained_items.push(item.clone());
             }
 
-            if dropped_blocks.is_empty() {
-                return Some(message.clone());
+            if !normalized_any {
+                return Ok(Some(message.clone()));
             }
-
-            let retained_items = items
-                .iter()
-                .enumerate()
-                .filter(|(block_index, _)| {
-                    !dropped_blocks
-                        .iter()
-                        .any(|(dropped_index, _, _)| dropped_index == block_index)
-                })
-                .map(|(_, item)| item.clone())
-                .collect::<Vec<_>>();
 
             // Keep user-only whitespace turns intact so the explicit
             // request-validation toggle still controls whether those payloads
             // are accepted. Only assistant-side no-op turns are removed here.
             if retained_items.is_empty() && message.role != "assistant" {
-                return Some(message.clone());
-            }
-
-            for (block_index, block_type, reason) in dropped_blocks {
-                push_normalization_event(
-                    events,
-                    message_index,
-                    &message.role,
-                    Some(block_index),
-                    Some(block_type),
-                    "drop_content_block",
-                    reason,
-                );
+                return Ok(Some(message.clone()));
             }
 
             if retained_items.is_empty() {
@@ -416,15 +428,353 @@ fn normalize_message(
                     "drop_message",
                     "message_became_empty_after_normalization",
                 );
-                None
+                Ok(None)
             } else {
                 let mut normalized = message.clone();
                 normalized.content = serde_json::Value::Array(retained_items);
-                Some(normalized)
+                Ok(Some(normalized))
             }
         },
-        _ => Some(message.clone()),
+        _ => Ok(Some(message.clone())),
     }
+}
+
+fn normalize_user_document_block(
+    block: &serde_json::Map<String, serde_json::Value>,
+    message_index: usize,
+    block_index: usize,
+    events: &mut Vec<NormalizationEvent>,
+) -> Result<serde_json::Value, ConversionError> {
+    let Some(source) = block.get("source").and_then(serde_json::Value::as_object) else {
+        return Err(invalid_request(format!(
+            "message {message_index} document block {block_index} is missing source"
+        )));
+    };
+    let Some(source_type) = source
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(invalid_request(format!(
+            "message {message_index} document block {block_index} is missing source.type"
+        )));
+    };
+    if source_type != "base64" {
+        return Err(invalid_request(format!(
+            "message {message_index} document block {block_index} must use source.type=`base64`"
+        )));
+    }
+
+    let Some(media_type) = source
+        .get("media_type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(invalid_request(format!(
+            "message {message_index} document block {block_index} is missing source.media_type"
+        )));
+    };
+    if media_type != "application/pdf" {
+        return Err(invalid_request(format!(
+            "message {message_index} document block {block_index} only supports \
+             source.media_type=`application/pdf`"
+        )));
+    }
+
+    let Some(encoded_pdf) = source
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(invalid_request(format!(
+            "message {message_index} document block {block_index} is missing source.data"
+        )));
+    };
+
+    let extracted_text = extract_pdf_document_text(encoded_pdf).map_err(|reason| {
+        invalid_request(format!(
+            "message {message_index} document block {block_index} could not be converted from \
+             PDF: {reason}"
+        ))
+    })?;
+
+    push_normalization_event(
+        events,
+        message_index,
+        "user",
+        Some(block_index),
+        Some("document"),
+        "rewrite_content_block",
+        "pdf_document_converted_to_text",
+    );
+
+    Ok(serde_json::json!({
+        "type": "text",
+        "text": format!(
+            "{PDF_DOCUMENT_OPEN_TAG}\n{extracted_text}\n{PDF_DOCUMENT_CLOSE_TAG}"
+        )
+    }))
+}
+
+fn extract_pdf_document_text(encoded_pdf: &str) -> Result<String, String> {
+    let pdf_bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded_pdf.as_bytes())
+        .map_err(|err| format!("invalid base64 payload: {err}"))?;
+    let document = load_pdf_document_with_xref_repair(&pdf_bytes)
+        .map_err(|err| format!("invalid PDF payload: {err}"))?;
+    let page_numbers = document.get_pages().into_keys().collect::<Vec<_>>();
+    if page_numbers.is_empty() {
+        return Err("pdf has no pages".to_string());
+    }
+
+    let text = document
+        .extract_text(&page_numbers)
+        .map_err(|err| format!("failed to extract PDF text: {err}"))?;
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return Err("pdf contained no extractable text".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn load_pdf_document_with_xref_repair(pdf_bytes: &[u8]) -> Result<PdfDocument, String> {
+    match PdfDocument::load_mem(pdf_bytes) {
+        Ok(document) => Ok(document),
+        Err(primary_err) => {
+            let repaired = repair_pdf_xref(pdf_bytes).ok_or_else(|| primary_err.to_string())?;
+            PdfDocument::load_mem(&repaired).map_err(|secondary_err| {
+                format!(
+                    "{primary_err}; xref repair failed to produce a readable PDF: {secondary_err}"
+                )
+            })
+        },
+    }
+}
+
+fn repair_pdf_xref(pdf_bytes: &[u8]) -> Option<Vec<u8>> {
+    let object_offsets = scan_indirect_object_offsets(pdf_bytes);
+    if object_offsets.is_empty() {
+        return None;
+    }
+
+    let root_reference = find_named_reference(pdf_bytes, b"/Root")
+        .or_else(|| find_catalog_reference(pdf_bytes, &object_offsets))?;
+    let max_object_id = *object_offsets.keys().max()?;
+    let mut repaired = pdf_bytes.to_vec();
+    if !repaired.ends_with(b"\n") {
+        repaired.push(b'\n');
+    }
+
+    let xref_start = repaired.len();
+    repaired.extend_from_slice(format!("xref\n0 {}\n", max_object_id + 1).as_bytes());
+    repaired.extend_from_slice(b"0000000000 65535 f \n");
+    for object_id in 1..=max_object_id {
+        if let Some((offset, generation)) = object_offsets.get(&object_id) {
+            repaired.extend_from_slice(format!("{offset:010} {generation:05} n \n").as_bytes());
+        } else {
+            repaired.extend_from_slice(b"0000000000 00000 f \n");
+        }
+    }
+    repaired.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root {} {} R >>\nstartxref\n{}\n%%EOF\n",
+            max_object_id + 1,
+            root_reference.0,
+            root_reference.1,
+            xref_start
+        )
+        .as_bytes(),
+    );
+    Some(repaired)
+}
+
+fn scan_indirect_object_offsets(pdf_bytes: &[u8]) -> BTreeMap<u32, (usize, u16)> {
+    let mut offsets = BTreeMap::new();
+    let mut index = 0;
+
+    while index < pdf_bytes.len() {
+        if !pdf_bytes[index].is_ascii_digit()
+            || (index > 0 && pdf_bytes[index - 1].is_ascii_digit())
+        {
+            index += 1;
+            continue;
+        }
+
+        let object_start = index;
+        let Some((object_id, after_object_id)) = parse_unsigned_pdf_integer(pdf_bytes, index)
+        else {
+            index += 1;
+            continue;
+        };
+        let Some(after_object_ws) = skip_required_pdf_whitespace(pdf_bytes, after_object_id) else {
+            index += 1;
+            continue;
+        };
+        let Some((generation, after_generation)) =
+            parse_unsigned_pdf_integer(pdf_bytes, after_object_ws)
+        else {
+            index += 1;
+            continue;
+        };
+        let Some(after_generation_ws) = skip_required_pdf_whitespace(pdf_bytes, after_generation)
+        else {
+            index += 1;
+            continue;
+        };
+
+        if pdf_bytes.get(after_generation_ws..after_generation_ws + 3) != Some(b"obj")
+            || pdf_bytes
+                .get(after_generation_ws + 3)
+                .is_some_and(|byte| is_pdf_name_char(*byte))
+        {
+            index += 1;
+            continue;
+        }
+
+        let generation = match u16::try_from(generation) {
+            Ok(value) => value,
+            Err(_) => {
+                index += 1;
+                continue;
+            },
+        };
+        offsets
+            .entry(object_id)
+            .or_insert((object_start, generation));
+        index = after_generation_ws + 3;
+    }
+
+    offsets
+}
+
+fn find_named_reference(pdf_bytes: &[u8], name: &[u8]) -> Option<(u32, u16)> {
+    let mut index = 0;
+    let mut last_match = None;
+
+    while let Some(relative_pos) = find_subslice(&pdf_bytes[index..], name) {
+        let start = index + relative_pos + name.len();
+        let value_start = skip_pdf_whitespace(pdf_bytes, start);
+        let Some((object_id, after_object_id)) = parse_unsigned_pdf_integer(pdf_bytes, value_start)
+        else {
+            index = start;
+            continue;
+        };
+        let Some(after_object_ws) = skip_required_pdf_whitespace(pdf_bytes, after_object_id) else {
+            index = start;
+            continue;
+        };
+        let Some((generation, after_generation)) =
+            parse_unsigned_pdf_integer(pdf_bytes, after_object_ws)
+        else {
+            index = start;
+            continue;
+        };
+        let Some(after_generation_ws) = skip_required_pdf_whitespace(pdf_bytes, after_generation)
+        else {
+            index = start;
+            continue;
+        };
+
+        if pdf_bytes.get(after_generation_ws) == Some(&b'R') {
+            let generation = match u16::try_from(generation) {
+                Ok(value) => value,
+                Err(_) => {
+                    index = start;
+                    continue;
+                },
+            };
+            last_match = Some((object_id, generation));
+        }
+        index = start;
+    }
+
+    last_match
+}
+
+fn find_catalog_reference(
+    pdf_bytes: &[u8],
+    object_offsets: &BTreeMap<u32, (usize, u16)>,
+) -> Option<(u32, u16)> {
+    for (object_id, (offset, generation)) in object_offsets {
+        let Some(end_relative) = find_subslice(&pdf_bytes[*offset..], b"endobj") else {
+            continue;
+        };
+        let object_bytes = &pdf_bytes[*offset..*offset + end_relative];
+        if object_bytes
+            .windows(b"/Type".len())
+            .any(|window| window == b"/Type")
+            && object_bytes
+                .windows(b"/Catalog".len())
+                .any(|window| window == b"/Catalog")
+        {
+            return Some((*object_id, *generation));
+        }
+    }
+    None
+}
+
+fn parse_unsigned_pdf_integer(pdf_bytes: &[u8], start: usize) -> Option<(u32, usize)> {
+    let mut end = start;
+    while end < pdf_bytes.len() && pdf_bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == start {
+        return None;
+    }
+    let value = std::str::from_utf8(&pdf_bytes[start..end])
+        .ok()?
+        .parse()
+        .ok()?;
+    Some((value, end))
+}
+
+fn skip_pdf_whitespace(pdf_bytes: &[u8], start: usize) -> usize {
+    let mut index = start;
+    while index < pdf_bytes.len()
+        && matches!(pdf_bytes[index], b' ' | b'\t' | b'\n' | b'\r' | 0x0c | 0x00)
+    {
+        index += 1;
+    }
+    index
+}
+
+fn skip_required_pdf_whitespace(pdf_bytes: &[u8], start: usize) -> Option<usize> {
+    let end = skip_pdf_whitespace(pdf_bytes, start);
+    (end > start).then_some(end)
+}
+
+fn is_pdf_name_char(byte: u8) -> bool {
+    !matches!(
+        byte,
+        b' ' | b'\t'
+            | b'\n'
+            | b'\r'
+            | 0x0c
+            | 0x00
+            | b'('
+            | b')'
+            | b'<'
+            | b'>'
+            | b'['
+            | b']'
+            | b'{'
+            | b'}'
+            | b'/'
+            | b'%'
+    )
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn normalize_tool_description(name: &str, description: &str) -> Option<String> {
@@ -569,7 +919,7 @@ pub(crate) fn normalize_request(
             continue;
         }
 
-        if let Some(normalized) = normalize_message(message, message_index, &mut events) {
+        if let Some(normalized) = normalize_message(message, message_index, &mut events)? {
             message_index_map.push(message_index);
             normalized_messages.push(normalized);
         }
@@ -1058,8 +1408,14 @@ pub(crate) fn convert_normalized_request_with_resolved_session(
     let mut user_input = merge_current_user_messages(&current_messages, &model_id)?;
     let mut tool_name_map = HashMap::new();
     let mut tools = convert_tools(&req.tools, &mut tool_name_map);
-    let mut history =
-        build_history(req, &messages[..current_range.start], &model_id, &mut tool_name_map)?;
+    let structured_output_tool_name = append_structured_output_tool(req, &mut tools);
+    let mut history = build_history(
+        req,
+        &messages[..current_range.start],
+        &model_id,
+        &mut tool_name_map,
+        structured_output_tool_name.as_deref(),
+    )?;
     prune_orphaned_history_tool_results(&mut history);
     let current_tool_results = user_input.user_input_message_context.tool_results.clone();
     let (validated_tool_results, orphaned_tool_use_ids) =
@@ -1099,6 +1455,7 @@ pub(crate) fn convert_normalized_request_with_resolved_session(
         tool_name_map,
         session_tracking: resolved_conversation.session_tracking,
         has_history_images,
+        structured_output_tool_name,
     })
 }
 
@@ -1566,6 +1923,51 @@ fn convert_tools(
         .collect()
 }
 
+fn extract_structured_output_schema(req: &MessagesRequest) -> Option<serde_json::Value> {
+    req.output_config
+        .as_ref()
+        .and_then(|config| config.json_schema())
+        .cloned()
+        .map(normalize_json_schema)
+}
+
+fn make_structured_output_tool_name(existing_tools: &[Tool]) -> String {
+    let existing = existing_tools
+        .iter()
+        .map(|tool| tool.tool_specification.name.to_lowercase())
+        .collect::<HashSet<_>>();
+    if !existing.contains(&STRUCTURED_OUTPUT_TOOL_NAME_BASE.to_lowercase()) {
+        return STRUCTURED_OUTPUT_TOOL_NAME_BASE.to_string();
+    }
+    for suffix in 1.. {
+        let candidate = format!("{STRUCTURED_OUTPUT_TOOL_NAME_BASE}_{suffix}");
+        if !existing.contains(&candidate.to_lowercase()) {
+            return candidate;
+        }
+    }
+    unreachable!("finite tool name search should always terminate")
+}
+
+fn structured_output_instruction(tool_name: &str) -> String {
+    format!(
+        "Return the final answer by calling the `{tool_name}` tool exactly once. Do not emit any \
+         free-form text outside that tool call."
+    )
+}
+
+fn append_structured_output_tool(req: &MessagesRequest, tools: &mut Vec<Tool>) -> Option<String> {
+    let schema = extract_structured_output_schema(req)?;
+    let tool_name = make_structured_output_tool_name(tools);
+    tools.push(Tool {
+        tool_specification: ToolSpecification {
+            name: tool_name.clone(),
+            description: STRUCTURED_OUTPUT_TOOL_DESCRIPTION.to_string(),
+            input_schema: InputSchema::from_json(schema),
+        },
+    });
+    Some(tool_name)
+}
+
 // Generates the XML thinking-mode prefix to inject into the system prompt
 // based on the request's thinking configuration.
 //
@@ -1588,7 +1990,7 @@ fn generate_thinking_prefix(req: &MessagesRequest) -> Option<String> {
             let effort = req
                 .output_config
                 .as_ref()
-                .map(|config| config.effort.as_str())
+                .map(|config| config.effective_effort())
                 .unwrap_or("xhigh");
             return Some(format!(
                 "<thinking_mode>adaptive</thinking_mode><thinking_effort>{effort}</\
@@ -1603,6 +2005,84 @@ fn has_thinking_tags(content: &str) -> bool {
     content.contains("<thinking_mode>") || content.contains("<max_thinking_length>")
 }
 
+fn requested_model_identity_id(model: &str) -> &str {
+    model.strip_suffix("-thinking").unwrap_or(model)
+}
+
+fn requested_model_identity_name(model: &str) -> Option<&'static str> {
+    match requested_model_identity_id(model) {
+        "claude-opus-4-7" => Some("Opus 4.7"),
+        "claude-opus-4-6" => Some("Opus 4.6"),
+        "claude-sonnet-4-6" => Some("Sonnet 4.6"),
+        "claude-sonnet-4-5" => Some("Sonnet 4.5"),
+        "claude-haiku-4-5" => Some("Haiku 4.5"),
+        _ => None,
+    }
+}
+
+fn normalize_claude_code_model_identity(content: String, requested_model: &str) -> String {
+    let Some(model_name) = requested_model_identity_name(requested_model) else {
+        return content;
+    };
+    let model_id = requested_model_identity_id(requested_model);
+    let replacement = format!(
+        "You are powered by the model named {model_name}. The exact model ID is {model_id}."
+    );
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.contains("You are powered by the model named")
+                && trimmed.contains("The exact model ID is")
+            {
+                let indent = &line[..line.len() - trimmed.len()];
+                format!("{indent}{replacement}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn build_injected_system_content(
+    req: &MessagesRequest,
+    structured_output_tool_name: Option<&str>,
+) -> Option<String> {
+    let thinking_prefix = generate_thinking_prefix(req);
+    let system_content = req
+        .system
+        .as_ref()
+        .map(|system| {
+            system
+                .iter()
+                .map(|message| message.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|content| !content.is_empty())
+        .map(|content| normalize_claude_code_model_identity(content, &req.model))
+        .map(|content| format!("{content}\n{SYSTEM_CHUNKED_POLICY}"));
+
+    let mut parts = Vec::new();
+    match (thinking_prefix, system_content) {
+        (Some(prefix), Some(content)) => {
+            if has_thinking_tags(&content) {
+                parts.push(content);
+            } else {
+                parts.push(format!("{prefix}\n{content}"));
+            }
+        },
+        (Some(prefix), None) => parts.push(prefix),
+        (None, Some(content)) => parts.push(content),
+        (None, None) => {},
+    }
+    if let Some(tool_name) = structured_output_tool_name {
+        parts.push(structured_output_instruction(tool_name));
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
 // Builds the Kiro history from Anthropic messages that precede the current
 // trailing user turn. Injects system prompt (with thinking prefix) as a
 // synthetic user/assistant turn pair at the start, then merges consecutive
@@ -1612,34 +2092,11 @@ fn build_history(
     messages: &[super::types::Message],
     model_id: &str,
     tool_name_map: &mut HashMap<String, String>,
+    structured_output_tool_name: Option<&str>,
 ) -> Result<Vec<Message>, ConversionError> {
     let mut history = Vec::new();
-    let thinking_prefix = generate_thinking_prefix(req);
-
-    if let Some(system) = &req.system {
-        let system_content = system
-            .iter()
-            .map(|message| message.text.clone())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !system_content.is_empty() {
-            let system_content = format!("{system_content}\n{SYSTEM_CHUNKED_POLICY}");
-            let final_content = if let Some(prefix) = &thinking_prefix {
-                if !has_thinking_tags(&system_content) {
-                    format!("{prefix}\n{system_content}")
-                } else {
-                    system_content
-                }
-            } else {
-                system_content
-            };
-            history.push(Message::User(HistoryUserMessage::new(final_content, model_id)));
-            history.push(Message::Assistant(HistoryAssistantMessage::new(
-                "I will follow these instructions.",
-            )));
-        }
-    } else if let Some(prefix) = &thinking_prefix {
-        history.push(Message::User(HistoryUserMessage::new(prefix.clone(), model_id)));
+    if let Some(system_content) = build_injected_system_content(req, structured_output_tool_name) {
+        history.push(Message::User(HistoryUserMessage::new(system_content, model_id)));
         history.push(Message::Assistant(HistoryAssistantMessage::new(
             "I will follow these instructions.",
         )));
@@ -1836,9 +2293,22 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        super::types::{Message as AnthropicMessage, Metadata, Tool as AnthropicTool},
+        super::types::{
+            Message as AnthropicMessage, Metadata, SystemMessage, Tool as AnthropicTool,
+        },
         *,
     };
+
+    const SAMPLE_PDF_BASE64: &str = concat!(
+        "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBv",
+        "YmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwg",
+        "L1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAxNTAgNTBdIC9SZXNvdXJjZXMgPDwg",
+        "L0ZvbnQgPDwgL0YxIDUgMCBSID4+ID4+IC9Db250ZW50cyA0IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAv",
+        "TGVuZ3RoIDM4ID4+CnN0cmVhbQpCVCAvRjEgMTQgVGYgMTAgMjAgVGQgKGh2b3l3cGtkKSBUaiBFVAplbmRz",
+        "dHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAv",
+        "SGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCnRyYWlsZXIKPDwgL1Np",
+        "emUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMAolJUVPRg=="
+    );
 
     fn base_request(messages: Vec<AnthropicMessage>) -> MessagesRequest {
         MessagesRequest {
@@ -2540,7 +3010,8 @@ mod tests {
             budget_tokens: 20_000,
         });
         req.output_config = Some(crate::kiro_gateway::anthropic::types::OutputConfig {
-            effort: "medium".to_string(),
+            effort: Some("medium".to_string()),
+            format: None,
         });
 
         let result = convert_request(&req).expect("conversion should succeed");
@@ -2571,6 +3042,78 @@ mod tests {
         };
 
         assert!(system_prefix.contains("<thinking_effort>xhigh</thinking_effort>"));
+    }
+
+    #[test]
+    fn convert_request_normalizes_claude_code_model_identity_to_requested_model() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.model = "claude-opus-4-6".to_string();
+        req.system = Some(vec![
+            SystemMessage {
+                text: "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
+            },
+            SystemMessage {
+                text: "You are powered by the model named Sonnet 4.6. The exact model ID is \
+                       claude-sonnet-4-6."
+                    .to_string(),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains(
+            "You are powered by the model named Opus 4.6. The exact model ID is claude-opus-4-6."
+        ));
+        assert!(!system_prefix.contains("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn convert_request_maps_json_schema_output_to_hidden_tool() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("计算 4 乘以 4 等于多少"),
+        }]);
+        req.output_config = Some(crate::kiro_gateway::anthropic::types::OutputConfig {
+            effort: None,
+            format: Some(crate::kiro_gateway::anthropic::types::OutputFormat {
+                format_type: "json_schema".to_string(),
+                schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "expression": { "type": "string" },
+                        "result": { "type": "integer" }
+                    },
+                    "required": ["expression", "result"],
+                    "additionalProperties": false
+                })),
+            }),
+        });
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let tool_name = result
+            .structured_output_tool_name
+            .as_deref()
+            .expect("structured output tool should be injected");
+        let current = &result.conversation_state.current_message.user_input_message;
+        let tools = &current.user_input_message_context.tools;
+        assert!(tools
+            .iter()
+            .any(|tool| tool.tool_specification.name == tool_name
+                && tool.tool_specification.input_schema.json["required"]
+                    == serde_json::json!(["expression", "result"])));
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+        assert!(system_prefix.contains(tool_name));
+        assert!(system_prefix.contains("Return the final answer by calling"));
     }
 
     #[test]
@@ -2700,6 +3243,33 @@ mod tests {
         assert_eq!(current.images.len(), 1);
         assert_eq!(current.images[0].format, "png");
         assert!(current.origin.is_none());
+    }
+
+    #[test]
+    fn convert_request_extracts_pdf_documents_into_user_text() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": SAMPLE_PDF_BASE64
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "What text does this PDF contain?"
+                }
+            ]),
+        }]);
+
+        let result = convert_request(&req).expect("pdf document block should be converted");
+        let current = &result.conversation_state.current_message.user_input_message;
+        assert!(current.content.contains("hvoywpkd"));
+        assert!(current.content.contains("What text does this PDF contain?"));
+        assert!(current.images.is_empty());
     }
 
     #[test]

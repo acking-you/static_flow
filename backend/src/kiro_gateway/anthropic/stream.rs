@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::json;
+use sha2::{Digest, Sha512};
 use uuid::Uuid;
 
 use super::{anthropic_usage_json, converter::get_context_window_size};
@@ -58,6 +60,183 @@ struct ToolUseAccumulator {
 pub(super) enum InlineThinkingBlock {
     Thinking(String),
     Text(String),
+}
+
+const THINKING_SIGNATURE_DOMAIN: &[u8] =
+    b"staticflow-kiro-anthropic-thinking-signature-anthropic-shape-v6\0";
+const THINKING_SIGNATURE_HEADER_KIND: u64 = 12;
+const THINKING_SIGNATURE_HEADER_MODE: u64 = 2;
+const THINKING_SIGNATURE_HEADER_BODY_LEN: usize = 64;
+const THINKING_SIGNATURE_HEADER_NONCE_LEN: usize = 12;
+const THINKING_SIGNATURE_HEADER_PROOF_LEN: usize = 48;
+const THINKING_SIGNATURE_BODY_MIN_LEN: usize = 619;
+const THINKING_SIGNATURE_BODY_MAX_LEN: usize = 8_192;
+
+fn encode_proto_varint(mut value: u64, out: &mut Vec<u8>) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn encode_proto_key(field_number: u32, wire_type: u8, out: &mut Vec<u8>) {
+    encode_proto_varint(((field_number as u64) << 3) | u64::from(wire_type), out);
+}
+
+fn proto_varint_len(mut value: usize) -> usize {
+    let mut len = 1usize;
+    while value >= 0x80 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
+fn proto_bytes_field_encoded_len(field_number: u32, content_len: usize) -> usize {
+    proto_varint_len(((field_number as usize) << 3) | 2)
+        + proto_varint_len(content_len)
+        + content_len
+}
+
+fn encode_proto_varint_field(field_number: u32, value: u64, out: &mut Vec<u8>) {
+    encode_proto_key(field_number, 0, out);
+    encode_proto_varint(value, out);
+}
+
+fn encode_proto_bytes_field(field_number: u32, value: &[u8], out: &mut Vec<u8>) {
+    encode_proto_key(field_number, 2, out);
+    encode_proto_varint(value.len() as u64, out);
+    out.extend_from_slice(value);
+}
+
+fn derive_deterministic_signature_bytes(
+    model: &str,
+    thinking: &str,
+    label: &[u8],
+    len: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len);
+    let mut counter = 0u32;
+    while out.len() < len {
+        let mut hasher = Sha512::new();
+        hasher.update(THINKING_SIGNATURE_DOMAIN);
+        hasher.update(label);
+        hasher.update([0]);
+        hasher.update(model.as_bytes());
+        hasher.update([0]);
+        hasher.update(thinking.as_bytes());
+        hasher.update(counter.to_le_bytes());
+        out.extend_from_slice(&hasher.finalize());
+        counter = counter.wrapping_add(1);
+    }
+    out.truncate(len);
+    out
+}
+
+fn signature_body_target_len(thinking: &str) -> usize {
+    let thinking_len = thinking.len();
+    thinking_len.clamp(THINKING_SIGNATURE_BODY_MIN_LEN, THINKING_SIGNATURE_BODY_MAX_LEN)
+}
+
+// Kiro exposes summarized thinking text but not Anthropic's encrypted thinking
+// signature. Emit a deterministic protobuf envelope that matches the field
+// layout used by recent Claude Code signatures observed locally:
+// outer field-2 payload + outer field-3=1
+// inner fields 1/2/3/4/5
+// header fields 1=12, 3=2, 5=64-byte body, 6=model string, 7=0.
+// This remains synthetic and is not a cryptographically valid signature.
+pub(super) fn synthetic_thinking_signature(model: &str, thinking: &str) -> String {
+    let mut header = Vec::new();
+    encode_proto_varint_field(1, THINKING_SIGNATURE_HEADER_KIND, &mut header);
+    encode_proto_varint_field(3, THINKING_SIGNATURE_HEADER_MODE, &mut header);
+    let header_body = derive_deterministic_signature_bytes(
+        model,
+        thinking,
+        b"header-body",
+        THINKING_SIGNATURE_HEADER_BODY_LEN,
+    );
+    encode_proto_bytes_field(5, &header_body, &mut header);
+    encode_proto_bytes_field(6, model.as_bytes(), &mut header);
+    encode_proto_varint_field(7, 0, &mut header);
+
+    let field_2 = derive_deterministic_signature_bytes(
+        model,
+        thinking,
+        b"field-2",
+        THINKING_SIGNATURE_HEADER_NONCE_LEN,
+    );
+    let field_3 = derive_deterministic_signature_bytes(
+        model,
+        thinking,
+        b"field-3",
+        THINKING_SIGNATURE_HEADER_NONCE_LEN,
+    );
+    let field_4 = derive_deterministic_signature_bytes(
+        model,
+        thinking,
+        b"field-4",
+        THINKING_SIGNATURE_HEADER_PROOF_LEN,
+    );
+    let body_len = signature_body_target_len(thinking);
+    let field_5 = derive_deterministic_signature_bytes(model, thinking, b"field-5", body_len);
+    let fixed_payload_len = proto_bytes_field_encoded_len(1, header.len())
+        + proto_bytes_field_encoded_len(2, field_2.len())
+        + proto_bytes_field_encoded_len(3, field_3.len())
+        + proto_bytes_field_encoded_len(4, field_4.len())
+        + proto_bytes_field_encoded_len(5, field_5.len());
+
+    let mut payload = Vec::new();
+    encode_proto_bytes_field(1, &header, &mut payload);
+    encode_proto_bytes_field(2, &field_2, &mut payload);
+    encode_proto_bytes_field(3, &field_3, &mut payload);
+    encode_proto_bytes_field(4, &field_4, &mut payload);
+    encode_proto_bytes_field(5, &field_5, &mut payload);
+    debug_assert_eq!(payload.len(), fixed_payload_len);
+
+    let mut envelope = Vec::new();
+    encode_proto_bytes_field(2, &payload, &mut envelope);
+    encode_proto_varint_field(3, 1, &mut envelope);
+
+    STANDARD.encode(envelope)
+}
+
+pub(super) fn build_inline_thinking_content_blocks(
+    content: &str,
+    model: &str,
+    thinking_enabled: bool,
+) -> Vec<serde_json::Value> {
+    let mut blocks = Vec::new();
+    for block in split_inline_thinking_content(content, thinking_enabled) {
+        match block {
+            InlineThinkingBlock::Thinking(thinking) => blocks.push(json!({
+                "type": "thinking",
+                "thinking": thinking,
+                "signature": synthetic_thinking_signature(model, &thinking),
+            })),
+            InlineThinkingBlock::Text(text) => {
+                if !text.is_empty() {
+                    blocks.push(json!({"type": "text", "text": text}));
+                }
+            },
+        }
+    }
+    blocks
+}
+
+fn canonicalize_structured_output_json(input: &str) -> String {
+    let value = if input.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(input).unwrap_or_else(|_| json!({}))
+    };
+    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
 }
 
 impl BlockState {
@@ -257,6 +436,10 @@ pub struct StreamContext {
     tool_use_accumulators: HashMap<String, ToolUseAccumulator>,
     completed_tool_uses: Vec<(usize, ToolUseEntry)>,
     next_tool_use_order: usize,
+    structured_output_tool_name: Option<String>,
+    structured_output_text_buffer: String,
+    structured_output_json_buffers: HashMap<String, String>,
+    structured_output_emitted: bool,
     pub thinking_enabled: bool,
     pub thinking_buffer: String,
     pub in_thinking_block: bool,
@@ -264,6 +447,7 @@ pub struct StreamContext {
     pub thinking_block_index: Option<i32>,
     pub text_block_index: Option<i32>,
     strip_thinking_leading_newline: bool,
+    open_thinking_content: String,
 }
 
 impl StreamContext {
@@ -272,6 +456,7 @@ impl StreamContext {
         input_tokens: i32,
         thinking_enabled: bool,
         tool_name_map: HashMap<String, String>,
+        structured_output_tool_name: Option<String>,
     ) -> Self {
         Self {
             state_manager: SseStateManager::new(),
@@ -288,6 +473,10 @@ impl StreamContext {
             tool_use_accumulators: HashMap::new(),
             completed_tool_uses: Vec::new(),
             next_tool_use_order: 0,
+            structured_output_tool_name,
+            structured_output_text_buffer: String::new(),
+            structured_output_json_buffers: HashMap::new(),
+            structured_output_emitted: false,
             thinking_enabled,
             thinking_buffer: String::new(),
             in_thinking_block: false,
@@ -295,7 +484,12 @@ impl StreamContext {
             thinking_block_index: None,
             text_block_index: None,
             strip_thinking_leading_newline: false,
+            open_thinking_content: String::new(),
         }
+    }
+
+    fn structured_output_mode(&self) -> bool {
+        self.structured_output_tool_name.is_some() && !self.thinking_enabled
     }
 
     pub fn final_usage(&self) -> (i32, i32) {
@@ -360,7 +554,7 @@ impl StreamContext {
         {
             events.push(event);
         }
-        if self.thinking_enabled {
+        if self.thinking_enabled || self.structured_output_mode() {
             return events;
         }
         let index = self.state_manager.next_block_index();
@@ -420,6 +614,10 @@ impl StreamContext {
         if content.is_empty() {
             return Vec::new();
         }
+        if self.structured_output_mode() {
+            self.structured_output_text_buffer.push_str(content);
+            return Vec::new();
+        }
         self.assistant_content.push_str(content);
         self.output_tokens += estimate_tokens(content);
         if self.thinking_enabled {
@@ -450,7 +648,11 @@ impl StreamContext {
                     events.extend(self.state_manager.handle_content_block_start(
                         index,
                         "thinking",
-                        json!({"type":"content_block_start","index":index,"content_block":{"type":"thinking","thinking":""}}),
+                        json!({
+                            "type":"content_block_start",
+                            "index":index,
+                            "content_block":{"type":"thinking","thinking":"","signature":""}
+                        }),
                     ));
                 } else {
                     let target_len = self
@@ -485,12 +687,7 @@ impl StreamContext {
                     }
                     self.in_thinking_block = false;
                     self.thinking_extracted = true;
-                    if let Some(index) = self.thinking_block_index {
-                        events.push(self.create_thinking_delta_event(index, ""));
-                        if let Some(stop) = self.state_manager.handle_content_block_stop(index) {
-                            events.push(stop);
-                        }
-                    }
+                    events.extend(self.finalize_open_thinking_block());
                     self.thinking_buffer =
                         self.thinking_buffer[end_pos + "</thinking>\n\n".len()..].to_string();
                 } else {
@@ -550,11 +747,38 @@ impl StreamContext {
         events
     }
 
-    fn create_thinking_delta_event(&self, index: i32, thinking: &str) -> SseEvent {
+    fn create_thinking_delta_event(&mut self, index: i32, thinking: &str) -> SseEvent {
+        if !thinking.is_empty() {
+            self.open_thinking_content.push_str(thinking);
+        }
         SseEvent::new(
             "content_block_delta",
             json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":thinking}}),
         )
+    }
+
+    fn finalize_open_thinking_block(&mut self) -> Vec<SseEvent> {
+        let mut events = Vec::new();
+        let Some(index) = self.thinking_block_index else {
+            return events;
+        };
+
+        let signature = synthetic_thinking_signature(&self.model, &self.open_thinking_content);
+        if let Some(event) = self.state_manager.handle_content_block_delta(
+            index,
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "signature_delta", "signature": signature}
+            }),
+        ) {
+            events.push(event);
+        }
+        if let Some(stop) = self.state_manager.handle_content_block_stop(index) {
+            events.push(stop);
+        }
+        self.open_thinking_content.clear();
+        events
     }
 
     // Handles a tool_use event: closes any open thinking block, flushes
@@ -564,6 +788,26 @@ impl StreamContext {
         tool_use: &crate::kiro_gateway::wire::ToolUseEvent,
     ) -> Vec<SseEvent> {
         let mut events = Vec::new();
+        if self.structured_output_mode()
+            && self.structured_output_tool_name.as_deref() == Some(&tool_use.name)
+        {
+            let buffer = self
+                .structured_output_json_buffers
+                .entry(tool_use.tool_use_id.clone())
+                .or_default();
+            buffer.push_str(&tool_use.input);
+            if tool_use.stop {
+                let json_text = canonicalize_structured_output_json(buffer);
+                self.structured_output_text_buffer = json_text.clone();
+                self.assistant_content = json_text.clone();
+                self.output_tokens = estimate_tokens(&json_text);
+                self.structured_output_emitted = true;
+                self.structured_output_json_buffers
+                    .remove(&tool_use.tool_use_id);
+                events.extend(self.create_text_delta_events(&json_text));
+            }
+            return events;
+        }
         self.state_manager.set_has_tool_use(true);
 
         if self.thinking_enabled && self.in_thinking_block {
@@ -578,12 +822,7 @@ impl StreamContext {
                 self.in_thinking_block = false;
                 self.thinking_extracted = true;
 
-                if let Some(index) = self.thinking_block_index {
-                    events.push(self.create_thinking_delta_event(index, ""));
-                    if let Some(stop) = self.state_manager.handle_content_block_stop(index) {
-                        events.push(stop);
-                    }
-                }
+                events.extend(self.finalize_open_thinking_block());
 
                 let after_pos = end_pos + "</thinking>".len();
                 let remaining = self.thinking_buffer[after_pos..].trim_start().to_string();
@@ -677,6 +916,14 @@ impl StreamContext {
     /// clients always receive at least one non-thinking content block.
     pub fn generate_final_events(&mut self) -> Vec<SseEvent> {
         let mut events = Vec::new();
+        if self.structured_output_mode() && !self.structured_output_emitted {
+            let buffered = std::mem::take(&mut self.structured_output_text_buffer);
+            if !buffered.is_empty() {
+                self.assistant_content = buffered.clone();
+                self.output_tokens = estimate_tokens(&buffered);
+                events.extend(self.create_text_delta_events(&buffered));
+            }
+        }
         if self.thinking_enabled && !self.thinking_buffer.is_empty() {
             if self.in_thinking_block {
                 if let Some(end_pos) =
@@ -689,12 +936,7 @@ impl StreamContext {
                         }
                     }
 
-                    if let Some(index) = self.thinking_block_index {
-                        events.push(self.create_thinking_delta_event(index, ""));
-                        if let Some(stop) = self.state_manager.handle_content_block_stop(index) {
-                            events.push(stop);
-                        }
-                    }
+                    events.extend(self.finalize_open_thinking_block());
 
                     let after_pos = end_pos + "</thinking>".len();
                     let remaining = self.thinking_buffer[after_pos..].trim_start().to_string();
@@ -706,14 +948,10 @@ impl StreamContext {
                     }
                 } else {
                     if let Some(index) = self.thinking_block_index {
-                        events.push(self.create_thinking_delta_event(index, &self.thinking_buffer));
+                        let buffered_thinking = self.thinking_buffer.clone();
+                        events.push(self.create_thinking_delta_event(index, &buffered_thinking));
                     }
-                    if let Some(index) = self.thinking_block_index {
-                        events.push(self.create_thinking_delta_event(index, ""));
-                        if let Some(stop) = self.state_manager.handle_content_block_stop(index) {
-                            events.push(stop);
-                        }
-                    }
+                    events.extend(self.finalize_open_thinking_block());
                 }
             } else {
                 let buffer_content = self.thinking_buffer.clone();
@@ -756,6 +994,7 @@ impl BufferedStreamContext {
         estimated_input_tokens: i32,
         thinking_enabled: bool,
         tool_name_map: HashMap<String, String>,
+        structured_output_tool_name: Option<String>,
     ) -> Self {
         Self {
             inner: StreamContext::new_with_thinking(
@@ -763,6 +1002,7 @@ impl BufferedStreamContext {
                 estimated_input_tokens,
                 thinking_enabled,
                 tool_name_map,
+                structured_output_tool_name,
             ),
             event_buffer: Vec::new(),
             estimated_input_tokens,
@@ -1020,6 +1260,113 @@ mod tests {
             .collect()
     }
 
+    fn read_proto_varint(buf: &[u8], offset: &mut usize) -> u64 {
+        let mut shift = 0;
+        let mut value = 0u64;
+        loop {
+            let byte = *buf
+                .get(*offset)
+                .expect("protobuf varint should be in bounds");
+            *offset += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return value;
+            }
+            shift += 7;
+        }
+    }
+
+    fn parse_proto_fields(buf: &[u8]) -> (HashMap<u32, Vec<u64>>, HashMap<u32, Vec<Vec<u8>>>) {
+        let mut varints = HashMap::<u32, Vec<u64>>::new();
+        let mut bytes = HashMap::<u32, Vec<Vec<u8>>>::new();
+        let mut offset = 0usize;
+        while offset < buf.len() {
+            let key = read_proto_varint(buf, &mut offset);
+            let field_number = (key >> 3) as u32;
+            let wire_type = (key & 0x07) as u8;
+            match wire_type {
+                0 => {
+                    let value = read_proto_varint(buf, &mut offset);
+                    varints.entry(field_number).or_default().push(value);
+                },
+                2 => {
+                    let len = read_proto_varint(buf, &mut offset) as usize;
+                    let end = offset + len;
+                    let value = buf
+                        .get(offset..end)
+                        .expect("protobuf length-delimited field should be in bounds")
+                        .to_vec();
+                    offset = end;
+                    bytes.entry(field_number).or_default().push(value);
+                },
+                other => panic!("unexpected protobuf wire type {other}"),
+            }
+        }
+        (varints, bytes)
+    }
+
+    fn assert_claude_shaped_signature(signature: &str, expected_model: &str) {
+        assert!(signature.len() >= 900);
+
+        let decoded = STANDARD
+            .decode(signature.as_bytes())
+            .expect("signature should be valid base64");
+        let (outer_varints, outer_bytes) = parse_proto_fields(&decoded);
+        assert_eq!(outer_varints.get(&3).map(Vec::as_slice), Some(&[1][..]));
+
+        let outer_payloads = outer_bytes
+            .get(&2)
+            .expect("signature envelope should contain a field-2 payload");
+        assert_eq!(outer_payloads.len(), 1);
+
+        let payload = &outer_payloads[0];
+        let (inner_varints, inner_bytes) = parse_proto_fields(payload);
+        assert!(inner_varints.is_empty());
+        assert!(payload.len() >= 791);
+
+        let header = inner_bytes
+            .get(&1)
+            .and_then(|values| values.first())
+            .expect("signature payload should contain the header block");
+        let (header_varints, header_bytes) = parse_proto_fields(header);
+        assert_eq!(
+            header_varints.get(&1).map(Vec::as_slice),
+            Some(&[THINKING_SIGNATURE_HEADER_KIND][..])
+        );
+        assert_eq!(
+            header_bytes.get(&6).map(|values| values[0].as_slice()),
+            Some(expected_model.as_bytes())
+        );
+        assert_eq!(
+            header_bytes.get(&5).map(|values| values[0].len()),
+            Some(THINKING_SIGNATURE_HEADER_BODY_LEN)
+        );
+        assert_eq!(
+            header_varints.get(&3).map(Vec::as_slice),
+            Some(&[THINKING_SIGNATURE_HEADER_MODE][..])
+        );
+        assert_eq!(
+            inner_bytes.get(&2).map(|values| values[0].len()),
+            Some(THINKING_SIGNATURE_HEADER_NONCE_LEN)
+        );
+        assert_eq!(
+            inner_bytes.get(&3).map(|values| values[0].len()),
+            Some(THINKING_SIGNATURE_HEADER_NONCE_LEN)
+        );
+        assert_eq!(
+            inner_bytes.get(&4).map(|values| values[0].len()),
+            Some(THINKING_SIGNATURE_HEADER_PROOF_LEN)
+        );
+        assert_eq!(header_varints.get(&7).map(Vec::as_slice), Some(&[0][..]));
+        assert!(
+            inner_bytes
+                .get(&5)
+                .map(|values| values[0].len())
+                .unwrap_or_default()
+                >= THINKING_SIGNATURE_BODY_MIN_LEN
+        );
+    }
+
     #[test]
     fn sse_event_format_is_valid() {
         let event = SseEvent::new("message_start", json!({"type": "message_start"}));
@@ -1043,8 +1390,27 @@ mod tests {
     }
 
     #[test]
+    fn build_inline_thinking_content_blocks_attach_signature() {
+        let blocks = build_inline_thinking_content_blocks(
+            "<thinking>\nCount carefully.\n</thinking>\n\nbeta",
+            "claude-opus-4-6",
+            true,
+        );
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "Count carefully.\n");
+        let signature = blocks[0]["signature"]
+            .as_str()
+            .expect("thinking block should include signature");
+        assert_claude_shaped_signature(signature, "claude-opus-4-6");
+        assert_eq!(blocks[1], json!({"type": "text", "text": "beta"}));
+    }
+
+    #[test]
     fn text_delta_after_tool_use_restarts_text_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false, HashMap::new());
+        let mut ctx =
+            StreamContext::new_with_thinking("test-model", 1, false, HashMap::new(), None);
         let initial_events = ctx.generate_initial_events();
         assert!(initial_events.iter().any(|event| {
             event.event == "content_block_start" && event.data["content_block"]["type"] == "text"
@@ -1085,7 +1451,7 @@ mod tests {
 
     #[test]
     fn tool_use_flushes_buffered_text_before_tool_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new(), None);
         let _ = ctx.generate_initial_events();
 
         let first = ctx.process_assistant_response("有修");
@@ -1140,7 +1506,7 @@ mod tests {
 
     #[test]
     fn tool_use_after_thinking_closes_block_and_filters_end_tag() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new(), None);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>abc</thinking>");
@@ -1176,7 +1542,7 @@ mod tests {
 
     #[test]
     fn thinking_strips_leading_newline_across_chunks() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new(), None);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>");
@@ -1190,7 +1556,7 @@ mod tests {
 
     #[test]
     fn thinking_only_sets_max_tokens_stop_reason_and_pads_text() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new(), None);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>\nabc</thinking>");
@@ -1209,8 +1575,68 @@ mod tests {
     }
 
     #[test]
+    fn thinking_stream_emits_signature_delta_before_block_stop() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-6", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_assistant_response("<thinking>\nabc</thinking>\n\nbeta");
+        events.extend(ctx.generate_final_events());
+
+        let thinking_index = ctx
+            .thinking_block_index
+            .expect("thinking block index should exist");
+        let signature_pos = events
+            .iter()
+            .position(|event| {
+                event.event == "content_block_delta"
+                    && event.data["index"].as_i64() == Some(thinking_index as i64)
+                    && event.data["delta"]["type"] == "signature_delta"
+            })
+            .expect("should emit signature delta");
+        let stop_pos = events
+            .iter()
+            .position(|event| {
+                event.event == "content_block_stop"
+                    && event.data["index"].as_i64() == Some(thinking_index as i64)
+            })
+            .expect("should emit thinking block stop");
+        assert!(signature_pos < stop_pos);
+
+        let signature = events[signature_pos].data["delta"]["signature"]
+            .as_str()
+            .expect("signature should be a string");
+        assert_claude_shaped_signature(signature, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn thinking_stream_start_block_exposes_empty_signature_field() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-6", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let events = ctx.process_assistant_response("<thinking>\nabc");
+        let start = events
+            .iter()
+            .find(|event| {
+                event.event == "content_block_start"
+                    && event.data["content_block"]["type"] == "thinking"
+            })
+            .expect("should emit thinking block start");
+
+        assert_eq!(start.data["content_block"]["thinking"], "");
+        assert_eq!(start.data["content_block"]["signature"], "");
+    }
+
+    #[test]
+    fn synthetic_signature_matches_current_claude_code_field_layout() {
+        let signature = synthetic_thinking_signature("claude-opus-4-6", "reasoned output");
+        assert_claude_shaped_signature(&signature, "claude-opus-4-6");
+    }
+
+    #[test]
     fn thinking_with_tool_use_keeps_tool_use_stop_reason() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new());
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true, HashMap::new(), None);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response("<thinking>\nabc</thinking>");
@@ -1231,7 +1657,8 @@ mod tests {
 
     #[test]
     fn buffered_stream_context_rewrites_message_start_input_tokens_from_upstream_context_usage() {
-        let mut ctx = BufferedStreamContext::new("claude-sonnet-4-6", 123, false, HashMap::new());
+        let mut ctx =
+            BufferedStreamContext::new("claude-sonnet-4-6", 123, false, HashMap::new(), None);
         ctx.process_and_buffer(&Event::ContextUsage(ContextUsageEvent {
             context_usage_percentage: 12.5,
         }));
@@ -1249,7 +1676,8 @@ mod tests {
 
     #[test]
     fn message_start_marks_half_input_as_cache_creation_when_cache_read_is_zero() {
-        let ctx = StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new());
+        let ctx =
+            StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new(), None);
         let event = ctx.create_message_start_event();
         assert_eq!(event["message"]["usage"]["input_tokens"], serde_json::json!(62));
         assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(61));
@@ -1259,7 +1687,7 @@ mod tests {
     #[test]
     fn metering_event_accumulates_credit_usage() {
         let mut ctx =
-            StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new());
+            StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new(), None);
         let _ = ctx.process_kiro_event(&Event::Metering(MeteringEvent {
             unit: Some("credit".to_string()),
             _unit_plural: Some("credits".to_string()),
@@ -1280,7 +1708,7 @@ mod tests {
             "short_tool_name".to_string(),
             "tool_name_that_is_much_longer_than_the_kiro_limit_and_should_be_restored".to_string(),
         );
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false, tool_name_map);
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false, tool_name_map, None);
         let _ = ctx.generate_initial_events();
 
         let events = ctx.process_tool_use(&ToolUseEvent {
@@ -1301,5 +1729,38 @@ mod tests {
             tool_start.data["content_block"]["name"],
             "tool_name_that_is_much_longer_than_the_kiro_limit_and_should_be_restored"
         );
+    }
+
+    #[test]
+    fn structured_output_tool_is_emitted_as_json_text() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "claude-opus-4-6",
+            1,
+            false,
+            HashMap::new(),
+            Some("sf_emit_structured_output".to_string()),
+        );
+        let initial_events = ctx.generate_initial_events();
+        assert_eq!(initial_events.len(), 1);
+        assert_eq!(initial_events[0].event, "message_start");
+
+        let mut events = ctx.process_assistant_response("Here is the answer:");
+        events.extend(ctx.process_tool_use(&ToolUseEvent {
+            name: "sf_emit_structured_output".to_string(),
+            tool_use_id: "tool_1".to_string(),
+            input: "{\"result\":16,\"expression\":\"4 * 4\"}".to_string(),
+            stop: true,
+        }));
+        events.extend(ctx.generate_final_events());
+
+        assert!(events.iter().all(|event| {
+            !(event.event == "content_block_start"
+                && event.data["content_block"]["type"] == "tool_use")
+        }));
+        let json_text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(json_text, "{\"expression\":\"4 * 4\",\"result\":16}");
+        let assistant = ctx.final_assistant_message();
+        assert_eq!(assistant.content, "{\"expression\":\"4 * 4\",\"result\":16}");
+        assert!(assistant.tool_uses.is_none());
     }
 }
