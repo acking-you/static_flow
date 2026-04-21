@@ -1276,9 +1276,12 @@ mod tests {
         }
     }
 
-    fn parse_proto_fields(buf: &[u8]) -> (HashMap<u32, Vec<u64>>, HashMap<u32, Vec<Vec<u8>>>) {
-        let mut varints = HashMap::<u32, Vec<u64>>::new();
-        let mut bytes = HashMap::<u32, Vec<Vec<u8>>>::new();
+    type ProtoVarintFields = HashMap<u32, Vec<u64>>;
+    type ProtoBytesFields = HashMap<u32, Vec<Vec<u8>>>;
+
+    fn parse_proto_fields(buf: &[u8]) -> (ProtoVarintFields, ProtoBytesFields) {
+        let mut varints = ProtoVarintFields::new();
+        let mut bytes = ProtoBytesFields::new();
         let mut offset = 0usize;
         while offset < buf.len() {
             let key = read_proto_varint(buf, &mut offset);
