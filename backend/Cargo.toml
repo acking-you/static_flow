@@ -22,7 +22,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sha2 = { workspace = true }
-reqwest = { workspace = true, features = ["stream"] }
+reqwest = { workspace = true, features = ["stream", "multipart"] }
 chrono = { workspace = true }
 flate2 = "1.1"
 maxminddb = "0.27"

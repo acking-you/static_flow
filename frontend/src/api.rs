@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::{Request, RequestBuilder};
 use js_sys::Date;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
 #[cfg(not(feature = "mock"))]
 use wasm_bindgen::JsValue;
@@ -2010,6 +2010,464 @@ fn admin_base() -> String {
         .strip_suffix("/api")
         .map(str::to_string)
         .unwrap_or_else(|| API_BASE.to_string())
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpt2ApiRsConfig {
+    pub base_url: String,
+    pub admin_token: String,
+    pub api_key: String,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsConfigEnvelope {
+    pub config_path: String,
+    pub configured: bool,
+    pub config: Gpt2ApiRsConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsAccountView {
+    pub name: String,
+    pub access_token: String,
+    pub source_kind: String,
+    pub email: Option<String>,
+    pub user_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub default_model_slug: Option<String>,
+    pub status: String,
+    pub quota_remaining: i64,
+    pub quota_known: bool,
+    pub restore_at: Option<String>,
+    pub last_refresh_at: Option<i64>,
+    pub last_used_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub success_count: i64,
+    pub fail_count: i64,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
+    pub browser_profile_json: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsKeyView {
+    pub id: String,
+    pub name: String,
+    pub secret_hash: String,
+    pub status: String,
+    pub quota_total_images: i64,
+    pub quota_used_images: i64,
+    pub route_strategy: String,
+    pub account_group_id: Option<String>,
+    pub request_max_concurrency: Option<u64>,
+    pub request_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUsageEventView {
+    pub event_id: String,
+    pub request_id: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub account_name: String,
+    pub endpoint: String,
+    pub requested_model: String,
+    pub resolved_upstream_model: String,
+    pub requested_n: i64,
+    pub generated_n: i64,
+    pub billable_images: i64,
+    pub status_code: i64,
+    pub latency_ms: i64,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub detail_ref: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsImportAccountsRequest {
+    #[serde(default)]
+    pub access_tokens: Vec<String>,
+    #[serde(default)]
+    pub session_jsons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsDeleteAccountsRequest {
+    #[serde(default)]
+    pub access_tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsRefreshAccountsRequest {
+    #[serde(default)]
+    pub access_tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUpdateAccountRequest {
+    pub access_token: String,
+    #[serde(default)]
+    pub plan_type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub quota_remaining: Option<i64>,
+    #[serde(default)]
+    pub restore_at: Option<String>,
+    #[serde(default)]
+    pub session_token: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub impersonate_browser: Option<String>,
+    #[serde(default)]
+    pub request_max_concurrency: Option<u64>,
+    #[serde(default)]
+    pub request_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsImageGenerationRequest {
+    pub prompt: String,
+    pub model: String,
+    pub n: usize,
+}
+
+impl Default for AdminGpt2ApiRsImageGenerationRequest {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            model: "gpt-image-1".to_string(),
+            n: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsImageEditRequest {
+    pub prompt: String,
+    pub model: String,
+    pub n: usize,
+    pub image_base64: String,
+    pub file_name: String,
+    pub mime_type: String,
+}
+
+impl Default for AdminGpt2ApiRsImageEditRequest {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            model: "gpt-image-1".to_string(),
+            n: 1,
+            image_base64: String::new(),
+            file_name: "image.png".to_string(),
+            mime_type: "image/png".to_string(),
+        }
+    }
+}
+
+#[cfg(not(feature = "mock"))]
+async fn parse_admin_gpt2api_rs_response<T>(response: gloo_net::http::Response) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed: {text}"));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {:?}", e))
+}
+
+#[cfg(not(feature = "mock"))]
+async fn get_admin_gpt2api_rs<T>(path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let url = format!("{}/admin/gpt2api-rs{path}", admin_base());
+    let response = api_get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    parse_admin_gpt2api_rs_response(response).await
+}
+
+#[cfg(not(feature = "mock"))]
+async fn post_admin_gpt2api_rs<B, T>(path: &str, body: &B) -> Result<T, String>
+where
+    B: Serialize,
+    T: DeserializeOwned,
+{
+    let url = format!("{}/admin/gpt2api-rs{path}", admin_base());
+    let response = api_post(&url)
+        .json(body)
+        .map_err(|e| format!("Serialize error: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    parse_admin_gpt2api_rs_response(response).await
+}
+
+#[cfg(not(feature = "mock"))]
+async fn delete_admin_gpt2api_rs<B, T>(path: &str, body: &B) -> Result<T, String>
+where
+    B: Serialize,
+    T: DeserializeOwned,
+{
+    let url = format!("{}/admin/gpt2api-rs{path}", admin_base());
+    let response = api_delete(&url)
+        .json(body)
+        .map_err(|e| format!("Serialize error: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    parse_admin_gpt2api_rs_response(response).await
+}
+
+pub async fn fetch_admin_gpt2api_rs_config() -> Result<AdminGpt2ApiRsConfigEnvelope, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsConfigEnvelope::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/config").await
+    }
+}
+
+pub async fn update_admin_gpt2api_rs_config(
+    config: &Gpt2ApiRsConfig,
+) -> Result<AdminGpt2ApiRsConfigEnvelope, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsConfigEnvelope {
+            config_path: "conf/gpt2api-rs.json".to_string(),
+            configured: !config.base_url.trim().is_empty(),
+            config: config.clone(),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/config", config).await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_status() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(serde_json::json!({ "configured": false }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/status").await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_version() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(serde_json::json!({ "version": "0.1.0" }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/version").await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_models() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(serde_json::json!({ "object": "list", "data": [] }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/models").await
+    }
+}
+
+pub async fn post_admin_gpt2api_rs_login() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(serde_json::json!({ "ok": true, "version": "0.1.0" }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/auth/login", &serde_json::json!({})).await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_accounts() -> Result<Vec<AdminGpt2ApiRsAccountView>, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(Vec::new())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/accounts").await
+    }
+}
+
+pub async fn import_admin_gpt2api_rs_accounts(
+    request: &AdminGpt2ApiRsImportAccountsRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({ "items": [] }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/accounts/import", request).await
+    }
+}
+
+pub async fn delete_admin_gpt2api_rs_accounts(
+    request: &AdminGpt2ApiRsDeleteAccountsRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({ "items": [] }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        delete_admin_gpt2api_rs("/accounts", request).await
+    }
+}
+
+pub async fn refresh_admin_gpt2api_rs_accounts(
+    request: &AdminGpt2ApiRsRefreshAccountsRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({ "items": [] }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/accounts/refresh", request).await
+    }
+}
+
+pub async fn update_admin_gpt2api_rs_account(
+    request: &AdminGpt2ApiRsUpdateAccountRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({ "item": null }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/accounts/update", request).await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_keys() -> Result<Vec<AdminGpt2ApiRsKeyView>, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(Vec::new())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/keys").await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_usage(
+    limit: u64,
+) -> Result<Vec<AdminGpt2ApiRsUsageEventView>, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = limit;
+        Ok(Vec::new())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/gpt2api-rs/usage?limit={}", admin_base(), limit.max(1));
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        parse_admin_gpt2api_rs_response(response).await
+    }
+}
+
+pub async fn admin_gpt2api_rs_generate_images(
+    request: &AdminGpt2ApiRsImageGenerationRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({ "created": 0, "data": [] }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/images/generations", request).await
+    }
+}
+
+pub async fn admin_gpt2api_rs_edit_images(
+    request: &AdminGpt2ApiRsImageEditRequest,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({ "created": 0, "data": [] }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/images/edits", request).await
+    }
+}
+
+pub async fn admin_gpt2api_rs_chat_completions(
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({}))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/chat/completions", request).await
+    }
+}
+
+pub async fn admin_gpt2api_rs_responses(
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = request;
+        Ok(serde_json::json!({}))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/responses", request).await
+    }
 }
 
 pub fn build_admin_comment_ai_stream_url(

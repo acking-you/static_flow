@@ -13,8 +13,8 @@ use tower_http::{
 };
 
 use crate::{
-    behavior_analytics, handlers, health, kiro_gateway, llm_gateway, request_context, seo,
-    state::AppState,
+    behavior_analytics, gpt2api_rs, handlers, health, kiro_gateway, llm_gateway, request_context,
+    seo, state::AppState,
 };
 
 #[cfg(feature = "local-media")]
@@ -294,6 +294,66 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/llm-gateway/accounts/:name/refresh",
             post(llm_gateway::refresh_account),
+        )
+        .route(
+            "/admin/gpt2api-rs/config",
+            get(gpt2api_rs::get_admin_config).post(gpt2api_rs::update_admin_config),
+        )
+        .route(
+            "/admin/gpt2api-rs/status",
+            get(gpt2api_rs::get_admin_status),
+        )
+        .route(
+            "/admin/gpt2api-rs/version",
+            get(gpt2api_rs::get_public_version),
+        )
+        .route(
+            "/admin/gpt2api-rs/models",
+            get(gpt2api_rs::get_public_models),
+        )
+        .route(
+            "/admin/gpt2api-rs/auth/login",
+            post(gpt2api_rs::post_public_login),
+        )
+        .route(
+            "/admin/gpt2api-rs/accounts",
+            get(gpt2api_rs::list_admin_accounts).delete(gpt2api_rs::delete_admin_accounts),
+        )
+        .route(
+            "/admin/gpt2api-rs/accounts/import",
+            post(gpt2api_rs::import_admin_accounts),
+        )
+        .route(
+            "/admin/gpt2api-rs/accounts/refresh",
+            post(gpt2api_rs::refresh_admin_accounts),
+        )
+        .route(
+            "/admin/gpt2api-rs/accounts/update",
+            post(gpt2api_rs::update_admin_account),
+        )
+        .route(
+            "/admin/gpt2api-rs/keys",
+            get(gpt2api_rs::list_admin_keys),
+        )
+        .route(
+            "/admin/gpt2api-rs/usage",
+            get(gpt2api_rs::list_admin_usage),
+        )
+        .route(
+            "/admin/gpt2api-rs/images/generations",
+            post(gpt2api_rs::post_image_generation),
+        )
+        .route(
+            "/admin/gpt2api-rs/images/edits",
+            post(gpt2api_rs::post_image_edit),
+        )
+        .route(
+            "/admin/gpt2api-rs/chat/completions",
+            post(gpt2api_rs::post_chat_completions),
+        )
+        .route(
+            "/admin/gpt2api-rs/responses",
+            post(gpt2api_rs::post_responses),
         )
         .route(
             "/admin/kiro-gateway/account-groups",

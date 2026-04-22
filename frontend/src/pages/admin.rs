@@ -1976,6 +1976,10 @@ pub fn admin_page() -> Html {
                             <i class={classes!("fas", "fa-bolt", "mr-2")} aria-hidden="true"></i>
                             { "Kiro Gateway" }
                         </Link<Route>>
+                        <Link<Route> to={Route::AdminGpt2ApiRs} classes={classes!("btn-fluent-secondary")}>
+                            <i class={classes!("fas", "fa-image", "mr-2")} aria-hidden="true"></i>
+                            { "gpt2api-rs" }
+                        </Link<Route>>
                         { local_media_link }
                         <button class={classes!("btn-fluent-secondary")} onclick={on_reload_click.clone()}>
                             <i class={classes!("fas", "fa-rotate-right", "mr-2")} aria-hidden="true"></i>

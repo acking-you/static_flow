@@ -9262,6 +9262,7 @@ dependencies = [
 name = "static-flow-frontend"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "gloo-net 0.6.0",
  "gloo-timers 0.3.0",

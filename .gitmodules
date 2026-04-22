@@ -24,3 +24,6 @@
 	path = deps/pingora
 	url = git@github.com:acking-you/pingora.git
 	branch = feat/static-flow
+[submodule "deps/gpt2api_rs"]
+	path = deps/gpt2api_rs
+	url = git@github.com:acking-you/gpt2api_rs.git

@@ -31,6 +31,7 @@ pulldown-cmark = { workspace = true }
 url = "2.5"
 urlencoding = "2.1"
 yew-hooks = "0.3.4"
+base64 = "0.22.1"
 
 # Shared crate
 static-flow-shared = { path = "../shared" }

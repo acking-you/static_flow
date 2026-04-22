@@ -47,6 +47,7 @@ use crate::{
     comment_worker::{self, CommentAiWorkerConfig},
     email::EmailNotifier,
     geoip::GeoIpResolver,
+    gpt2api_rs::Gpt2ApiRsState,
     kiro_gateway::KiroGatewayRuntimeState,
     llm_gateway::LlmGatewayRuntimeState,
     music_wish_worker::{self, MusicWishWorkerConfig},
@@ -349,6 +350,7 @@ pub struct AppState {
     pub(crate) store: Arc<StaticFlowDataStore>,
     pub(crate) comment_store: Arc<CommentDataStore>,
     pub(crate) geoip: GeoIpResolver,
+    pub(crate) gpt2api_rs: Arc<Gpt2ApiRsState>,
     pub(crate) tags_cache: SharedListCache<TagInfo>,
     pub(crate) categories_cache: SharedListCache<CategoryInfo>,
     pub(crate) stats_cache: SharedValueCache<StatsResponse>,
@@ -412,6 +414,7 @@ impl AppState {
             Arc::new(UpstreamProxyRegistry::new(llm_gateway_store.clone()).await?);
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
+        let gpt2api_rs = Arc::new(Gpt2ApiRsState::load_from_env().await?);
         let email_notifier = EmailNotifier::from_env()?.map(Arc::new);
         let runtime_metadata = Arc::new(RuntimeMetadata {
             started_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -701,6 +704,7 @@ impl AppState {
             store,
             comment_store,
             geoip,
+            gpt2api_rs,
             tags_cache: Arc::new(RwLock::new(None)),
             categories_cache: Arc::new(RwLock::new(None)),
             stats_cache: Arc::new(RwLock::new(None)),

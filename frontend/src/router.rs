@@ -147,6 +147,13 @@ pub enum Route {
     AdminKiroAccountStatus,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/admin/gpt2api-rs")]
+    AdminGpt2ApiRs,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/gpt2api-rs")]
+    AdminGpt2ApiRs,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/admin/comments/runs/:task_id")]
     AdminCommentRuns { task_id: String },
     #[cfg(feature = "mock")]
@@ -263,6 +270,7 @@ fn switch(route: Route) -> Html {
         Route::AdminKiroAccountStatus => {
             html! { <pages::admin_kiro_account_status::AdminKiroAccountStatusPage /> }
         },
+        Route::AdminGpt2ApiRs => html! { <pages::admin_gpt2api_rs::AdminGpt2ApiRsPage /> },
         Route::AdminCommentRuns {
             task_id,
         } => {

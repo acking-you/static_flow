@@ -5,6 +5,7 @@ mod behavior_analytics;
 mod comment_worker;
 mod email;
 mod geoip;
+mod gpt2api_rs;
 mod handlers;
 mod health;
 mod kiro_gateway;
