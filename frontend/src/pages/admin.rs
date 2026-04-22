@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
@@ -51,8 +50,10 @@ use crate::{
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
         pagination::Pagination,
+        search_box::SearchBox,
         view_trend_chart::ViewTrendChart,
     },
+    pages::llm_access_shared::{confirm_destructive, format_ms},
     router::Route,
 };
 
@@ -65,19 +66,6 @@ enum AdminTab {
     RuntimeMemory,
     MusicWishes,
     ArticleRequests,
-}
-
-fn format_ms(ts_ms: i64) -> String {
-    let d = Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64));
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        d.get_full_year(),
-        d.get_month() + 1, // JS months are 0-indexed
-        d.get_date(),
-        d.get_hours(),
-        d.get_minutes(),
-        d.get_seconds(),
-    )
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -160,6 +148,140 @@ fn article_request_status_label(req: &ArticleRequestItem) -> String {
         "done/no-article".to_string()
     } else {
         req.status.clone()
+    }
+}
+
+/// Destructive-ish actions fired from a Music Wish row. The parent builds a
+/// single `Callback<(wish_id, WishAction)>` and dispatches by variant, so the
+/// row component doesn't need to own four separate callbacks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WishAction {
+    Approve,
+    Reject,
+    Retry,
+    Delete,
+}
+
+/// Same idea as WishAction but for Article Request rows. The two tabs run
+/// parallel workflows against different APIs, so the enums stay separate to
+/// keep the dispatcher callbacks type-safe.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArticleRequestAction {
+    Approve,
+    Reject,
+    Retry,
+    Delete,
+}
+
+#[derive(Properties, PartialEq)]
+struct MusicWishRowProps {
+    wish: MusicWishItem,
+    inflight: bool,
+    on_action: Callback<(String, WishAction)>,
+}
+
+#[function_component(MusicWishRow)]
+fn music_wish_row(props: &MusicWishRowProps) -> Html {
+    let wish = &props.wish;
+    let wid = wish.wish_id.clone();
+    let status = wish.status.clone();
+    let inflight = props.inflight;
+
+    // One cheap Rc clone of on_action per row render — versus the previous
+    // pattern which allocated four distinct closures + captured state handles.
+    let dispatch = |action: WishAction| {
+        let on_action = props.on_action.clone();
+        let wid = wid.clone();
+        Callback::from(move |_| on_action.emit((wid.clone(), action)))
+    };
+
+    html! {
+        <tr class={classes!("border-t", "border-[var(--border)]")}>
+            <td class={classes!("py-2", "pr-3", "max-w-[180px]", "truncate")} title={wish.song_name.clone()}>{ wish.song_name.clone() }</td>
+            <td class={classes!("py-2", "pr-3")}>{ wish.artist_hint.clone().unwrap_or_default() }</td>
+            <td class={classes!("py-2", "pr-3")}>{ wish.nickname.clone() }</td>
+            <td class={classes!("py-2", "pr-3")}><span class={status_badge_class(&status)}>{ status.clone() }</span></td>
+            <td class={classes!("py-2", "pr-3")}>{ wish.ip_region.clone() }</td>
+            <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(wish.created_at) }</td>
+            <td class={classes!("py-2", "pr-3")}>
+                <div class={classes!("flex", "gap-1", "flex-wrap")}>
+                    if status == "pending" {
+                        <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(WishAction::Approve)}>{ "Approve & Run" }</button>
+                        <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(WishAction::Reject)}>{ "Reject" }</button>
+                    }
+                    if status == "failed" {
+                        <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(WishAction::Retry)}>{ "Retry" }</button>
+                    }
+                    if status == "done" || status == "running" || status == "failed" {
+                        <Link<Route> to={Route::AdminMusicWishRuns { wish_id: wid.clone() }} classes={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")}>
+                            { "AI Output" }
+                        </Link<Route>>
+                    }
+                    <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={dispatch(WishAction::Delete)}>{ "Delete" }</button>
+                </div>
+            </td>
+        </tr>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct ArticleRequestRowProps {
+    request: ArticleRequestItem,
+    inflight: bool,
+    on_action: Callback<(String, ArticleRequestAction)>,
+}
+
+#[function_component(ArticleRequestRow)]
+fn article_request_row(props: &ArticleRequestRowProps) -> Html {
+    let req = &props.request;
+    let rid = req.request_id.clone();
+    let status = req.status.clone();
+    let inflight = props.inflight;
+
+    let dispatch = |action: ArticleRequestAction| {
+        let on_action = props.on_action.clone();
+        let rid = rid.clone();
+        Callback::from(move |_| on_action.emit((rid.clone(), action)))
+    };
+
+    let url_display: String = if req.article_url.chars().count() > 50 {
+        format!("{}...", req.article_url.chars().take(47).collect::<String>())
+    } else {
+        req.article_url.clone()
+    };
+
+    html! {
+        <tr class={classes!("border-t", "border-[var(--border)]")}>
+            <td class={classes!("py-2", "pr-3", "max-w-[220px]", "truncate")} title={req.article_url.clone()}>
+                <a href={req.article_url.clone()} target="_blank" rel="noopener noreferrer" class="text-[var(--primary)] hover:underline">{ url_display }</a>
+            </td>
+            <td class={classes!("py-2", "pr-3", "max-w-[150px]", "truncate")}>{ req.title_hint.clone().unwrap_or_default() }</td>
+            <td class={classes!("py-2", "pr-3")}>{ req.nickname.clone() }</td>
+            <td class={classes!("py-2", "pr-3")}>
+                <span class={article_request_status_badge_class(req)}>
+                    { article_request_status_label(req) }
+                </span>
+            </td>
+            <td class={classes!("py-2", "pr-3")}>{ req.ip_region.clone() }</td>
+            <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(req.created_at) }</td>
+            <td class={classes!("py-2", "pr-3")}>
+                <div class={classes!("flex", "gap-1", "flex-wrap")}>
+                    if status == "pending" {
+                        <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Approve)}>{ "Approve & Run" }</button>
+                        <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Reject)}>{ "Reject" }</button>
+                    }
+                    if status == "failed" {
+                        <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Retry)}>{ "Retry" }</button>
+                    }
+                    if status == "done" || status == "running" || status == "failed" {
+                        <Link<Route> to={Route::AdminArticleRequestRuns { request_id: rid.clone() }} classes={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")}>
+                            { "AI Output" }
+                        </Link<Route>>
+                    }
+                    <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Delete)}>{ "Delete" }</button>
+                </div>
+            </td>
+        </tr>
     }
 }
 
@@ -372,8 +494,10 @@ pub fn admin_page() -> Html {
 
     let music_wishes = use_state(Vec::<MusicWishItem>::new);
     let music_wish_action_inflight = use_state(HashSet::<String>::new);
+    let music_wish_search = use_state(String::new);
     let article_requests = use_state(Vec::<ArticleRequestItem>::new);
     let article_request_action_inflight = use_state(HashSet::<String>::new);
+    let article_request_search = use_state(String::new);
     let saving = use_state(|| false);
     let loaded_tabs = use_state(HashSet::<AdminTab>::new);
     let tab_loading = use_state(HashSet::<AdminTab>::new);
@@ -1060,7 +1184,11 @@ pub fn admin_page() -> Html {
         let refresh_memory = refresh_memory.clone();
         let refresh_music_wishes = refresh_music_wishes.clone();
         let refresh_article_requests = refresh_article_requests.clone();
+        let load_error = load_error.clone();
         use_effect_with(*active_tab, move |tab| {
+            // Clear stale load errors from a previous tab so switching tabs
+            // doesn't surface an unrelated banner on the new tab.
+            load_error.set(None);
             if let Some(tab) = tab {
                 if !loaded_tabs.contains(tab) {
                     match *tab {
@@ -1314,6 +1442,10 @@ pub fn admin_page() -> Html {
             if task_action_inflight.contains(&task_id) {
                 return;
             }
+            // Confirm before any destructive action. Keep non-destructive flows silent.
+            if action == "delete" && !confirm_destructive("确认删除这条 comment task？此操作不可撤销。") {
+                return;
+            }
             {
                 let mut next = (*task_action_inflight).clone();
                 next.insert(task_id.clone());
@@ -1437,6 +1569,9 @@ pub fn admin_page() -> Html {
         let refresh_all = refresh_all.clone();
         let selected_published = selected_published.clone();
         Callback::from(move |comment_id: String| {
+            if !confirm_destructive("确认删除这条已发布评论？此操作不可撤销。") {
+                return;
+            }
             let load_error = load_error.clone();
             let refresh_all = refresh_all.clone();
             let selected_published = selected_published.clone();
@@ -1938,6 +2073,238 @@ pub fn admin_page() -> Html {
     let behavior_total_pages = (*behavior_total).max(1).div_ceil(PAGE_SIZE);
     let music_wish_total_pages = (*music_wish_total).max(1).div_ceil(PAGE_SIZE);
     let article_request_total_pages = (*article_request_total).max(1).div_ceil(PAGE_SIZE);
+
+    // Client-side filters over the current page. Matches on multiple fields
+    // (case-insensitive). Uses use_memo so we don't re-filter on unrelated renders.
+    let music_wish_query_lower = (*music_wish_search).trim().to_lowercase();
+    let filtered_music_wishes: Vec<MusicWishItem> = {
+        let q = music_wish_query_lower.clone();
+        use_memo(((*music_wishes).clone(), q.clone()), move |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|w| {
+                        let hay = [
+                            w.song_name.to_lowercase(),
+                            w.artist_hint.clone().unwrap_or_default().to_lowercase(),
+                            w.nickname.to_lowercase(),
+                            w.wish_message.to_lowercase(),
+                            w.status.to_lowercase(),
+                        ];
+                        hay.iter().any(|v| v.contains(q))
+                    })
+                    .cloned()
+                    .collect()
+            }
+        })
+        .as_ref()
+        .clone()
+    };
+    let article_request_query_lower = (*article_request_search).trim().to_lowercase();
+    let filtered_article_requests: Vec<ArticleRequestItem> = {
+        let q = article_request_query_lower.clone();
+        use_memo(((*article_requests).clone(), q.clone()), move |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|r| {
+                        let hay = [
+                            r.article_url.to_lowercase(),
+                            r.title_hint.clone().unwrap_or_default().to_lowercase(),
+                            r.nickname.to_lowercase(),
+                            r.request_message.to_lowercase(),
+                            r.status.to_lowercase(),
+                        ];
+                        hay.iter().any(|v| v.contains(q))
+                    })
+                    .cloned()
+                    .collect()
+            }
+        })
+        .as_ref()
+        .clone()
+    };
+    let music_wish_matched = filtered_music_wishes.len();
+    let article_request_matched = filtered_article_requests.len();
+    let on_music_wish_search_change = {
+        let music_wish_search = music_wish_search.clone();
+        Callback::from(move |v: String| music_wish_search.set(v))
+    };
+    let on_article_request_search_change = {
+        let article_request_search = article_request_search.clone();
+        Callback::from(move |v: String| article_request_search.set(v))
+    };
+
+    // Single dispatcher used by MusicWishRow children. Beats allocating
+    // four `Callback::from` closures per row, per render.
+    let on_music_wish_action = {
+        let music_wishes = music_wishes.clone();
+        let music_wish_action_inflight = music_wish_action_inflight.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |(wid, action): (String, WishAction)| {
+            if action == WishAction::Delete
+                && !confirm_destructive("确认删除这条 music wish？此操作不可撤销。")
+            {
+                return;
+            }
+            let music_wishes = music_wishes.clone();
+            let inflight = music_wish_action_inflight.clone();
+            let load_error = load_error.clone();
+            // Reserve inflight slot.
+            let mut s = (*inflight).clone();
+            s.insert(wid.clone());
+            inflight.set(s);
+            wasm_bindgen_futures::spawn_local(async move {
+                match action {
+                    WishAction::Approve => match admin_approve_and_run_music_wish(&wid, None).await
+                    {
+                        Ok(updated) => {
+                            let mut list = (*music_wishes).clone();
+                            if let Some(item) =
+                                list.iter_mut().find(|w| w.wish_id == updated.wish_id)
+                            {
+                                *item = updated;
+                            }
+                            music_wishes.set(list);
+                            load_error.set(None);
+                        },
+                        Err(err) => load_error.set(Some(format!("Approve failed: {}", err))),
+                    },
+                    WishAction::Reject => match admin_reject_music_wish(&wid, None).await {
+                        Ok(updated) => {
+                            let mut list = (*music_wishes).clone();
+                            if let Some(item) =
+                                list.iter_mut().find(|w| w.wish_id == updated.wish_id)
+                            {
+                                *item = updated;
+                            }
+                            music_wishes.set(list);
+                            load_error.set(None);
+                        },
+                        Err(err) => load_error.set(Some(format!("Reject failed: {}", err))),
+                    },
+                    WishAction::Retry => match admin_retry_music_wish(&wid).await {
+                        Ok(updated) => {
+                            let mut list = (*music_wishes).clone();
+                            if let Some(item) =
+                                list.iter_mut().find(|w| w.wish_id == updated.wish_id)
+                            {
+                                *item = updated;
+                            }
+                            music_wishes.set(list);
+                            load_error.set(None);
+                        },
+                        Err(err) => load_error.set(Some(format!("Retry failed: {}", err))),
+                    },
+                    WishAction::Delete => match admin_delete_music_wish(&wid).await {
+                        Ok(()) => {
+                            let list: Vec<_> = (*music_wishes)
+                                .iter()
+                                .filter(|w| w.wish_id != wid)
+                                .cloned()
+                                .collect();
+                            music_wishes.set(list);
+                            load_error.set(None);
+                        },
+                        Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
+                    },
+                }
+                let mut s = (*inflight).clone();
+                s.remove(&wid);
+                inflight.set(s);
+            });
+        })
+    };
+
+    // Mirror of on_music_wish_action for the Article Requests tab. Same shape
+    // (single dispatcher, match on enum) so both tabs look the same.
+    let on_article_request_action = {
+        let article_requests = article_requests.clone();
+        let article_request_action_inflight = article_request_action_inflight.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |(rid, action): (String, ArticleRequestAction)| {
+            if action == ArticleRequestAction::Delete
+                && !confirm_destructive("确认删除这条 article request？此操作不可撤销。")
+            {
+                return;
+            }
+            let article_requests = article_requests.clone();
+            let inflight = article_request_action_inflight.clone();
+            let load_error = load_error.clone();
+            let mut s = (*inflight).clone();
+            s.insert(rid.clone());
+            inflight.set(s);
+            wasm_bindgen_futures::spawn_local(async move {
+                match action {
+                    ArticleRequestAction::Approve => {
+                        match admin_approve_and_run_article_request(&rid, None).await {
+                            Ok(updated) => {
+                                let mut list = (*article_requests).clone();
+                                if let Some(item) =
+                                    list.iter_mut().find(|r| r.request_id == updated.request_id)
+                                {
+                                    *item = updated;
+                                }
+                                article_requests.set(list);
+                                load_error.set(None);
+                            },
+                            Err(err) => {
+                                load_error.set(Some(format!("Approve failed: {}", err)))
+                            },
+                        }
+                    },
+                    ArticleRequestAction::Reject => {
+                        match admin_reject_article_request(&rid, None).await {
+                            Ok(updated) => {
+                                let mut list = (*article_requests).clone();
+                                if let Some(item) =
+                                    list.iter_mut().find(|r| r.request_id == updated.request_id)
+                                {
+                                    *item = updated;
+                                }
+                                article_requests.set(list);
+                                load_error.set(None);
+                            },
+                            Err(err) => load_error.set(Some(format!("Reject failed: {}", err))),
+                        }
+                    },
+                    ArticleRequestAction::Retry => match admin_retry_article_request(&rid).await {
+                        Ok(updated) => {
+                            let mut list = (*article_requests).clone();
+                            if let Some(item) =
+                                list.iter_mut().find(|r| r.request_id == updated.request_id)
+                            {
+                                *item = updated;
+                            }
+                            article_requests.set(list);
+                            load_error.set(None);
+                        },
+                        Err(err) => load_error.set(Some(format!("Retry failed: {}", err))),
+                    },
+                    ArticleRequestAction::Delete => match admin_delete_article_request(&rid).await
+                    {
+                        Ok(()) => {
+                            let list: Vec<_> = (*article_requests)
+                                .iter()
+                                .filter(|r| r.request_id != rid)
+                                .cloned()
+                                .collect();
+                            article_requests.set(list);
+                            load_error.set(None);
+                        },
+                        Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
+                    },
+                }
+                let mut s = (*inflight).clone();
+                s.remove(&rid);
+                inflight.set(s);
+            });
+        })
+    };
 
     #[cfg(feature = "local-media")]
     let local_media_link = html! {
@@ -3350,6 +3717,18 @@ pub fn admin_page() -> Html {
                                 Callback::from(move |_| r.emit(None))
                             }>{ "Refresh" }</button>
                         </div>
+                        <div class={classes!("mb-3", "max-w-md")}>
+                            <SearchBox
+                                value={(*music_wish_search).clone()}
+                                on_change={on_music_wish_search_change.clone()}
+                                placeholder={AttrValue::Static("搜索歌曲 / 歌手 / 昵称 / 留言 / 状态")}
+                            />
+                        </div>
+                        if !music_wish_query_lower.is_empty() {
+                            <p class={classes!("mb-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                                { format!("当前页匹配 {}/{}", music_wish_matched, music_wishes.len()) }
+                            </p>
+                        }
                         if tab_loading.contains(&AdminTab::MusicWishes) {
                             <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
                                 <LoadingSpinner size={SpinnerSize::Small} />
@@ -3358,6 +3737,8 @@ pub fn admin_page() -> Html {
                         }
                         if music_wishes.is_empty() {
                             <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No wishes yet." }</p>
+                        } else if filtered_music_wishes.is_empty() {
+                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "当前过滤条件下没有匹配项。" }</p>
                         } else {
                             <div class={classes!("overflow-x-auto")}>
                                 <table class={classes!("w-full", "text-sm")}>
@@ -3373,162 +3754,15 @@ pub fn admin_page() -> Html {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        { for (*music_wishes).iter().map(|wish| {
+                                        { for filtered_music_wishes.iter().map(|wish| {
                                             let wid = wish.wish_id.clone();
                                             let inflight = music_wish_action_inflight.contains(&wid);
-                                            let status = wish.status.clone();
-
-                                            let on_approve = {
-                                                let wid = wid.clone();
-                                                let music_wishes = music_wishes.clone();
-                                                let music_wish_action_inflight = music_wish_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let wid = wid.clone();
-                                                    let music_wishes = music_wishes.clone();
-                                                    let inflight = music_wish_action_inflight.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight).clone();
-                                                    s.insert(wid.clone());
-                                                    inflight.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_approve_and_run_music_wish(&wid, None).await {
-                                                            Ok(updated) => {
-                                                                let mut list = (*music_wishes).clone();
-                                                                if let Some(item) = list.iter_mut().find(|w| w.wish_id == updated.wish_id) {
-                                                                    *item = updated;
-                                                                }
-                                                                music_wishes.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Approve failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight).clone();
-                                                        s.remove(&wid);
-                                                        inflight.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let on_reject = {
-                                                let wid = wid.clone();
-                                                let music_wishes = music_wishes.clone();
-                                                let music_wish_action_inflight = music_wish_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let wid = wid.clone();
-                                                    let music_wishes = music_wishes.clone();
-                                                    let inflight = music_wish_action_inflight.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight).clone();
-                                                    s.insert(wid.clone());
-                                                    inflight.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_reject_music_wish(&wid, None).await {
-                                                            Ok(updated) => {
-                                                                let mut list = (*music_wishes).clone();
-                                                                if let Some(item) = list.iter_mut().find(|w| w.wish_id == updated.wish_id) {
-                                                                    *item = updated;
-                                                                }
-                                                                music_wishes.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Reject failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight).clone();
-                                                        s.remove(&wid);
-                                                        inflight.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let on_retry = {
-                                                let wid = wid.clone();
-                                                let music_wishes = music_wishes.clone();
-                                                let music_wish_action_inflight = music_wish_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let wid = wid.clone();
-                                                    let music_wishes = music_wishes.clone();
-                                                    let inflight = music_wish_action_inflight.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight).clone();
-                                                    s.insert(wid.clone());
-                                                    inflight.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_retry_music_wish(&wid).await {
-                                                            Ok(updated) => {
-                                                                let mut list = (*music_wishes).clone();
-                                                                if let Some(item) = list.iter_mut().find(|w| w.wish_id == updated.wish_id) {
-                                                                    *item = updated;
-                                                                }
-                                                                music_wishes.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Retry failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight).clone();
-                                                        s.remove(&wid);
-                                                        inflight.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let on_delete = {
-                                                let wid = wid.clone();
-                                                let music_wishes = music_wishes.clone();
-                                                let music_wish_action_inflight = music_wish_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let wid = wid.clone();
-                                                    let music_wishes = music_wishes.clone();
-                                                    let inflight = music_wish_action_inflight.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight).clone();
-                                                    s.insert(wid.clone());
-                                                    inflight.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_delete_music_wish(&wid).await {
-                                                            Ok(()) => {
-                                                                let list: Vec<_> = (*music_wishes).iter().filter(|w| w.wish_id != wid).cloned().collect();
-                                                                music_wishes.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight).clone();
-                                                        s.remove(&wid);
-                                                        inflight.set(s);
-                                                    });
-                                                })
-                                            };
-
                                             html! {
-                                                <tr class={classes!("border-t", "border-[var(--border)]")}>
-                                                    <td class={classes!("py-2", "pr-3", "max-w-[180px]", "truncate")} title={wish.song_name.clone()}>{ wish.song_name.clone() }</td>
-                                                    <td class={classes!("py-2", "pr-3")}>{ wish.artist_hint.clone().unwrap_or_default() }</td>
-                                                    <td class={classes!("py-2", "pr-3")}>{ wish.nickname.clone() }</td>
-                                                    <td class={classes!("py-2", "pr-3")}><span class={status_badge_class(&wish.status)}>{ wish.status.clone() }</span></td>
-                                                    <td class={classes!("py-2", "pr-3")}>{ wish.ip_region.clone() }</td>
-                                                    <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(wish.created_at) }</td>
-                                                    <td class={classes!("py-2", "pr-3")}>
-                                                        <div class={classes!("flex", "gap-1", "flex-wrap")}>
-                                                            if status == "pending" {
-                                                                <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_approve}>{ "Approve & Run" }</button>
-                                                                <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_reject}>{ "Reject" }</button>
-                                                            }
-                                                            if status == "failed" {
-                                                                <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_retry}>{ "Retry" }</button>
-                                                            }
-                                                            if status == "done" || status == "running" || status == "failed" {
-                                                                <Link<Route> to={Route::AdminMusicWishRuns { wish_id: wid.clone() }} classes={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")}>
-                                                                    { "AI Output" }
-                                                                </Link<Route>>
-                                                            }
-                                                            <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={on_delete}>{ "Delete" }</button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
+                                                <MusicWishRow
+                                                    wish={wish.clone()}
+                                                    inflight={inflight}
+                                                    on_action={on_music_wish_action.clone()}
+                                                />
                                             }
                                         }) }
                                     </tbody>
@@ -3558,6 +3792,18 @@ pub fn admin_page() -> Html {
                                 Callback::from(move |_| r.emit(None))
                             }>{ "Refresh" }</button>
                         </div>
+                        <div class={classes!("mb-3", "max-w-md")}>
+                            <SearchBox
+                                value={(*article_request_search).clone()}
+                                on_change={on_article_request_search_change.clone()}
+                                placeholder={AttrValue::Static("搜索 URL / 标题 / 昵称 / 留言 / 状态")}
+                            />
+                        </div>
+                        if !article_request_query_lower.is_empty() {
+                            <p class={classes!("mb-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                                { format!("当前页匹配 {}/{}", article_request_matched, article_requests.len()) }
+                            </p>
+                        }
                         if tab_loading.contains(&AdminTab::ArticleRequests) {
                             <div class={classes!("mb-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
                                 <LoadingSpinner size={SpinnerSize::Small} />
@@ -3566,6 +3812,8 @@ pub fn admin_page() -> Html {
                         }
                         if article_requests.is_empty() {
                             <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No article requests yet." }</p>
+                        } else if filtered_article_requests.is_empty() {
+                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "当前过滤条件下没有匹配项。" }</p>
                         } else {
                             <div class={classes!("overflow-x-auto")}>
                                 <table class={classes!("w-full", "text-sm")}>
@@ -3581,174 +3829,15 @@ pub fn admin_page() -> Html {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        { for (*article_requests).iter().map(|req| {
+                                        { for filtered_article_requests.iter().map(|req| {
                                             let rid = req.request_id.clone();
                                             let inflight = article_request_action_inflight.contains(&rid);
-                                            let status = req.status.clone();
-
-                                            let on_approve = {
-                                                let rid = rid.clone();
-                                                let article_requests = article_requests.clone();
-                                                let inflight_set = article_request_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let rid = rid.clone();
-                                                    let article_requests = article_requests.clone();
-                                                    let inflight_set = inflight_set.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight_set).clone();
-                                                    s.insert(rid.clone());
-                                                    inflight_set.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_approve_and_run_article_request(&rid, None).await {
-                                                            Ok(updated) => {
-                                                                let mut list = (*article_requests).clone();
-                                                                if let Some(item) = list.iter_mut().find(|r| r.request_id == updated.request_id) {
-                                                                    *item = updated;
-                                                                }
-                                                                article_requests.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Approve failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight_set).clone();
-                                                        s.remove(&rid);
-                                                        inflight_set.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let on_reject = {
-                                                let rid = rid.clone();
-                                                let article_requests = article_requests.clone();
-                                                let inflight_set = article_request_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let rid = rid.clone();
-                                                    let article_requests = article_requests.clone();
-                                                    let inflight_set = inflight_set.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight_set).clone();
-                                                    s.insert(rid.clone());
-                                                    inflight_set.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_reject_article_request(&rid, None).await {
-                                                            Ok(updated) => {
-                                                                let mut list = (*article_requests).clone();
-                                                                if let Some(item) = list.iter_mut().find(|r| r.request_id == updated.request_id) {
-                                                                    *item = updated;
-                                                                }
-                                                                article_requests.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Reject failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight_set).clone();
-                                                        s.remove(&rid);
-                                                        inflight_set.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let on_retry = {
-                                                let rid = rid.clone();
-                                                let article_requests = article_requests.clone();
-                                                let inflight_set = article_request_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let rid = rid.clone();
-                                                    let article_requests = article_requests.clone();
-                                                    let inflight_set = inflight_set.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight_set).clone();
-                                                    s.insert(rid.clone());
-                                                    inflight_set.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_retry_article_request(&rid).await {
-                                                            Ok(updated) => {
-                                                                let mut list = (*article_requests).clone();
-                                                                if let Some(item) = list.iter_mut().find(|r| r.request_id == updated.request_id) {
-                                                                    *item = updated;
-                                                                }
-                                                                article_requests.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Retry failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight_set).clone();
-                                                        s.remove(&rid);
-                                                        inflight_set.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let on_delete = {
-                                                let rid = rid.clone();
-                                                let article_requests = article_requests.clone();
-                                                let inflight_set = article_request_action_inflight.clone();
-                                                let load_error = load_error.clone();
-                                                Callback::from(move |_| {
-                                                    let rid = rid.clone();
-                                                    let article_requests = article_requests.clone();
-                                                    let inflight_set = inflight_set.clone();
-                                                    let load_error = load_error.clone();
-                                                    let mut s = (*inflight_set).clone();
-                                                    s.insert(rid.clone());
-                                                    inflight_set.set(s);
-                                                    wasm_bindgen_futures::spawn_local(async move {
-                                                        match admin_delete_article_request(&rid).await {
-                                                            Ok(()) => {
-                                                                let list: Vec<_> = (*article_requests).iter().filter(|r| r.request_id != rid).cloned().collect();
-                                                                article_requests.set(list);
-                                                                load_error.set(None);
-                                                            },
-                                                            Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
-                                                        }
-                                                        let mut s = (*inflight_set).clone();
-                                                        s.remove(&rid);
-                                                        inflight_set.set(s);
-                                                    });
-                                                })
-                                            };
-
-                                            let url_display: String = if req.article_url.chars().count() > 50 {
-                                                format!("{}...", req.article_url.chars().take(47).collect::<String>())
-                                            } else {
-                                                req.article_url.clone()
-                                            };
-
                                             html! {
-                                                <tr class={classes!("border-t", "border-[var(--border)]")}>
-                                                    <td class={classes!("py-2", "pr-3", "max-w-[220px]", "truncate")} title={req.article_url.clone()}>
-                                                        <a href={req.article_url.clone()} target="_blank" rel="noopener noreferrer" class="text-[var(--primary)] hover:underline">{ url_display }</a>
-                                                    </td>
-                                                    <td class={classes!("py-2", "pr-3", "max-w-[150px]", "truncate")}>{ req.title_hint.clone().unwrap_or_default() }</td>
-                                                    <td class={classes!("py-2", "pr-3")}>{ req.nickname.clone() }</td>
-                                                    <td class={classes!("py-2", "pr-3")}>
-                                                        <span class={article_request_status_badge_class(req)}>
-                                                            { article_request_status_label(req) }
-                                                        </span>
-                                                    </td>
-                                                    <td class={classes!("py-2", "pr-3")}>{ req.ip_region.clone() }</td>
-                                                    <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(req.created_at) }</td>
-                                                    <td class={classes!("py-2", "pr-3")}>
-                                                        <div class={classes!("flex", "gap-1", "flex-wrap")}>
-                                                            if status == "pending" {
-                                                                <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_approve}>{ "Approve & Run" }</button>
-                                                                <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_reject}>{ "Reject" }</button>
-                                                            }
-                                                            if status == "failed" {
-                                                                <button class={classes!("btn-fluent-primary", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={on_retry}>{ "Retry" }</button>
-                                                            }
-                                                            if status == "done" || status == "running" || status == "failed" {
-                                                                <Link<Route> to={Route::AdminArticleRequestRuns { request_id: rid.clone() }} classes={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs")}>
-                                                                    { "AI Output" }
-                                                                </Link<Route>>
-                                                            }
-                                                            <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={on_delete}>{ "Delete" }</button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
+                                                <ArticleRequestRow
+                                                    request={req.clone()}
+                                                    inflight={inflight}
+                                                    on_action={on_article_request_action.clone()}
+                                                />
                                             }
                                         }) }
                                     </tbody>

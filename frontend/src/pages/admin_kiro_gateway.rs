@@ -25,10 +25,12 @@ use crate::{
         LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput, PatchAdminLlmGatewayKeyRequest,
         PatchKiroAccountInput,
     },
+    components::search_box::SearchBox,
+    components::tab_bar::render_tab_bar,
     pages::llm_access_shared::{
-        format_float2, format_kiro_disabled_reason, format_ms, format_number_i64,
-        format_number_u64, format_reset_hint, kiro_credit_ratio, kiro_key_usage_ratio,
-        MaskedSecretCode,
+        confirm_destructive, format_float2, format_kiro_disabled_reason, format_ms,
+        format_number_i64, format_number_u64, format_reset_hint, kiro_credit_ratio,
+        kiro_key_usage_ratio, MaskedSecretCode,
     },
     router::Route,
 };
@@ -71,35 +73,8 @@ fn kiro_badge() -> Classes {
 
 /// Render a horizontal tab bar. Each `(id, label)` pair becomes a button;
 /// the one matching `active` gets the primary style.
-fn render_tab_bar(active: &str, tabs: &[(&str, &str)], on_click: &Callback<String>) -> Html {
-    html! {
-        <nav class={classes!(
-            "flex", "items-center", "gap-1.5", "flex-wrap",
-            "rounded-xl", "border", "border-[var(--border)]",
-            "bg-[var(--surface)]", "p-1.5"
-        )} role="tablist">
-            { for tabs.iter().map(|(id, label)| {
-                let is_active = active == *id;
-                let id_owned = id.to_string();
-                let on_click = on_click.clone();
-                html! {
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={is_active.to_string()}
-                        class={classes!(
-                            "btn-terminal",
-                            if is_active { "btn-terminal-primary" } else { "" }
-                        )}
-                        onclick={Callback::from(move |_| on_click.emit(id_owned.clone()))}
-                    >
-                        { *label }
-                    </button>
-                }
-            }) }
-        </nav>
-    }
-}
+// NOTE: the implementation moved to `crate::components::tab_bar::render_tab_bar`.
+// This file now passes `None` as the badge argument (Kiro tab bar has no badges).
 
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
@@ -1006,6 +981,12 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let busy = busy.clone();
         let on_reload = props.on_reload.clone();
         Callback::from(move |_| {
+            if !confirm_destructive(&format!(
+                "确认删除 Kiro 账号 `{}` ？此操作不可撤销。",
+                account_name
+            )) {
+                return;
+            }
             let account_name = account_name.clone();
             let flash = flash.clone();
             let notify = notify.clone();
@@ -1718,6 +1699,12 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let on_flash = props.on_flash.clone();
         let on_reload = props.on_reload.clone();
         Callback::from(move |_| {
+            if !confirm_destructive(&format!(
+                "确认删除 Kiro key `{}` ？此操作不可撤销。",
+                key_name
+            )) {
+                return;
+            }
             let key_id = key_id.clone();
             let key_name = key_name.clone();
             let saving = saving.clone();
@@ -2508,14 +2495,7 @@ fn kiro_account_group_editor_card(props: &KiroAccountGroupEditorCardProps) -> Ht
         let on_flash = props.on_flash.clone();
         let on_reload = props.on_reload.clone();
         Callback::from(move |_| {
-            let Some(window) = web_sys::window() else {
-                return;
-            };
-            if !window
-                .confirm_with_message("确认删除这个 Kiro 账号组？")
-                .ok()
-                .unwrap_or(false)
-            {
+            if !confirm_destructive("确认删除这个 Kiro 账号组？") {
                 return;
             }
             let group_id = group_id.clone();
@@ -2657,7 +2637,9 @@ fn kiro_account_group_editor_card(props: &KiroAccountGroupEditorCardProps) -> Ht
 pub fn admin_kiro_gateway_page() -> Html {
     let accounts = use_state(Vec::<KiroAccountView>::new);
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
+    let keys_search = use_state(String::new);
     let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
+    let account_groups_search = use_state(String::new);
     let kiro_models = use_state(Vec::<KiroModelView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_loading = use_state(|| false);
@@ -2733,6 +2715,9 @@ pub fn admin_kiro_gateway_page() -> Html {
 
     let new_key_name = use_state(|| "kiro-private".to_string());
     let new_key_quota = use_state(|| "1000000".to_string());
+    let creating_key = use_state(|| false);
+    let importing_local = use_state(|| false);
+    let creating_manual = use_state(|| false);
     let create_account_group_name = use_state(String::new);
     let create_account_group_account_names = use_state(Vec::<String>::new);
     let creating_account_group = use_state(|| false);
@@ -3117,7 +3102,11 @@ pub fn admin_kiro_gateway_page() -> Html {
         let notify = notify.clone();
         let error = error.clone();
         let on_reload = on_reload.clone();
+        let importing_local = importing_local.clone();
         Callback::from(move |_| {
+            if *importing_local {
+                return;
+            }
             let import_name = (*import_name).clone();
             let import_sqlite_path = (*import_sqlite_path).clone();
             let import_scheduler_max = (*import_scheduler_max).clone();
@@ -3126,6 +3115,7 @@ pub fn admin_kiro_gateway_page() -> Html {
             let notify = notify.clone();
             let error = error.clone();
             let on_reload = on_reload.clone();
+            let importing_local = importing_local.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let parsed_max = match import_scheduler_max.trim().parse::<u64>() {
                     Ok(value) => value,
@@ -3146,6 +3136,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         return;
                     },
                 };
+                importing_local.set(true);
                 error.set(None);
                 match import_admin_kiro_account(
                     Some(import_name.as_str()),
@@ -3170,6 +3161,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         notify.emit((format!("Failed to import local Kiro auth.\n{err}"), true));
                     },
                 }
+                importing_local.set(false);
             });
         })
     };
@@ -3199,11 +3191,16 @@ pub fn admin_kiro_gateway_page() -> Html {
         let notify = notify.clone();
         let error = error.clone();
         let on_reload = on_reload.clone();
+        let creating_manual = creating_manual.clone();
         Callback::from(move |_| {
+            if *creating_manual {
+                return;
+            }
             let flash = flash.clone();
             let notify = notify.clone();
             let error = error.clone();
             let on_reload = on_reload.clone();
+            let creating_manual = creating_manual.clone();
             let parsed_max = match (*manual_scheduler_max).trim().parse::<u64>() {
                 Ok(value) => value,
                 Err(_) => {
@@ -3263,6 +3260,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 disabled: *manual_disabled,
             };
             wasm_bindgen_futures::spawn_local(async move {
+                creating_manual.set(true);
                 error.set(None);
                 match create_admin_kiro_manual_account(&input).await {
                     Ok(account) => {
@@ -3276,6 +3274,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         notify.emit((format!("Failed to save manual Kiro account.\n{err}"), true));
                     },
                 }
+                creating_manual.set(false);
             });
         })
     };
@@ -3287,13 +3286,18 @@ pub fn admin_kiro_gateway_page() -> Html {
         let notify = notify.clone();
         let error = error.clone();
         let on_reload = on_reload.clone();
+        let creating_key = creating_key.clone();
         Callback::from(move |_| {
+            if *creating_key {
+                return;
+            }
             let name = (*new_key_name).clone();
             let quota = (*new_key_quota).clone();
             let flash = flash.clone();
             let notify = notify.clone();
             let error = error.clone();
             let on_reload = on_reload.clone();
+            let creating_key = creating_key.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let parsed_quota = match quota.trim().parse::<u64>() {
                     Ok(value) => value,
@@ -3304,6 +3308,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         return;
                     },
                 };
+                creating_key.set(true);
                 error.set(None);
                 match create_admin_kiro_key(name.trim(), parsed_quota).await {
                     Ok(key) => {
@@ -3317,6 +3322,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         notify.emit((format!("Failed to create Kiro key.\n{err}"), true));
                     },
                 }
+                creating_key.set(false);
             });
         })
     };
@@ -3395,6 +3401,71 @@ pub fn admin_kiro_gateway_page() -> Html {
     let disabled_account_count = accounts.iter().filter(|a| a.disabled).count();
     let active_key_count = keys.iter().filter(|k| k.status == "active").count();
 
+    // Client-side filters for Kiro Keys and Account Groups tabs. Matches are
+    // case-insensitive. `use_memo` avoids re-filtering on unrelated parent
+    // re-renders. Pre-computed here because the html! macro does not permit
+    // `let` bindings inside conditional branches.
+    let keys_query_lower = (*keys_search).trim().to_lowercase();
+    let filtered_keys: Vec<AdminLlmGatewayKeyView> = {
+        let q = keys_query_lower.clone();
+        use_memo(((*keys).clone(), q.clone()), move |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|k| {
+                        let hay = [
+                            k.name.to_lowercase(),
+                            k.id.to_lowercase(),
+                            k.provider_type.to_lowercase(),
+                            k.status.to_lowercase(),
+                        ];
+                        hay.iter().any(|v| v.contains(q))
+                    })
+                    .cloned()
+                    .collect()
+            }
+        })
+        .as_ref()
+        .clone()
+    };
+    let account_groups_query_lower = (*account_groups_search).trim().to_lowercase();
+    let filtered_account_groups: Vec<AdminAccountGroupView> = {
+        let q = account_groups_query_lower.clone();
+        use_memo(((*account_groups).clone(), q.clone()), move |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|g| {
+                        if g.name.to_lowercase().contains(q)
+                            || g.id.to_lowercase().contains(q)
+                            || g.provider_type.to_lowercase().contains(q)
+                        {
+                            return true;
+                        }
+                        g.account_names
+                            .iter()
+                            .any(|n| n.to_lowercase().contains(q))
+                    })
+                    .cloned()
+                    .collect()
+            }
+        })
+        .as_ref()
+        .clone()
+    };
+    let on_keys_search_change = {
+        let keys_search = keys_search.clone();
+        Callback::from(move |v: String| keys_search.set(v))
+    };
+    let on_account_groups_search_change = {
+        let account_groups_search = account_groups_search.clone();
+        Callback::from(move |v: String| account_groups_search.set(v))
+    };
+
     html! {
         <main class={classes!(
             "min-h-screen",
@@ -3468,7 +3539,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 (TAB_KEYS, "Keys"),
                 (TAB_GROUPS, "Groups"),
                 (TAB_USAGE, "Usage"),
-            ], &on_tab_click) }
+            ], &on_tab_click, None) }
 
             // ── Overview Tab ──
             if *active_tab == TAB_OVERVIEW {
@@ -3729,8 +3800,13 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 />
                             </label>
                         </div>
-                        <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_import_local}>
-                            { "Import Local Auth" }
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "btn-terminal-primary")}
+                            onclick={on_import_local}
+                            disabled={*importing_local}
+                        >
+                            { if *importing_local { "Importing..." } else { "Import Local Auth" } }
                         </button>
                     </div>
                 </article>
@@ -3811,8 +3887,13 @@ pub fn admin_kiro_gateway_page() -> Html {
                             { "disabled" }
                         </label>
                     </div>
-                    <button type="button" class={classes!("mt-4", "btn-terminal", "btn-terminal-primary")} onclick={on_create_manual}>
-                        { "Save Manual Account" }
+                    <button
+                        type="button"
+                        class={classes!("mt-4", "btn-terminal", "btn-terminal-primary")}
+                        onclick={on_create_manual}
+                        disabled={*creating_manual}
+                    >
+                        { if *creating_manual { "Saving..." } else { "Save Manual Account" } }
                     </button>
                     } // end manual_form_expanded
                 </article>
@@ -3898,8 +3979,13 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 }}
                             />
                         </label>
-                        <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_create_key}>
-                            { "Create Kiro Key" }
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "btn-terminal-primary")}
+                            onclick={on_create_key}
+                            disabled={*creating_key}
+                        >
+                            { if *creating_key { "Creating..." } else { "Create Kiro Key" } }
                         </button>
                     </div>
                 </article>
@@ -3921,6 +4007,18 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { if *loading { "Refreshing..." } else { "Refresh" } }
                     </button>
                 </div>
+                <div class={classes!("mt-4", "max-w-md")}>
+                    <SearchBox
+                        value={(*keys_search).clone()}
+                        on_change={on_keys_search_change.clone()}
+                        placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
+                    />
+                </div>
+                if !keys_query_lower.is_empty() {
+                    <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                        { format!("匹配 {}/{}", filtered_keys.len(), keys.len()) }
+                    </p>
+                }
                 <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
                     {
                         if (*keys).is_empty() {
@@ -3929,9 +4027,15 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     { "还没有 Kiro key。先创建一个，然后把 base URL 和 key 发给 Claude Code 或 Anthropic SDK 使用。" }
                                 </div>
                             }
+                        } else if filtered_keys.is_empty() {
+                            html! {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                                    { "当前过滤条件下没有匹配的 Kiro key。" }
+                                </div>
+                            }
                         } else {
                             html! {
-                                for (*keys).iter().map(|key_item| html! {
+                                for filtered_keys.iter().map(|key_item| html! {
                                     <KiroKeyEditorCard
                                         key={key_item.id.clone()}
                                         key_item={key_item.clone()}
@@ -3976,6 +4080,19 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { if *loading { "Refreshing..." } else { "Refresh Groups" } }
                     </button>
                 </div>
+
+                <div class={classes!("mt-4", "max-w-md")}>
+                    <SearchBox
+                        value={(*account_groups_search).clone()}
+                        on_change={on_account_groups_search_change.clone()}
+                        placeholder={AttrValue::Static("搜索账号组名 / id / 成员账号")}
+                    />
+                </div>
+                if !account_groups_query_lower.is_empty() {
+                    <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                        { format!("匹配 {}/{}", filtered_account_groups.len(), account_groups.len()) }
+                    </p>
+                }
 
                 <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
@@ -4094,9 +4211,15 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     { "当前还没有 Kiro 账号组。" }
                                 </div>
                             }
+                        } else if filtered_account_groups.is_empty() {
+                            html! {
+                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
+                                    { "当前过滤条件下没有匹配的账号组。" }
+                                </div>
+                            }
                         } else {
                             html! {
-                                for (*account_groups).iter().map(|group_item| html! {
+                                for filtered_account_groups.iter().map(|group_item| html! {
                                     <KiroAccountGroupEditorCard
                                         key={group_item.id.clone()}
                                         group_item={group_item.clone()}

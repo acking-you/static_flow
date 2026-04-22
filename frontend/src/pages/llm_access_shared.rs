@@ -75,6 +75,29 @@ pub fn format_ms(ts_ms: i64) -> String {
     )
 }
 
+/// Ask the user for confirmation via the browser's native dialog.
+/// Returns false if the user cancels or the dialog can't open (SSR/no window).
+/// Used for destructive actions (delete / purge / revoke) to standardize UX
+/// across admin pages.
+pub fn confirm_destructive(message: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.confirm_with_message(message).ok())
+        .unwrap_or(false)
+}
+
+/// ISO-style UTC timestamp `"YYYY-MM-DD HH:MM:SS.sss"` (T replaced with space,
+/// trailing Z trimmed). Used by the admin SSE stream pages where sub-second
+/// precision is useful for debugging chunk ordering.
+pub fn format_ms_iso(ts_ms: i64) -> String {
+    Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64))
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_else(|| ts_ms.to_string())
+        .replace('T', " ")
+        .trim_end_matches('Z')
+        .to_string()
+}
+
 pub fn usage_ratio(key: &LlmGatewayPublicKeyView) -> f64 {
     if key.quota_billable_limit == 0 {
         0.0

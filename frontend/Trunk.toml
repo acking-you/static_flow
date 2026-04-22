@@ -18,7 +18,7 @@ open = false
 
 # API proxy to backend server
 [[proxy]]
-backend = "http://localhost:39080/api"
+backend = "http://127.0.0.1:39080/api"
 
 [[hooks]]
 stage = "pre_build"

@@ -1,4 +1,3 @@
-use js_sys::Date;
 use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::{Event, EventSource, MessageEvent};
 use yew::prelude::*;
@@ -9,22 +8,14 @@ use crate::{
         build_admin_comment_ai_stream_url, fetch_admin_comment_task_ai_output,
         AdminCommentAiRunChunk, AdminCommentAiStreamEvent, AdminCommentTaskAiOutputResponse,
     },
+    components::stream_chunk_batcher::ChunkBatcher,
+    pages::llm_access_shared::format_ms_iso,
     router::Route,
 };
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct AdminCommentRunsProps {
     pub task_id: String,
-}
-
-fn format_ms(ts_ms: i64) -> String {
-    Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64))
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_else(|| ts_ms.to_string())
-        .replace('T', " ")
-        .trim_end_matches('Z')
-        .to_string()
 }
 
 #[function_component(AdminCommentRunsPage)]
@@ -37,7 +28,13 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
     let stream_status = use_state(|| "idle".to_string());
     let stream_error = use_state(|| None::<String>);
     let stream_ref = use_mut_ref(|| {
-        None::<(EventSource, Closure<dyn FnMut(MessageEvent)>, Closure<dyn FnMut(Event)>)>
+        None::<(
+            EventSource,
+            Closure<dyn FnMut(MessageEvent)>,
+            Closure<dyn FnMut(Event)>,
+            // Batches chunks; dropping it cancels any pending flush.
+            ChunkBatcher<AdminCommentAiRunChunk, String>,
+        )>
     });
 
     let task_id = props.task_id.clone();
@@ -140,8 +137,9 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
         let stream_error = stream_error.clone();
         let stream_ref = stream_ref.clone();
         use_effect_with((task_id.clone(), (*selected_run_id).clone()), move |(task_id, run_id)| {
-            if let Some((source, _, _)) = stream_ref.borrow_mut().take() {
+            if let Some((source, _, _, batcher)) = stream_ref.borrow_mut().take() {
                 source.close();
+                batcher.cancel();
             }
 
             if let Some(run_id) = run_id.clone() {
@@ -150,7 +148,14 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                     Ok(source) => {
                         stream_status.set("streaming".to_string());
 
-                        let stream_chunks_setter = stream_chunks.clone();
+                        // Batches token-level chunks so Yew renders at most ~10/sec.
+                        let batcher = ChunkBatcher::new(
+                            stream_chunks.clone(),
+                            |c: &AdminCommentAiRunChunk| c.chunk_id.clone(),
+                            |c: &AdminCommentAiRunChunk| c.batch_index,
+                        );
+                        let batcher_for_msg = batcher.clone();
+
                         let stream_status_setter = stream_status.clone();
                         let stream_error_setter = stream_error.clone();
                         let onmessage =
@@ -167,17 +172,7 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                                 match payload.event_type.as_str() {
                                     "chunk" => {
                                         if let Some(chunk) = payload.chunk {
-                                            let mut next = (*stream_chunks_setter).clone();
-                                            if !next
-                                                .iter()
-                                                .any(|item| item.chunk_id == chunk.chunk_id)
-                                            {
-                                                next.push(chunk);
-                                                next.sort_by(|left, right| {
-                                                    left.batch_index.cmp(&right.batch_index)
-                                                });
-                                                stream_chunks_setter.set(next);
-                                            }
+                                            batcher_for_msg.push(chunk);
                                         }
                                     },
                                     "done" => {
@@ -217,7 +212,7 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                         });
                         source.set_onerror(Some(onerror.as_ref().unchecked_ref()));
 
-                        *stream_ref.borrow_mut() = Some((source, onmessage, onerror));
+                        *stream_ref.borrow_mut() = Some((source, onmessage, onerror, batcher));
                     },
                     Err(err) => {
                         stream_status.set("error".to_string());
@@ -230,8 +225,9 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
 
             let stream_ref = stream_ref.clone();
             move || {
-                if let Some((source, _, _)) = stream_ref.borrow_mut().take() {
+                if let Some((source, _, _, batcher)) = stream_ref.borrow_mut().take() {
                     source.close();
+                    batcher.cancel();
                 }
             }
         });
@@ -295,16 +291,19 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                         <div class={classes!("flex", "gap-2", "flex-wrap")}>
                             { for data.runs.iter().map(|run| {
                                 let run_id = run.run_id.clone();
-                                let selected = Some(run_id.clone()) == *selected_run_id;
+                                let selected = Some(&run_id) == selected_run_id.as_ref();
                                 let click = {
                                     let on_select_run = on_select_run.clone();
                                     let run_id = run_id.clone();
+                                    // Move the owned String into the closure directly; a single
+                                    // clone at emit time, no extra clone per render.
                                     Callback::from(move |_| on_select_run.emit(run_id.clone()))
                                 };
                                 html! {
                                     <button
                                         class={if selected { classes!("btn-fluent-primary", "!px-2", "!py-1", "!text-xs") } else { classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs") }}
                                         onclick={click}
+                                        aria-label={format!("Select run {}", run.run_id)}
                                     >
                                         { format!("{} · {}", run.status, run.run_id) }
                                     </button>
@@ -343,7 +342,7 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                                     <div class={classes!("mb-2", "flex", "items-center", "gap-2", "flex-wrap")}>
                                         <span class={stream_badge}>{ chunk.stream.clone() }</span>
                                         <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("batch={}", chunk.batch_index) }</span>
-                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format_ms(chunk.created_at) }</span>
+                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format_ms_iso(chunk.created_at) }</span>
                                     </div>
                                     <pre class={classes!("m-0", "text-xs", "whitespace-pre-wrap", "break-words", "font-mono")}>
                                         { chunk.content.clone() }

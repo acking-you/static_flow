@@ -1,10 +1,21 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use js_sys::Date;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{File, HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
+
+#[wasm_bindgen(inline_js = r#"
+export function gpt2api_copy_text(text) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).catch(function(){});
+    }
+}
+"#)]
+extern "C" {
+    fn gpt2api_copy_text(text: &str);
+}
 
 use crate::{
     api::{
@@ -21,6 +32,8 @@ use crate::{
         AdminGpt2ApiRsKeyView, AdminGpt2ApiRsRefreshAccountsRequest,
         AdminGpt2ApiRsUpdateAccountRequest, AdminGpt2ApiRsUsageEventView, Gpt2ApiRsConfig,
     },
+    components::{search_box::SearchBox, tab_bar::render_tab_bar},
+    pages::llm_access_shared::{confirm_destructive, format_ms, MaskedSecretCode},
     router::Route,
 };
 
@@ -31,25 +44,13 @@ struct BrowserProfileView {
     impersonate_browser: Option<String>,
 }
 
-fn format_ms(ts_ms: i64) -> String {
-    let d = Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64));
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        d.get_full_year(),
-        d.get_month() + 1,
-        d.get_date(),
-        d.get_hours(),
-        d.get_minutes(),
-        d.get_seconds(),
-    )
-}
-
-fn mask_secret(value: &str) -> String {
-    if value.len() <= 12 {
-        return value.to_string();
-    }
-    format!("{}...{}", &value[..6], &value[value.len() - 4..])
-}
+// Tabs on the gpt2api-rs admin page. Using &'static str to slot straight into
+// the shared `render_tab_bar` helper without boxing.
+const GPT2API_TAB_OVERVIEW: &str = "overview";
+const GPT2API_TAB_ACCOUNTS: &str = "accounts";
+const GPT2API_TAB_KEYS: &str = "keys";
+const GPT2API_TAB_IMAGES: &str = "images";
+const GPT2API_TAB_PLAYGROUND: &str = "playground";
 
 fn pretty_json(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
@@ -93,6 +94,7 @@ fn parse_browser_profile(account: &AdminGpt2ApiRsAccountView) -> BrowserProfileV
 
 #[function_component(AdminGpt2ApiRsPage)]
 pub fn admin_gpt2api_rs_page() -> Html {
+    let active_tab = use_state(|| GPT2API_TAB_OVERVIEW.to_string());
     let loading = use_state(|| false);
     let saving_config = use_state(|| false);
     let load_error = use_state(|| None::<String>);
@@ -108,6 +110,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let login_json = use_state(|| "{}".to_string());
 
     let accounts = use_state(Vec::<AdminGpt2ApiRsAccountView>::new);
+    let accounts_search = use_state(String::new);
     let keys = use_state(Vec::<AdminGpt2ApiRsKeyView>::new);
     let usage = use_state(Vec::<AdminGpt2ApiRsUsageEventView>::new);
     let usage_limit = use_state(|| "50".to_string());
@@ -167,6 +170,22 @@ pub fn admin_gpt2api_rs_page() -> Html {
         .to_string()
     });
     let responses_output = use_state(|| "{}".to_string());
+
+    // Copy a secret to the clipboard and surface a short notice. Used by
+    // MaskedSecretCode's built-in copy button, so the user gets consistent
+    // feedback across gpt2api / llm / kiro pages.
+    let on_copy = {
+        let notice = notice.clone();
+        Callback::from(move |(label, value): (String, String)| {
+            gpt2api_copy_text(&value);
+            let text = if label.is_empty() {
+                "已复制".to_string()
+            } else {
+                format!("已复制 {label}")
+            };
+            notice.set(Some(text));
+        })
+    };
 
     let reload_all = {
         let loading = loading.clone();
@@ -628,6 +647,50 @@ pub fn admin_gpt2api_rs_page() -> Html {
         })
     };
 
+    // Client-side account filter: matches on name / access_token prefix /
+    // user_agent fragment (case-insensitive). Kept as a cloned Vec so the
+    // existing `.iter().map()` rendering below still works unchanged.
+    let accounts_query_lower = (*accounts_search).trim().to_lowercase();
+    let filtered_accounts: Vec<AdminGpt2ApiRsAccountView> = use_memo(
+        ((*accounts).clone(), accounts_query_lower.clone()),
+        |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|a| {
+                        let ua = parse_browser_profile(a)
+                            .user_agent
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        a.name.to_lowercase().contains(q.as_str())
+                            || a.access_token.to_lowercase().contains(q.as_str())
+                            || ua.contains(q.as_str())
+                    })
+                    .cloned()
+                    .collect()
+            }
+        },
+    )
+    .as_ref()
+    .clone();
+
+    // Tab wiring. Pure UI switch — all data is still reloaded together by
+    // `reload_all`, so switching tabs does not trigger additional network.
+    let on_tab_select = {
+        let active_tab = active_tab.clone();
+        Callback::from(move |id: String| active_tab.set(id))
+    };
+    let tabs: [(&str, &str); 5] = [
+        (GPT2API_TAB_OVERVIEW, "Overview"),
+        (GPT2API_TAB_ACCOUNTS, "Accounts"),
+        (GPT2API_TAB_KEYS, "Keys & Usage"),
+        (GPT2API_TAB_IMAGES, "Image Gen"),
+        (GPT2API_TAB_PLAYGROUND, "Playground"),
+    ];
+    let active = (*active_tab).clone();
+
     html! {
         <main class={classes!("container", "py-8", "space-y-5")}>
             <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
@@ -665,6 +728,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 }
             </section>
 
+            { render_tab_bar(&active, &tabs, &on_tab_select, None) }
+
+            if active == GPT2API_TAB_OVERVIEW {
             <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-3")}>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
@@ -758,7 +824,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     <pre class={classes!("overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*login_json).clone() }</pre>
                 </article>
             </section>
+            }
 
+            if active == GPT2API_TAB_ACCOUNTS {
             <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-4")}>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
@@ -802,6 +870,22 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_import_accounts}>{ "Import Accounts" }</button>
 
+                <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
+                    <div class={classes!("flex-1", "min-w-[240px]")}>
+                        <SearchBox
+                            value={(*accounts_search).clone()}
+                            on_change={{
+                                let accounts_search = accounts_search.clone();
+                                Callback::from(move |v: String| accounts_search.set(v))
+                            }}
+                            placeholder={"按名称 / access token / user agent 搜索"}
+                        />
+                    </div>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                        { format!("{} / {}", filtered_accounts.len(), accounts.len()) }
+                    </span>
+                </div>
+
                 <div class={classes!("overflow-x-auto")}>
                     <table class={classes!("w-full", "text-sm")}>
                         <thead>
@@ -816,7 +900,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             </tr>
                         </thead>
                         <tbody>
-                            { for accounts.iter().map(|account| {
+                            { for filtered_accounts.iter().map(|account| {
                                 let account_for_edit = account.clone();
                                 let account_for_delete = account.clone();
                                 let update_access_token = update_access_token.clone();
@@ -835,7 +919,13 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 html! {
                                     <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
                                         <td class="py-2 pr-3">{ account.name.clone() }</td>
-                                        <td class="py-2 pr-3">{ mask_secret(&account.access_token) }</td>
+                                        <td class="py-2 pr-3">
+                                            <MaskedSecretCode
+                                                value={account.access_token.clone()}
+                                                copy_label={"access token"}
+                                                on_copy={on_copy.clone()}
+                                            />
+                                        </td>
                                         <td class="py-2 pr-3">{ account.status.clone() }</td>
                                         <td class="py-2 pr-3">{ account.plan_type.clone().unwrap_or_else(|| "-".to_string()) }</td>
                                         <td class="py-2 pr-3">
@@ -867,6 +957,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                 <button
                                                     class={classes!("btn-fluent-secondary")}
                                                     onclick={Callback::from(move |_| {
+                                                        if !confirm_destructive("确认删除这个 gpt2api-rs 账户？此操作不可撤销。") {
+                                                            return;
+                                                        }
                                                         load_error.set(None);
                                                         notice.set(None);
                                                         let load_error = load_error.clone();
@@ -976,7 +1069,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_update_account}>{ "Update Selected Account" }</button>
             </section>
+            }
 
+            if active == GPT2API_TAB_KEYS {
             <section class={classes!("grid", "gap-5", "lg:grid-cols-2")}>
                 <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
                     <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "API Keys" }</h2>
@@ -994,7 +1089,13 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 { for keys.iter().map(|key| html! {
                                     <tr class={classes!("border-b", "border-[var(--border)]")}>
                                         <td class="py-2 pr-3">{ key.name.clone() }</td>
-                                        <td class="py-2 pr-3">{ mask_secret(&key.secret_hash) }</td>
+                                        <td class="py-2 pr-3">
+                                            <MaskedSecretCode
+                                                value={key.secret_hash.clone()}
+                                                copy_label={"secret hash"}
+                                                on_copy={on_copy.clone()}
+                                            />
+                                        </td>
                                         <td class="py-2 pr-3">{ format!("{}/{}", key.quota_used_images, key.quota_total_images) }</td>
                                         <td class="py-2 pr-3">{ key.route_strategy.clone() }</td>
                                     </tr>
@@ -1044,7 +1145,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     </div>
                 </article>
             </section>
+            }
 
+            if active == GPT2API_TAB_IMAGES {
             <section class={classes!("grid", "gap-5", "lg:grid-cols-2")}>
                 <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-3")}>
                     <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Image Generations" }</h2>
@@ -1099,7 +1202,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     <pre class={classes!("overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*edit_output).clone() }</pre>
                 </article>
             </section>
+            }
 
+            if active == GPT2API_TAB_PLAYGROUND {
             <section class={classes!("grid", "gap-5", "lg:grid-cols-2")}>
                 <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-3")}>
                     <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Chat Completions Playground" }</h2>
@@ -1121,6 +1226,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     <pre class={classes!("overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*responses_output).clone() }</pre>
                 </article>
             </section>
+            }
         </main>
     }
 }

@@ -2177,6 +2177,24 @@ where
         let text = response.text().await.unwrap_or_default();
         return Err(format!("Failed: {text}"));
     }
+    // Guard against SPA fallback returning index.html with a 200. Without this
+    // check, `response.json()` on the HTML body surfaces as the cryptic
+    // "Parse error: SerdeError(expected value)" banner. Surface a clearer
+    // message so the operator knows the gpt2api-rs integration is missing on
+    // the backend rather than chasing a phantom JSON bug.
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap_or_default()
+        .to_lowercase();
+    if !content_type.contains("application/json") {
+        return Err(
+            "gpt2api-rs admin endpoint is not available on this backend \
+             (got a non-JSON response). Ensure the gpt2api-rs integration is \
+             enabled on the server build."
+                .to_string(),
+        );
+    }
     response
         .json()
         .await

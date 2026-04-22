@@ -1,5 +1,4 @@
-use js_sys::Date;
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::{Event, EventSource, MessageEvent};
 use yew::prelude::*;
 use yew_router::prelude::Link;
@@ -9,6 +8,8 @@ use crate::{
         build_admin_music_wish_ai_stream_url, fetch_admin_music_wish_ai_output,
         MusicWishAiRunChunk, MusicWishAiRunRecord,
     },
+    components::stream_chunk_batcher::ChunkBatcher,
+    pages::llm_access_shared::format_ms_iso,
     router::Route,
 };
 
@@ -21,27 +22,19 @@ struct StreamHandle {
     _on_done: NamedEventClosure,
     _on_stream_error: NamedEventClosure,
     _on_error: ErrorClosure,
+    batcher: ChunkBatcher<MusicWishAiRunChunk, (i32, String)>,
 }
 
 impl Drop for StreamHandle {
     fn drop(&mut self) {
         self.source.close();
+        self.batcher.cancel();
     }
 }
 
 #[derive(Properties, Clone, PartialEq)]
 pub struct Props {
     pub wish_id: String,
-}
-
-fn format_ms(ts_ms: i64) -> String {
-    Date::new(&JsValue::from_f64(ts_ms as f64))
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_else(|| ts_ms.to_string())
-        .replace('T', " ")
-        .trim_end_matches('Z')
-        .to_string()
 }
 
 #[function_component(AdminMusicWishRunsPage)]
@@ -108,35 +101,31 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
             if let Ok(source) = EventSource::new(&stream_url) {
                 stream_status.set("streaming".to_string());
 
-                let on_chunk = {
-                    let stream_chunks = stream_chunks.clone();
-                    Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
-                        let Some(text) = event.data().as_string() else { return };
-                        let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else {
-                            return;
-                        };
-                        let stream = val["stream"].as_str().unwrap_or("stdout").to_string();
-                        let batch_index = val["batch_index"].as_i64().unwrap_or(0) as i32;
-                        let content = val["content"].as_str().unwrap_or("").to_string();
-                        let mut next = (*stream_chunks).clone();
-                        if !next
-                            .iter()
-                            .any(|c| c.batch_index == batch_index && c.stream == stream)
-                        {
-                            next.push(MusicWishAiRunChunk {
-                                chunk_id: format!("live-{}-{}", stream, batch_index),
-                                run_id: String::new(),
-                                wish_id: String::new(),
-                                stream,
-                                batch_index,
-                                content,
-                                created_at: 0,
-                            });
-                            next.sort_by_key(|c| c.batch_index);
-                            stream_chunks.set(next);
-                        }
-                    })
-                };
+                let batcher = ChunkBatcher::new(
+                    stream_chunks.clone(),
+                    |c: &MusicWishAiRunChunk| (c.batch_index, c.stream.clone()),
+                    |c: &MusicWishAiRunChunk| c.batch_index,
+                );
+                let batcher_for_msg = batcher.clone();
+
+                let on_chunk = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+                    let Some(text) = event.data().as_string() else { return };
+                    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else {
+                        return;
+                    };
+                    let stream = val["stream"].as_str().unwrap_or("stdout").to_string();
+                    let batch_index = val["batch_index"].as_i64().unwrap_or(0) as i32;
+                    let content = val["content"].as_str().unwrap_or("").to_string();
+                    batcher_for_msg.push(MusicWishAiRunChunk {
+                        chunk_id: format!("live-{}-{}", stream, batch_index),
+                        run_id: String::new(),
+                        wish_id: String::new(),
+                        stream,
+                        batch_index,
+                        content,
+                        created_at: 0,
+                    });
+                });
 
                 let on_done = {
                     let stream_status = stream_status.clone();
@@ -202,6 +191,7 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
                     _on_done: on_done,
                     _on_stream_error: on_stream_error,
                     _on_error: on_error,
+                    batcher,
                 });
             } else {
                 stream_error.set(Some("Failed to open EventSource".to_string()));
@@ -297,7 +287,7 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
                                         <span class={badge}>{ chunk.stream.clone() }</span>
                                         <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("batch={}", chunk.batch_index) }</span>
                                         if chunk.created_at > 0 {
-                                            <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format_ms(chunk.created_at) }</span>
+                                            <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format_ms_iso(chunk.created_at) }</span>
                                         }
                                     </div>
                                     <pre class={classes!("m-0", "text-xs", "whitespace-pre-wrap", "break-words", "font-mono")}>

@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
-use js_sys::Date;
 use wasm_bindgen::prelude::*;
-use web_sys::{window, HtmlElement, HtmlInputElement, HtmlSelectElement};
+use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -42,7 +41,11 @@ use crate::{
         PatchAdminUpstreamProxyConfigInput,
     },
     components::pagination::Pagination,
-    pages::llm_access_shared::{format_number_i64, format_number_u64, MaskedSecretCode},
+    components::search_box::SearchBox,
+    components::tab_bar::render_tab_bar,
+    pages::llm_access_shared::{
+        confirm_destructive, format_ms, format_number_i64, format_number_u64, MaskedSecretCode,
+    },
     router::Route,
 };
 
@@ -61,52 +64,8 @@ const TAB_SETTINGS: &str = "settings";
 
 /// Render a horizontal tab bar with an optional numeric badge on one tab.
 /// `badge_tab` is `Some((tab_id, count))` to show a pending-count pill.
-fn render_tab_bar(
-    active: &str,
-    tabs: &[(&str, &str)],
-    on_click: &Callback<String>,
-    badge_tab: Option<(&str, usize)>,
-) -> Html {
-    html! {
-        <nav class={classes!(
-            "flex", "items-center", "gap-1.5", "flex-wrap",
-            "rounded-xl", "border", "border-[var(--border)]",
-            "bg-[var(--surface)]", "p-1.5"
-        )} role="tablist">
-            { for tabs.iter().map(|(id, label)| {
-                let is_active = active == *id;
-                let id_owned = id.to_string();
-                let on_click = on_click.clone();
-                let badge_count = badge_tab
-                    .filter(|(bid, count)| *bid == *id && *count > 0)
-                    .map(|(_, count)| count);
-                html! {
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={is_active.to_string()}
-                        class={classes!(
-                            "btn-terminal",
-                            if is_active { "btn-terminal-primary" } else { "" }
-                        )}
-                        onclick={Callback::from(move |_| on_click.emit(id_owned.clone()))}
-                    >
-                        { *label }
-                        if let Some(count) = badge_count {
-                            <span class={classes!(
-                                "ml-1.5", "inline-flex", "items-center", "justify-center",
-                                "min-w-[1.25rem]", "h-5", "rounded-full",
-                                "bg-amber-500", "text-white", "text-[10px]", "font-bold"
-                            )}>
-                                { count }
-                            </span>
-                        }
-                    </button>
-                }
-            }) }
-        </nav>
-    }
-}
+// NOTE: the implementation moved to `crate::components::tab_bar::render_tab_bar`.
+// Keep this comment block to preserve git blame context for reviewers.
 
 #[wasm_bindgen(inline_js = r#"
 export function copy_text(text) {
@@ -117,19 +76,6 @@ export function copy_text(text) {
 "#)]
 extern "C" {
     fn copy_text(text: &str);
-}
-
-fn format_ms(ts_ms: i64) -> String {
-    let d = Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64));
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        d.get_full_year(),
-        d.get_month() + 1,
-        d.get_date(),
-        d.get_hours(),
-        d.get_minutes(),
-        d.get_seconds(),
-    )
 }
 
 fn account_proxy_select_value(account: &AccountSummaryView) -> String {
@@ -631,14 +577,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let on_flash = props.on_flash.clone();
         let key_name_for_actions = key_name_for_actions.clone();
         Callback::from(move |_| {
-            let Some(window) = window() else {
-                return;
-            };
-            if !window
-                .confirm_with_message("确认删除这个 API key？")
-                .ok()
-                .unwrap_or(false)
-            {
+            if !confirm_destructive("确认删除这个 API key？") {
                 return;
             }
             let key_id = key_id.clone();
@@ -1036,14 +975,7 @@ fn account_group_editor_card(props: &AccountGroupEditorCardProps) -> Html {
         let on_flash = props.on_flash.clone();
         let saving = saving.clone();
         Callback::from(move |_| {
-            let Some(window) = window() else {
-                return;
-            };
-            if !window
-                .confirm_with_message("确认删除这个账号组？")
-                .ok()
-                .unwrap_or(false)
-            {
+            if !confirm_destructive("确认删除这个账号组？") {
                 return;
             }
             let group_id = group_id.clone();
@@ -1180,53 +1112,85 @@ struct ProxyConfigEditorCardProps {
     on_flash: Callback<(String, bool)>,
 }
 
+/// Editable fields for the proxy-config form. Grouped into a single struct so
+/// every field update is one `form.set(next)` instead of juggling five
+/// independent `UseStateHandle`s across effect + save callback.
+#[derive(Clone, PartialEq)]
+struct ProxyForm {
+    name: String,
+    proxy_url: String,
+    proxy_username: String,
+    proxy_password: String,
+    status: String,
+}
+
+impl ProxyForm {
+    fn from_config(cfg: &AdminUpstreamProxyConfigView) -> Self {
+        Self {
+            name: cfg.name.clone(),
+            proxy_url: cfg.proxy_url.clone(),
+            proxy_username: cfg.proxy_username.clone().unwrap_or_default(),
+            proxy_password: cfg.proxy_password.clone().unwrap_or_default(),
+            status: cfg.status.clone(),
+        }
+    }
+}
+
+/// Inputs for the "create new API key" panel at the top of the Keys tab.
+/// Bundled so the submit callback and `.set(next)` paths read a single clone
+/// of the struct.
+#[derive(Clone, PartialEq)]
+struct CreateKeyForm {
+    name: String,
+    quota: String,
+    public: bool,
+    request_max_concurrency: String,
+    request_min_start_interval_ms: String,
+}
+
+impl Default for CreateKeyForm {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            quota: "100000".to_string(),
+            public: true,
+            request_max_concurrency: String::new(),
+            request_min_start_interval_ms: String::new(),
+        }
+    }
+}
+
 #[function_component(ProxyConfigEditorCard)]
 fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
     let proxy_config = props.proxy_config.clone();
-    let name = use_state(|| proxy_config.name.clone());
-    let proxy_url = use_state(|| proxy_config.proxy_url.clone());
-    let proxy_username = use_state(|| proxy_config.proxy_username.clone().unwrap_or_default());
-    let proxy_password = use_state(|| proxy_config.proxy_password.clone().unwrap_or_default());
-    let status = use_state(|| proxy_config.status.clone());
+    let form = use_state(|| ProxyForm::from_config(&proxy_config));
     let saving = use_state(|| false);
     let checking = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
     {
-        let proxy_config = props.proxy_config.clone();
-        let name = name.clone();
-        let proxy_url = proxy_url.clone();
-        let proxy_username = proxy_username.clone();
-        let proxy_password = proxy_password.clone();
-        let status = status.clone();
-        use_effect_with(props.proxy_config.clone(), move |_| {
-            name.set(proxy_config.name.clone());
-            proxy_url.set(proxy_config.proxy_url.clone());
-            proxy_username.set(proxy_config.proxy_username.clone().unwrap_or_default());
-            proxy_password.set(proxy_config.proxy_password.clone().unwrap_or_default());
-            status.set(proxy_config.status.clone());
+        let form = form.clone();
+        use_effect_with(props.proxy_config.clone(), move |cfg| {
+            form.set(ProxyForm::from_config(cfg));
             || ()
         });
     }
 
     let on_save = {
         let proxy_id = proxy_config.id.clone();
-        let name = name.clone();
-        let proxy_url = proxy_url.clone();
-        let proxy_username = proxy_username.clone();
-        let proxy_password = proxy_password.clone();
-        let status = status.clone();
+        let form = form.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_changed = props.on_changed.clone();
         let on_flash = props.on_flash.clone();
         Callback::from(move |_| {
             let proxy_id = proxy_id.clone();
+            let current = (*form).clone();
             let input = PatchAdminUpstreamProxyConfigInput {
-                name: Some((*name).trim().to_string()),
-                proxy_url: Some((*proxy_url).trim().to_string()),
+                name: Some(current.name.trim().to_string()),
+                proxy_url: Some(current.proxy_url.trim().to_string()),
                 proxy_username: {
-                    let value = (*proxy_username).trim().to_string();
+                    let value = current.proxy_username.trim().to_string();
                     if value.is_empty() {
                         None
                     } else {
@@ -1234,14 +1198,14 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                     }
                 },
                 proxy_password: {
-                    let value = (*proxy_password).trim().to_string();
+                    let value = current.proxy_password.trim().to_string();
                     if value.is_empty() {
                         None
                     } else {
                         Some(value)
                     }
                 },
-                status: Some((*status).trim().to_string()),
+                status: Some(current.status.trim().to_string()),
             };
             let saving = saving.clone();
             let feedback = feedback.clone();
@@ -1272,6 +1236,9 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
         let on_changed = props.on_changed.clone();
         let on_flash = props.on_flash.clone();
         Callback::from(move |_| {
+            if !confirm_destructive("确认删除这个代理配置？绑定该配置的账号会回退到默认行为。") {
+                return;
+            }
             let proxy_id = proxy_id.clone();
             let saving = saving.clone();
             let feedback = feedback.clone();
@@ -1358,12 +1325,14 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                     <input
                         type="text"
                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
-                        value={(*name).clone()}
+                        value={form.name.clone()}
                         oninput={{
-                            let name = name.clone();
+                            let form = form.clone();
                             Callback::from(move |event: InputEvent| {
                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                    name.set(target.value());
+                                    let mut next = (*form).clone();
+                                    next.name = target.value();
+                                    form.set(next);
                                 }
                             })
                         }}
@@ -1372,20 +1341,22 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                 <label class={classes!("text-sm")}>
                     <span class={classes!("text-[var(--muted)]")}>{ "Status" }</span>
                     <select
-                        key={format!("proxy-config-status-{}-{}", proxy_config.id, (*status).clone())}
+                        key={format!("proxy-config-status-{}-{}", proxy_config.id, form.status)}
                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
-                        value={(*status).clone()}
+                        value={form.status.clone()}
                         onchange={{
-                            let status = status.clone();
+                            let form = form.clone();
                             Callback::from(move |event: Event| {
                                 if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                                    status.set(target.value());
+                                    let mut next = (*form).clone();
+                                    next.status = target.value();
+                                    form.set(next);
                                 }
                             })
                         }}
                     >
-                        <option value="active" selected={*status == "active"}>{ "active" }</option>
-                        <option value="disabled" selected={*status == "disabled"}>{ "disabled" }</option>
+                        <option value="active" selected={form.status == "active"}>{ "active" }</option>
+                        <option value="disabled" selected={form.status == "disabled"}>{ "disabled" }</option>
                     </select>
                 </label>
                 <label class={classes!("text-sm", "md:col-span-2")}>
@@ -1393,12 +1364,14 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                     <input
                         type="text"
                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono")}
-                        value={(*proxy_url).clone()}
+                        value={form.proxy_url.clone()}
                         oninput={{
-                            let proxy_url = proxy_url.clone();
+                            let form = form.clone();
                             Callback::from(move |event: InputEvent| {
                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                    proxy_url.set(target.value());
+                                    let mut next = (*form).clone();
+                                    next.proxy_url = target.value();
+                                    form.set(next);
                                 }
                             })
                         }}
@@ -1409,12 +1382,14 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                     <input
                         type="text"
                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
-                        value={(*proxy_username).clone()}
+                        value={form.proxy_username.clone()}
                         oninput={{
-                            let proxy_username = proxy_username.clone();
+                            let form = form.clone();
                             Callback::from(move |event: InputEvent| {
                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                    proxy_username.set(target.value());
+                                    let mut next = (*form).clone();
+                                    next.proxy_username = target.value();
+                                    form.set(next);
                                 }
                             })
                         }}
@@ -1425,12 +1400,14 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                     <input
                         type="text"
                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}
-                        value={(*proxy_password).clone()}
+                        value={form.proxy_password.clone()}
                         oninput={{
-                            let proxy_password = proxy_password.clone();
+                            let form = form.clone();
                             Callback::from(move |event: InputEvent| {
                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                    proxy_password.set(target.value());
+                                    let mut next = (*form).clone();
+                                    next.proxy_password = target.value();
+                                    form.set(next);
                                 }
                             })
                         }}
@@ -1503,7 +1480,9 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
 pub fn admin_llm_gateway_page() -> Html {
     let config = use_state(|| None::<LlmGatewayRuntimeConfig>);
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
+    let keys_search = use_state(String::new);
     let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
+    let account_groups_search = use_state(String::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_total = use_state(|| 0_usize);
     let usage_page = use_state(|| 1_usize);
@@ -1562,11 +1541,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let saving_proxy_binding_provider = use_state(|| None::<String>);
     let migrating_legacy_kiro_proxy = use_state(|| false);
     let saving_runtime_config = use_state(|| false);
-    let create_name = use_state(String::new);
-    let create_quota = use_state(|| "100000".to_string());
-    let create_public = use_state(|| true);
-    let create_request_max_concurrency = use_state(String::new);
-    let create_request_min_start_interval_ms = use_state(String::new);
+    // Group the create-key inputs into a single state. Saves juggling five
+    // separate `use_state` clones across the form and the submit callback.
+    let create_key = use_state(CreateKeyForm::default);
     let creating = use_state(|| false);
     let create_account_group_name = use_state(String::new);
     let create_account_group_account_names = use_state(Vec::<String>::new);
@@ -2337,30 +2314,25 @@ pub fn admin_llm_gateway_page() -> Html {
     };
 
     let on_create = {
-        let create_name = create_name.clone();
-        let create_quota = create_quota.clone();
-        let create_public = create_public.clone();
-        let create_request_max_concurrency = create_request_max_concurrency.clone();
-        let create_request_min_start_interval_ms = create_request_min_start_interval_ms.clone();
+        let create_key = create_key.clone();
         let creating = creating.clone();
         let load_error = load_error.clone();
         let flash = flash.clone();
         let reload = reload.clone();
         let usage_page = usage_page.clone();
         Callback::from(move |_| {
-            let name = (*create_name).trim().to_string();
-            let quota = (*create_quota).trim().parse::<u64>();
-            let public_visible = *create_public;
-            let request_max_concurrency = (*create_request_max_concurrency).trim().to_string();
+            let current = (*create_key).clone();
+            let name = current.name.trim().to_string();
+            let quota = current.quota.trim().parse::<u64>();
+            let public_visible = current.public;
+            let request_max_concurrency = current.request_max_concurrency.trim().to_string();
             let request_min_start_interval_ms =
-                (*create_request_min_start_interval_ms).trim().to_string();
+                current.request_min_start_interval_ms.trim().to_string();
             let creating = creating.clone();
             let load_error = load_error.clone();
             let flash = flash.clone();
             let reload = reload.clone();
-            let create_name = create_name.clone();
-            let create_request_max_concurrency = create_request_max_concurrency.clone();
-            let create_request_min_start_interval_ms = create_request_min_start_interval_ms.clone();
+            let create_key = create_key.clone();
             let usage_page = usage_page.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Ok(quota) = quota else {
@@ -2406,9 +2378,14 @@ pub fn admin_llm_gateway_page() -> Html {
                 .await
                 {
                     Ok(_) => {
-                        create_name.set(String::new());
-                        create_request_max_concurrency.set(String::new());
-                        create_request_min_start_interval_ms.set(String::new());
+                        // Reset the form inputs after a successful create;
+                        // leave `public` / `quota` defaults as-is so the next
+                        // create has the same baseline.
+                        let mut next = (*create_key).clone();
+                        next.name = String::new();
+                        next.request_max_concurrency = String::new();
+                        next.request_min_start_interval_ms = String::new();
+                        create_key.set(next);
                         usage_page.set(1);
                         load_error.set(None);
                         flash.emit((format!("已创建 key `{}`", name), false));
@@ -2912,14 +2889,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let reload_sponsor_requests = reload_sponsor_requests.clone();
         let load_error = load_error.clone();
         Callback::from(move |request_id: String| {
-            let Some(browser) = window() else {
-                return;
-            };
-            if !browser
-                .confirm_with_message("确认删除这条 Sponsor 请求？")
-                .ok()
-                .unwrap_or(false)
-            {
+            if !confirm_destructive("确认删除这条 Sponsor 请求？") {
                 return;
             }
 
@@ -3231,13 +3201,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let reload = reload.clone();
         let load_error = load_error.clone();
         Callback::from(move |name: String| {
-            let confirmed = window()
-                .and_then(|w| {
-                    w.confirm_with_message(&format!("确认删除账号 {} ？", name))
-                        .ok()
-                })
-                .unwrap_or(false);
-            if !confirmed {
+            if !confirm_destructive(&format!("确认删除账号 {} ？", name)) {
                 return;
             }
             let reload = reload.clone();
@@ -3634,6 +3598,71 @@ pub fn admin_llm_gateway_page() -> Html {
             </div>
         }
         })
+    };
+
+    // Client-side filters for Keys and Account Groups tabs. Matches are case-insensitive.
+    // `use_memo` avoids re-filtering on unrelated parent re-renders. These are pre-computed
+    // at component top-level because the html! macro does not permit `let` bindings
+    // inside conditional branches.
+    let keys_query_lower = (*keys_search).trim().to_lowercase();
+    let filtered_keys: Vec<AdminLlmGatewayKeyView> = {
+        let q = keys_query_lower.clone();
+        use_memo(((*keys).clone(), q.clone()), move |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|k| {
+                        let hay = [
+                            k.name.to_lowercase(),
+                            k.id.to_lowercase(),
+                            k.provider_type.to_lowercase(),
+                            k.status.to_lowercase(),
+                        ];
+                        hay.iter().any(|v| v.contains(q))
+                    })
+                    .cloned()
+                    .collect()
+            }
+        })
+        .as_ref()
+        .clone()
+    };
+    let account_groups_query_lower = (*account_groups_search).trim().to_lowercase();
+    let filtered_account_groups: Vec<AdminAccountGroupView> = {
+        let q = account_groups_query_lower.clone();
+        use_memo(((*account_groups).clone(), q.clone()), move |(items, q)| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|g| {
+                        if g.name.to_lowercase().contains(q)
+                            || g.id.to_lowercase().contains(q)
+                            || g.provider_type.to_lowercase().contains(q)
+                        {
+                            return true;
+                        }
+                        g.account_names
+                            .iter()
+                            .any(|n| n.to_lowercase().contains(q))
+                    })
+                    .cloned()
+                    .collect()
+            }
+        })
+        .as_ref()
+        .clone()
+    };
+    let on_keys_search_change = {
+        let keys_search = keys_search.clone();
+        Callback::from(move |v: String| keys_search.set(v))
+    };
+    let on_account_groups_search_change = {
+        let account_groups_search = account_groups_search.clone();
+        Callback::from(move |v: String| account_groups_search.set(v))
     };
 
     html! {
@@ -4044,12 +4073,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                     <input
                                         type="text"
                                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                        value={(*create_name).clone()}
+                                        value={create_key.name.clone()}
                                         oninput={{
-                                            let create_name = create_name.clone();
+                                            let create_key = create_key.clone();
                                             Callback::from(move |event: InputEvent| {
                                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                                    create_name.set(target.value());
+                                                    let mut next = (*create_key).clone();
+                                                    next.name = target.value();
+                                                    create_key.set(next);
                                                 }
                                             })
                                         }}
@@ -4060,12 +4091,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                     <input
                                         type="number"
                                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                        value={(*create_quota).clone()}
+                                        value={create_key.quota.clone()}
                                         oninput={{
-                                            let create_quota = create_quota.clone();
+                                            let create_key = create_key.clone();
                                             Callback::from(move |event: InputEvent| {
                                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                                    create_quota.set(target.value());
+                                                    let mut next = (*create_key).clone();
+                                                    next.quota = target.value();
+                                                    create_key.set(next);
                                                 }
                                             })
                                         }}
@@ -4079,12 +4112,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                         type="number"
                                         placeholder="留空表示不限制"
                                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                        value={(*create_request_max_concurrency).clone()}
+                                        value={create_key.request_max_concurrency.clone()}
                                         oninput={{
-                                            let create_request_max_concurrency = create_request_max_concurrency.clone();
+                                            let create_key = create_key.clone();
                                             Callback::from(move |event: InputEvent| {
                                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                                    create_request_max_concurrency.set(target.value());
+                                                    let mut next = (*create_key).clone();
+                                                    next.request_max_concurrency = target.value();
+                                                    create_key.set(next);
                                                 }
                                             })
                                         }}
@@ -4096,12 +4131,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                         type="number"
                                         placeholder="留空表示不限制"
                                         class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                        value={(*create_request_min_start_interval_ms).clone()}
+                                        value={create_key.request_min_start_interval_ms.clone()}
                                         oninput={{
-                                            let create_request_min_start_interval_ms = create_request_min_start_interval_ms.clone();
+                                            let create_key = create_key.clone();
                                             Callback::from(move |event: InputEvent| {
                                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                                    create_request_min_start_interval_ms.set(target.value());
+                                                    let mut next = (*create_key).clone();
+                                                    next.request_min_start_interval_ms = target.value();
+                                                    create_key.set(next);
                                                 }
                                             })
                                         }}
@@ -4112,12 +4149,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                 <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
                                     <input
                                         type="checkbox"
-                                        checked={*create_public}
+                                        checked={create_key.public}
                                         onchange={{
-                                            let create_public = create_public.clone();
+                                            let create_key = create_key.clone();
                                             Callback::from(move |event: Event| {
                                                 if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                                                    create_public.set(target.checked());
+                                                    let mut next = (*create_key).clone();
+                                                    next.public = target.checked();
+                                                    create_key.set(next);
                                                 }
                                             })
                                         }}
@@ -4361,13 +4400,29 @@ pub fn admin_llm_gateway_page() -> Html {
                             { if *loading { "刷新中..." } else { "刷新" } }
                         </button>
                     </div>
+                    <div class={classes!("mt-4", "max-w-md")}>
+                        <SearchBox
+                            value={(*keys_search).clone()}
+                            on_change={on_keys_search_change.clone()}
+                            placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
+                        />
+                    </div>
+                    if !keys_query_lower.is_empty() {
+                        <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                            { format!("匹配 {}/{}", filtered_keys.len(), keys.len()) }
+                        </p>
+                    }
                     <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
                         if keys.is_empty() && !*loading {
                             <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
                                 { "当前还没有可管理的 key。" }
                             </div>
+                        } else if filtered_keys.is_empty() {
+                            <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-6", "text-center", "text-[var(--muted)]")}>
+                                { "当前过滤条件下没有匹配的 key。" }
+                            </div>
                         } else {
-                            { for keys.iter().map(|key_item| html! {
+                            { for filtered_keys.iter().map(|key_item| html! {
                                 <KeyEditorCard
                                     key={key_item.id.clone()}
                                     key_item={key_item.clone()}
@@ -4405,6 +4460,19 @@ pub fn admin_llm_gateway_page() -> Html {
                             { if *loading { "刷新中..." } else { "刷新账号组" } }
                         </button>
                     </div>
+
+                    <div class={classes!("mt-4", "max-w-md")}>
+                        <SearchBox
+                            value={(*account_groups_search).clone()}
+                            on_change={on_account_groups_search_change.clone()}
+                            placeholder={AttrValue::Static("搜索账号组名 / id / 成员账号")}
+                        />
+                    </div>
+                    if !account_groups_query_lower.is_empty() {
+                        <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                            { format!("匹配 {}/{}", filtered_account_groups.len(), account_groups.len()) }
+                        </p>
+                    }
 
                     <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
                         <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
@@ -4516,8 +4584,12 @@ pub fn admin_llm_gateway_page() -> Html {
                             <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
                                 { "当前还没有账号组。" }
                             </div>
+                        } else if filtered_account_groups.is_empty() {
+                            <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-6", "text-center", "text-[var(--muted)]")}>
+                                { "当前过滤条件下没有匹配的账号组。" }
+                            </div>
                         } else {
-                            { for account_groups.iter().map(|group_item| html! {
+                            { for filtered_account_groups.iter().map(|group_item| html! {
                                 <AccountGroupEditorCard
                                     key={group_item.id.clone()}
                                     group_item={group_item.clone()}
