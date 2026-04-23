@@ -5,7 +5,7 @@
 //! migration logic needed to evolve existing production tables without manual
 //! intervention.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
@@ -22,6 +22,46 @@ use super::types::{
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
+
+const COMPRESSION_META_KEY: &str = "lance-encoding:compression";
+const COMPRESSION_LEVEL_META_KEY: &str = "lance-encoding:compression-level";
+const DICT_DIVISOR_META_KEY: &str = "lance-encoding:dict-divisor";
+const DICT_SIZE_RATIO_META_KEY: &str = "lance-encoding:dict-size-ratio";
+const DICT_VALUES_COMPRESSION_META_KEY: &str = "lance-encoding:dict-values-compression";
+const DICT_VALUES_COMPRESSION_LEVEL_META_KEY: &str = "lance-encoding:dict-values-compression-level";
+const HEAVY_TEXT_COMPRESSION_SCHEME: &str = "zstd";
+const HEAVY_TEXT_COMPRESSION_LEVEL: i32 = 6;
+const LOW_CARDINALITY_DICT_DIVISOR: u64 = 8;
+const LOW_CARDINALITY_DICT_SIZE_RATIO: f64 = 0.98;
+
+fn low_cardinality_metadata() -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    metadata.insert(DICT_DIVISOR_META_KEY.to_string(), LOW_CARDINALITY_DICT_DIVISOR.to_string());
+    metadata
+        .insert(DICT_SIZE_RATIO_META_KEY.to_string(), LOW_CARDINALITY_DICT_SIZE_RATIO.to_string());
+    metadata
+}
+
+fn compressed_utf8_field(name: &str, nullable: bool) -> Field {
+    let mut metadata = HashMap::new();
+    metadata.insert(COMPRESSION_META_KEY.to_string(), HEAVY_TEXT_COMPRESSION_SCHEME.to_string());
+    metadata
+        .insert(COMPRESSION_LEVEL_META_KEY.to_string(), HEAVY_TEXT_COMPRESSION_LEVEL.to_string());
+    Field::new(name, DataType::Utf8, nullable).with_metadata(metadata)
+}
+
+fn low_cardinality_utf8_field(name: &str, nullable: bool) -> Field {
+    let mut metadata = low_cardinality_metadata();
+    metadata.insert(
+        DICT_VALUES_COMPRESSION_META_KEY.to_string(),
+        HEAVY_TEXT_COMPRESSION_SCHEME.to_string(),
+    );
+    metadata.insert(
+        DICT_VALUES_COMPRESSION_LEVEL_META_KEY.to_string(),
+        HEAVY_TEXT_COMPRESSION_LEVEL.to_string(),
+    );
+    Field::new(name, DataType::Utf8, nullable).with_metadata(metadata)
+}
 
 /// Canonical schema for the `llm_gateway_keys` table.
 pub fn llm_gateway_keys_schema() -> Arc<Schema> {
@@ -80,17 +120,17 @@ pub fn llm_gateway_account_groups_schema() -> Arc<Schema> {
 pub fn llm_gateway_usage_events_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
-        Field::new("key_id", DataType::Utf8, false),
-        Field::new("key_name", DataType::Utf8, true),
+        low_cardinality_utf8_field("key_id", false),
+        low_cardinality_utf8_field("key_name", true),
         // Upstream LLM provider for this event (e.g. "anthropic", "openai").
         // Nullable for events recorded before multi-provider routing.
-        Field::new("provider_type", DataType::Utf8, true),
-        Field::new("account_name", DataType::Utf8, true),
-        Field::new("request_method", DataType::Utf8, true),
-        Field::new("request_url", DataType::Utf8, true),
+        low_cardinality_utf8_field("provider_type", true),
+        low_cardinality_utf8_field("account_name", true),
+        low_cardinality_utf8_field("request_method", true),
+        low_cardinality_utf8_field("request_url", true),
         Field::new("latency_ms", DataType::Int32, true),
-        Field::new("endpoint", DataType::Utf8, false),
-        Field::new("model", DataType::Utf8, true),
+        low_cardinality_utf8_field("endpoint", false),
+        low_cardinality_utf8_field("model", true),
         Field::new("status_code", DataType::Int32, false),
         Field::new("input_uncached_tokens", DataType::UInt64, false),
         Field::new("input_cached_tokens", DataType::UInt64, false),
@@ -99,13 +139,13 @@ pub fn llm_gateway_usage_events_schema() -> Arc<Schema> {
         Field::new("usage_missing", DataType::Boolean, false),
         Field::new("credit_usage", DataType::Float64, true),
         Field::new("credit_usage_missing", DataType::Boolean, false),
-        Field::new("client_ip", DataType::Utf8, true),
-        Field::new("ip_region", DataType::Utf8, true),
-        Field::new("request_headers_json", DataType::Utf8, true),
-        Field::new("last_message_content", DataType::Utf8, true),
-        Field::new("client_request_body_json", DataType::Utf8, true),
-        Field::new("upstream_request_body_json", DataType::Utf8, true),
-        Field::new("full_request_json", DataType::Utf8, true),
+        low_cardinality_utf8_field("client_ip", true),
+        low_cardinality_utf8_field("ip_region", true),
+        compressed_utf8_field("request_headers_json", true),
+        compressed_utf8_field("last_message_content", true),
+        compressed_utf8_field("client_request_body_json", true),
+        compressed_utf8_field("upstream_request_body_json", true),
+        compressed_utf8_field("full_request_json", true),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
@@ -934,4 +974,106 @@ pub fn sponsor_request_columns() -> [&'static str; 16] {
 /// Escape a literal string for safe use inside a simple LanceDB SQL filter.
 pub fn escape_literal(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        llm_gateway_usage_events_schema, COMPRESSION_LEVEL_META_KEY, COMPRESSION_META_KEY,
+        DICT_DIVISOR_META_KEY, DICT_SIZE_RATIO_META_KEY, DICT_VALUES_COMPRESSION_LEVEL_META_KEY,
+        DICT_VALUES_COMPRESSION_META_KEY, HEAVY_TEXT_COMPRESSION_LEVEL,
+        HEAVY_TEXT_COMPRESSION_SCHEME, LOW_CARDINALITY_DICT_DIVISOR,
+        LOW_CARDINALITY_DICT_SIZE_RATIO,
+    };
+
+    #[test]
+    fn usage_event_heavy_text_columns_use_explicit_zstd_compression() {
+        let schema = llm_gateway_usage_events_schema();
+        let expected_level = HEAVY_TEXT_COMPRESSION_LEVEL.to_string();
+
+        for column in [
+            "request_headers_json",
+            "last_message_content",
+            "client_request_body_json",
+            "upstream_request_body_json",
+            "full_request_json",
+        ] {
+            let field = schema
+                .field_with_name(column)
+                .expect("usage-event text column exists");
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(COMPRESSION_META_KEY)
+                    .map(String::as_str),
+                Some(HEAVY_TEXT_COMPRESSION_SCHEME),
+                "{column} should force zstd compression",
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(COMPRESSION_LEVEL_META_KEY)
+                    .map(String::as_str),
+                Some(expected_level.as_str()),
+                "{column} should pin a zstd compression level",
+            );
+        }
+    }
+
+    #[test]
+    fn usage_event_low_cardinality_columns_use_dictionary_friendly_metadata() {
+        let schema = llm_gateway_usage_events_schema();
+        let expected_dict_divisor = LOW_CARDINALITY_DICT_DIVISOR.to_string();
+        let expected_dict_ratio = LOW_CARDINALITY_DICT_SIZE_RATIO.to_string();
+        let expected_level = HEAVY_TEXT_COMPRESSION_LEVEL.to_string();
+
+        for column in [
+            "key_id",
+            "key_name",
+            "provider_type",
+            "account_name",
+            "request_method",
+            "request_url",
+            "endpoint",
+            "model",
+            "client_ip",
+            "ip_region",
+        ] {
+            let field = schema
+                .field_with_name(column)
+                .expect("usage-event low-cardinality column exists");
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(DICT_DIVISOR_META_KEY)
+                    .map(String::as_str),
+                Some(expected_dict_divisor.as_str()),
+                "{column} should cap dictionary cardinality by divisor",
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(DICT_SIZE_RATIO_META_KEY)
+                    .map(String::as_str),
+                Some(expected_dict_ratio.as_str()),
+                "{column} should allow dictionary encoding when it materially shrinks data",
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(DICT_VALUES_COMPRESSION_META_KEY)
+                    .map(String::as_str),
+                Some(HEAVY_TEXT_COMPRESSION_SCHEME),
+                "{column} should compress dictionary values with zstd",
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(DICT_VALUES_COMPRESSION_LEVEL_META_KEY)
+                    .map(String::as_str),
+                Some(expected_level.as_str()),
+                "{column} should pin dictionary-value zstd level",
+            );
+        }
+    }
 }

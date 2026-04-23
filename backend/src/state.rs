@@ -93,8 +93,8 @@ pub const MAX_CONFIGURABLE_TABLE_COMPACT_SCAN_INTERVAL_SECS: u64 = 86_400;
 pub const DEFAULT_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 128;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 2;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_FRAGMENT_THRESHOLD: usize = 10_000;
-pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
-pub const MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 1;
+pub const DEFAULT_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 0;
+pub const MIN_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 0;
 pub const MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS: i64 = 8_760;
 pub const DEFAULT_TABLE_COMPACT_WORKER_COUNT: usize = 4;
 pub const MIN_CONFIGURABLE_TABLE_COMPACT_WORKER_COUNT: usize = 1;
@@ -1102,6 +1102,12 @@ fn spawn_behavior_event_flusher(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compaction_runtime_config_defaults_prune_to_zero_hours() {
+        let config = CompactionRuntimeConfig::default();
+        assert_eq!(config.prune_older_than_hours, 0);
+    }
 
     #[test]
     fn sanitize_kiro_cache_policy_json_falls_back_to_default_values() {

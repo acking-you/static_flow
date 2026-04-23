@@ -2844,6 +2844,43 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert!(filtered.iter().all(|event| event.key_id == key.id));
 
+        let db = connect_db(&dir).await.expect("reopen rebuilt db");
+        let table = open_table(&db, LLM_GATEWAY_USAGE_EVENTS_TABLE)
+            .await
+            .expect("open rebuilt usage-events table");
+        let schema = table.schema().await.expect("read rebuilt schema");
+        let ip_region = schema
+            .field_with_name("ip_region")
+            .expect("ip_region field exists");
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-divisor")
+                .map(String::as_str),
+            Some("8")
+        );
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-size-ratio")
+                .map(String::as_str),
+            Some("0.98")
+        );
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-values-compression")
+                .map(String::as_str),
+            Some("zstd")
+        );
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-values-compression-level")
+                .map(String::as_str),
+            Some("6")
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

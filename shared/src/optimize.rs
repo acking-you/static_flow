@@ -37,7 +37,7 @@ impl Default for CompactConfig {
         Self {
             enabled: true,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
-            prune_older_than_hours: 1,
+            prune_older_than_hours: 0,
             optimize_dirty_indices: true,
             skip_tables: HashSet::new(),
         }
@@ -672,6 +672,12 @@ mod tests {
         assert_eq!(CompactAction::CompactedMaintenance.as_str(), "compacted_maintenance");
         assert_eq!(CompactAction::CompactedSafeFallback.as_str(), "compacted_safe_fallback");
         assert_eq!(CompactAction::CompactFailed.as_str(), "compact_failed");
+    }
+
+    #[test]
+    fn compact_config_defaults_prune_to_zero_hours() {
+        let config = CompactConfig::default();
+        assert_eq!(config.prune_older_than_hours, 0);
     }
 
     #[tokio::test]

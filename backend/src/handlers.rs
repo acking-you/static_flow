@@ -4031,7 +4031,7 @@ fn apply_compaction_runtime_config_update(
             ..=MAX_CONFIGURABLE_TABLE_COMPACT_PRUNE_OLDER_THAN_HOURS)
             .contains(&value)
         {
-            return Err(bad_request("`prune_older_than_hours` must be between 1 and 8760"));
+            return Err(bad_request("`prune_older_than_hours` must be between 0 and 8760"));
         }
         next.prune_older_than_hours = value;
     }
@@ -5822,6 +5822,23 @@ mod tests {
         assert_eq!(config.fragment_threshold, 128);
         assert_eq!(config.prune_older_than_hours, 6);
         assert_eq!(config.worker_count, 8);
+    }
+
+    #[test]
+    fn update_compaction_runtime_config_accepts_zero_hour_prune() {
+        let config = apply_compaction_runtime_config_update(
+            CompactionRuntimeConfig::default(),
+            UpdateCompactionRuntimeConfigRequest {
+                enabled: None,
+                scan_interval_seconds: None,
+                fragment_threshold: None,
+                prune_older_than_hours: Some(0),
+                worker_count: None,
+            },
+        )
+        .expect("zero-hour prune should be accepted");
+
+        assert_eq!(config.prune_older_than_hours, 0);
     }
 
     #[test]
