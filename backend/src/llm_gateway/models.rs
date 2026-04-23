@@ -18,6 +18,8 @@ use super::{
 };
 use crate::state::AppState;
 
+const GATEWAY_MODELS_OWNER: &str = "static-flow";
+
 /// Serve `/v1/models` by querying the upstream Codex models endpoint.
 pub(crate) async fn respond_local_models(
     state: &AppState,
@@ -124,7 +126,7 @@ async fn fetch_codex_models(
             return Err(err).context("codex models upstream request failed");
         },
     };
-    match parse_models_response(response, "codexmanager").await {
+    match parse_models_response(response, gateway_models_owner()).await {
         Ok(parsed) => Ok(parsed),
         Err(err) => {
             tracing::error!(
@@ -135,6 +137,10 @@ async fn fetch_codex_models(
             Err(err)
         },
     }
+}
+
+fn gateway_models_owner() -> &'static str {
+    GATEWAY_MODELS_OWNER
 }
 
 /// Parse the upstream models response and return normalized descriptors plus
@@ -259,4 +265,14 @@ pub(crate) fn append_client_version_query(url: &str, client_version: &str) -> St
     }
     let separator = if url.contains('?') { '&' } else { '?' };
     format!("{url}{separator}client_version={client_version}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gateway_models_owner;
+
+    #[test]
+    fn codex_models_are_tagged_with_static_flow_owner() {
+        assert_eq!(gateway_models_owner(), "static-flow");
+    }
 }
