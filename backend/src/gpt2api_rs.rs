@@ -240,6 +240,91 @@ pub async fn list_admin_accounts(
     .await
 }
 
+pub async fn list_admin_proxy_configs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::GET,
+        "/admin/proxy-configs",
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn create_admin_proxy_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        "/admin/proxy-configs",
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn update_admin_proxy_config(
+    AxumPath(proxy_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::PATCH,
+        &format!("/admin/proxy-configs/{proxy_id}"),
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn delete_admin_proxy_config(
+    AxumPath(proxy_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::DELETE,
+        &format!("/admin/proxy-configs/{proxy_id}"),
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn check_admin_proxy_config(
+    AxumPath(proxy_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        &format!("/admin/proxy-configs/{proxy_id}/check"),
+        None,
+        Some(Value::Object(serde_json::Map::new())),
+    )
+    .await
+}
+
 pub async fn import_admin_accounts(
     State(state): State<AppState>,
     headers: HeaderMap,

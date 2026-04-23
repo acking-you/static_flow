@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
-use web_sys::{File, HtmlInputElement, HtmlTextAreaElement};
+use web_sys::{File, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -19,20 +19,25 @@ extern "C" {
 use crate::{
     api::{
         admin_gpt2api_rs_chat_completions, admin_gpt2api_rs_edit_images,
-        admin_gpt2api_rs_generate_images, admin_gpt2api_rs_responses, create_admin_gpt2api_rs_key,
-        delete_admin_gpt2api_rs_accounts, delete_admin_gpt2api_rs_key,
+        admin_gpt2api_rs_generate_images, admin_gpt2api_rs_responses,
+        check_admin_gpt2api_rs_proxy_config, create_admin_gpt2api_rs_key,
+        create_admin_gpt2api_rs_proxy_config, delete_admin_gpt2api_rs_accounts,
+        delete_admin_gpt2api_rs_key, delete_admin_gpt2api_rs_proxy_config,
         fetch_admin_gpt2api_rs_accounts, fetch_admin_gpt2api_rs_config,
-        fetch_admin_gpt2api_rs_keys, fetch_admin_gpt2api_rs_models, fetch_admin_gpt2api_rs_status,
+        fetch_admin_gpt2api_rs_keys, fetch_admin_gpt2api_rs_models,
+        fetch_admin_gpt2api_rs_proxy_configs, fetch_admin_gpt2api_rs_status,
         fetch_admin_gpt2api_rs_usage, fetch_admin_gpt2api_rs_version,
         import_admin_gpt2api_rs_accounts, post_admin_gpt2api_rs_login,
         refresh_admin_gpt2api_rs_accounts, rotate_admin_gpt2api_rs_key,
         update_admin_gpt2api_rs_account, update_admin_gpt2api_rs_config,
-        update_admin_gpt2api_rs_key, AdminGpt2ApiRsAccountView, AdminGpt2ApiRsCreateKeyRequest,
-        AdminGpt2ApiRsDeleteAccountsRequest, AdminGpt2ApiRsImageEditRequest,
-        AdminGpt2ApiRsImageGenerationRequest, AdminGpt2ApiRsImportAccountsRequest,
-        AdminGpt2ApiRsKeyView, AdminGpt2ApiRsRefreshAccountsRequest,
+        update_admin_gpt2api_rs_key, update_admin_gpt2api_rs_proxy_config,
+        AdminGpt2ApiRsAccountView, AdminGpt2ApiRsCreateKeyRequest,
+        AdminGpt2ApiRsCreateProxyConfigRequest, AdminGpt2ApiRsDeleteAccountsRequest,
+        AdminGpt2ApiRsImageEditRequest, AdminGpt2ApiRsImageGenerationRequest,
+        AdminGpt2ApiRsImportAccountsRequest, AdminGpt2ApiRsKeyView, AdminGpt2ApiRsProxyCheckResult,
+        AdminGpt2ApiRsProxyConfigView, AdminGpt2ApiRsRefreshAccountsRequest,
         AdminGpt2ApiRsUpdateAccountRequest, AdminGpt2ApiRsUpdateKeyRequest,
-        AdminGpt2ApiRsUsageEventView, Gpt2ApiRsConfig,
+        AdminGpt2ApiRsUpdateProxyConfigRequest, AdminGpt2ApiRsUsageEventView, Gpt2ApiRsConfig,
     },
     components::{search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{confirm_destructive, format_ms, MaskedSecretCode},
@@ -123,6 +128,53 @@ fn format_account_scheduler(account: &AdminGpt2ApiRsAccountView) -> String {
     format!("{concurrency} · {spacing}")
 }
 
+fn format_account_proxy_binding(account: &AdminGpt2ApiRsAccountView) -> String {
+    match account.proxy_mode.as_str() {
+        "direct" => "direct".to_string(),
+        "fixed" => account
+            .proxy_config_id
+            .as_ref()
+            .map(|proxy_id| format!("fixed · {proxy_id}"))
+            .unwrap_or_else(|| "fixed".to_string()),
+        _ => "inherit".to_string(),
+    }
+}
+
+fn format_account_restore_at(account: &AdminGpt2ApiRsAccountView) -> String {
+    account
+        .restore_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_account_effective_proxy(account: &AdminGpt2ApiRsAccountView) -> String {
+    match account.effective_proxy_url.as_deref() {
+        Some(url) => match account.effective_proxy_config_name.as_deref() {
+            Some(name) if !name.trim().is_empty() => {
+                format!("{} · {} · {}", account.effective_proxy_source, name, url)
+            },
+            _ => format!("{} · {}", account.effective_proxy_source, url),
+        },
+        None => {
+            if account.effective_proxy_source.trim().is_empty() {
+                "direct".to_string()
+            } else {
+                format!("{} · direct", account.effective_proxy_source)
+            }
+        },
+    }
+}
+
+fn format_proxy_check_result(result: &AdminGpt2ApiRsProxyCheckResult) -> String {
+    match result.status_code {
+        Some(status) => format!("{} (status {})", result.message, status),
+        None => result.message.clone(),
+    }
+}
+
 #[function_component(AdminGpt2ApiRsPage)]
 pub fn admin_gpt2api_rs_page() -> Html {
     let active_tab = use_state(|| GPT2API_TAB_OVERVIEW.to_string());
@@ -141,6 +193,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let login_json = use_state(|| "{}".to_string());
 
     let accounts = use_state(Vec::<AdminGpt2ApiRsAccountView>::new);
+    let proxy_configs = use_state(Vec::<AdminGpt2ApiRsProxyConfigView>::new);
     let accounts_search = use_state(String::new);
     let keys = use_state(Vec::<AdminGpt2ApiRsKeyView>::new);
     let usage = use_state(Vec::<AdminGpt2ApiRsUsageEventView>::new);
@@ -169,8 +222,19 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let update_impersonate_browser = use_state(String::new);
     let update_request_max_concurrency = use_state(String::new);
     let update_request_min_start_interval_ms = use_state(String::new);
+    let update_proxy_mode = use_state(|| "inherit".to_string());
+    let update_proxy_config_id = use_state(String::new);
     let selected_scheduler_account_name = use_state(String::new);
     let saving_account_scheduler = use_state(|| false);
+
+    let editing_proxy_id = use_state(|| None::<String>);
+    let proxy_form_name = use_state(String::new);
+    let proxy_form_url = use_state(|| "http://127.0.0.1:11118".to_string());
+    let proxy_form_username = use_state(String::new);
+    let proxy_form_password = use_state(String::new);
+    let proxy_form_status = use_state(|| "active".to_string());
+    let saving_proxy = use_state(|| false);
+    let checking_proxy = use_state(|| false);
 
     let generation_prompt = use_state(String::new);
     let generation_model = use_state(|| "gpt-image-1".to_string());
@@ -241,6 +305,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let version_json = version_json.clone();
         let models_json = models_json.clone();
         let accounts = accounts.clone();
+        let proxy_configs = proxy_configs.clone();
         let keys = keys.clone();
         let usage = usage.clone();
         let usage_limit = usage_limit.clone();
@@ -257,6 +322,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
             let version_json = version_json.clone();
             let models_json = models_json.clone();
             let accounts = accounts.clone();
+            let proxy_configs = proxy_configs.clone();
             let keys = keys.clone();
             let usage = usage.clone();
             let usage_limit = usage_limit.clone();
@@ -287,6 +353,10 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 }
                 match fetch_admin_gpt2api_rs_accounts().await {
                     Ok(value) => accounts.set(value),
+                    Err(err) => load_error.set(Some(err)),
+                }
+                match fetch_admin_gpt2api_rs_proxy_configs().await {
+                    Ok(value) => proxy_configs.set(value),
                     Err(err) => load_error.set(Some(err)),
                 }
                 match fetch_admin_gpt2api_rs_keys().await {
@@ -404,6 +474,182 @@ pub fn admin_gpt2api_rs_page() -> Html {
         })
     };
 
+    let reset_proxy_form = {
+        let editing_proxy_id = editing_proxy_id.clone();
+        let proxy_form_name = proxy_form_name.clone();
+        let proxy_form_url = proxy_form_url.clone();
+        let proxy_form_username = proxy_form_username.clone();
+        let proxy_form_password = proxy_form_password.clone();
+        let proxy_form_status = proxy_form_status.clone();
+        Callback::from(move |_| {
+            editing_proxy_id.set(None);
+            proxy_form_name.set(String::new());
+            proxy_form_url.set("http://127.0.0.1:11118".to_string());
+            proxy_form_username.set(String::new());
+            proxy_form_password.set(String::new());
+            proxy_form_status.set("active".to_string());
+        })
+    };
+
+    let on_edit_proxy_config = {
+        let editing_proxy_id = editing_proxy_id.clone();
+        let proxy_form_name = proxy_form_name.clone();
+        let proxy_form_url = proxy_form_url.clone();
+        let proxy_form_username = proxy_form_username.clone();
+        let proxy_form_password = proxy_form_password.clone();
+        let proxy_form_status = proxy_form_status.clone();
+        Callback::from(move |proxy_config: AdminGpt2ApiRsProxyConfigView| {
+            editing_proxy_id.set(Some(proxy_config.id));
+            proxy_form_name.set(proxy_config.name);
+            proxy_form_url.set(proxy_config.proxy_url);
+            proxy_form_username.set(proxy_config.proxy_username.unwrap_or_default());
+            proxy_form_password.set(proxy_config.proxy_password.unwrap_or_default());
+            proxy_form_status.set(proxy_config.status);
+        })
+    };
+
+    let on_submit_proxy_config = {
+        let editing_proxy_id = editing_proxy_id.clone();
+        let proxy_form_name = proxy_form_name.clone();
+        let proxy_form_url = proxy_form_url.clone();
+        let proxy_form_username = proxy_form_username.clone();
+        let proxy_form_password = proxy_form_password.clone();
+        let proxy_form_status = proxy_form_status.clone();
+        let saving_proxy = saving_proxy.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        let reset_proxy_form = reset_proxy_form.clone();
+        Callback::from(move |_| {
+            let name = (*proxy_form_name).trim().to_string();
+            if name.is_empty() {
+                load_error.set(Some("Proxy config name is required".to_string()));
+                return;
+            }
+            let proxy_url = (*proxy_form_url).trim().to_string();
+            if proxy_url.is_empty() {
+                load_error.set(Some("Proxy URL is required".to_string()));
+                return;
+            }
+            let proxy_username = (!(*proxy_form_username).trim().is_empty())
+                .then(|| (*proxy_form_username).trim().to_string());
+            let proxy_password = (!(*proxy_form_password).trim().is_empty())
+                .then(|| (*proxy_form_password).trim().to_string());
+            let status = (*proxy_form_status).trim().to_string();
+            let editing_proxy_id_value = (*editing_proxy_id).clone();
+            saving_proxy.set(true);
+            load_error.set(None);
+            notice.set(None);
+            let saving_proxy = saving_proxy.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            let reset_proxy_form = reset_proxy_form.clone();
+            spawn_local(async move {
+                let result = if let Some(proxy_id) = editing_proxy_id_value {
+                    let request = AdminGpt2ApiRsUpdateProxyConfigRequest {
+                        name: Some(name),
+                        proxy_url: Some(proxy_url),
+                        proxy_username: Some(proxy_username),
+                        proxy_password: Some(proxy_password),
+                        status: Some(status),
+                    };
+                    update_admin_gpt2api_rs_proxy_config(&proxy_id, &request)
+                        .await
+                        .map(|_| "Updated proxy config".to_string())
+                } else {
+                    let request = AdminGpt2ApiRsCreateProxyConfigRequest {
+                        name,
+                        proxy_url,
+                        proxy_username,
+                        proxy_password,
+                        status: Some(status),
+                    };
+                    create_admin_gpt2api_rs_proxy_config(&request)
+                        .await
+                        .map(|_| "Created proxy config".to_string())
+                };
+                match result {
+                    Ok(message) => {
+                        notice.set(Some(message));
+                        reset_proxy_form.emit(());
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                saving_proxy.set(false);
+            });
+        })
+    };
+
+    let on_check_proxy_config = {
+        let checking_proxy = checking_proxy.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        Callback::from(move |proxy_config: AdminGpt2ApiRsProxyConfigView| {
+            if *checking_proxy {
+                return;
+            }
+            checking_proxy.set(true);
+            load_error.set(None);
+            notice.set(None);
+            let checking_proxy = checking_proxy.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            spawn_local(async move {
+                match check_admin_gpt2api_rs_proxy_config(&proxy_config.id).await {
+                    Ok(result) => {
+                        let message = format!(
+                            "{}: {}",
+                            proxy_config.name,
+                            format_proxy_check_result(&result)
+                        );
+                        if result.ok {
+                            notice.set(Some(message));
+                        } else {
+                            load_error.set(Some(message));
+                        }
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                checking_proxy.set(false);
+            });
+        })
+    };
+
+    let on_delete_proxy_config = {
+        let editing_proxy_id = editing_proxy_id.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        let reset_proxy_form = reset_proxy_form.clone();
+        Callback::from(move |proxy_config: AdminGpt2ApiRsProxyConfigView| {
+            if !confirm_destructive("确认删除这个 gpt2api-rs 代理配置？仍被账号绑定时删除会失败。")
+            {
+                return;
+            }
+            load_error.set(None);
+            notice.set(None);
+            let editing_proxy_id = editing_proxy_id.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            let reset_proxy_form = reset_proxy_form.clone();
+            spawn_local(async move {
+                match delete_admin_gpt2api_rs_proxy_config(&proxy_config.id).await {
+                    Ok(_) => {
+                        if (*editing_proxy_id).as_deref() == Some(proxy_config.id.as_str()) {
+                            reset_proxy_form.emit(());
+                        }
+                        notice.set(Some(format!("Deleted proxy config {}", proxy_config.name)));
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+            });
+        })
+    };
+
     let on_refresh_all_accounts = {
         let load_error = load_error.clone();
         let notice = notice.clone();
@@ -439,6 +685,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let update_session_token = update_session_token.clone();
         let update_user_agent = update_user_agent.clone();
         let update_impersonate_browser = update_impersonate_browser.clone();
+        let update_proxy_mode = update_proxy_mode.clone();
+        let update_proxy_config_id = update_proxy_config_id.clone();
         let load_error = load_error.clone();
         let notice = notice.clone();
         let reload_all = reload_all.clone();
@@ -470,6 +718,28 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 .then(|| (*update_user_agent).trim().to_string());
             let impersonate_browser = (!(*update_impersonate_browser).trim().is_empty())
                 .then(|| (*update_impersonate_browser).trim().to_string());
+            let proxy_mode = match (*update_proxy_mode).trim() {
+                "" => "inherit".to_string(),
+                "inherit" | "direct" | "fixed" => (*update_proxy_mode).trim().to_string(),
+                _ => {
+                    load_error
+                        .set(Some("proxy mode must be inherit, direct, or fixed".to_string()));
+                    return;
+                },
+            };
+            let proxy_config_id = match proxy_mode.as_str() {
+                "fixed" => {
+                    let value = (*update_proxy_config_id).trim().to_string();
+                    if value.is_empty() {
+                        load_error.set(Some(
+                            "Select a proxy config when proxy mode is fixed".to_string(),
+                        ));
+                        return;
+                    }
+                    Some(Some(value))
+                },
+                _ => Some(None),
+            };
             load_error.set(None);
             notice.set(None);
             let load_error = load_error.clone();
@@ -487,6 +757,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     impersonate_browser,
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
+                    proxy_mode: Some(proxy_mode),
+                    proxy_config_id,
                 };
                 match update_admin_gpt2api_rs_account(&request).await {
                     Ok(_) => {
@@ -569,6 +841,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     impersonate_browser: None,
                     request_max_concurrency: Some(request_max_concurrency),
                     request_min_start_interval_ms: Some(request_min_start_interval_ms),
+                    proxy_mode: None,
+                    proxy_config_id: None,
                 };
                 match update_admin_gpt2api_rs_account(&request).await {
                     Ok(_) => {
@@ -1218,6 +1492,210 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_import_accounts}>{ "Import Accounts" }</button>
 
+                <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4", "space-y-4")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ "Proxy Configs" }</h3>
+                            <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                                { "Reusable per-account upstream proxy configs. New configs default to http://127.0.0.1:11118 for this rollout." }
+                            </p>
+                        </div>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            if let Some(proxy_id) = (*editing_proxy_id).clone() {
+                                <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                    { format!("Editing {}", proxy_id) }
+                                </span>
+                            }
+                            <button
+                                class={classes!("btn-fluent-secondary")}
+                                onclick={{
+                                    let reset_proxy_form = reset_proxy_form.clone();
+                                    Callback::from(move |_| reset_proxy_form.emit(()))
+                                }}
+                            >
+                                { if (*editing_proxy_id).is_some() { "New Proxy Config" } else { "Reset Form" } }
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class={classes!("grid", "gap-4", "lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]")}>
+                        <div class={classes!("space-y-3")}>
+                            <label class="block text-sm">
+                                <span>{ "Name" }</span>
+                                <input
+                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                    value={(*proxy_form_name).clone()}
+                                    oninput={{
+                                        let proxy_form_name = proxy_form_name.clone();
+                                        Callback::from(move |e: InputEvent| {
+                                            proxy_form_name.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class="block text-sm">
+                                <span>{ "Proxy URL" }</span>
+                                <input
+                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2 font-mono"
+                                    value={(*proxy_form_url).clone()}
+                                    oninput={{
+                                        let proxy_form_url = proxy_form_url.clone();
+                                        Callback::from(move |e: InputEvent| {
+                                            proxy_form_url.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
+                                <label class="block text-sm">
+                                    <span>{ "Proxy Username" }</span>
+                                    <input
+                                        class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                        value={(*proxy_form_username).clone()}
+                                        oninput={{
+                                            let proxy_form_username = proxy_form_username.clone();
+                                            Callback::from(move |e: InputEvent| {
+                                                proxy_form_username.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                            })
+                                        }}
+                                    />
+                                </label>
+                                <label class="block text-sm">
+                                    <span>{ "Proxy Password" }</span>
+                                    <input
+                                        class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                        value={(*proxy_form_password).clone()}
+                                        oninput={{
+                                            let proxy_form_password = proxy_form_password.clone();
+                                            Callback::from(move |e: InputEvent| {
+                                                proxy_form_password.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                            })
+                                        }}
+                                    />
+                                </label>
+                            </div>
+                            <label class="block text-sm">
+                                <span>{ "Status" }</span>
+                                <select
+                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                    value={(*proxy_form_status).clone()}
+                                    onchange={{
+                                        let proxy_form_status = proxy_form_status.clone();
+                                        Callback::from(move |e: Event| {
+                                            proxy_form_status.set(e.target_unchecked_into::<HtmlSelectElement>().value())
+                                        })
+                                    }}
+                                >
+                                    <option value="active">{ "active" }</option>
+                                    <option value="disabled">{ "disabled" }</option>
+                                </select>
+                            </label>
+                            <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
+                                <button
+                                    class={classes!("btn-fluent-primary")}
+                                    onclick={on_submit_proxy_config}
+                                    disabled={*saving_proxy}
+                                >
+                                    {
+                                        if *saving_proxy {
+                                            "Saving..."
+                                        } else if (*editing_proxy_id).is_some() {
+                                            "Update Proxy Config"
+                                        } else {
+                                            "Create Proxy Config"
+                                        }
+                                    }
+                                </button>
+                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                    { "账号可绑定 inherit / direct / fixed 三种代理模式。" }
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class={classes!("overflow-x-auto")}>
+                            <table class={classes!("w-full", "text-sm")}>
+                                <thead>
+                                    <tr class={classes!("text-left", "border-b", "border-[var(--border)]")}>
+                                        <th class="py-2 pr-3">{ "Name" }</th>
+                                        <th class="py-2 pr-3">{ "Proxy URL" }</th>
+                                        <th class="py-2 pr-3">{ "Status" }</th>
+                                        <th class="py-2 pr-3">{ "Actions" }</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    { for proxy_configs.iter().map(|proxy_config| {
+                                        let proxy_for_edit = proxy_config.clone();
+                                        let proxy_for_check = proxy_config.clone();
+                                        let proxy_for_delete = proxy_config.clone();
+                                        html! {
+                                            <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
+                                                <td class="py-2 pr-3">
+                                                    <div class={classes!("font-medium")}>{ proxy_config.name.clone() }</div>
+                                                    <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                        { format!(
+                                                            "created {} · updated {}",
+                                                            format_ms(proxy_config.created_at * 1000),
+                                                            format_ms(proxy_config.updated_at * 1000),
+                                                        ) }
+                                                    </div>
+                                                </td>
+                                                <td class="py-2 pr-3">
+                                                    <div class={classes!("font-mono", "text-xs", "break-all")}>
+                                                        { proxy_config.proxy_url.clone() }
+                                                    </div>
+                                                    if let Some(username) = proxy_config.proxy_username.clone() {
+                                                        <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                            { format!("user={username}") }
+                                                        </div>
+                                                    }
+                                                </td>
+                                                <td class="py-2 pr-3">{ proxy_config.status.clone() }</td>
+                                                <td class="py-2 pr-3">
+                                                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                                                        <button
+                                                            class={classes!("btn-fluent-secondary")}
+                                                            onclick={{
+                                                                let on_edit_proxy_config = on_edit_proxy_config.clone();
+                                                                Callback::from(move |_| on_edit_proxy_config.emit(proxy_for_edit.clone()))
+                                                            }}
+                                                        >
+                                                            { "Edit" }
+                                                        </button>
+                                                        <button
+                                                            class={classes!("btn-fluent-secondary")}
+                                                            onclick={{
+                                                                let on_check_proxy_config = on_check_proxy_config.clone();
+                                                                Callback::from(move |_| on_check_proxy_config.emit(proxy_for_check.clone()))
+                                                            }}
+                                                            disabled={*checking_proxy}
+                                                        >
+                                                            { if *checking_proxy { "Checking..." } else { "Check" } }
+                                                        </button>
+                                                        <button
+                                                            class={classes!("btn-fluent-secondary")}
+                                                            onclick={{
+                                                                let on_delete_proxy_config = on_delete_proxy_config.clone();
+                                                                Callback::from(move |_| on_delete_proxy_config.emit(proxy_for_delete.clone()))
+                                                            }}
+                                                        >
+                                                            { "Delete" }
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    }) }
+                                </tbody>
+                            </table>
+                            if proxy_configs.is_empty() {
+                                <p class={classes!("m-0", "mt-3", "text-sm", "text-[var(--muted)]")}>
+                                    { "No proxy configs yet." }
+                                </p>
+                            }
+                        </div>
+                    </div>
+                </div>
+
                 <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
                     <div class={classes!("flex-1", "min-w-[240px]")}>
                         <SearchBox
@@ -1243,8 +1721,10 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 <th class="py-2 pr-3">{ "Status" }</th>
                                 <th class="py-2 pr-3">{ "Plan" }</th>
                                 <th class="py-2 pr-3">{ "Quota" }</th>
+                                <th class="py-2 pr-3">{ "Restore At" }</th>
                                 <th class="py-2 pr-3">{ "Last Refresh" }</th>
                                 <th class="py-2 pr-3">{ "Scheduler" }</th>
+                                <th class="py-2 pr-3">{ "Proxy" }</th>
                                 <th class="py-2 pr-3">{ "Actions" }</th>
                             </tr>
                         </thead>
@@ -1262,6 +1742,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 let update_impersonate_browser = update_impersonate_browser.clone();
                                 let update_request_max_concurrency = update_request_max_concurrency.clone();
                                 let update_request_min_start_interval_ms = update_request_min_start_interval_ms.clone();
+                                let update_proxy_mode = update_proxy_mode.clone();
+                                let update_proxy_config_id = update_proxy_config_id.clone();
                                 let selected_scheduler_account_name = selected_scheduler_account_name.clone();
                                 let load_error = load_error.clone();
                                 let notice = notice.clone();
@@ -1281,12 +1763,21 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                         <td class="py-2 pr-3">
                                             { if account.quota_known { account.quota_remaining.to_string() } else { "unknown".to_string() } }
                                         </td>
+                                        <td class="py-2 pr-3">{ format_account_restore_at(account) }</td>
                                         <td class="py-2 pr-3">
                                             { account.last_refresh_at.map(|ts| format_ms(ts * 1000)).unwrap_or_else(|| "-".to_string()) }
                                         </td>
                                         <td class="py-2 pr-3">
                                             <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
                                                 { format_account_scheduler(account) }
+                                            </div>
+                                        </td>
+                                        <td class="py-2 pr-3">
+                                            <div class={classes!("text-xs", "font-mono")}>
+                                                { format_account_proxy_binding(account) }
+                                            </div>
+                                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]", "break-all")}>
+                                                { format_account_effective_proxy(account) }
                                             </div>
                                         </td>
                                         <td class="py-2 pr-3">
@@ -1305,6 +1796,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                         update_impersonate_browser.set(profile.impersonate_browser.unwrap_or_default());
                                                         update_request_max_concurrency.set(account_for_edit.request_max_concurrency.map(|v| v.to_string()).unwrap_or_default());
                                                         update_request_min_start_interval_ms.set(account_for_edit.request_min_start_interval_ms.map(|v| v.to_string()).unwrap_or_default());
+                                                        update_proxy_mode.set(account_for_edit.proxy_mode.clone());
+                                                        update_proxy_config_id.set(account_for_edit.proxy_config_id.clone().unwrap_or_default());
                                                         selected_scheduler_account_name.set(account_for_edit.name.clone());
                                                     })}
                                                 >
@@ -1460,6 +1953,56 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             Callback::from(move |e: InputEvent| update_impersonate_browser.set(e.target_unchecked_into::<HtmlInputElement>().value()))
                         }} />
                     </label>
+                    <label class="block text-sm">
+                        <span>{ "Proxy Mode" }</span>
+                        <select
+                            class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                            value={(*update_proxy_mode).clone()}
+                            onchange={{
+                                let update_proxy_mode = update_proxy_mode.clone();
+                                Callback::from(move |e: Event| {
+                                    update_proxy_mode.set(e.target_unchecked_into::<HtmlSelectElement>().value())
+                                })
+                            }}
+                        >
+                            <option value="inherit">{ "inherit" }</option>
+                            <option value="direct">{ "direct" }</option>
+                            <option value="fixed">{ "fixed" }</option>
+                        </select>
+                    </label>
+                    <label class="block text-sm">
+                        <span>{ "Proxy Config" }</span>
+                        <select
+                            class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                            value={(*update_proxy_config_id).clone()}
+                            onchange={{
+                                let update_proxy_config_id = update_proxy_config_id.clone();
+                                Callback::from(move |e: Event| {
+                                    update_proxy_config_id
+                                        .set(e.target_unchecked_into::<HtmlSelectElement>().value())
+                                })
+                            }}
+                            disabled={(*update_proxy_mode).as_str() != "fixed"}
+                        >
+                            <option value="">{ "Select proxy config" }</option>
+                            { for proxy_configs.iter().map(|proxy_config| html! {
+                                <option value={proxy_config.id.clone()}>
+                                    { format!("{} · {}", proxy_config.name, proxy_config.proxy_url) }
+                                </option>
+                            }) }
+                        </select>
+                    </label>
+                </div>
+                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                    {
+                        if (*update_proxy_mode).as_str() == "fixed" && (*update_proxy_config_id).trim().is_empty() {
+                            "Fixed mode requires a saved proxy config.".to_string()
+                        } else if (*update_proxy_mode).as_str() == "direct" {
+                            "Direct mode bypasses the global default proxy.".to_string()
+                        } else {
+                            "Inherit mode follows the gpt2api-rs default upstream proxy.".to_string()
+                        }
+                    }
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_update_account}>{ "Update Selected Account" }</button>
             </section>
@@ -1841,5 +2384,31 @@ pub fn admin_gpt2api_rs_page() -> Html {
             </section>
             }
         </main>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::AdminGpt2ApiRsAccountView;
+
+    #[test]
+    fn format_account_restore_at_uses_timestamp_when_present() {
+        let account = AdminGpt2ApiRsAccountView {
+            restore_at: Some("2026-04-24T12:00:00Z".to_string()),
+            ..AdminGpt2ApiRsAccountView::default()
+        };
+
+        assert_eq!(format_account_restore_at(&account), "2026-04-24T12:00:00Z");
+    }
+
+    #[test]
+    fn format_account_restore_at_falls_back_for_blank_values() {
+        let account = AdminGpt2ApiRsAccountView {
+            restore_at: Some("   ".to_string()),
+            ..AdminGpt2ApiRsAccountView::default()
+        };
+
+        assert_eq!(format_account_restore_at(&account), "-");
     }
 }

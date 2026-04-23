@@ -320,6 +320,20 @@ pub fn create_router(state: AppState) -> Router {
             get(gpt2api_rs::list_admin_accounts).delete(gpt2api_rs::delete_admin_accounts),
         )
         .route(
+            "/admin/gpt2api-rs/proxy-configs",
+            get(gpt2api_rs::list_admin_proxy_configs)
+                .post(gpt2api_rs::create_admin_proxy_config),
+        )
+        .route(
+            "/admin/gpt2api-rs/proxy-configs/:proxy_id",
+            patch(gpt2api_rs::update_admin_proxy_config)
+                .delete(gpt2api_rs::delete_admin_proxy_config),
+        )
+        .route(
+            "/admin/gpt2api-rs/proxy-configs/:proxy_id/check",
+            post(gpt2api_rs::check_admin_proxy_config),
+        )
+        .route(
             "/admin/gpt2api-rs/accounts/import",
             post(gpt2api_rs::import_admin_accounts),
         )

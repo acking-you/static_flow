@@ -1,5 +1,12 @@
-use std::{collections::HashSet, time::Instant};
+use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
+    fs::{self, File, OpenOptions},
+    hash::{Hash, Hasher},
+    path::PathBuf,
+    time::Instant,
+};
 
+use fs2::FileExt;
 use futures::stream::{self, StreamExt};
 use lancedb::{
     table::{CompactionOptions, OptimizeAction, OptimizeOptions},
@@ -77,6 +84,68 @@ pub struct CompactResult {
     pub pruned: bool,
     pub index_optimized: bool,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAccessMode {
+    Shared,
+    Exclusive,
+}
+
+#[derive(Debug)]
+pub struct TableAccessFileGuard {
+    file: File,
+}
+
+impl Drop for TableAccessFileGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+pub async fn acquire_table_access_file_lock(
+    lock_path: &std::path::Path,
+    mode: TableAccessMode,
+) -> Result<TableAccessFileGuard, String> {
+    acquire_table_access_file_lock_inner(lock_path.to_path_buf(), mode).await
+}
+
+async fn acquire_table_access_file_lock_inner(
+    lock_path: PathBuf,
+    mode: TableAccessMode,
+) -> Result<TableAccessFileGuard, String> {
+    tokio::task::spawn_blocking(move || -> Result<TableAccessFileGuard, String> {
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!("failed to create table lock dir `{}`: {err:#}", parent.display())
+            })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|err| {
+                format!("failed to open table lock file `{}`: {err:#}", lock_path.display())
+            })?;
+        let lock_result = match mode {
+            TableAccessMode::Shared => FileExt::lock_shared(&file),
+            TableAccessMode::Exclusive => FileExt::lock_exclusive(&file),
+        };
+        match lock_result {
+            Ok(()) => Ok(TableAccessFileGuard {
+                file,
+            }),
+            Err(err) => Err(format!(
+                "failed to acquire {:?} lock for `{}`: {err:#}",
+                mode,
+                lock_path.display()
+            )),
+        }
+    })
+    .await
+    .map_err(|err| format!("table lock task join failed: {err:#}"))?
 }
 
 pub async fn compact_table_with_fallback(table: &Table) -> Result<CompactAction, String> {
@@ -160,6 +229,23 @@ async fn check_and_compact(db: &Connection, name: &str, config: &CompactConfig) 
         return finalize(CompactAction::CompactionDisabled, 0, 0, false, false, false, None);
     }
 
+    let lock_path = local_table_rewrite_lock_path(db.uri(), name);
+    let _file_guard =
+        match acquire_table_access_file_lock(&lock_path, TableAccessMode::Exclusive).await {
+            Ok(guard) => guard,
+            Err(err) => {
+                return finalize(
+                    CompactAction::CompactFailed,
+                    0,
+                    0,
+                    false,
+                    false,
+                    false,
+                    Some(format!("table lock failed: {err}")),
+                )
+            },
+        };
+
     let table = match db.open_table(name).execute().await {
         Ok(t) => t,
         Err(err) => {
@@ -236,8 +322,8 @@ pub async fn check_opened_table_and_compact(
         // Even when compaction is skipped, old versions should still be pruned
         // and lagging indices repaired through the same maintenance entrypoint.
         let pruned =
-            match prune_table_versions(table, config.prune_older_than_hours, false, false).await {
-                Ok(()) => true,
+            match prune_table_versions_with_recovery(table, config.prune_older_than_hours).await {
+                Ok(_) => true,
                 Err(err) => {
                     return finalize(
                         CompactAction::SkippedBelowThreshold,
@@ -296,7 +382,7 @@ pub async fn check_opened_table_and_compact(
         },
     };
 
-    if let Err(err) = prune_table_versions(table, config.prune_older_than_hours, false, false).await
+    if let Err(err) = prune_table_versions_with_recovery(table, config.prune_older_than_hours).await
     {
         return finalize(
             CompactAction::CompactedPruneFailed,
@@ -373,6 +459,84 @@ async fn optimize_compaction_with_fallback(table: &Table) -> Result<OptimizePath
 
 fn is_offset_overflow_error(err: &dyn std::error::Error) -> bool {
     err.to_string().contains("Offset overflow error")
+}
+
+pub fn local_table_access_lock_path(db_uri: &str, table: &str) -> PathBuf {
+    local_table_lock_path(db_uri, table, "access")
+}
+
+pub fn local_table_rewrite_lock_path(db_uri: &str, table: &str) -> PathBuf {
+    local_table_lock_path(db_uri, table, "rewrite")
+}
+
+fn local_table_lock_path(db_uri: &str, table: &str, scope: &str) -> PathBuf {
+    let table_uri = format!("{}/{}.lance", db_uri.trim_end_matches('/'), table);
+    table_access_lock_path(&format!("{scope}:{table_uri}"))
+}
+
+fn table_access_lock_path(lock_key: &str) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    lock_key.hash(&mut hasher);
+    let hash = hasher.finish();
+    let label = lock_key
+        .rsplit('/')
+        .next()
+        .unwrap_or(lock_key)
+        .trim_end_matches(".lance")
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') { ch } else { '_' })
+        .collect::<String>();
+    let label = if label.is_empty() { "table" } else { label.as_str() };
+    std::env::temp_dir()
+        .join("staticflow-table-locks")
+        .join(format!("{label}-{hash:016x}.lock"))
+}
+
+async fn prune_table_versions_with_recovery(
+    table: &Table,
+    older_than_hours: i64,
+) -> Result<bool, String> {
+    match prune_table_versions(table, older_than_hours, false, false).await {
+        Ok(()) => Ok(false),
+        Err(err) if should_use_delete_unverified_prune_recovery(table.name(), &err) => {
+            let table_uri = table.uri().await.map_err(|fallback_err| {
+                format!(
+                    "{err}; failed to resolve table uri before delete_unverified cleanup \
+                     fallback: {fallback_err:#}"
+                )
+            })?;
+            let lock_path = table_access_lock_path(&format!("access:{table_uri}"));
+            let _file_guard =
+                acquire_table_access_file_lock(&lock_path, TableAccessMode::Exclusive)
+                    .await
+                    .map_err(|fallback_err| {
+                        format!(
+                            "{err}; failed to acquire exclusive table access lock before \
+                             delete_unverified cleanup fallback: {fallback_err}"
+                        )
+                    })?;
+            tracing::warn!(
+                table = table.name(),
+                error = %err,
+                "standard prune failed with missing manifest; retrying delete_unverified cleanup"
+            );
+            prune_table_versions(table, 0, true, false)
+                .await
+                .map(|()| true)
+                .map_err(|fallback_err| {
+                    format!("{err}; delete_unverified cleanup fallback failed: {fallback_err}")
+                })
+        },
+        Err(err) => Err(err),
+    }
+}
+
+fn should_use_delete_unverified_prune_recovery(table: &str, error: &str) -> bool {
+    if table != "llm_gateway_usage_events" {
+        return false;
+    }
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("manifest") && normalized.contains("not found")
 }
 
 async fn count_small_fragments(table: &Table) -> Result<usize, String> {
@@ -462,18 +626,20 @@ async fn table_uses_stable_row_ids(table: &Table) -> Result<bool, String> {
 mod tests {
     use std::{
         collections::HashSet,
+        fs::OpenOptions,
         path::PathBuf,
         sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use arrow_array::{Int32Array, RecordBatch, RecordBatchIterator, RecordBatchReader};
     use arrow_schema::{DataType, Field, Schema};
+    use fs2::FileExt;
     use lancedb::connect;
 
     use super::{
-        check_opened_table_and_compact, count_small_fragments, is_offset_overflow_error,
-        CompactAction, CompactConfig,
+        check_and_compact, check_opened_table_and_compact, count_small_fragments,
+        is_offset_overflow_error, local_table_rewrite_lock_path, CompactAction, CompactConfig,
     };
 
     #[derive(Debug)]
@@ -685,6 +851,97 @@ mod tests {
             .expect("index stats exist");
         assert_eq!(stats_after.num_unindexed_rows, 0);
         assert_eq!(table.count_rows(None).await.expect("count rows"), 200);
+
+        std::fs::remove_dir_all(&dir).expect("cleanup temp db dir");
+    }
+
+    #[tokio::test]
+    async fn check_and_compact_waits_for_rewrite_lock_before_pruning_versions() {
+        let dir = temp_db_dir();
+        std::fs::create_dir_all(&dir).expect("create temp db dir");
+        let uri = dir.to_string_lossy().to_string();
+        let db = connect(&uri).execute().await.expect("connect temp db");
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]));
+
+        for chunk in [[1_i32, 2], [3, 4], [5, 6]] {
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(
+                chunk.to_vec(),
+            ))])
+            .expect("batch");
+            let reader: Box<dyn RecordBatchReader + Send> =
+                Box::new(RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone()));
+            if db.open_table("locked_versions").execute().await.is_ok() {
+                let table = db
+                    .open_table("locked_versions")
+                    .execute()
+                    .await
+                    .expect("open table");
+                table.add(reader).execute().await.expect("append rows");
+            } else {
+                db.create_table("locked_versions", reader)
+                    .execute()
+                    .await
+                    .expect("create table");
+            }
+        }
+
+        let table = db
+            .open_table("locked_versions")
+            .execute()
+            .await
+            .expect("open locked_versions table");
+        let version_count_before = table
+            .list_versions()
+            .await
+            .expect("list versions before locked maintenance")
+            .len();
+        assert!(version_count_before > 1);
+
+        let lock_path = local_table_rewrite_lock_path(&uri, "locked_versions");
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).expect("create table lock dir");
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open table lock file");
+        file.lock_exclusive().expect("acquire exclusive table lock");
+
+        let db_for_task = db.clone();
+        let handle = tokio::spawn(async move {
+            check_and_compact(&db_for_task, "locked_versions", &CompactConfig {
+                enabled: true,
+                fragment_threshold: usize::MAX,
+                prune_older_than_hours: 0,
+                optimize_dirty_indices: true,
+                skip_tables: HashSet::new(),
+            })
+            .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !handle.is_finished(),
+            "maintenance must wait for the table lock instead of racing past it"
+        );
+
+        file.unlock().expect("release exclusive table lock");
+        let result = handle.await.expect("maintenance task join");
+        let version_count_after = table
+            .list_versions()
+            .await
+            .expect("list versions after maintenance")
+            .len();
+        assert!(
+            version_count_after < version_count_before,
+            "maintenance should prune versions after the lock is released"
+        );
+        assert_eq!(result.action, CompactAction::SkippedBelowThreshold);
+        assert!(result.pruned, "maintenance should prune versions once it acquires the lock");
+        assert!(!result.compacted, "locked maintenance must not compact table files");
 
         std::fs::remove_dir_all(&dir).expect("cleanup temp db dir");
     }

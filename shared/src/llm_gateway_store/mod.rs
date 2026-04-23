@@ -98,7 +98,10 @@ pub use self::{
         LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED, LLM_GATEWAY_USAGE_EVENTS_TABLE,
     },
 };
-use crate::optimize::compact_table_with_fallback;
+use crate::optimize::{
+    acquire_table_access_file_lock, compact_table_with_fallback, local_table_access_lock_path,
+    TableAccessMode,
+};
 
 /// Owns the LanceDB-backed storage layer for all LLM gateway admin data.
 pub struct LlmGatewayStore {
@@ -904,6 +907,10 @@ impl LlmGatewayStore {
         if records.is_empty() {
             return Ok(());
         }
+        let lock_path = local_table_access_lock_path(self.db.uri(), LLM_GATEWAY_USAGE_EVENTS_TABLE);
+        let _file_guard = acquire_table_access_file_lock(&lock_path, TableAccessMode::Shared)
+            .await
+            .map_err(anyhow::Error::msg)?;
         let table = self.usage_events_table().await?;
         let batch = build_usage_events_batch(records)?;
         let schema = batch.schema();
@@ -1764,7 +1771,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
+    use std::{
+        collections::BTreeMap, fs, fs::OpenOptions, path::PathBuf, sync::Arc, time::Duration,
+    };
 
     use arrow_array::{
         builder::{
@@ -1774,6 +1783,7 @@ mod tests {
         RecordBatch,
     };
     use arrow_schema::{DataType, Field, Schema};
+    use fs2::FileExt;
     use lancedb::connect;
 
     use super::*;
@@ -2655,6 +2665,163 @@ mod tests {
         assert_eq!(loaded.upstream_request_body_json, record.upstream_request_body_json);
         assert_eq!(loaded.full_request_json, record.full_request_json);
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn append_usage_events_waits_for_usage_table_lock() {
+        let dir = temp_store_dir("usage-append-lock");
+        let store = Arc::new(
+            LlmGatewayStore::connect(&dir.to_string_lossy())
+                .await
+                .expect("connect llm gateway store"),
+        );
+
+        let key = sample_key_record("test-key-lock", "Lock Key");
+        store.create_key(&key).await.expect("create key");
+        let event = LlmGatewayUsageEventRecord {
+            id: "evt-lock".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 19,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5.3-codex".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 20,
+            input_cached_tokens: 0,
+            output_tokens: 4,
+            billable_tokens: 40,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{\"x-test\":\"1\"}".to_string(),
+            last_message_content: Some("hello".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            created_at: now_ms(),
+        };
+
+        let lock_path =
+            local_table_access_lock_path(&dir.to_string_lossy(), LLM_GATEWAY_USAGE_EVENTS_TABLE);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).expect("create table lock dir");
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open usage-events table lock");
+        file.lock_exclusive()
+            .expect("acquire exclusive usage-events table lock");
+
+        let store_for_task = Arc::clone(&store);
+        let handle = tokio::spawn(async move { store_for_task.append_usage_event(&event).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !handle.is_finished(),
+            "append_usage_event must wait for the usage-events table lock"
+        );
+
+        file.unlock()
+            .expect("release exclusive usage-events table lock");
+        handle
+            .await
+            .expect("append task join")
+            .expect("append usage event after lock release");
+
+        let persisted = store
+            .get_usage_event_detail_by_id("evt-lock")
+            .await
+            .expect("load appended event");
+        assert!(persisted.is_some(), "usage event should persist after lock release");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn append_usage_events_does_not_wait_for_usage_table_rewrite_lock() {
+        let dir = temp_store_dir("usage-append-rewrite-lock");
+        let store = Arc::new(
+            LlmGatewayStore::connect(&dir.to_string_lossy())
+                .await
+                .expect("connect llm gateway store"),
+        );
+
+        let key = sample_key_record("test-key-rewrite-lock", "Rewrite Lock Key");
+        store.create_key(&key).await.expect("create key");
+        let event = LlmGatewayUsageEventRecord {
+            id: "evt-rewrite-lock".to_string(),
+            key_id: key.id.clone(),
+            key_name: key.name.clone(),
+            provider_type: LLM_GATEWAY_PROVIDER_CODEX.to_string(),
+            account_name: Some("default".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/llm-gateway/v1/responses".to_string(),
+            latency_ms: 21,
+            endpoint: "/v1/responses".to_string(),
+            model: Some("gpt-5.3-codex".to_string()),
+            status_code: 200,
+            input_uncached_tokens: 24,
+            input_cached_tokens: 0,
+            output_tokens: 5,
+            billable_tokens: 48,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{\"x-test\":\"rewrite\"}".to_string(),
+            last_message_content: Some("hello rewrite".to_string()),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            created_at: now_ms(),
+        };
+
+        let lock_path = crate::optimize::local_table_rewrite_lock_path(
+            &dir.to_string_lossy(),
+            LLM_GATEWAY_USAGE_EVENTS_TABLE,
+        );
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).expect("create rewrite lock dir");
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open usage-events rewrite lock");
+        file.lock_exclusive()
+            .expect("acquire exclusive usage-events rewrite lock");
+
+        let store_for_task = Arc::clone(&store);
+        let handle = tokio::spawn(async move { store_for_task.append_usage_event(&event).await });
+        handle
+            .await
+            .expect("append task join")
+            .expect("append usage event while rewrite lock is held");
+
+        let persisted = store
+            .get_usage_event_detail_by_id("evt-rewrite-lock")
+            .await
+            .expect("load appended event");
+        assert!(
+            persisted.is_some(),
+            "usage event should persist even while the rewrite lock is held"
+        );
+
+        file.unlock()
+            .expect("release exclusive usage-events rewrite lock");
         let _ = fs::remove_dir_all(&dir);
     }
 

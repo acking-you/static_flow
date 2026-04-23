@@ -2014,6 +2014,10 @@ fn admin_base() -> String {
         .unwrap_or_else(|| API_BASE.to_string())
 }
 
+fn default_admin_gpt2api_rs_proxy_mode() -> String {
+    "inherit".to_string()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gpt2ApiRsConfig {
     pub base_url: String,
@@ -2049,7 +2053,65 @@ pub struct AdminGpt2ApiRsAccountView {
     pub fail_count: i64,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default = "default_admin_gpt2api_rs_proxy_mode")]
+    pub proxy_mode: String,
+    #[serde(default)]
+    pub proxy_config_id: Option<String>,
     pub browser_profile_json: String,
+    #[serde(default)]
+    pub effective_proxy_source: String,
+    #[serde(default)]
+    pub effective_proxy_url: Option<String>,
+    #[serde(default)]
+    pub effective_proxy_config_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsProxyConfigView {
+    pub id: String,
+    pub name: String,
+    pub proxy_url: String,
+    #[serde(default)]
+    pub proxy_username: Option<String>,
+    #[serde(default)]
+    pub proxy_password: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsCreateProxyConfigRequest {
+    pub name: String,
+    pub proxy_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUpdateProxyConfigRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_username: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_password: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsProxyCheckResult {
+    pub ok: bool,
+    pub message: String,
+    #[serde(default)]
+    pub status_code: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2133,6 +2195,10 @@ pub struct AdminGpt2ApiRsUpdateAccountRequest {
     pub request_max_concurrency: Option<u64>,
     #[serde(default)]
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub proxy_mode: Option<String>,
+    #[serde(default)]
+    pub proxy_config_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2477,6 +2543,111 @@ pub async fn fetch_admin_gpt2api_rs_accounts() -> Result<Vec<AdminGpt2ApiRsAccou
     #[cfg(not(feature = "mock"))]
     {
         get_admin_gpt2api_rs("/accounts").await
+    }
+}
+
+pub async fn fetch_admin_gpt2api_rs_proxy_configs(
+) -> Result<Vec<AdminGpt2ApiRsProxyConfigView>, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(Vec::new())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/proxy-configs").await
+    }
+}
+
+pub async fn create_admin_gpt2api_rs_proxy_config(
+    request: &AdminGpt2ApiRsCreateProxyConfigRequest,
+) -> Result<AdminGpt2ApiRsProxyConfigView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsProxyConfigView {
+            id: "mock-proxy".to_string(),
+            name: request.name.clone(),
+            proxy_url: request.proxy_url.clone(),
+            proxy_username: request.proxy_username.clone(),
+            proxy_password: request.proxy_password.clone(),
+            status: request
+                .status
+                .clone()
+                .unwrap_or_else(|| "active".to_string()),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/proxy-configs", request).await
+    }
+}
+
+pub async fn update_admin_gpt2api_rs_proxy_config(
+    proxy_id: &str,
+    request: &AdminGpt2ApiRsUpdateProxyConfigRequest,
+) -> Result<AdminGpt2ApiRsProxyConfigView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsProxyConfigView {
+            id: proxy_id.to_string(),
+            name: request
+                .name
+                .clone()
+                .unwrap_or_else(|| "mock-proxy".to_string()),
+            proxy_url: request
+                .proxy_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:11118".to_string()),
+            proxy_username: request.proxy_username.clone().flatten(),
+            proxy_password: request.proxy_password.clone().flatten(),
+            status: request
+                .status
+                .clone()
+                .unwrap_or_else(|| "active".to_string()),
+            created_at: 0,
+            updated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        patch_admin_gpt2api_rs(&format!("/proxy-configs/{proxy_id}"), request).await
+    }
+}
+
+pub async fn delete_admin_gpt2api_rs_proxy_config(
+    proxy_id: &str,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(serde_json::json!({ "ok": true, "id": proxy_id }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        delete_admin_gpt2api_rs_empty(&format!("/proxy-configs/{proxy_id}")).await
+    }
+}
+
+pub async fn check_admin_gpt2api_rs_proxy_config(
+    proxy_id: &str,
+) -> Result<AdminGpt2ApiRsProxyCheckResult, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsProxyCheckResult {
+            ok: true,
+            message: format!("proxy {proxy_id} ok"),
+            status_code: Some(200),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs(&format!("/proxy-configs/{proxy_id}/check"), &serde_json::json!({}))
+            .await
     }
 }
 

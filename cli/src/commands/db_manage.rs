@@ -31,7 +31,10 @@ use static_flow_shared::{
         now_ms, query_usage_event_rebuild_rows_from_connection, LlmGatewayStore,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS, LLM_GATEWAY_USAGE_EVENTS_TABLE,
     },
-    optimize::{compact_table_with_fallback, prune_table_versions},
+    optimize::{
+        acquire_table_access_file_lock, compact_table_with_fallback, local_table_access_lock_path,
+        local_table_rewrite_lock_path, prune_table_versions, TableAccessMode,
+    },
 };
 
 use crate::{
@@ -44,7 +47,8 @@ use crate::{
     utils::rasterize_svg_for_embedding,
 };
 
-const CLEANUP_TARGET_TABLES: [&str; 4] = ["articles", "images", "taxonomies", "article_views"];
+const CLEANUP_TARGET_TABLES: [&str; 5] =
+    ["articles", "images", "taxonomies", "article_views", "llm_gateway_usage_events"];
 const DEFAULT_REBUILD_BATCH_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
@@ -431,6 +435,12 @@ pub async fn drop_index(db_path: &Path, table: &str, name: &str) -> Result<()> {
 pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: bool) -> Result<()> {
     let db = connect_db(db_path).await?;
     let table = open_table(&db, table).await?;
+    let rewrite_lock_path =
+        local_table_rewrite_lock_path(db_path.to_string_lossy().as_ref(), table.name());
+    let _rewrite_guard =
+        acquire_table_access_file_lock(&rewrite_lock_path, TableAccessMode::Exclusive)
+            .await
+            .map_err(anyhow::Error::msg)?;
 
     if all {
         let action = compact_table_with_fallback(&table)
@@ -447,6 +457,12 @@ pub async fn optimize_table(db_path: &Path, table: &str, all: bool, prune_now: b
     }
 
     if prune_now {
+        let access_lock_path =
+            local_table_access_lock_path(db_path.to_string_lossy().as_ref(), table.name());
+        let _access_guard =
+            acquire_table_access_file_lock(&access_lock_path, TableAccessMode::Exclusive)
+                .await
+                .map_err(anyhow::Error::msg)?;
         prune_table_versions(&table, 0, true, false)
             .await
             .map_err(anyhow::Error::msg)?;
@@ -474,6 +490,18 @@ pub async fn cleanup_orphans(db_path: &Path, table: Option<&str>) -> Result<()> 
     let allow_missing = table.is_none();
 
     for target in targets {
+        let rewrite_lock_path =
+            local_table_rewrite_lock_path(db_path.to_string_lossy().as_ref(), target);
+        let _rewrite_guard =
+            acquire_table_access_file_lock(&rewrite_lock_path, TableAccessMode::Exclusive)
+                .await
+                .map_err(anyhow::Error::msg)?;
+        let access_lock_path =
+            local_table_access_lock_path(db_path.to_string_lossy().as_ref(), target);
+        let _access_guard =
+            acquire_table_access_file_lock(&access_lock_path, TableAccessMode::Exclusive)
+                .await
+                .map_err(anyhow::Error::msg)?;
         let table = match db.open_table(target).execute().await {
             Ok(table) => table,
             Err(err) => {
@@ -1241,6 +1269,22 @@ pub async fn rebuild_llm_gateway_usage_events(
     source_db_path: Option<&Path>,
     source_table: Option<&str>,
 ) -> Result<()> {
+    let rewrite_lock_path = local_table_rewrite_lock_path(
+        db_path.to_string_lossy().as_ref(),
+        LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    );
+    let _rewrite_guard =
+        acquire_table_access_file_lock(&rewrite_lock_path, TableAccessMode::Exclusive)
+            .await
+            .map_err(anyhow::Error::msg)?;
+    let access_lock_path = local_table_access_lock_path(
+        db_path.to_string_lossy().as_ref(),
+        LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    );
+    let _access_guard =
+        acquire_table_access_file_lock(&access_lock_path, TableAccessMode::Exclusive)
+            .await
+            .map_err(anyhow::Error::msg)?;
     let db_uri = db_path.to_string_lossy().to_string();
     let store = LlmGatewayStore::connect(&db_uri).await?;
     let mut runtime_config = store.get_runtime_config_or_default().await?;
@@ -1396,9 +1440,19 @@ pub async fn rebuild_llm_gateway_usage_events(
     let _ = fs::remove_dir_all(&tmp_db_path);
     let _ = fs::remove_dir_all(&stable_tmp_db_path);
 
-    optimize_table(db_path, LLM_GATEWAY_USAGE_EVENTS_TABLE, false, true)
+    let db = connect_db(db_path).await?;
+    let rebuilt_table = open_table(&db, LLM_GATEWAY_USAGE_EVENTS_TABLE).await?;
+    let _ = rebuilt_table
+        .optimize(OptimizeAction::Index(OptimizeOptions::default()))
         .await
-        .context("failed to optimize rebuilt llm gateway usage-events table")?;
+        .context("failed to optimize rebuilt llm gateway usage-event indexes")?;
+    prune_table_versions(&rebuilt_table, 0, true, false)
+        .await
+        .map_err(anyhow::Error::msg)
+        .context("failed to prune rebuilt llm gateway usage-event old versions")?;
+    if table_policy(LLM_GATEWAY_USAGE_EVENTS_TABLE).is_some() {
+        ensure_indexes_for_table(&db, LLM_GATEWAY_USAGE_EVENTS_TABLE).await?;
+    }
     Ok(())
 }
 
@@ -2652,6 +2706,13 @@ mod tests {
         let policy = table_policy("llm_gateway_usage_events")
             .expect("usage events table should be index-managed");
         assert_eq!(policy.scalar_indexes, ["id", "key_id", "provider_type", "created_at"]);
+    }
+
+    #[test]
+    fn cleanup_targets_support_llm_gateway_usage_events() {
+        let targets = resolve_cleanup_targets(Some("llm_gateway_usage_events"))
+            .expect("usage events table should be a cleanup target");
+        assert_eq!(targets, vec!["llm_gateway_usage_events"]);
     }
 
     #[tokio::test]
