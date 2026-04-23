@@ -14,13 +14,19 @@ description: >-
 Use this skill when the user wants the local self-hosted StaticFlow deployment
 updated to the latest workspace code with minimal interruption.
 
+If production traffic really targets `39080` directly and there is no stable
+frontend in front of it, this workflow cannot be truly seamless. Treat it as a
+minimal-downtime restart and say so explicitly.
+
 ## Scope
 1. Re-run quality gates before deployment.
 2. Build `frontend/dist` for self-hosted mode.
 3. Build the latest `release-backend` binary.
 4. Keep the current backend online until the new artifacts are ready.
-5. Swap the backend binary and restart with one merged log file.
-6. Verify the new process on localhost after restart.
+5. If a canary port is used, validate the candidate there without touching the
+   live `39080` process.
+6. Swap the backend binary and restart with one merged log file.
+7. Verify the new process on localhost after restart.
 
 ## Mandatory Workflow
 1. Format only changed Rust files with `rustfmt`.
@@ -33,6 +39,8 @@ updated to the latest workspace code with minimal interruption.
 4. Build backend with:
    - `make bin-backend`
 5. Do not stop the currently running backend before step 4 completes.
+6. If a candidate instance is started on another port, never treat that as a
+   completed cutover while real traffic still goes to `39080`.
 
 ## Binary Swap Rule
 - Desired runtime path is `./bin/static-flow-backend`.
@@ -47,9 +55,14 @@ updated to the latest workspace code with minimal interruption.
 - If `make bin-backend` or manual copy fails with `Text file busy`, that means
   the old process is executing `./bin/static-flow-backend`. This is expected:
   1. finish the build first so `./target/release-backend/static-flow-backend` is ready
-  2. stop the old backend
-  3. copy `./target/release-backend/static-flow-backend` to `./bin/static-flow-backend`
-  4. start the new backend immediately
+  2. verify you are ready for the only downtime window in this workflow
+  3. stop the old backend
+  4. copy `./target/release-backend/static-flow-backend` to `./bin/static-flow-backend`
+  5. start the new backend immediately
+
+If the user requires zero-downtime semantics, stop here and move traffic behind
+the gateway first. Do not fake "seamless" by killing the live `39080` process
+just because a canary on another port is healthy.
 
 ## Restart Policy
 - Prefer one merged log file under `/tmp/`, for example:
@@ -89,5 +102,8 @@ updated to the latest workspace code with minimal interruption.
 - If `cargo check` or `cargo clippy` fails, stop before deployment.
 - If frontend build fails, do not restart the backend.
 - If backend build fails, leave the old backend running.
+- If real production traffic still hits `39080`, do not kill the live backend
+  until the new binary is fully built and you are intentionally entering the
+  restart window.
 - If restart fails, keep or restore the last known good binary/process before
   declaring success.
