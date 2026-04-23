@@ -293,6 +293,9 @@ fn route_path_for(route: &Route) -> String {
         Route::AdminKiroGateway => config::route_path("/admin/kiro-gateway"),
         Route::AdminKiroAccountStatus => config::route_path("/admin/kiro-gateway/accounts"),
         Route::AdminGpt2ApiRs => config::route_path("/admin/gpt2api-rs"),
+        Route::Gpt2ApiLogin => config::route_path("/gpt2api/login"),
+        Route::Gpt2ApiImage => config::route_path("/gpt2api/image"),
+        Route::Gpt2ApiChat => config::route_path("/gpt2api/chat"),
         Route::AdminCommentRuns {
             task_id,
         } => config::route_path(&format!("/admin/comments/runs/{}", urlencoding::encode(task_id))),
@@ -502,6 +505,42 @@ pub fn apply_route_seo(route: Option<&Route>) {
             let entries =
                 vec![("zh-CN", zh_url.clone()), ("en", en_url.clone()), ("x-default", zh_url)];
             set_hreflang_links(&entries);
+        },
+        Route::Gpt2ApiLogin => {
+            apply_common_seo(
+                "GPT2API 登录 · StaticFlow",
+                "输入公开 key，进入本地会话与图片工作台。",
+                &canonical_url,
+                "website",
+                "noindex,nofollow,noarchive",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::Gpt2ApiImage => {
+            apply_common_seo(
+                "GPT2API 画图 · StaticFlow",
+                "通过公开 key 使用本地代理图片生成与编辑工作台。",
+                &canonical_url,
+                "website",
+                "noindex,nofollow,noarchive",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
+        },
+        Route::Gpt2ApiChat => {
+            apply_common_seo(
+                "GPT2API 聊天 · StaticFlow",
+                "通过公开 key 使用本地代理 SSE 聊天工作台。",
+                &canonical_url,
+                "website",
+                "noindex,nofollow,noarchive",
+                "zh-CN",
+                &og_image,
+            );
+            apply_default_hreflang(&canonical_url);
         },
         Route::Admin
         | Route::AdminLlmGateway

@@ -1443,7 +1443,9 @@ pub fn admin_page() -> Html {
                 return;
             }
             // Confirm before any destructive action. Keep non-destructive flows silent.
-            if action == "delete" && !confirm_destructive("确认删除这条 comment task？此操作不可撤销。") {
+            if action == "delete"
+                && !confirm_destructive("确认删除这条 comment task？此操作不可撤销。")
+            {
                 return;
             }
             {
@@ -1569,7 +1571,8 @@ pub fn admin_page() -> Html {
         let refresh_all = refresh_all.clone();
         let selected_published = selected_published.clone();
         Callback::from(move |comment_id: String| {
-            if !confirm_destructive("确认删除这条已发布评论？此操作不可撤销。") {
+            if !confirm_destructive("确认删除这条已发布评论？此操作不可撤销。")
+            {
                 return;
             }
             let load_error = load_error.clone();
@@ -2252,9 +2255,7 @@ pub fn admin_page() -> Html {
                                 article_requests.set(list);
                                 load_error.set(None);
                             },
-                            Err(err) => {
-                                load_error.set(Some(format!("Approve failed: {}", err)))
-                            },
+                            Err(err) => load_error.set(Some(format!("Approve failed: {}", err))),
                         }
                     },
                     ArticleRequestAction::Reject => {
@@ -2285,18 +2286,19 @@ pub fn admin_page() -> Html {
                         },
                         Err(err) => load_error.set(Some(format!("Retry failed: {}", err))),
                     },
-                    ArticleRequestAction::Delete => match admin_delete_article_request(&rid).await
-                    {
-                        Ok(()) => {
-                            let list: Vec<_> = (*article_requests)
-                                .iter()
-                                .filter(|r| r.request_id != rid)
-                                .cloned()
-                                .collect();
-                            article_requests.set(list);
-                            load_error.set(None);
-                        },
-                        Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
+                    ArticleRequestAction::Delete => {
+                        match admin_delete_article_request(&rid).await {
+                            Ok(()) => {
+                                let list: Vec<_> = (*article_requests)
+                                    .iter()
+                                    .filter(|r| r.request_id != rid)
+                                    .cloned()
+                                    .collect();
+                                article_requests.set(list);
+                                load_error.set(None);
+                            },
+                            Err(err) => load_error.set(Some(format!("Delete failed: {}", err))),
+                        }
                     },
                 }
                 let mut s = (*inflight).clone();

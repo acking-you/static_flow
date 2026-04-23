@@ -40,9 +40,7 @@ use crate::{
         PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
         PatchAdminUpstreamProxyConfigInput,
     },
-    components::pagination::Pagination,
-    components::search_box::SearchBox,
-    components::tab_bar::render_tab_bar,
+    components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{
         confirm_destructive, format_ms, format_number_i64, format_number_u64, MaskedSecretCode,
     },
@@ -1236,7 +1234,8 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
         let on_changed = props.on_changed.clone();
         let on_flash = props.on_flash.clone();
         Callback::from(move |_| {
-            if !confirm_destructive("确认删除这个代理配置？绑定该配置的账号会回退到默认行为。") {
+            if !confirm_destructive("确认删除这个代理配置？绑定该配置的账号会回退到默认行为。")
+            {
                 return;
             }
             let proxy_id = proxy_id.clone();
@@ -3600,10 +3599,10 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    // Client-side filters for Keys and Account Groups tabs. Matches are case-insensitive.
-    // `use_memo` avoids re-filtering on unrelated parent re-renders. These are pre-computed
-    // at component top-level because the html! macro does not permit `let` bindings
-    // inside conditional branches.
+    // Client-side filters for Keys and Account Groups tabs. Matches are
+    // case-insensitive. `use_memo` avoids re-filtering on unrelated parent
+    // re-renders. These are pre-computed at component top-level because the
+    // html! macro does not permit `let` bindings inside conditional branches.
     let keys_query_lower = (*keys_search).trim().to_lowercase();
     let filtered_keys: Vec<AdminLlmGatewayKeyView> = {
         let q = keys_query_lower.clone();
@@ -3645,9 +3644,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         {
                             return true;
                         }
-                        g.account_names
-                            .iter()
-                            .any(|n| n.to_lowercase().contains(q))
+                        g.account_names.iter().any(|n| n.to_lowercase().contains(q))
                     })
                     .cloned()
                     .collect()

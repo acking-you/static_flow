@@ -24,7 +24,8 @@ web-sys = { workspace = true, features = [
   "HtmlElement", "HtmlSelectElement", "CssStyleDeclaration", "TouchEvent", "TouchList", "Touch", "History",
   "DomTokenList", "DomRect", "Navigator", "HtmlTextAreaElement", "Selection", "Range", "Node", "HtmlButtonElement",
   "Event", "MessageEvent", "EventSource", "HtmlAudioElement", "MediaError", "HtmlInputElement",
-  "TimeRanges", "File", "Blob", "FileList"
+  "ClipboardEvent", "DataTransfer",
+  "TimeRanges", "File", "Blob", "FileList", "FormData"
 ] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }

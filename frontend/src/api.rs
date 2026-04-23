@@ -7,6 +7,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
 #[cfg(not(feature = "mock"))]
 use wasm_bindgen::JsValue;
+#[cfg(not(feature = "mock"))]
+use web_sys::{File, FormData};
 
 #[cfg(feature = "mock")]
 use crate::models;
@@ -2054,14 +2056,19 @@ pub struct AdminGpt2ApiRsAccountView {
 pub struct AdminGpt2ApiRsKeyView {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub secret_hash: String,
     pub status: String,
-    pub quota_total_images: i64,
-    pub quota_used_images: i64,
+    #[serde(default, alias = "quota_total_images")]
+    pub quota_total_calls: i64,
+    #[serde(default, alias = "quota_used_images")]
+    pub quota_used_calls: i64,
     pub route_strategy: String,
     pub account_group_id: Option<String>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub secret_plaintext: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2128,11 +2135,45 @@ pub struct AdminGpt2ApiRsUpdateAccountRequest {
     pub request_min_start_interval_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsCreateKeyRequest {
+    pub name: String,
+    pub quota_total_calls: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub route_strategy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_max_concurrency: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUpdateKeyRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_total_calls: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_strategy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_max_concurrency: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_min_start_interval_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminGpt2ApiRsImageGenerationRequest {
     pub prompt: String,
     pub model: String,
     pub n: usize,
+    pub response_format: String,
 }
 
 impl Default for AdminGpt2ApiRsImageGenerationRequest {
@@ -2141,6 +2182,7 @@ impl Default for AdminGpt2ApiRsImageGenerationRequest {
             prompt: String::new(),
             model: "gpt-image-1".to_string(),
             n: 1,
+            response_format: "b64_json".to_string(),
         }
     }
 }
@@ -2168,6 +2210,40 @@ impl Default for AdminGpt2ApiRsImageEditRequest {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpt2ApiPublicKeyInfo {
+    pub id: Option<String>,
+    pub name: String,
+    pub status: String,
+    pub quota_total_calls: i64,
+    pub quota_used_calls: i64,
+    #[serde(default)]
+    pub route_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpt2ApiPublicVerifyResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub version: Option<String>,
+    pub key: Gpt2ApiPublicKeyInfo,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpt2ApiImageData {
+    #[serde(default)]
+    pub b64_json: Option<String>,
+    #[serde(default)]
+    pub revised_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpt2ApiImageResponse {
+    pub created: i64,
+    #[serde(default)]
+    pub data: Vec<Gpt2ApiImageData>,
+}
+
 #[cfg(not(feature = "mock"))]
 async fn parse_admin_gpt2api_rs_response<T>(response: gloo_net::http::Response) -> Result<T, String>
 where
@@ -2188,12 +2264,9 @@ where
         .unwrap_or_default()
         .to_lowercase();
     if !content_type.contains("application/json") {
-        return Err(
-            "gpt2api-rs admin endpoint is not available on this backend \
-             (got a non-JSON response). Ensure the gpt2api-rs integration is \
-             enabled on the server build."
-                .to_string(),
-        );
+        return Err("gpt2api-rs admin endpoint is not available on this backend (got a non-JSON \
+                    response). Ensure the gpt2api-rs integration is enabled on the server build."
+            .to_string());
     }
     response
         .json()
@@ -2244,6 +2317,77 @@ where
         .await
         .map_err(|e| format!("Network error: {:?}", e))?;
     parse_admin_gpt2api_rs_response(response).await
+}
+
+#[cfg(not(feature = "mock"))]
+async fn patch_admin_gpt2api_rs<B, T>(path: &str, body: &B) -> Result<T, String>
+where
+    B: Serialize,
+    T: DeserializeOwned,
+{
+    let url = format!("{}/admin/gpt2api-rs{path}", admin_base());
+    let response = api_patch(&url)
+        .json(body)
+        .map_err(|e| format!("Serialize error: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    parse_admin_gpt2api_rs_response(response).await
+}
+
+#[cfg(not(feature = "mock"))]
+async fn delete_admin_gpt2api_rs_empty<T>(path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let url = format!("{}/admin/gpt2api-rs{path}", admin_base());
+    let response = api_delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    parse_admin_gpt2api_rs_response(response).await
+}
+
+#[cfg(not(feature = "mock"))]
+fn gpt2api_public_base() -> String {
+    format!("{}/gpt2api", API_BASE.trim_end_matches('/'))
+}
+
+#[cfg(not(feature = "mock"))]
+async fn parse_gpt2api_public_response<T>(response: gloo_net::http::Response) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(message) = value.get("error").and_then(serde_json::Value::as_str) {
+                return Err(message.to_string());
+            }
+        }
+        return Err(if text.trim().is_empty() { "请求失败".to_string() } else { text });
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {:?}", e))
+}
+
+#[cfg(not(feature = "mock"))]
+async fn post_public_gpt2api_json<B, T>(path: &str, auth_key: &str, body: &B) -> Result<T, String>
+where
+    B: Serialize,
+    T: DeserializeOwned,
+{
+    let url = format!("{}{path}", gpt2api_public_base());
+    let response = api_post(&url)
+        .header("authorization", &format!("Bearer {}", auth_key.trim()))
+        .json(body)
+        .map_err(|e| format!("Serialize error: {:?}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    parse_gpt2api_public_response(response).await
 }
 
 pub async fn fetch_admin_gpt2api_rs_config() -> Result<AdminGpt2ApiRsConfigEnvelope, String> {
@@ -2408,6 +2552,85 @@ pub async fn fetch_admin_gpt2api_rs_keys() -> Result<Vec<AdminGpt2ApiRsKeyView>,
     }
 }
 
+pub async fn create_admin_gpt2api_rs_key(
+    request: &AdminGpt2ApiRsCreateKeyRequest,
+) -> Result<AdminGpt2ApiRsKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let mut key = AdminGpt2ApiRsKeyView::default();
+        key.id = "mock-key".to_string();
+        key.name = request.name.clone();
+        key.status = request
+            .status
+            .clone()
+            .unwrap_or_else(|| "active".to_string());
+        key.quota_total_calls = request.quota_total_calls;
+        key.route_strategy = request.route_strategy.clone();
+        key.secret_plaintext = Some("sk-mock-secret".to_string());
+        Ok(key)
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/keys", request).await
+    }
+}
+
+pub async fn update_admin_gpt2api_rs_key(
+    key_id: &str,
+    request: &AdminGpt2ApiRsUpdateKeyRequest,
+) -> Result<AdminGpt2ApiRsKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let mut key = AdminGpt2ApiRsKeyView::default();
+        key.id = key_id.to_string();
+        key.name = request.name.clone().unwrap_or_default();
+        key.status = request
+            .status
+            .clone()
+            .unwrap_or_else(|| "active".to_string());
+        key.quota_total_calls = request.quota_total_calls.unwrap_or_default();
+        key.route_strategy = request
+            .route_strategy
+            .clone()
+            .unwrap_or_else(|| "auto".to_string());
+        Ok(key)
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        patch_admin_gpt2api_rs(&format!("/keys/{key_id}"), request).await
+    }
+}
+
+pub async fn rotate_admin_gpt2api_rs_key(key_id: &str) -> Result<AdminGpt2ApiRsKeyView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let mut key = AdminGpt2ApiRsKeyView::default();
+        key.id = key_id.to_string();
+        key.secret_plaintext = Some("sk-mock-rotated".to_string());
+        Ok(key)
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs(&format!("/keys/{key_id}/rotate"), &serde_json::json!({})).await
+    }
+}
+
+pub async fn delete_admin_gpt2api_rs_key(key_id: &str) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = key_id;
+        Ok(serde_json::json!({ "ok": true }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        delete_admin_gpt2api_rs_empty(&format!("/keys/{key_id}")).await
+    }
+}
+
 pub async fn fetch_admin_gpt2api_rs_usage(
     limit: u64,
 ) -> Result<Vec<AdminGpt2ApiRsUsageEventView>, String> {
@@ -2485,6 +2708,86 @@ pub async fn admin_gpt2api_rs_responses(
     #[cfg(not(feature = "mock"))]
     {
         post_admin_gpt2api_rs("/responses", request).await
+    }
+}
+
+pub async fn verify_public_gpt2api_key(
+    auth_key: &str,
+) -> Result<Gpt2ApiPublicVerifyResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = auth_key;
+        Ok(Gpt2ApiPublicVerifyResponse {
+            ok: true,
+            version: Some("mock".to_string()),
+            key: Gpt2ApiPublicKeyInfo {
+                id: Some("mock".to_string()),
+                name: "demo".to_string(),
+                status: "active".to_string(),
+                quota_total_calls: 100,
+                quota_used_calls: 0,
+                route_strategy: Some("auto".to_string()),
+            },
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_public_gpt2api_json("/auth/verify", auth_key, &serde_json::json!({})).await
+    }
+}
+
+pub async fn generate_public_gpt2api_images(
+    auth_key: &str,
+    request: &AdminGpt2ApiRsImageGenerationRequest,
+) -> Result<Gpt2ApiImageResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (auth_key, request);
+        Ok(Gpt2ApiImageResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_public_gpt2api_json("/images/generations", auth_key, request).await
+    }
+}
+
+pub async fn edit_public_gpt2api_images(
+    auth_key: &str,
+    prompt: &str,
+    model: &str,
+    n: usize,
+    files: &[File],
+) -> Result<Gpt2ApiImageResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (auth_key, prompt, model, n, files);
+        Ok(Gpt2ApiImageResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/images/edits", gpt2api_public_base());
+        let form = FormData::new().map_err(|err| format!("{err:?}"))?;
+        form.append_with_str("prompt", prompt)
+            .map_err(|err| format!("{err:?}"))?;
+        form.append_with_str("model", model)
+            .map_err(|err| format!("{err:?}"))?;
+        form.append_with_str("n", &n.to_string())
+            .map_err(|err| format!("{err:?}"))?;
+        for file in files {
+            form.append_with_blob_and_filename("image", file.as_ref(), &file.name())
+                .map_err(|err| format!("{err:?}"))?;
+        }
+        let response = api_post(&url)
+            .header("authorization", &format!("Bearer {}", auth_key.trim()))
+            .body(JsValue::from(form))
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        parse_gpt2api_public_response(response).await
     }
 }
 
@@ -8761,6 +9064,14 @@ pub async fn delete_admin_kiro_account(name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_generation_request_serializes_b64_response_format() {
+        let value = serde_json::to_value(AdminGpt2ApiRsImageGenerationRequest::default())
+            .expect("request should serialize");
+
+        assert_eq!(value.get("response_format"), Some(&serde_json::json!("b64_json")));
+    }
 
     #[test]
     fn admin_kiro_account_statuses_response_defaults_are_empty() {

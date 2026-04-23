@@ -25,8 +25,7 @@ use crate::{
         LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput, PatchAdminLlmGatewayKeyRequest,
         PatchKiroAccountInput,
     },
-    components::search_box::SearchBox,
-    components::tab_bar::render_tab_bar,
+    components::{search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{
         confirm_destructive, format_float2, format_kiro_disabled_reason, format_ms,
         format_number_i64, format_number_u64, format_reset_hint, kiro_credit_ratio,
@@ -1699,10 +1698,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let on_flash = props.on_flash.clone();
         let on_reload = props.on_reload.clone();
         Callback::from(move |_| {
-            if !confirm_destructive(&format!(
-                "确认删除 Kiro key `{}` ？此操作不可撤销。",
-                key_name
-            )) {
+            if !confirm_destructive(&format!("确认删除 Kiro key `{}` ？此操作不可撤销。", key_name))
+            {
                 return;
             }
             let key_id = key_id.clone();
@@ -3446,9 +3443,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                         {
                             return true;
                         }
-                        g.account_names
-                            .iter()
-                            .any(|n| n.to_lowercase().contains(q))
+                        g.account_names.iter().any(|n| n.to_lowercase().contains(q))
                     })
                     .cloned()
                     .collect()

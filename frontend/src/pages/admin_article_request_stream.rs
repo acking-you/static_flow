@@ -109,24 +109,25 @@ pub fn admin_article_request_runs_page(props: &Props) -> Html {
                 );
                 let batcher_for_msg = batcher.clone();
 
-                let on_chunk = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
-                    let Some(text) = event.data().as_string() else { return };
-                    let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else {
-                        return;
-                    };
-                    let stream = val["stream"].as_str().unwrap_or("stdout").to_string();
-                    let batch_index = val["batch_index"].as_i64().unwrap_or(0) as i32;
-                    let content = val["content"].as_str().unwrap_or("").to_string();
-                    batcher_for_msg.push(ArticleRequestAiRunChunk {
-                        chunk_id: format!("live-{}-{}", stream, batch_index),
-                        run_id: String::new(),
-                        request_id: String::new(),
-                        stream,
-                        batch_index,
-                        content,
-                        created_at: 0,
+                let on_chunk =
+                    Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+                        let Some(text) = event.data().as_string() else { return };
+                        let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else {
+                            return;
+                        };
+                        let stream = val["stream"].as_str().unwrap_or("stdout").to_string();
+                        let batch_index = val["batch_index"].as_i64().unwrap_or(0) as i32;
+                        let content = val["content"].as_str().unwrap_or("").to_string();
+                        batcher_for_msg.push(ArticleRequestAiRunChunk {
+                            chunk_id: format!("live-{}-{}", stream, batch_index),
+                            run_id: String::new(),
+                            request_id: String::new(),
+                            stream,
+                            batch_index,
+                            content,
+                            created_at: 0,
+                        });
                     });
-                });
 
                 let on_done = {
                     let stream_status = stream_status.clone();

@@ -333,7 +333,15 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/admin/gpt2api-rs/keys",
-            get(gpt2api_rs::list_admin_keys),
+            get(gpt2api_rs::list_admin_keys).post(gpt2api_rs::create_admin_key),
+        )
+        .route(
+            "/admin/gpt2api-rs/keys/:key_id",
+            patch(gpt2api_rs::update_admin_key).delete(gpt2api_rs::delete_admin_key),
+        )
+        .route(
+            "/admin/gpt2api-rs/keys/:key_id/rotate",
+            post(gpt2api_rs::rotate_admin_key),
         )
         .route(
             "/admin/gpt2api-rs/usage",
@@ -354,6 +362,26 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/admin/gpt2api-rs/responses",
             post(gpt2api_rs::post_responses),
+        )
+        .route(
+            "/api/gpt2api/auth/verify",
+            post(gpt2api_rs::post_public_auth_verify),
+        )
+        .route(
+            "/api/gpt2api/images/generations",
+            post(gpt2api_rs::public_image_generation),
+        )
+        .route(
+            "/api/gpt2api/images/edits",
+            post(gpt2api_rs::public_image_edit),
+        )
+        .route(
+            "/api/gpt2api/chat/completions",
+            post(gpt2api_rs::public_chat_completions),
+        )
+        .route(
+            "/api/gpt2api/responses",
+            post(gpt2api_rs::public_responses),
         )
         .route(
             "/admin/kiro-gateway/account-groups",

@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{File, HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
@@ -20,17 +19,20 @@ extern "C" {
 use crate::{
     api::{
         admin_gpt2api_rs_chat_completions, admin_gpt2api_rs_edit_images,
-        admin_gpt2api_rs_generate_images, admin_gpt2api_rs_responses,
-        delete_admin_gpt2api_rs_accounts, fetch_admin_gpt2api_rs_accounts,
-        fetch_admin_gpt2api_rs_config, fetch_admin_gpt2api_rs_keys, fetch_admin_gpt2api_rs_models,
-        fetch_admin_gpt2api_rs_status, fetch_admin_gpt2api_rs_usage,
-        fetch_admin_gpt2api_rs_version, import_admin_gpt2api_rs_accounts,
-        post_admin_gpt2api_rs_login, refresh_admin_gpt2api_rs_accounts,
-        update_admin_gpt2api_rs_account, update_admin_gpt2api_rs_config, AdminGpt2ApiRsAccountView,
+        admin_gpt2api_rs_generate_images, admin_gpt2api_rs_responses, create_admin_gpt2api_rs_key,
+        delete_admin_gpt2api_rs_accounts, delete_admin_gpt2api_rs_key,
+        fetch_admin_gpt2api_rs_accounts, fetch_admin_gpt2api_rs_config,
+        fetch_admin_gpt2api_rs_keys, fetch_admin_gpt2api_rs_models, fetch_admin_gpt2api_rs_status,
+        fetch_admin_gpt2api_rs_usage, fetch_admin_gpt2api_rs_version,
+        import_admin_gpt2api_rs_accounts, post_admin_gpt2api_rs_login,
+        refresh_admin_gpt2api_rs_accounts, rotate_admin_gpt2api_rs_key,
+        update_admin_gpt2api_rs_account, update_admin_gpt2api_rs_config,
+        update_admin_gpt2api_rs_key, AdminGpt2ApiRsAccountView, AdminGpt2ApiRsCreateKeyRequest,
         AdminGpt2ApiRsDeleteAccountsRequest, AdminGpt2ApiRsImageEditRequest,
         AdminGpt2ApiRsImageGenerationRequest, AdminGpt2ApiRsImportAccountsRequest,
         AdminGpt2ApiRsKeyView, AdminGpt2ApiRsRefreshAccountsRequest,
-        AdminGpt2ApiRsUpdateAccountRequest, AdminGpt2ApiRsUsageEventView, Gpt2ApiRsConfig,
+        AdminGpt2ApiRsUpdateAccountRequest, AdminGpt2ApiRsUpdateKeyRequest,
+        AdminGpt2ApiRsUsageEventView, Gpt2ApiRsConfig,
     },
     components::{search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{confirm_destructive, format_ms, MaskedSecretCode},
@@ -92,6 +94,35 @@ fn parse_browser_profile(account: &AdminGpt2ApiRsAccountView) -> BrowserProfileV
     serde_json::from_str(&account.browser_profile_json).unwrap_or_default()
 }
 
+fn parse_required_i64_input(value: &str, field_name: &str) -> Result<i64, String> {
+    value
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| format!("{field_name} must be an integer"))
+}
+
+fn parse_optional_u64_input(value: &str, field_name: &str) -> Result<Option<u64>, String> {
+    match value.trim() {
+        "" => Ok(None),
+        raw => raw
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| format!("{field_name} must be an integer")),
+    }
+}
+
+fn format_account_scheduler(account: &AdminGpt2ApiRsAccountView) -> String {
+    let concurrency = account
+        .request_max_concurrency
+        .map(|value| format!("{value} in-flight"))
+        .unwrap_or_else(|| "inherit concurrency".to_string());
+    let spacing = account
+        .request_min_start_interval_ms
+        .map(|value| format!("{value} ms spacing"))
+        .unwrap_or_else(|| "inherit spacing".to_string());
+    format!("{concurrency} · {spacing}")
+}
+
 #[function_component(AdminGpt2ApiRsPage)]
 pub fn admin_gpt2api_rs_page() -> Html {
     let active_tab = use_state(|| GPT2API_TAB_OVERVIEW.to_string());
@@ -114,6 +145,16 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let keys = use_state(Vec::<AdminGpt2ApiRsKeyView>::new);
     let usage = use_state(Vec::<AdminGpt2ApiRsUsageEventView>::new);
     let usage_limit = use_state(|| "50".to_string());
+    let editing_key_id = use_state(|| None::<String>);
+    let key_form_name = use_state(String::new);
+    let key_form_status = use_state(|| "active".to_string());
+    let key_form_quota_total_calls = use_state(|| "100".to_string());
+    let key_form_route_strategy = use_state(|| "auto".to_string());
+    let key_form_account_group_id = use_state(String::new);
+    let key_form_request_max_concurrency = use_state(String::new);
+    let key_form_request_min_start_interval_ms = use_state(String::new);
+    let saving_key = use_state(|| false);
+    let latest_key_secret = use_state(|| None::<String>);
 
     let import_access_tokens = use_state(String::new);
     let import_session_jsons = use_state(String::new);
@@ -128,6 +169,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let update_impersonate_browser = use_state(String::new);
     let update_request_max_concurrency = use_state(String::new);
     let update_request_min_start_interval_ms = use_state(String::new);
+    let selected_scheduler_account_name = use_state(String::new);
+    let saving_account_scheduler = use_state(|| false);
 
     let generation_prompt = use_state(String::new);
     let generation_model = use_state(|| "gpt-image-1".to_string());
@@ -396,8 +439,6 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let update_session_token = update_session_token.clone();
         let update_user_agent = update_user_agent.clone();
         let update_impersonate_browser = update_impersonate_browser.clone();
-        let update_request_max_concurrency = update_request_max_concurrency.clone();
-        let update_request_min_start_interval_ms = update_request_min_start_interval_ms.clone();
         let load_error = load_error.clone();
         let notice = notice.clone();
         let reload_all = reload_all.clone();
@@ -413,30 +454,6 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     Ok(parsed) => Some(parsed),
                     Err(_) => {
                         load_error.set(Some("quota_remaining must be an integer".to_string()));
-                        return;
-                    },
-                },
-            };
-            let request_max_concurrency = match (*update_request_max_concurrency).trim() {
-                "" => None,
-                value => match value.parse::<u64>() {
-                    Ok(parsed) => Some(parsed),
-                    Err(_) => {
-                        load_error
-                            .set(Some("request_max_concurrency must be an integer".to_string()));
-                        return;
-                    },
-                },
-            };
-            let request_min_start_interval_ms = match (*update_request_min_start_interval_ms).trim()
-            {
-                "" => None,
-                value => match value.parse::<u64>() {
-                    Ok(parsed) => Some(parsed),
-                    Err(_) => {
-                        load_error.set(Some(
-                            "request_min_start_interval_ms must be an integer".to_string(),
-                        ));
                         return;
                     },
                 },
@@ -468,12 +485,344 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     session_token,
                     user_agent,
                     impersonate_browser,
-                    request_max_concurrency,
-                    request_min_start_interval_ms,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
                 };
                 match update_admin_gpt2api_rs_account(&request).await {
                     Ok(_) => {
                         notice.set(Some("Updated account".to_string()));
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+            });
+        })
+    };
+
+    let on_save_account_scheduler = {
+        let update_access_token = update_access_token.clone();
+        let selected_scheduler_account_name = selected_scheduler_account_name.clone();
+        let update_request_max_concurrency = update_request_max_concurrency.clone();
+        let update_request_min_start_interval_ms = update_request_min_start_interval_ms.clone();
+        let saving_account_scheduler = saving_account_scheduler.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        Callback::from(move |_| {
+            let access_token = (*update_access_token).trim().to_string();
+            if access_token.is_empty() {
+                load_error
+                    .set(Some("Load an account before saving scheduler controls".to_string()));
+                return;
+            }
+            let request_max_concurrency = match (*update_request_max_concurrency).trim() {
+                "" => {
+                    load_error.set(Some("request_max_concurrency is required".to_string()));
+                    return;
+                },
+                value => match value.parse::<u64>() {
+                    Ok(parsed) => parsed,
+                    Err(_) => {
+                        load_error
+                            .set(Some("request_max_concurrency must be an integer".to_string()));
+                        return;
+                    },
+                },
+            };
+            let request_min_start_interval_ms = match (*update_request_min_start_interval_ms).trim()
+            {
+                "" => {
+                    load_error.set(Some("request_min_start_interval_ms is required".to_string()));
+                    return;
+                },
+                value => match value.parse::<u64>() {
+                    Ok(parsed) => parsed,
+                    Err(_) => {
+                        load_error.set(Some(
+                            "request_min_start_interval_ms must be an integer".to_string(),
+                        ));
+                        return;
+                    },
+                },
+            };
+            let account_name = if (*selected_scheduler_account_name).trim().is_empty() {
+                "selected account".to_string()
+            } else {
+                (*selected_scheduler_account_name).trim().to_string()
+            };
+            saving_account_scheduler.set(true);
+            load_error.set(None);
+            notice.set(None);
+            let saving_account_scheduler = saving_account_scheduler.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            spawn_local(async move {
+                let request = AdminGpt2ApiRsUpdateAccountRequest {
+                    access_token,
+                    plan_type: None,
+                    status: None,
+                    quota_remaining: None,
+                    restore_at: None,
+                    session_token: None,
+                    user_agent: None,
+                    impersonate_browser: None,
+                    request_max_concurrency: Some(request_max_concurrency),
+                    request_min_start_interval_ms: Some(request_min_start_interval_ms),
+                };
+                match update_admin_gpt2api_rs_account(&request).await {
+                    Ok(_) => {
+                        notice.set(Some(format!("Saved scheduler controls for {account_name}")));
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                saving_account_scheduler.set(false);
+            });
+        })
+    };
+
+    let reset_key_form = {
+        let editing_key_id = editing_key_id.clone();
+        let key_form_name = key_form_name.clone();
+        let key_form_status = key_form_status.clone();
+        let key_form_quota_total_calls = key_form_quota_total_calls.clone();
+        let key_form_route_strategy = key_form_route_strategy.clone();
+        let key_form_account_group_id = key_form_account_group_id.clone();
+        let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
+        let key_form_request_min_start_interval_ms = key_form_request_min_start_interval_ms.clone();
+        let latest_key_secret = latest_key_secret.clone();
+        Callback::from(move |_| {
+            editing_key_id.set(None);
+            key_form_name.set(String::new());
+            key_form_status.set("active".to_string());
+            key_form_quota_total_calls.set("100".to_string());
+            key_form_route_strategy.set("auto".to_string());
+            key_form_account_group_id.set(String::new());
+            key_form_request_max_concurrency.set(String::new());
+            key_form_request_min_start_interval_ms.set(String::new());
+            latest_key_secret.set(None);
+        })
+    };
+
+    let on_edit_key = {
+        let editing_key_id = editing_key_id.clone();
+        let key_form_name = key_form_name.clone();
+        let key_form_status = key_form_status.clone();
+        let key_form_quota_total_calls = key_form_quota_total_calls.clone();
+        let key_form_route_strategy = key_form_route_strategy.clone();
+        let key_form_account_group_id = key_form_account_group_id.clone();
+        let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
+        let key_form_request_min_start_interval_ms = key_form_request_min_start_interval_ms.clone();
+        let latest_key_secret = latest_key_secret.clone();
+        Callback::from(move |key: AdminGpt2ApiRsKeyView| {
+            editing_key_id.set(Some(key.id));
+            key_form_name.set(key.name);
+            key_form_status.set(key.status);
+            key_form_quota_total_calls.set(key.quota_total_calls.to_string());
+            key_form_route_strategy.set(key.route_strategy);
+            key_form_account_group_id.set(key.account_group_id.unwrap_or_default());
+            key_form_request_max_concurrency.set(
+                key.request_max_concurrency
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            );
+            key_form_request_min_start_interval_ms.set(
+                key.request_min_start_interval_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            );
+            latest_key_secret.set(None);
+        })
+    };
+
+    let on_submit_key = {
+        let editing_key_id = editing_key_id.clone();
+        let key_form_name = key_form_name.clone();
+        let key_form_status = key_form_status.clone();
+        let key_form_quota_total_calls = key_form_quota_total_calls.clone();
+        let key_form_route_strategy = key_form_route_strategy.clone();
+        let key_form_account_group_id = key_form_account_group_id.clone();
+        let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
+        let key_form_request_min_start_interval_ms = key_form_request_min_start_interval_ms.clone();
+        let saving_key = saving_key.clone();
+        let latest_key_secret = latest_key_secret.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        Callback::from(move |_| {
+            let name = (*key_form_name).trim().to_string();
+            if name.is_empty() {
+                load_error.set(Some("Key name is required".to_string()));
+                return;
+            }
+            let quota_total_calls = match parse_required_i64_input(
+                (*key_form_quota_total_calls).as_str(),
+                "quota_total_calls",
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    load_error.set(Some(err));
+                    return;
+                },
+            };
+            let request_max_concurrency = match parse_optional_u64_input(
+                (*key_form_request_max_concurrency).as_str(),
+                "request_max_concurrency",
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    load_error.set(Some(err));
+                    return;
+                },
+            };
+            let request_min_start_interval_ms = match parse_optional_u64_input(
+                (*key_form_request_min_start_interval_ms).as_str(),
+                "request_min_start_interval_ms",
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    load_error.set(Some(err));
+                    return;
+                },
+            };
+            let status = (*key_form_status).trim().to_string();
+            let route_strategy = (*key_form_route_strategy).trim().to_string();
+            if route_strategy.is_empty() {
+                load_error.set(Some("route_strategy is required".to_string()));
+                return;
+            }
+            let account_group_id = (!(*key_form_account_group_id).trim().is_empty())
+                .then(|| (*key_form_account_group_id).trim().to_string());
+            let editing_key_id_value = (*editing_key_id).clone();
+            let saving_key = saving_key.clone();
+            let latest_key_secret = latest_key_secret.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            let editing_key_id = editing_key_id.clone();
+            let key_form_name = key_form_name.clone();
+            let key_form_status = key_form_status.clone();
+            let key_form_quota_total_calls = key_form_quota_total_calls.clone();
+            let key_form_route_strategy = key_form_route_strategy.clone();
+            let key_form_account_group_id = key_form_account_group_id.clone();
+            let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
+            let key_form_request_min_start_interval_ms =
+                key_form_request_min_start_interval_ms.clone();
+            saving_key.set(true);
+            load_error.set(None);
+            notice.set(None);
+            latest_key_secret.set(None);
+            spawn_local(async move {
+                let result = if let Some(key_id) = editing_key_id_value.clone() {
+                    let request = AdminGpt2ApiRsUpdateKeyRequest {
+                        name: Some(name.clone()),
+                        status: Some(status.clone()),
+                        quota_total_calls: Some(quota_total_calls),
+                        route_strategy: Some(route_strategy.clone()),
+                        account_group_id: account_group_id.clone(),
+                        request_max_concurrency,
+                        request_min_start_interval_ms,
+                    };
+                    update_admin_gpt2api_rs_key(&key_id, &request).await
+                } else {
+                    let request = AdminGpt2ApiRsCreateKeyRequest {
+                        name: name.clone(),
+                        quota_total_calls,
+                        status: Some(status.clone()),
+                        route_strategy: route_strategy.clone(),
+                        account_group_id: account_group_id.clone(),
+                        request_max_concurrency,
+                        request_min_start_interval_ms,
+                    };
+                    create_admin_gpt2api_rs_key(&request).await
+                };
+
+                match result {
+                    Ok(key) => {
+                        editing_key_id.set(Some(key.id.clone()));
+                        key_form_name.set(key.name.clone());
+                        key_form_status.set(key.status.clone());
+                        key_form_quota_total_calls.set(key.quota_total_calls.to_string());
+                        key_form_route_strategy.set(key.route_strategy.clone());
+                        key_form_account_group_id
+                            .set(key.account_group_id.clone().unwrap_or_default());
+                        key_form_request_max_concurrency.set(
+                            key.request_max_concurrency
+                                .map(|value| value.to_string())
+                                .unwrap_or_default(),
+                        );
+                        key_form_request_min_start_interval_ms.set(
+                            key.request_min_start_interval_ms
+                                .map(|value| value.to_string())
+                                .unwrap_or_default(),
+                        );
+                        latest_key_secret.set(key.secret_plaintext.clone());
+                        notice.set(Some(if editing_key_id_value.is_some() {
+                            "Updated key".to_string()
+                        } else {
+                            "Created key".to_string()
+                        }));
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                saving_key.set(false);
+            });
+        })
+    };
+
+    let on_rotate_key = {
+        let latest_key_secret = latest_key_secret.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        Callback::from(move |key: AdminGpt2ApiRsKeyView| {
+            if !confirm_destructive(&format!("Reissue plaintext key for \"{}\"?", key.name)) {
+                return;
+            }
+            let latest_key_secret = latest_key_secret.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            spawn_local(async move {
+                match rotate_admin_gpt2api_rs_key(&key.id).await {
+                    Ok(rotated) => {
+                        latest_key_secret.set(rotated.secret_plaintext.clone());
+                        notice.set(Some(format!("Reissued key {}", key.name)));
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+            });
+        })
+    };
+
+    let on_delete_key = {
+        let editing_key_id = editing_key_id.clone();
+        let latest_key_secret = latest_key_secret.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        let reset_key_form = reset_key_form.clone();
+        Callback::from(move |key: AdminGpt2ApiRsKeyView| {
+            if !confirm_destructive(&format!("Delete key \"{}\"?", key.name)) {
+                return;
+            }
+            let editing_key_id_value = (*editing_key_id).clone();
+            let latest_key_secret = latest_key_secret.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            let reset_key_form = reset_key_form.clone();
+            spawn_local(async move {
+                match delete_admin_gpt2api_rs_key(&key.id).await {
+                    Ok(_) => {
+                        if editing_key_id_value.as_ref() == Some(&key.id) {
+                            reset_key_form.emit(());
+                        }
+                        latest_key_secret.set(None);
+                        notice.set(Some(format!("Deleted key {}", key.name)));
                         reload_all.emit(());
                     },
                     Err(err) => load_error.set(Some(err)),
@@ -505,6 +854,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 prompt: (*generation_prompt).clone(),
                 model: (*generation_model).clone(),
                 n,
+                response_format: "b64_json".to_string(),
             };
             spawn_local(async move {
                 match admin_gpt2api_rs_generate_images(&request).await {
@@ -651,9 +1001,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
     // user_agent fragment (case-insensitive). Kept as a cloned Vec so the
     // existing `.iter().map()` rendering below still works unchanged.
     let accounts_query_lower = (*accounts_search).trim().to_lowercase();
-    let filtered_accounts: Vec<AdminGpt2ApiRsAccountView> = use_memo(
-        ((*accounts).clone(), accounts_query_lower.clone()),
-        |(items, q)| {
+    let filtered_accounts: Vec<AdminGpt2ApiRsAccountView> =
+        use_memo(((*accounts).clone(), accounts_query_lower.clone()), |(items, q)| {
             if q.is_empty() {
                 items.clone()
             } else {
@@ -671,10 +1020,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     .cloned()
                     .collect()
             }
-        },
-    )
-    .as_ref()
-    .clone();
+        })
+        .as_ref()
+        .clone();
 
     // Tab wiring. Pure UI switch — all data is still reloaded together by
     // `reload_all`, so switching tabs does not trigger additional network.
@@ -896,6 +1244,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 <th class="py-2 pr-3">{ "Plan" }</th>
                                 <th class="py-2 pr-3">{ "Quota" }</th>
                                 <th class="py-2 pr-3">{ "Last Refresh" }</th>
+                                <th class="py-2 pr-3">{ "Scheduler" }</th>
                                 <th class="py-2 pr-3">{ "Actions" }</th>
                             </tr>
                         </thead>
@@ -913,6 +1262,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 let update_impersonate_browser = update_impersonate_browser.clone();
                                 let update_request_max_concurrency = update_request_max_concurrency.clone();
                                 let update_request_min_start_interval_ms = update_request_min_start_interval_ms.clone();
+                                let selected_scheduler_account_name = selected_scheduler_account_name.clone();
                                 let load_error = load_error.clone();
                                 let notice = notice.clone();
                                 let reload_all = reload_all.clone();
@@ -935,6 +1285,11 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                             { account.last_refresh_at.map(|ts| format_ms(ts * 1000)).unwrap_or_else(|| "-".to_string()) }
                                         </td>
                                         <td class="py-2 pr-3">
+                                            <div class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                { format_account_scheduler(account) }
+                                            </div>
+                                        </td>
+                                        <td class="py-2 pr-3">
                                             <div class={classes!("flex", "gap-2", "flex-wrap")}>
                                                 <button
                                                     class={classes!("btn-fluent-secondary")}
@@ -950,9 +1305,10 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                         update_impersonate_browser.set(profile.impersonate_browser.unwrap_or_default());
                                                         update_request_max_concurrency.set(account_for_edit.request_max_concurrency.map(|v| v.to_string()).unwrap_or_default());
                                                         update_request_min_start_interval_ms.set(account_for_edit.request_min_start_interval_ms.map(|v| v.to_string()).unwrap_or_default());
+                                                        selected_scheduler_account_name.set(account_for_edit.name.clone());
                                                     })}
                                                 >
-                                                    { "Load To Form" }
+                                                    { "Load Account" }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-fluent-secondary")}
@@ -993,6 +1349,58 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             }) }
                         </tbody>
                     </table>
+                </div>
+
+                <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4", "space-y-4")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ "Account Scheduler" }</h3>
+                            <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                                { "Per-account concurrency and minimum start interval mirror the Kiro account scheduler flow: load one account, edit both integer values, then save them together." }
+                            </p>
+                        </div>
+                        <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                            {
+                                if (*selected_scheduler_account_name).trim().is_empty() {
+                                    "No account loaded".to_string()
+                                } else {
+                                    format!("Editing {}", (*selected_scheduler_account_name))
+                                }
+                            }
+                        </span>
+                    </div>
+                    <div class={classes!("grid", "gap-4", "md:grid-cols-3")}>
+                        <label class="block text-sm md:col-span-1">
+                            <span>{ "Account" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*selected_scheduler_account_name).clone()}
+                                readonly=true
+                            />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Request Max Concurrency" }</span>
+                            <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*update_request_max_concurrency).clone()} oninput={{
+                                let update_request_max_concurrency = update_request_max_concurrency.clone();
+                                Callback::from(move |e: InputEvent| update_request_max_concurrency.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                            }} />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Request Min Start Interval Ms" }</span>
+                            <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*update_request_min_start_interval_ms).clone()} oninput={{
+                                let update_request_min_start_interval_ms = update_request_min_start_interval_ms.clone();
+                                Callback::from(move |e: InputEvent| update_request_min_start_interval_ms.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                            }} />
+                        </label>
+                    </div>
+                    <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
+                        <button class={classes!("btn-fluent-primary")} onclick={on_save_account_scheduler} disabled={*saving_account_scheduler}>
+                            { if *saving_account_scheduler { "Saving..." } else { "Save Account Scheduler" } }
+                        </button>
+                        <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                            { "These two values directly gate request fan-out for the selected upstream ChatGPT account." }
+                        </span>
+                    </div>
                 </div>
 
                 <div class={classes!("grid", "gap-4", "lg:grid-cols-2")}>
@@ -1052,20 +1460,6 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             Callback::from(move |e: InputEvent| update_impersonate_browser.set(e.target_unchecked_into::<HtmlInputElement>().value()))
                         }} />
                     </label>
-                    <label class="block text-sm">
-                        <span>{ "Request Max Concurrency" }</span>
-                        <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*update_request_max_concurrency).clone()} oninput={{
-                            let update_request_max_concurrency = update_request_max_concurrency.clone();
-                            Callback::from(move |e: InputEvent| update_request_max_concurrency.set(e.target_unchecked_into::<HtmlInputElement>().value()))
-                        }} />
-                    </label>
-                    <label class="block text-sm">
-                        <span>{ "Request Min Start Interval Ms" }</span>
-                        <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*update_request_min_start_interval_ms).clone()} oninput={{
-                            let update_request_min_start_interval_ms = update_request_min_start_interval_ms.clone();
-                            Callback::from(move |e: InputEvent| update_request_min_start_interval_ms.set(e.target_unchecked_into::<HtmlInputElement>().value()))
-                        }} />
-                    </label>
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_update_account}>{ "Update Selected Account" }</button>
             </section>
@@ -1074,30 +1468,249 @@ pub fn admin_gpt2api_rs_page() -> Html {
             if active == GPT2API_TAB_KEYS {
             <section class={classes!("grid", "gap-5", "lg:grid-cols-2")}>
                 <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
-                    <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "API Keys" }</h2>
-                    <div class={classes!("mt-3", "overflow-x-auto")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "API Keys" }</h2>
+                            <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                                { "Create, reissue, disable, or delete public keys. The plaintext sk-... secret is stored directly and can be copied from the inventory below whenever you need to log in." }
+                            </p>
+                        </div>
+                        <button class={classes!("btn-fluent-secondary")} onclick={{
+                            let reset_key_form = reset_key_form.clone();
+                            Callback::from(move |_| reset_key_form.emit(()))
+                        }}>
+                            { if (*editing_key_id).is_some() { "New Key" } else { "Reset Form" } }
+                        </button>
+                    </div>
+
+                    <div class={classes!("mt-4", "grid", "gap-3", "sm:grid-cols-2")}>
+                        <label class="block text-sm">
+                            <span>{ "Name" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_name).clone()}
+                                oninput={{
+                                    let key_form_name = key_form_name.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_name.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Status" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_status).clone()}
+                                oninput={{
+                                    let key_form_status = key_form_status.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_status.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Quota Total Calls" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_quota_total_calls).clone()}
+                                oninput={{
+                                    let key_form_quota_total_calls = key_form_quota_total_calls.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_quota_total_calls.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Route Strategy" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_route_strategy).clone()}
+                                oninput={{
+                                    let key_form_route_strategy = key_form_route_strategy.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_route_strategy.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Account Group ID" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_account_group_id).clone()}
+                                oninput={{
+                                    let key_form_account_group_id = key_form_account_group_id.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_account_group_id.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Request Max Concurrency" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_request_max_concurrency).clone()}
+                                oninput={{
+                                    let key_form_request_max_concurrency =
+                                        key_form_request_max_concurrency.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_request_max_concurrency
+                                            .set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class="block text-sm sm:col-span-2">
+                            <span>{ "Request Min Start Interval Ms" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*key_form_request_min_start_interval_ms).clone()}
+                                oninput={{
+                                    let key_form_request_min_start_interval_ms =
+                                        key_form_request_min_start_interval_ms.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        key_form_request_min_start_interval_ms
+                                            .set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+                    </div>
+
+                    <div class={classes!("mt-4", "flex", "items-center", "gap-2", "flex-wrap")}>
+                        <button
+                            class={classes!("btn-fluent-primary")}
+                            onclick={on_submit_key}
+                            disabled={*saving_key}
+                        >
+                            {
+                                if *saving_key {
+                                    "Saving..."
+                                } else if (*editing_key_id).is_some() {
+                                    "Update Key"
+                                } else {
+                                    "Create Key"
+                                }
+                            }
+                        </button>
+                        if let Some(key_id) = (*editing_key_id).clone() {
+                            <span class={classes!("text-sm", "text-[var(--muted)]")}>
+                                { format!("Editing key {key_id}") }
+                            </span>
+                        }
+                    </div>
+
+                    if let Some(secret) = (*latest_key_secret).clone() {
+                        <div class={classes!("mt-4", "rounded-[var(--radius)]", "border", "border-emerald-400/40", "bg-emerald-500/10", "p-4")}>
+                            <div class={classes!("text-sm", "font-medium")}>{ "Stored plaintext key (use this for /gpt2api/login)" }</div>
+                            <p class={classes!("m-0", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                                { "This sk-... value is the real login credential. It is now stored with the key and will stay visible in the inventory below after reload." }
+                            </p>
+                            <div class={classes!("mt-3")}>
+                                <MaskedSecretCode
+                                    value={secret}
+                                    copy_label={"plaintext key"}
+                                    on_copy={on_copy.clone()}
+                                />
+                            </div>
+                        </div>
+                    }
+
+                    <div class={classes!("mt-5", "overflow-x-auto")}>
                         <table class={classes!("w-full", "text-sm")}>
                             <thead>
                                 <tr class={classes!("text-left", "border-b", "border-[var(--border)]")}>
                                     <th class="py-2 pr-3">{ "Name" }</th>
-                                    <th class="py-2 pr-3">{ "Secret Hash" }</th>
+                                    <th class="py-2 pr-3">{ "Status" }</th>
                                     <th class="py-2 pr-3">{ "Quota" }</th>
-                                    <th class="py-2 pr-3">{ "Route" }</th>
+                                    <th class="py-2 pr-3">{ "Plaintext Key" }</th>
+                                    <th class="py-2 pr-3">{ "Actions" }</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 { for keys.iter().map(|key| html! {
                                     <tr class={classes!("border-b", "border-[var(--border)]")}>
-                                        <td class="py-2 pr-3">{ key.name.clone() }</td>
                                         <td class="py-2 pr-3">
-                                            <MaskedSecretCode
-                                                value={key.secret_hash.clone()}
-                                                copy_label={"secret hash"}
-                                                on_copy={on_copy.clone()}
-                                            />
+                                            <div class={classes!("font-medium")}>{ key.name.clone() }</div>
+                                            <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                { format!("route={}{}", key.route_strategy, key.account_group_id.as_ref().map(|id| format!(" · group={id}")).unwrap_or_default()) }
+                                            </div>
                                         </td>
-                                        <td class="py-2 pr-3">{ format!("{}/{}", key.quota_used_images, key.quota_total_images) }</td>
-                                        <td class="py-2 pr-3">{ key.route_strategy.clone() }</td>
+                                        <td class="py-2 pr-3">
+                                            <span class={classes!(
+                                                "inline-flex",
+                                                "rounded-full",
+                                                "px-2.5",
+                                                "py-1",
+                                                "text-xs",
+                                                "font-medium",
+                                                match key.status.as_str() {
+                                                    "active" => "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+                                                    "disabled" => "bg-red-500/10 text-red-700 dark:text-red-200",
+                                                    _ => "bg-amber-500/10 text-amber-700 dark:text-amber-200",
+                                                }
+                                            )}>
+                                                { key.status.clone() }
+                                            </span>
+                                        </td>
+                                        <td class="py-2 pr-3">{ format!("{}/{}", key.quota_used_calls, key.quota_total_calls) }</td>
+                                        <td class="py-2 pr-3">
+                                            {
+                                                if let Some(secret_plaintext) = key.secret_plaintext.clone() {
+                                                    html! {
+                                                        <MaskedSecretCode
+                                                            value={secret_plaintext}
+                                                            copy_label={"plaintext key"}
+                                                            on_copy={on_copy.clone()}
+                                                        />
+                                                    }
+                                                } else {
+                                                    html! {
+                                                        <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                            { "No stored plaintext yet" }
+                                                        </span>
+                                                    }
+                                                }
+                                            }
+                                        </td>
+                                        <td class="py-2 pr-3">
+                                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                <button
+                                                    class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                                    onclick={{
+                                                        let on_edit_key = on_edit_key.clone();
+                                                        let key = key.clone();
+                                                        Callback::from(move |_| on_edit_key.emit(key.clone()))
+                                                    }}
+                                                >
+                                                    { "Edit" }
+                                                </button>
+                                                <button
+                                                    class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                                    onclick={{
+                                                        let on_rotate_key = on_rotate_key.clone();
+                                                        let key = key.clone();
+                                                        Callback::from(move |_| on_rotate_key.emit(key.clone()))
+                                                    }}
+                                                >
+                                                    { "Reissue" }
+                                                </button>
+                                                <button
+                                                    class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs", "text-red-600")}
+                                                    onclick={{
+                                                        let on_delete_key = on_delete_key.clone();
+                                                        let key = key.clone();
+                                                        Callback::from(move |_| on_delete_key.emit(key.clone()))
+                                                    }}
+                                                >
+                                                    { "Delete" }
+                                                </button>
+                                            </div>
+                                        </td>
                                     </tr>
                                 }) }
                             </tbody>

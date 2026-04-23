@@ -7,8 +7,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    body::Body,
+    extract::{Multipart, Path as AxumPath, Query, State},
+    http::{header, HeaderMap, Method, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -322,6 +324,75 @@ pub async fn list_admin_keys(
     .await
 }
 
+pub async fn create_admin_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        "/admin/keys",
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn update_admin_key(
+    AxumPath(key_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::PATCH,
+        &format!("/admin/keys/{key_id}"),
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn rotate_admin_key(
+    AxumPath(key_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        &format!("/admin/keys/{key_id}/rotate"),
+        None,
+        Some(Value::Object(serde_json::Map::new())),
+    )
+    .await
+}
+
+pub async fn delete_admin_key(
+    AxumPath(key_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::DELETE,
+        &format!("/admin/keys/{key_id}"),
+        None,
+        None,
+    )
+    .await
+}
+
 pub async fn list_admin_usage(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -441,6 +512,128 @@ pub async fn post_responses(
     .await
 }
 
+pub async fn post_public_auth_verify(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    let bearer = extract_public_bearer(&headers)?;
+    proxy_json_request_with_bearer(
+        state.gpt2api_rs.as_ref(),
+        bearer,
+        Method::POST,
+        "/auth/login",
+        None,
+        Some(Value::Object(serde_json::Map::new())),
+    )
+    .await
+}
+
+pub async fn public_image_generation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    let bearer = extract_public_bearer(&headers)?;
+    proxy_json_request_with_bearer(
+        state.gpt2api_rs.as_ref(),
+        bearer,
+        Method::POST,
+        "/v1/images/generations",
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn public_image_edit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> HandlerResult<Json<Value>> {
+    let bearer = extract_public_bearer(&headers)?;
+    let mut form = reqwest::multipart::Form::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| bad_request(format!("invalid multipart body: {err}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        if name.trim().is_empty() {
+            continue;
+        }
+        let file_name = field.file_name().map(ToString::to_string);
+        let content_type = field.content_type().map(ToString::to_string);
+        if let Some(file_name) = file_name {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| bad_request(format!("invalid multipart file: {err}")))?;
+            let mut part = reqwest::multipart::Part::bytes(bytes.to_vec()).file_name(file_name);
+            if let Some(content_type) = content_type.as_deref() {
+                part = part.mime_str(content_type).map_err(internal_error)?;
+            }
+            form = form.part(name, part);
+        } else {
+            let text = field
+                .text()
+                .await
+                .map_err(|err| bad_request(format!("invalid multipart text: {err}")))?;
+            form = form.text(name, text);
+        }
+    }
+    proxy_multipart_request_with_bearer(state.gpt2api_rs.as_ref(), bearer, "/v1/images/edits", form)
+        .await
+}
+
+pub async fn public_chat_completions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Response> {
+    let bearer = extract_public_bearer(&headers)?;
+    if request
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return proxy_stream_request_with_bearer(
+            state.gpt2api_rs.as_ref(),
+            bearer,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(request),
+        )
+        .await;
+    }
+    proxy_json_request_with_bearer(
+        state.gpt2api_rs.as_ref(),
+        bearer,
+        Method::POST,
+        "/v1/chat/completions",
+        None,
+        Some(request),
+    )
+    .await
+    .map(|payload| payload.into_response())
+}
+
+pub async fn public_responses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    let bearer = extract_public_bearer(&headers)?;
+    proxy_json_request_with_bearer(
+        state.gpt2api_rs.as_ref(),
+        bearer,
+        Method::POST,
+        "/v1/responses",
+        None,
+        Some(request),
+    )
+    .await
+}
+
 fn config_envelope(state: &Gpt2ApiRsState) -> AdminGpt2ApiRsConfigEnvelope {
     let config = state.snapshot();
     AdminGpt2ApiRsConfigEnvelope {
@@ -459,13 +652,22 @@ async fn proxy_json_request(
     body: Option<Value>,
 ) -> HandlerResult<Json<Value>> {
     let config = state.snapshot();
-    let url = configured_url(&config, path).map_err(bad_request)?;
     let bearer = configured_token(&config, scope).map_err(bad_request)?;
-    let mut request = state
-        .client
-        .request(method, url)
-        .timeout(Duration::from_secs(config.timeout_seconds))
-        .bearer_auth(bearer);
+    proxy_json_request_with_bearer(state, bearer, method, path, query, body).await
+}
+
+async fn proxy_json_request_with_bearer(
+    state: &Gpt2ApiRsState,
+    bearer: String,
+    method: Method,
+    path: &str,
+    query: Option<&[(&str, String)]>,
+    body: Option<Value>,
+) -> HandlerResult<Json<Value>> {
+    let config = state.snapshot();
+    let url = configured_url(&config, path).map_err(bad_request)?;
+    let mut request = state.client.request(method, url);
+    request = configure_timeout_and_auth(request, &config, &bearer);
     if let Some(query) = query {
         request = request.query(query);
     }
@@ -474,6 +676,52 @@ async fn proxy_json_request(
     }
     let response = request.send().await.map_err(bad_gateway)?;
     decode_json_response(response).await
+}
+
+async fn proxy_multipart_request_with_bearer(
+    state: &Gpt2ApiRsState,
+    bearer: String,
+    path: &str,
+    form: reqwest::multipart::Form,
+) -> HandlerResult<Json<Value>> {
+    let config = state.snapshot();
+    let url = configured_url(&config, path).map_err(bad_request)?;
+    let request =
+        configure_timeout_and_auth(state.client.post(url), &config, &bearer).multipart(form);
+    let response = request.send().await.map_err(bad_gateway)?;
+    decode_json_response(response).await
+}
+
+async fn proxy_stream_request_with_bearer(
+    state: &Gpt2ApiRsState,
+    bearer: String,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> HandlerResult<Response> {
+    let config = state.snapshot();
+    let url = configured_url(&config, path).map_err(bad_request)?;
+    let mut request =
+        configure_timeout_and_auth(state.client.request(method, url), &config, &bearer);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.map_err(bad_gateway)?;
+    let status = StatusCode::from_u16(response.status().as_u16())
+        .map_err(|err| internal_error(format!("invalid upstream status: {err}")))?;
+    if !status.is_success() {
+        let error = decode_error_response(status, response.bytes().await.map_err(bad_gateway)?);
+        return Err(error);
+    }
+    let mut builder = Response::builder().status(status);
+    for header_name in [header::CONTENT_TYPE, header::CACHE_CONTROL] {
+        if let Some(value) = response.headers().get(&header_name) {
+            builder = builder.header(header_name, value.clone());
+        }
+    }
+    builder
+        .body(Body::from_stream(response.bytes_stream()))
+        .map_err(internal_error)
 }
 
 async fn decode_json_response(response: reqwest::Response) -> HandlerResult<Json<Value>> {
@@ -489,18 +737,26 @@ async fn decode_json_response(response: reqwest::Response) -> HandlerResult<Json
         };
         return Ok(Json(payload));
     }
-    let payload = serde_json::from_slice::<ErrorResponse>(&bytes).unwrap_or_else(|_| {
-        let message = String::from_utf8_lossy(&bytes).trim().to_string();
-        ErrorResponse {
-            error: if message.is_empty() {
-                "gpt2api-rs request failed".to_string()
-            } else {
-                message
-            },
-            code: status.as_u16(),
+    Err(decode_error_response(status, bytes))
+}
+
+fn decode_error_response(
+    status: StatusCode,
+    bytes: bytes::Bytes,
+) -> (StatusCode, Json<ErrorResponse>) {
+    if let Ok(payload) = serde_json::from_slice::<ErrorResponse>(&bytes) {
+        return (status, Json(payload));
+    }
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        if let Some(message) = extract_error_message(&value) {
+            return error_response(status, message);
         }
-    });
-    Err((status, Json(payload)))
+    }
+    let message = String::from_utf8_lossy(&bytes).trim().to_string();
+    error_response(
+        status,
+        if message.is_empty() { "gpt2api-rs request failed".to_string() } else { message },
+    )
 }
 
 fn configured_url(config: &Gpt2ApiRsConfig, path: &str) -> Result<String> {
@@ -528,6 +784,42 @@ fn configured_token(config: &Gpt2ApiRsConfig, scope: TokenScope) -> Result<Strin
         anyhow::bail!("gpt2api-rs {label} is empty");
     }
     Ok(value.to_string())
+}
+
+fn configure_timeout_and_auth(
+    request: reqwest::RequestBuilder,
+    config: &Gpt2ApiRsConfig,
+    bearer: &str,
+) -> reqwest::RequestBuilder {
+    request
+        .timeout(Duration::from_secs(config.timeout_seconds))
+        .bearer_auth(bearer)
+}
+
+fn extract_public_bearer(headers: &HeaderMap) -> HandlerResult<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "invalid_key"))
+}
+
+fn extract_error_message(value: &Value) -> Option<String> {
+    if let Some(message) = value.get("error").and_then(Value::as_str) {
+        return Some(message.to_string());
+    }
+    if let Some(error) = value.get("error").and_then(Value::as_object) {
+        if let Some(message) = error.get("message").and_then(Value::as_str) {
+            return Some(message.to_string());
+        }
+    }
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn is_configured(config: &Gpt2ApiRsConfig) -> bool {
