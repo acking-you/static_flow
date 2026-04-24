@@ -22,18 +22,22 @@ use lancedb::{
     Connection, Table,
 };
 use static_flow_shared::{
+    article_request_store::request_ai_chunks_schema,
+    comments_store::comment_ai_chunks_schema,
     embedding::{embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage},
     image_vector_maintenance::{
         reembed_image_vectors as reembed_image_vectors_in_table, ImageReembedOptions,
         ImageReembedScope,
     },
+    lancedb_api::api_behavior_schema,
     llm_gateway_store::{
         now_ms, query_usage_event_rebuild_rows_from_connection, LlmGatewayStore,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_DETAIL_RETENTION_DAYS, LLM_GATEWAY_USAGE_EVENTS_TABLE,
     },
+    music_wish_store::wish_ai_chunks_schema,
     optimize::{
         acquire_table_access_file_lock, compact_table_with_fallback, local_table_access_lock_path,
-        local_table_rewrite_lock_path, prune_table_versions, TableAccessMode,
+        local_table_rewrite_lock_path, prune_table_versions, TableAccessFileGuard, TableAccessMode,
     },
 };
 
@@ -1121,10 +1125,12 @@ pub async fn rebuild_table_stable(
     force: bool,
     batch_size: usize,
 ) -> Result<()> {
+    let _guards = acquire_rebuild_guards(db_path, table_name).await?;
     let db = connect_db(db_path).await?;
     let table = open_table(&db, table_name).await?;
     let current_schema = table.schema().await?;
-    rebuild_table_with_target_schema(db_path, table_name, current_schema, force, batch_size).await
+    let target_schema = managed_table_target_schema(table_name).unwrap_or(current_schema);
+    rebuild_table_with_target_schema(db_path, table_name, target_schema, force, batch_size).await
 }
 
 async fn rebuild_table_with_target_schema(
@@ -1773,11 +1779,62 @@ fn schema_is_compatible_with_target(actual: &Schema, target: &Schema) -> bool {
         if actual_field.is_nullable() != target_field.is_nullable() {
             return false;
         }
+        if !target_field
+            .metadata()
+            .iter()
+            .all(|(key, value)| actual_field.metadata().get(key) == Some(value))
+        {
+            return false;
+        }
         if is_blob_v2_field(target_field) {
             return !matches!(actual_field.data_type(), DataType::Binary | DataType::LargeBinary);
         }
         datatype_layout_matches(actual_field.data_type(), target_field.data_type())
     })
+}
+
+fn managed_table_target_schema(table_name: &str) -> Option<Arc<Schema>> {
+    match table_name {
+        "api_behavior_events" => Some(api_behavior_schema()),
+        "article_request_ai_run_chunks" => Some(request_ai_chunks_schema()),
+        "comment_ai_run_chunks" => Some(comment_ai_chunks_schema()),
+        "music_wish_ai_run_chunks" => Some(wish_ai_chunks_schema()),
+        _ => None,
+    }
+}
+
+async fn acquire_rebuild_guards(
+    db_path: &Path,
+    table_name: &str,
+) -> Result<Vec<TableAccessFileGuard>> {
+    let db_uri = db_path.to_string_lossy();
+    let mut guards = Vec::new();
+    match table_name {
+        "api_behavior_events" | "article_views" => {
+            let lock_path = local_table_access_lock_path(db_uri.as_ref(), table_name);
+            guards.push(
+                acquire_table_access_file_lock(&lock_path, TableAccessMode::Exclusive)
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            );
+        },
+        LLM_GATEWAY_USAGE_EVENTS_TABLE => {
+            let rewrite_lock_path = local_table_rewrite_lock_path(db_uri.as_ref(), table_name);
+            guards.push(
+                acquire_table_access_file_lock(&rewrite_lock_path, TableAccessMode::Exclusive)
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            );
+            let access_lock_path = local_table_access_lock_path(db_uri.as_ref(), table_name);
+            guards.push(
+                acquire_table_access_file_lock(&access_lock_path, TableAccessMode::Exclusive)
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            );
+        },
+        _ => {},
+    }
+    Ok(guards)
 }
 
 fn schema_has_blob_like_field(schema: &Schema) -> bool {
@@ -2652,6 +2709,7 @@ pub async fn verify_audio(db_path: &Path, ids: Option<String>, limit: Option<usi
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::Field;
     use static_flow_shared::llm_gateway_store::{
         LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
         LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
@@ -2875,6 +2933,115 @@ mod tests {
         );
         assert_eq!(
             ip_region
+                .metadata()
+                .get("lance-encoding:dict-values-compression-level")
+                .map(String::as_str),
+            Some("6")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn rebuild_table_stable_applies_canonical_api_behavior_schema_metadata() {
+        let dir = temp_db_path("rebuild-api-behavior-schema");
+        let db = connect_db(&dir).await.expect("connect db");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("event_id", DataType::Utf8, false),
+            Field::new("occurred_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new("client_source", DataType::Utf8, false),
+            Field::new("method", DataType::Utf8, false),
+            Field::new("path", DataType::Utf8, false),
+            Field::new("query", DataType::Utf8, false),
+            Field::new("page_path", DataType::Utf8, false),
+            Field::new("referrer", DataType::Utf8, true),
+            Field::new("status_code", DataType::Int32, false),
+            Field::new("latency_ms", DataType::Int32, false),
+            Field::new("client_ip", DataType::Utf8, false),
+            Field::new("ip_region", DataType::Utf8, false),
+            Field::new("ua_raw", DataType::Utf8, true),
+            Field::new("device_type", DataType::Utf8, false),
+            Field::new("os_family", DataType::Utf8, false),
+            Field::new("browser_family", DataType::Utf8, false),
+            Field::new("request_id", DataType::Utf8, false),
+            Field::new("trace_id", DataType::Utf8, false),
+            Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        ]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![
+            Arc::new(StringArray::from(vec!["evt-1"])) as ArrayRef,
+            Arc::new(TimestampMillisecondArray::from(vec![1_710_000_000_000i64])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["site"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["GET"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["/api/articles"])) as ArrayRef,
+            Arc::new(StringArray::from(vec![""])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["/"])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("https://ackingliu.top/")])) as ArrayRef,
+            Arc::new(arrow_array::Int32Array::from(vec![200])) as ArrayRef,
+            Arc::new(arrow_array::Int32Array::from(vec![12])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["127.0.0.1"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Local"])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("Mozilla/5.0")])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["desktop"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["macos"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["chrome"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["req-1"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["trace-1"])) as ArrayRef,
+            Arc::new(TimestampMillisecondArray::from(vec![1_710_000_000_001i64])) as ArrayRef,
+            Arc::new(TimestampMillisecondArray::from(vec![1_710_000_000_002i64])) as ArrayRef,
+        ])
+        .expect("build legacy-style api behavior batch");
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        db.create_table(
+            "api_behavior_events",
+            Box::new(batches) as Box<dyn RecordBatchReader + Send>,
+        )
+        .storage_options(vec![
+            ("new_table_enable_stable_row_ids".to_string(), "true".to_string()),
+            ("new_table_enable_v2_manifest_paths".to_string(), "true".to_string()),
+        ])
+        .execute()
+        .await
+        .expect("create legacy-style api behavior table");
+
+        rebuild_table_stable(&dir, "api_behavior_events", false, DEFAULT_REBUILD_BATCH_SIZE)
+            .await
+            .expect("rebuild api behavior table");
+
+        let reopened = open_table(&db, "api_behavior_events")
+            .await
+            .expect("reopen rebuilt api behavior table");
+        let schema = reopened.schema().await.expect("read rebuilt schema");
+        let ip_region = schema
+            .field_with_name("ip_region")
+            .expect("ip_region field exists");
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-divisor")
+                .map(String::as_str),
+            Some("8")
+        );
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-size-ratio")
+                .map(String::as_str),
+            Some("0.98")
+        );
+        assert_eq!(
+            ip_region
+                .metadata()
+                .get("lance-encoding:dict-values-compression")
+                .map(String::as_str),
+            Some("zstd")
+        );
+
+        let ua_raw = schema
+            .field_with_name("ua_raw")
+            .expect("ua_raw field exists");
+        assert_eq!(
+            ua_raw
                 .metadata()
                 .get("lance-encoding:dict-values-compression-level")
                 .map(String::as_str),

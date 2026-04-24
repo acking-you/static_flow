@@ -16,6 +16,8 @@ use lancedb::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
+
 pub const COMMENT_STATUS_PENDING: &str = "pending";
 pub const COMMENT_STATUS_APPROVED: &str = "approved";
 pub const COMMENT_STATUS_RUNNING: &str = "running";
@@ -969,14 +971,14 @@ fn comment_ai_runs_schema() -> Arc<Schema> {
     ]))
 }
 
-fn comment_ai_chunks_schema() -> Arc<Schema> {
+pub fn comment_ai_chunks_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("chunk_id", DataType::Utf8, false),
         Field::new("run_id", DataType::Utf8, false),
         Field::new("task_id", DataType::Utf8, false),
-        Field::new("stream", DataType::Utf8, false),
+        low_cardinality_utf8_field("stream", false),
         Field::new("batch_index", DataType::Int32, false),
-        Field::new("content", DataType::Utf8, false),
+        compressed_utf8_field("content", false),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
     ]))
 }
@@ -1759,4 +1761,63 @@ fn nullable_i32_value(array: &Int32Array, idx: usize) -> Option<i32> {
 
 fn escape_literal(input: &str) -> String {
     input.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comment_ai_chunks_schema;
+
+    #[test]
+    fn comment_ai_chunk_schema_prefers_low_cardinality_stream_and_zstd_content() {
+        let schema = comment_ai_chunks_schema();
+        let stream = schema
+            .field_with_name("stream")
+            .expect("stream field exists");
+        assert_eq!(
+            stream
+                .metadata()
+                .get("lance-encoding:dict-divisor")
+                .map(String::as_str),
+            Some("8")
+        );
+        assert_eq!(
+            stream
+                .metadata()
+                .get("lance-encoding:dict-size-ratio")
+                .map(String::as_str),
+            Some("0.98")
+        );
+        assert_eq!(
+            stream
+                .metadata()
+                .get("lance-encoding:dict-values-compression")
+                .map(String::as_str),
+            Some("zstd")
+        );
+        assert_eq!(
+            stream
+                .metadata()
+                .get("lance-encoding:dict-values-compression-level")
+                .map(String::as_str),
+            Some("6")
+        );
+
+        let content = schema
+            .field_with_name("content")
+            .expect("content field exists");
+        assert_eq!(
+            content
+                .metadata()
+                .get("lance-encoding:compression")
+                .map(String::as_str),
+            Some("zstd")
+        );
+        assert_eq!(
+            content
+                .metadata()
+                .get("lance-encoding:compression-level")
+                .map(String::as_str),
+            Some("6")
+        );
+    }
 }

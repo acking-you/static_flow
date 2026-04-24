@@ -31,6 +31,7 @@ use crate::{
         detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
         TextEmbeddingModel,
     },
+    lance_schema_encoding::low_cardinality_utf8_field,
     normalize_taxonomy_key,
     optimize::{
         check_opened_table_and_compact, compact_table_with_fallback, prune_table_versions,
@@ -2744,24 +2745,24 @@ fn article_view_schema() -> Arc<Schema> {
     ]))
 }
 
-fn api_behavior_schema() -> Arc<Schema> {
+pub fn api_behavior_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("event_id", DataType::Utf8, false),
         Field::new("occurred_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
-        Field::new("client_source", DataType::Utf8, false),
-        Field::new("method", DataType::Utf8, false),
-        Field::new("path", DataType::Utf8, false),
+        low_cardinality_utf8_field("client_source", false),
+        low_cardinality_utf8_field("method", false),
+        low_cardinality_utf8_field("path", false),
         Field::new("query", DataType::Utf8, false),
-        Field::new("page_path", DataType::Utf8, false),
-        Field::new("referrer", DataType::Utf8, true),
+        low_cardinality_utf8_field("page_path", false),
+        low_cardinality_utf8_field("referrer", true),
         Field::new("status_code", DataType::Int32, false),
         Field::new("latency_ms", DataType::Int32, false),
-        Field::new("client_ip", DataType::Utf8, false),
-        Field::new("ip_region", DataType::Utf8, false),
-        Field::new("ua_raw", DataType::Utf8, true),
-        Field::new("device_type", DataType::Utf8, false),
-        Field::new("os_family", DataType::Utf8, false),
-        Field::new("browser_family", DataType::Utf8, false),
+        low_cardinality_utf8_field("client_ip", false),
+        low_cardinality_utf8_field("ip_region", false),
+        low_cardinality_utf8_field("ua_raw", true),
+        low_cardinality_utf8_field("device_type", false),
+        low_cardinality_utf8_field("os_family", false),
+        low_cardinality_utf8_field("browser_family", false),
         Field::new("request_id", DataType::Utf8, false),
         Field::new("trace_id", DataType::Utf8, false),
         Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
@@ -3864,9 +3865,10 @@ mod tests {
     use tokio::sync::Barrier;
 
     use super::{
-        alternate_embedding_language, choose_primary_search_language, cosine_similarity,
-        extract_highlight, extract_semantic_highlight, find_case_insensitive_match_range,
-        is_pure_english_query, quarantine_zero_byte_lance_tail_files, semantic_query_tokens,
+        alternate_embedding_language, api_behavior_schema, choose_primary_search_language,
+        cosine_similarity, extract_highlight, extract_semantic_highlight,
+        find_case_insensitive_match_range, is_pure_english_query,
+        quarantine_zero_byte_lance_tail_files, semantic_query_tokens,
         split_text_by_sentence_or_size, table_uses_stable_row_ids, vector_column_for_language,
         zero_byte_tail_quarantine_root, CompactAction, NewApiBehaviorEventInput,
         StaticFlowDataStore, TextEmbeddingLanguage, CONTENT_COMPACTION_TABLE_NAMES,
@@ -3877,6 +3879,61 @@ mod tests {
     fn content_compaction_tables_include_api_behavior_events() {
         assert!(CONTENT_TABLE_NAMES.contains(&"api_behavior_events"));
         assert!(CONTENT_COMPACTION_TABLE_NAMES.contains(&"api_behavior_events"));
+    }
+
+    #[test]
+    fn api_behavior_schema_uses_dictionary_and_compression_hints() {
+        let schema = api_behavior_schema();
+
+        for column in [
+            "client_source",
+            "method",
+            "path",
+            "page_path",
+            "referrer",
+            "client_ip",
+            "ip_region",
+            "ua_raw",
+            "device_type",
+            "os_family",
+            "browser_family",
+        ] {
+            let field = schema
+                .field_with_name(column)
+                .expect("api behavior dictionary-friendly column exists");
+            assert_eq!(
+                field
+                    .metadata()
+                    .get("lance-encoding:dict-divisor")
+                    .map(String::as_str),
+                Some("8"),
+                "{column} should cap dictionary cardinality"
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get("lance-encoding:dict-size-ratio")
+                    .map(String::as_str),
+                Some("0.98"),
+                "{column} should require material dictionary savings"
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get("lance-encoding:dict-values-compression")
+                    .map(String::as_str),
+                Some("zstd"),
+                "{column} should compress dictionary values"
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get("lance-encoding:dict-values-compression-level")
+                    .map(String::as_str),
+                Some("6"),
+                "{column} should pin dictionary-value compression level"
+            );
+        }
     }
 
     #[tokio::test]

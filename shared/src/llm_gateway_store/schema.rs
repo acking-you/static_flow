@@ -5,7 +5,7 @@
 //! migration logic needed to evolve existing production tables without manual
 //! intervention.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
@@ -22,46 +22,14 @@ use super::types::{
     LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
-
-const COMPRESSION_META_KEY: &str = "lance-encoding:compression";
-const COMPRESSION_LEVEL_META_KEY: &str = "lance-encoding:compression-level";
-const DICT_DIVISOR_META_KEY: &str = "lance-encoding:dict-divisor";
-const DICT_SIZE_RATIO_META_KEY: &str = "lance-encoding:dict-size-ratio";
-const DICT_VALUES_COMPRESSION_META_KEY: &str = "lance-encoding:dict-values-compression";
-const DICT_VALUES_COMPRESSION_LEVEL_META_KEY: &str = "lance-encoding:dict-values-compression-level";
-const HEAVY_TEXT_COMPRESSION_SCHEME: &str = "zstd";
-const HEAVY_TEXT_COMPRESSION_LEVEL: i32 = 6;
-const LOW_CARDINALITY_DICT_DIVISOR: u64 = 8;
-const LOW_CARDINALITY_DICT_SIZE_RATIO: f64 = 0.98;
-
-fn low_cardinality_metadata() -> HashMap<String, String> {
-    let mut metadata = HashMap::new();
-    metadata.insert(DICT_DIVISOR_META_KEY.to_string(), LOW_CARDINALITY_DICT_DIVISOR.to_string());
-    metadata
-        .insert(DICT_SIZE_RATIO_META_KEY.to_string(), LOW_CARDINALITY_DICT_SIZE_RATIO.to_string());
-    metadata
-}
-
-fn compressed_utf8_field(name: &str, nullable: bool) -> Field {
-    let mut metadata = HashMap::new();
-    metadata.insert(COMPRESSION_META_KEY.to_string(), HEAVY_TEXT_COMPRESSION_SCHEME.to_string());
-    metadata
-        .insert(COMPRESSION_LEVEL_META_KEY.to_string(), HEAVY_TEXT_COMPRESSION_LEVEL.to_string());
-    Field::new(name, DataType::Utf8, nullable).with_metadata(metadata)
-}
-
-fn low_cardinality_utf8_field(name: &str, nullable: bool) -> Field {
-    let mut metadata = low_cardinality_metadata();
-    metadata.insert(
-        DICT_VALUES_COMPRESSION_META_KEY.to_string(),
-        HEAVY_TEXT_COMPRESSION_SCHEME.to_string(),
-    );
-    metadata.insert(
-        DICT_VALUES_COMPRESSION_LEVEL_META_KEY.to_string(),
-        HEAVY_TEXT_COMPRESSION_LEVEL.to_string(),
-    );
-    Field::new(name, DataType::Utf8, nullable).with_metadata(metadata)
-}
+use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
+#[cfg(test)]
+use crate::lance_schema_encoding::{
+    COMPRESSION_LEVEL_META_KEY, COMPRESSION_META_KEY, DICT_DIVISOR_META_KEY,
+    DICT_SIZE_RATIO_META_KEY, DICT_VALUES_COMPRESSION_LEVEL_META_KEY,
+    DICT_VALUES_COMPRESSION_META_KEY, HEAVY_TEXT_COMPRESSION_LEVEL, HEAVY_TEXT_COMPRESSION_SCHEME,
+    LOW_CARDINALITY_DICT_DIVISOR, LOW_CARDINALITY_DICT_SIZE_RATIO,
+};
 
 /// Canonical schema for the `llm_gateway_keys` table.
 pub fn llm_gateway_keys_schema() -> Arc<Schema> {

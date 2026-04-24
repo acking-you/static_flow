@@ -90,6 +90,9 @@ pub mod llm_gateway_store;
 pub mod optimize;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod lance_schema_encoding;
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Maintenance routines for rebuilding image embedding vectors.
 #[allow(
     missing_docs,

@@ -24,6 +24,14 @@ The post-switch verification must be repeated, not single-shot. Require
 multiple consecutive successful requests through the stable gateway path before
 stopping the old slot.
 
+Treat old-slot cleanup as the last and optional step. A rollout is considered
+successful when the stable frontend is already serving the candidate. If there
+is any ambiguity after cutover, leave the old slot alive and stop there.
+
+The source of truth is the stable frontend path (`39180` and, when applicable,
+the public URL). Direct responses from `39080` or `39081` are only candidate
+checks and never authorize stopping the old slot by themselves.
+
 ## Preflight
 
 Before touching any slot, determine the real traffic path and the supervisor
@@ -65,8 +73,9 @@ In that situation, do not stop the live `39080` backend under this skill.
 - If there is no gateway in front of the backend yet, bootstrap the gateway
   first.
 - If the deployment still runs as one standalone backend process on `39080`
-  with direct traffic and no blue-green slots, use
-  `selfhosted-seamless-upgrade` instead.
+  with direct traffic and no blue-green slots, do not use this skill.
+  Either bootstrap the gateway first or perform a separate explicit
+  minimal-downtime direct restart workflow outside this skill.
 
 ## Default Layout
 
@@ -175,15 +184,18 @@ If gateway code or gateway scripts changed, refresh the gateway binary first:
    - `kill -HUP <gateway-pid>`
 7. Verify the stable gateway path now points to the candidate:
    - `curl -fsS http://127.0.0.1:39180/api/healthz`
+   - `curl -fsS 'http://127.0.0.1:39180/api/articles?limit=1'`
+   - `curl -fsS 'http://127.0.0.1:39180/api/llm-gateway/status'`
    - `env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY curl -fsS https://ackingliu.top/api/healthz`
 8. Repeat step 7 until both paths have passed at least 3 consecutive checks and
-   each response reports the candidate slot port. If the health payload also
-   exposes `pid`, prefer seeing the same candidate pid across those repeated
-   checks.
+   each health response reports the candidate slot port. If the health payload
+   also exposes `pid`, prefer seeing the same candidate pid across those
+   repeated checks. A passing direct check on `39081` does not count toward this
+   gate.
 9. Only after the repeated checks above succeed, stop the old slot
    supervisor.
 10. After a successful cutover, sync `bin/static-flow-backend` to the new
-   artifact using a new inode, not an in-place overwrite.
+    artifact using a new inode, not an in-place overwrite.
 
 If either check in step 7 still reports the old slot, do not stop anything.
 Keep the old slot serving, fix the route, and verify again.
@@ -263,15 +275,19 @@ Always verify from the stable gateway port after switching:
 
 1. `./scripts/pingora_gateway.sh status`
 2. `curl -fsS http://127.0.0.1:39180/api/healthz`
-3. `curl -fsS 'http://127.0.0.1:39180/api/llm-gateway/status'`
-4. If this is public production, also verify:
+3. `curl -fsS 'http://127.0.0.1:39180/api/articles?limit=1'`
+4. `curl -fsS 'http://127.0.0.1:39180/api/llm-gateway/status'`
+5. If this is public production, also verify:
    - `env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY curl -fsS https://ackingliu.top/api/healthz`
-5. Confirm:
+6. Confirm:
    - `status == "ok"`
    - `port` matches the new backend slot
    - the old backend port is no longer the active route
-6. Repeat the stable health check at least 3 times before cleanup and make sure
+7. Repeat the stable health check at least 3 times before cleanup and make sure
    the candidate route stays stable across those checks.
+8. Treat passing stable-path verification as the cutover gate. Do not use
+   `39080`, `39081`, or `bin/static-flow-backend` inode state as the cleanup
+   gate.
 
 Useful log roots:
 
@@ -302,12 +318,19 @@ For `tmux`-managed slots, also inspect:
 
 ## Cleanup Rules
 
-- After a successful switch, stop the old slot and confirm its port no longer
-  listens.
+- After a successful switch, stopping the old slot is a separate cleanup phase,
+  not part of the cutover proof.
+- Only enter cleanup after the stable frontend path has already served the
+  candidate successfully for multiple consecutive checks.
+- After cleanup, confirm the old slot port no longer listens.
 - "Successful switch" means the stable frontend health path already reports the
   candidate slot. A healthy canary on `39081` is not enough.
 - The stable frontend health path must report the candidate for multiple
   consecutive requests before old-slot cleanup.
+- If health checks pass but stable-path functional probes fail, do not clean up
+  the old slot.
+- If there is any doubt about which slot the stable frontend is serving, keep
+  the old slot alive.
 - Treat `tmux ls` plus `ss -ltnp` as the source of truth.
 - A surviving `tmux` server process may keep the original `new-session` argv in
   `ps`, which can still mention `green` even after the `green` session is gone.
@@ -325,5 +348,7 @@ For `tmux`-managed slots, also inspect:
   the old slot alive.
 - If the stable frontend still points at the old slot, do not stop the old
   backend under any circumstance.
+- If stable-path health succeeds but `articles` or `llm-gateway` stable-path
+  probes fail after switch, keep the old slot alive or roll back before cleanup.
 - If the gateway is not the active frontend yet, do not claim the rollout is
   seamless.
