@@ -145,6 +145,14 @@ bash scripts/build_frontend_selfhosted.sh
 bash scripts/start_backend_selfhosted.sh --daemon
 ```
 
+Self-hosted pitfall: do not run bare `trunk build --release` inside
+`frontend/` for the public `ackingliu.top` deployment. `STATICFLOW_API_BASE` is
+compiled into the WASM; without the self-hosted script it falls back to
+`http://localhost:3000/api`, so public users' browsers try to call their own
+localhost and report `Network error: JsError(... Failed to fetch ...)`.
+Recover by rebuilding with `bash scripts/build_frontend_selfhosted.sh` and
+confirming the served WASM contains `/api/...`, not `localhost:3000`.
+
 ### Mode B: Local Development (trunk hot-reload)
 
 Frontend served by trunk dev server with hot-reload; trunk proxies `/api` to backend.
@@ -438,6 +446,10 @@ Frontend build-time:
   - GitHub Pages: absolute URL (set by CI workflow repo variables)
   - Local dev: `http://127.0.0.1:39080/api` (set by `start_frontend_with_api.sh`)
 
+Never rely on the fallback `http://localhost:3000/api` for any public build.
+It is only a development fallback in source code; a self-hosted production
+build must come from `scripts/build_frontend_selfhosted.sh`.
+
 ## Development Commands
 
 ```bash
@@ -449,6 +461,7 @@ cargo clippy --workspace -- -D warnings
 
 # Frontend (self-hosted build)
 bash scripts/build_frontend_selfhosted.sh
+# Do not replace this with: cd frontend && trunk build --release
 
 # Frontend (trunk hot-reload dev)
 bash scripts/start_frontend_with_api.sh --open
