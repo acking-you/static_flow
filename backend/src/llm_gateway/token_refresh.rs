@@ -8,7 +8,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use parking_lot::RwLock;
 use rand::Rng;
 
@@ -22,9 +22,24 @@ use crate::{
     upstream_proxy::{HttpClientProfile, UpstreamProxyRegistry},
 };
 
-const TOKEN_REFRESH_AHEAD_SECONDS: i64 = 600;
+const TOKEN_REFRESH_INTERVAL_DAYS: i64 = 8;
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+#[derive(serde::Serialize)]
+struct RefreshRequest<'a> {
+    client_id: &'static str,
+    grant_type: &'static str,
+    refresh_token: &'a str,
+}
+
+fn build_refresh_request(refresh_token: &str) -> RefreshRequest<'_> {
+    RefreshRequest {
+        client_id: CODEX_CLIENT_ID,
+        grant_type: "refresh_token",
+        refresh_token,
+    }
+}
 
 fn next_codex_refresh_delay(config: &LlmGatewayRuntimeConfig) -> Duration {
     let min_seconds = config
@@ -153,20 +168,15 @@ async fn refresh_account_entry(
         },
     }
 
-    let now = Utc::now().timestamp();
-    let (status, needs_refresh) = {
+    let now = Utc::now();
+    let needs_refresh = {
         let account = entry.read().await;
-        (account.status, token_needs_refresh(&account.access_token, now))
+        account_needs_refresh(&account.access_token, account.last_refresh, now)
     };
 
-    if needs_refresh || (manual_refresh && status != AccountStatus::Active) {
-        match refresh_account_token(entry, proxy_registry).await {
+    if needs_refresh || manual_refresh {
+        match refresh_and_persist_account(pool, name, entry, proxy_registry).await {
             Ok(()) => {
-                pool.clear_consecutive_refresh_failures(name).await;
-                if let Err(err) = pool.persist(name).await {
-                    tracing::warn!(account = name, "Failed to persist refreshed tokens: {err:#}");
-                }
-                entry.write().await.status = AccountStatus::Active;
                 tracing::info!(account = name, "Refreshed access token");
             },
             Err(err) => {
@@ -227,12 +237,62 @@ fn status_after_refresh_failure(consecutive_failures: u64, retry_limit: u64) -> 
     }
 }
 
-fn token_needs_refresh(access_token: &str, now_epoch: i64) -> bool {
-    let exp = extract_jwt_exp(access_token).unwrap_or(0);
-    if exp == 0 {
-        return false; // cannot determine expiry, skip
+pub(crate) async fn refresh_account_access_token_once(
+    pool: &AccountPool,
+    proxy_registry: &UpstreamProxyRegistry,
+    name: &str,
+) -> Result<CodexAuthSnapshot> {
+    let entry = pool
+        .entry_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("account `{name}` not found"))?;
+    match pool.sync_account_from_disk_if_changed(name, &entry).await {
+        Ok(true) => {
+            tracing::info!(
+                account = name,
+                "Reloaded auth file changes before forced access token refresh"
+            );
+        },
+        Ok(false) => {},
+        Err(err) => {
+            tracing::warn!(
+                account = name,
+                "Failed to sync account from auth file before forced refresh: {err:#}"
+            );
+        },
     }
-    exp - now_epoch < TOKEN_REFRESH_AHEAD_SECONDS
+    refresh_and_persist_account(pool, name, &entry, proxy_registry).await?;
+    let account = entry.read().await;
+    Ok(account.to_auth_snapshot())
+}
+
+async fn refresh_and_persist_account(
+    pool: &AccountPool,
+    name: &str,
+    entry: &Arc<tokio::sync::RwLock<super::accounts::CodexAccount>>,
+    proxy_registry: &UpstreamProxyRegistry,
+) -> Result<()> {
+    refresh_account_token(entry, proxy_registry).await?;
+    pool.clear_consecutive_refresh_failures(name).await;
+    pool.persist(name).await?;
+    entry.write().await.status = AccountStatus::Active;
+    Ok(())
+}
+
+fn account_needs_refresh(
+    access_token: &str,
+    last_refresh: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> bool {
+    access_token_is_expired(access_token, now.timestamp())
+        || last_refresh.is_some_and(|last_refresh| {
+            last_refresh < now - ChronoDuration::days(TOKEN_REFRESH_INTERVAL_DAYS)
+        })
+}
+
+fn access_token_is_expired(access_token: &str, now_epoch: i64) -> bool {
+    extract_jwt_exp(access_token)
+        .map(|exp| exp <= now_epoch)
+        .unwrap_or(false)
 }
 
 fn extract_jwt_exp(jwt: &str) -> Option<i64> {
@@ -264,16 +324,12 @@ async fn refresh_account_token(
     };
 
     let client = build_refresh_client(proxy_registry, &auth_snapshot).await?;
-    let body = format!(
-        "client_id={}&grant_type=refresh_token&refresh_token={}",
-        urlencoding::encode(CODEX_CLIENT_ID),
-        urlencoding::encode(&refresh_token),
-    );
+    let refresh_request = build_refresh_request(&refresh_token);
 
     let resp = client
         .post(REFRESH_TOKEN_URL)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
+        .header("Content-Type", "application/json")
+        .json(&refresh_request)
         .send()
         .await
         .context("refresh token request failed")?;
@@ -330,6 +386,9 @@ async fn fetch_account_usage(
 
     if let Some(account_id) = auth.account_id.as_deref() {
         request = request.header("ChatGPT-Account-Id", account_id);
+    }
+    if auth.is_fedramp_account {
+        request = request.header("X-OpenAI-Fedramp", "true");
     }
 
     let response = request.send().await.context("usage request failed")?;
@@ -597,5 +656,57 @@ mod tests {
             let value = next_codex_account_jitter(&config).as_secs();
             assert!(value <= 10);
         }
+    }
+
+    #[test]
+    fn refresh_token_request_body_matches_codex_v0124_json_shape() {
+        let request = build_refresh_request("refresh token/with spaces");
+        let value = serde_json::to_value(&request).expect("serialize refresh request");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "client_id": CODEX_CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": "refresh token/with spaces",
+            })
+        );
+    }
+
+    #[test]
+    fn account_needs_refresh_matches_codex_expiry_and_last_refresh_rules() {
+        use base64::Engine as _;
+        use chrono::TimeZone as _;
+
+        fn jwt_with_exp(exp: i64) -> String {
+            let payload = serde_json::json!({ "exp": exp }).to_string();
+            let encoded =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+            format!("header.{encoded}.sig")
+        }
+
+        let now = Utc
+            .with_ymd_and_hms(2026, 4, 25, 0, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let valid_access_token = jwt_with_exp(now.timestamp() + 300);
+        let expired_access_token = jwt_with_exp(now.timestamp() - 1);
+
+        assert!(
+            !account_needs_refresh(&valid_access_token, Some(now - chrono::Duration::days(7)), now),
+            "Codex does not refresh solely because a token expires soon"
+        );
+        assert!(
+            account_needs_refresh(&expired_access_token, Some(now), now),
+            "expired access tokens should refresh immediately"
+        );
+        assert!(
+            account_needs_refresh(&valid_access_token, Some(now - chrono::Duration::days(9)), now),
+            "tokens older than the Codex 8 day refresh interval should refresh"
+        );
+        assert!(
+            !account_needs_refresh("not-a-jwt", None, now),
+            "unparseable tokens without last_refresh should not force refresh"
+        );
     }
 }

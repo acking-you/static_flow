@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::{Cursor, Read},
     net::IpAddr,
 };
 
@@ -42,7 +43,14 @@ pub(crate) async fn prepare_gateway_request(
     (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>),
 > {
     let body = read_gateway_request_body(body, max_request_body_bytes).await?;
-    prepare_gateway_request_from_bytes(gateway_path, query, method, headers, body)
+    prepare_gateway_request_from_bytes(
+        gateway_path,
+        query,
+        method,
+        headers,
+        body,
+        max_request_body_bytes,
+    )
 }
 
 pub(crate) async fn read_gateway_request_body(
@@ -60,13 +68,13 @@ pub(crate) fn prepare_gateway_request_from_bytes(
     method: Method,
     headers: &HeaderMap,
     body: Bytes,
+    max_request_body_bytes: usize,
 ) -> Result<
     PreparedGatewayRequest,
     (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>),
 > {
     let allows_get = is_models_path(gateway_path);
-    let allows_post =
-        gateway_path == "/v1/chat/completions" || gateway_path.starts_with("/v1/responses");
+    let allows_post = is_supported_codex_post_path(gateway_path);
     let method_allowed =
         (method == Method::GET && allows_get) || (method == Method::POST && allows_post);
     if !method_allowed {
@@ -74,6 +82,7 @@ pub(crate) fn prepare_gateway_request_from_bytes(
             "Unsupported method for the requested llm gateway endpoint",
         ));
     }
+    let body = decode_gateway_request_body(headers, body, max_request_body_bytes)?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -82,7 +91,10 @@ pub(crate) fn prepare_gateway_request_from_bytes(
         .unwrap_or("application/json")
         .to_string();
     let client_request_body = body.clone();
-    let mut json_value = if content_type.starts_with("application/json") && !body.is_empty() {
+    let is_json_content = content_type
+        .to_ascii_lowercase()
+        .starts_with("application/json");
+    let mut json_value = if is_json_content && !body.is_empty() {
         serde_json::from_slice::<Value>(&body)
             .map(Some)
             .map_err(|err| bad_request_with_detail("Invalid JSON body", err))?
@@ -169,6 +181,44 @@ pub(crate) fn prepare_gateway_request_from_bytes(
         tool_name_restore_map,
         billable_multiplier,
     })
+}
+
+fn decode_gateway_request_body(
+    headers: &HeaderMap,
+    body: Bytes,
+    max_request_body_bytes: usize,
+) -> Result<Bytes, (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>)> {
+    let Some(content_encoding) = headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(body);
+    };
+
+    if content_encoding.eq_ignore_ascii_case("identity") {
+        return Ok(body);
+    }
+    if !content_encoding.eq_ignore_ascii_case("zstd") {
+        return Err(bad_request("Unsupported request content-encoding"));
+    }
+
+    let mut decoder = zstd::stream::Decoder::new(Cursor::new(body.as_ref()))
+        .map_err(|err| bad_request_with_detail("Invalid zstd request body", err))?;
+    let limit = u64::try_from(max_request_body_bytes)
+        .unwrap_or(u64::MAX - 1)
+        .saturating_add(1);
+    let mut decoded = Vec::new();
+    decoder
+        .by_ref()
+        .take(limit)
+        .read_to_end(&mut decoded)
+        .map_err(|err| bad_request_with_detail("Invalid zstd request body", err))?;
+    if decoded.len() > max_request_body_bytes {
+        return Err(bad_request("Decoded request body is too large"));
+    }
+    Ok(Bytes::from(decoded))
 }
 
 pub(crate) fn apply_gpt53_codex_spark_mapping(
@@ -1452,13 +1502,33 @@ pub(crate) fn normalize_responses_request(
 pub(crate) fn ensure_supported_gateway_path(
     path: &str,
 ) -> Result<(), (axum::http::StatusCode, axum::response::Json<crate::handlers::ErrorResponse>)> {
-    if matches!(path, "/v1/responses" | "/v1/responses/compact" | "/v1/chat/completions")
-        || is_models_path(path)
-    {
+    if is_supported_codex_post_path(path) || is_models_path(path) {
         Ok(())
     } else {
         Err(not_found("Unsupported llm gateway endpoint"))
     }
+}
+
+fn is_supported_codex_post_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/responses"
+            | "/v1/responses/compact"
+            | "/v1/chat/completions"
+            | "/v1/memories/trace_summarize"
+            | "/v1/realtime/calls"
+            | "/v1/files"
+    ) || is_codex_file_finalize_path(path)
+}
+
+fn is_codex_file_finalize_path(path: &str) -> bool {
+    let Some(file_id) = path
+        .strip_prefix("/v1/files/")
+        .and_then(|value| value.strip_suffix("/uploaded"))
+    else {
+        return false;
+    };
+    !file_id.is_empty() && !file_id.contains('/')
 }
 
 /// Extract the presented API key from Authorization or x-api-key headers.
@@ -1537,7 +1607,12 @@ pub(crate) fn normalize_status(
 
 #[cfg(test)]
 mod tests {
-    use axum::{body::Body, http::StatusCode};
+    use std::io::Cursor;
+
+    use axum::{
+        body::Body,
+        http::{header, HeaderValue, StatusCode},
+    };
     use serde_json::json;
 
     use super::{
@@ -1727,5 +1802,151 @@ mod tests {
             upstream.get("stream").is_none(),
             "compact requests should not inject stream control"
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_accepts_memories_trace_summarize_without_responses_defaults() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(r#"{"model":"gpt-5.3-codex","raw_memories":["alpha"]}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/memories/trace_summarize",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("memory summarize request should pass through");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.upstream_path, "/v1/memories/trace_summarize");
+        assert_eq!(upstream["raw_memories"], json!(["alpha"]));
+        assert!(upstream.get("instructions").is_none());
+        assert!(upstream.get("tools").is_none());
+        assert!(upstream.get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_accepts_file_finalize_without_responses_defaults() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(r#"{}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/files/file_abc123/uploaded",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("file finalize request should pass through");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.upstream_path, "/v1/files/file_abc123/uploaded");
+        assert_eq!(upstream, json!({}));
+        assert!(upstream.get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_accepts_file_create_without_responses_defaults() {
+        let headers = axum::http::HeaderMap::new();
+        let body =
+            Body::from(r#"{"file_name":"patch.txt","file_size":42,"use_case":"assistants"}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/files",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("file create request should pass through");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.upstream_path, "/v1/files");
+        assert_eq!(upstream["file_name"], "patch.txt");
+        assert_eq!(upstream["file_size"], 42);
+        assert!(upstream.get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rejects_nested_file_finalize_path() {
+        let headers = axum::http::HeaderMap::new();
+        let err = prepare_gateway_request(
+            "/v1/files/a/b/uploaded",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            Body::from(r#"{}"#),
+            1024 * 1024,
+        )
+        .await
+        .expect_err("nested file ids should not match the Codex finalize path");
+
+        assert_eq!(err.0, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_accepts_realtime_sdp_without_json_parsing() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/sdp"));
+        let sdp = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n";
+
+        let prepared = prepare_gateway_request(
+            "/v1/realtime/calls",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            Body::from(sdp),
+            1024 * 1024,
+        )
+        .await
+        .expect("realtime SDP request should pass through");
+
+        assert_eq!(prepared.upstream_path, "/v1/realtime/calls");
+        assert_eq!(prepared.content_type, "application/sdp");
+        assert_eq!(prepared.model, None);
+        assert_eq!(prepared.request_body.as_ref(), sdp.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_decodes_zstd_json_body_before_normalizing_responses() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+        let compressed = zstd::stream::encode_all(
+            Cursor::new(br#"{"model":"gpt-5.3-codex","input":"compressed hello"}"#),
+            3,
+        )
+        .expect("compress request body");
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            Body::from(compressed),
+            1024 * 1024,
+        )
+        .await
+        .expect("compressed responses request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "compressed hello");
+        assert_eq!(upstream["stream"], true);
+        assert_eq!(prepared.client_request_body.as_ref()[0], b'{');
     }
 }

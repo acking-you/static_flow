@@ -9280,6 +9280,7 @@ dependencies = [
  "uuid",
  "wiremock",
  "xxhash-rust",
+ "zstd",
 ]
 
 [[package]]

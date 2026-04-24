@@ -623,7 +623,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         Route::LlmAccessGuide => {
             apply_common_seo(
                 "LLM Access Guide · StaticFlow",
-                "Codex 与养龙虾🦞的三步接入说明页",
+                "Codex 接入说明、feature 清单与本地配置辅助页面。",
                 &canonical_url,
                 "website",
                 "index,follow",

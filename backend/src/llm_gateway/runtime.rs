@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use reqwest::header::HeaderValue as ReqwestHeaderValue;
@@ -826,6 +827,7 @@ impl Drop for CodexKeyRequestLease {
 pub(crate) struct CodexAuthSnapshot {
     pub access_token: String,
     pub account_id: Option<String>,
+    pub is_fedramp_account: bool,
     pub proxy_selection: AccountProxySelection,
     modified_at: Option<SystemTime>,
 }
@@ -841,9 +843,19 @@ impl CodexAuthSnapshot {
         account_id: Option<String>,
         proxy_selection: AccountProxySelection,
     ) -> Self {
+        Self::from_tokens_with_proxy_and_fedramp(access_token, account_id, proxy_selection, false)
+    }
+
+    pub(crate) fn from_tokens_with_proxy_and_fedramp(
+        access_token: String,
+        account_id: Option<String>,
+        proxy_selection: AccountProxySelection,
+        is_fedramp_account: bool,
+    ) -> Self {
         Self {
             access_token,
             account_id,
+            is_fedramp_account,
             proxy_selection: proxy_selection.canonicalize(),
             modified_at: None,
         }
@@ -864,6 +876,8 @@ struct CodexAuthTokens {
     access_token: Option<String>,
     #[serde(default)]
     account_id: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
 }
 
 /// File-backed auth source with mtime-based hot reload.
@@ -924,12 +938,42 @@ impl CodexAuthSource {
                 .account_id
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            is_fedramp_account: parsed
+                .tokens
+                .id_token
+                .as_deref()
+                .is_some_and(id_token_is_fedramp_account),
             proxy_selection: AccountProxySelection::default(),
             modified_at,
         };
         *self.cached.write().await = Some(snapshot.clone());
         Ok(snapshot)
     }
+}
+
+pub(crate) fn id_token_is_fedramp_account(id_token: &str) -> bool {
+    let Some(payload_b64) = id_token.split('.').nth(1) else {
+        return false;
+    };
+    let Some(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .ok()
+        .or_else(|| {
+            base64::engine::general_purpose::URL_SAFE
+                .decode(payload_b64)
+                .ok()
+        })
+    else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
+        return false;
+    };
+    value
+        .get("https://api.openai.com/auth")
+        .and_then(|auth| auth.get("chatgpt_account_is_fedramp"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Compare two optional mtimes without treating missing metadata as an error.
@@ -1122,6 +1166,17 @@ mod tests {
     use super::*;
     use crate::{state::LlmGatewayRuntimeConfig, upstream_proxy::UpstreamProxyRegistry};
 
+    fn id_token_with_fedramp_claim(value: bool) -> String {
+        let payload = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_is_fedramp": value
+            }
+        })
+        .to_string();
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        format!("header.{encoded}.sig")
+    }
+
     fn sample_key() -> LlmGatewayKeyRecord {
         LlmGatewayKeyRecord {
             id: "key-1".to_string(),
@@ -1154,6 +1209,13 @@ mod tests {
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
         }
+    }
+
+    #[test]
+    fn id_token_is_fedramp_account_reads_codex_auth_claim() {
+        assert!(id_token_is_fedramp_account(&id_token_with_fedramp_claim(true)));
+        assert!(!id_token_is_fedramp_account(&id_token_with_fedramp_claim(false)));
+        assert!(!id_token_is_fedramp_account("not-a-jwt"));
     }
 
     fn temp_dir(prefix: &str) -> PathBuf {

@@ -146,6 +146,12 @@ async fn fetch_codex_models_payload(
             ReqwestHeaderValue::from_str(account_id)?,
         );
     }
+    if auth_snapshot.is_fedramp_account {
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-openai-fedramp"),
+            ReqwestHeaderValue::from_static("true"),
+        );
+    }
     let (client, resolved_proxy) = gateway.build_upstream_client(auth_snapshot).await?;
     let response = client.get(&url).headers(headers).send().await;
     let response = match response {

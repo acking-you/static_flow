@@ -25,6 +25,7 @@ sha2 = { workspace = true }
 reqwest = { workspace = true, features = ["stream", "multipart"] }
 chrono = { workspace = true }
 flate2 = "1.1"
+zstd = "0.13"
 maxminddb = "0.27"
 async-stream = "0.3"
 eventsource-stream = "0.2"

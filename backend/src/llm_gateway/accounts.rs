@@ -19,7 +19,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock as AsyncRwLock;
 
-use super::runtime::CodexAuthSnapshot;
+use super::runtime::{id_token_is_fedramp_account, CodexAuthSnapshot};
 use crate::upstream_proxy::{AccountProxyMode, AccountProxySelection};
 
 // ---------------------------------------------------------------------------
@@ -120,10 +120,11 @@ pub(crate) struct CodexAccount {
 
 impl CodexAccount {
     pub fn to_auth_snapshot(&self) -> CodexAuthSnapshot {
-        CodexAuthSnapshot::from_tokens_with_proxy(
+        CodexAuthSnapshot::from_tokens_with_proxy_and_fedramp(
             self.access_token.clone(),
             self.account_id.clone(),
             self.proxy_selection.clone(),
+            id_token_is_fedramp_account(&self.id_token),
         )
     }
 
@@ -562,16 +563,6 @@ impl AccountPool {
         self.last_routed_at_ms
             .write()
             .insert(name.to_string(), static_flow_shared::llm_gateway_store::now_ms());
-    }
-
-    /// Get a specific account by name.
-    pub async fn get_account(&self, name: &str) -> Option<(CodexAuthSnapshot, bool)> {
-        let entry = self.accounts.read().get(name).cloned()?;
-        let account = entry.read().await;
-        if account.status != AccountStatus::Active {
-            return None;
-        }
-        Some((account.to_auth_snapshot(), account.map_gpt53_codex_to_spark))
     }
 
     pub fn entry_by_name(&self, name: &str) -> Option<Arc<AsyncRwLock<CodexAccount>>> {

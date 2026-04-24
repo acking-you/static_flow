@@ -3669,7 +3669,7 @@ pub async fn proxy_gateway_request(
     );
 
     let record_route_selection = !is_models_path;
-    let resolved_route = match resolve_auth_for_key(
+    let mut resolved_route = match resolve_auth_for_key(
         &state,
         &key_lease.record,
         record_route_selection,
@@ -3704,20 +3704,13 @@ pub async fn proxy_gateway_request(
             return Err(err);
         },
     };
-    let ResolvedCodexRoute {
-        auth_snapshot,
-        selected_account_name,
-        map_gpt53_codex_to_spark,
-        account_request_limit_lease,
-    } = resolved_route;
-
     if is_models_path {
         return respond_local_models(
             &state,
-            &auth_snapshot,
+            &resolved_route.auth_snapshot,
             &parts.headers,
             &query,
-            map_gpt53_codex_to_spark,
+            resolved_route.map_gpt53_codex_to_spark,
         )
         .await;
     }
@@ -3738,7 +3731,7 @@ pub async fn proxy_gateway_request(
                     status_code: response.0.as_u16() as i32,
                     usage: missing_usage_breakdown(),
                     event_context: event_context.as_ref(),
-                    selected_account_name: selected_account_name.as_deref(),
+                    selected_account_name: resolved_route.selected_account_name.as_deref(),
                     failure_stage: "key_request_limit",
                     error: &response.1 .0.error,
                     details: Some(json!({
@@ -3768,6 +3761,7 @@ pub async fn proxy_gateway_request(
         request_method.clone(),
         &parts.headers,
         raw_request_body,
+        max_request_body_bytes,
     ) {
         Ok(prepared) => prepared,
         Err(err) => {
@@ -3786,7 +3780,7 @@ pub async fn proxy_gateway_request(
                     status_code: err.0.as_u16() as i32,
                     usage: missing_usage_breakdown(),
                     event_context: event_context.as_ref(),
-                    selected_account_name: selected_account_name.as_deref(),
+                    selected_account_name: resolved_route.selected_account_name.as_deref(),
                     failure_stage: "normalize_request",
                     error: &err.1 .0.error,
                     details: Some(json!({ "error_code": err.1.0.code })),
@@ -3802,7 +3796,10 @@ pub async fn proxy_gateway_request(
             return Err(err);
         },
     };
-    let prepared = match apply_gpt53_codex_spark_mapping(&prepared, map_gpt53_codex_to_spark) {
+    let prepared = match apply_gpt53_codex_spark_mapping(
+        &prepared,
+        resolved_route.map_gpt53_codex_to_spark,
+    ) {
         Ok(prepared) => prepared,
         Err(err) => {
             if let Err(persist_err) = persist_gateway_failure_usage(
@@ -3813,7 +3810,7 @@ pub async fn proxy_gateway_request(
                     status_code: err.0.as_u16() as i32,
                     usage: missing_usage_breakdown(),
                     event_context: event_context.as_ref(),
-                    selected_account_name: selected_account_name.as_deref(),
+                    selected_account_name: resolved_route.selected_account_name.as_deref(),
                     failure_stage: "apply_model_mapping",
                     error: &err.1 .0.error,
                     details: Some(json!({ "error_code": err.1.0.code })),
@@ -3833,53 +3830,159 @@ pub async fn proxy_gateway_request(
         .llm_gateway
         .start_request_activity(&key_lease.record.id);
 
-    let response = match send_upstream_with_retry(
-        &state,
-        &prepared,
-        &parts.headers,
-        &auth_snapshot,
-        selected_account_name.as_deref(),
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            if let Err(persist_err) = persist_gateway_failure_usage(
-                state.llm_gateway.as_ref(),
+    let mut failed_account_names = HashSet::new();
+    loop {
+        let attempted_account_name = resolved_route.selected_account_name.clone();
+        let response = match send_upstream_with_retry(
+            &state,
+            &prepared,
+            &parts.headers,
+            &resolved_route.auth_snapshot,
+            attempted_account_name.as_deref(),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                if let Err(persist_err) = persist_gateway_failure_usage(
+                    state.llm_gateway.as_ref(),
+                    key_lease.as_ref(),
+                    GatewayFailureUsageRequest {
+                        prepared: &prepared,
+                        status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                        usage: missing_usage_breakdown(),
+                        event_context: event_context.as_ref(),
+                        selected_account_name: attempted_account_name.as_deref(),
+                        failure_stage: "send_upstream",
+                        error: &err.to_string(),
+                        details: Some(json!({ "error_chain": format!("{err:#}") })),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        "failed to persist codex failure usage after upstream send error: {persist_err:#}"
+                    );
+                }
+                let Some(failed_account_name) = attempted_account_name else {
+                    return Err(internal_error("Failed to proxy llm gateway request", err));
+                };
+                failed_account_names.insert(failed_account_name.clone());
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    key_name = %key_lease.record.name,
+                    failed_account = %failed_account_name,
+                    failed_accounts = ?failed_account_names,
+                    error = %err,
+                    "codex upstream send failed; trying another account if available"
+                );
+                let ResolvedCodexRoute {
+                    account_request_limit_lease, ..
+                } = resolved_route;
+                drop(account_request_limit_lease);
+                resolved_route = match resolve_auth_for_key_excluding(
+                    &state,
+                    &key_lease.record,
+                    record_route_selection,
+                    &failed_account_names,
+                )
+                .await
+                {
+                    Ok(next_route) => next_route,
+                    Err(_) => {
+                        return Err(internal_error("Failed to proxy llm gateway request", err));
+                    },
+                };
+                continue;
+            },
+        };
+
+        if let Some(failed_account_name) =
+            retryable_codex_account_failure(response.status(), attempted_account_name.as_deref())
+        {
+            let failed_account_name = failed_account_name.to_string();
+            let retry_response = match capture_upstream_non_success_response(
+                &state,
                 key_lease.as_ref(),
-                GatewayFailureUsageRequest {
-                    prepared: &prepared,
-                    status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
-                    usage: missing_usage_breakdown(),
-                    event_context: event_context.as_ref(),
-                    selected_account_name: selected_account_name.as_deref(),
-                    failure_stage: "send_upstream",
-                    error: &err.to_string(),
-                    details: Some(json!({ "error_chain": format!("{err:#}") })),
-                },
+                &prepared,
+                response,
+                event_context.as_ref(),
+                Some(&failed_account_name),
             )
             .await
             {
-                tracing::warn!(
-                    key_id = %key_lease.record.id,
-                    "failed to persist codex failure usage after upstream send error: {persist_err:#}"
-                );
-            }
-            return Err(internal_error("Failed to proxy llm gateway request", err));
-        },
-    };
+                Ok(response) => response,
+                Err(err) => {
+                    failed_account_names.insert(failed_account_name.clone());
+                    tracing::warn!(
+                        key_id = %key_lease.record.id,
+                        key_name = %key_lease.record.name,
+                        failed_account = %failed_account_name,
+                        failed_accounts = ?failed_account_names,
+                        "failed to capture codex non-success response; trying another account if available"
+                    );
+                    let ResolvedCodexRoute {
+                        account_request_limit_lease, ..
+                    } = resolved_route;
+                    drop(account_request_limit_lease);
+                    resolved_route = match resolve_auth_for_key_excluding(
+                        &state,
+                        &key_lease.record,
+                        record_route_selection,
+                        &failed_account_names,
+                    )
+                    .await
+                    {
+                        Ok(next_route) => next_route,
+                        Err(_) => return Err(err),
+                    };
+                    continue;
+                },
+            };
+            failed_account_names.insert(failed_account_name.clone());
+            tracing::warn!(
+                key_id = %key_lease.record.id,
+                key_name = %key_lease.record.name,
+                failed_account = %failed_account_name,
+                failed_accounts = ?failed_account_names,
+                "codex account returned non-success response; trying another account if available"
+            );
+            let ResolvedCodexRoute {
+                account_request_limit_lease, ..
+            } = resolved_route;
+            drop(account_request_limit_lease);
+            resolved_route = match resolve_auth_for_key_excluding(
+                &state,
+                &key_lease.record,
+                record_route_selection,
+                &failed_account_names,
+            )
+            .await
+            {
+                Ok(next_route) => next_route,
+                Err(_) => return Ok(retry_response),
+            };
+            continue;
+        }
 
-    forward_upstream_response(ForwardUpstreamResponseArgs {
-        state,
-        key_lease,
-        account_request_limit_lease,
-        request_limit_lease,
-        prepared,
-        upstream: response,
-        event_context,
-        selected_account_name,
-    })
-    .await
+        let ResolvedCodexRoute {
+            account_request_limit_lease,
+            selected_account_name,
+            ..
+        } = resolved_route;
+        return forward_upstream_response(ForwardUpstreamResponseArgs {
+            state,
+            key_lease,
+            account_request_limit_lease,
+            request_limit_lease,
+            prepared,
+            upstream: response,
+            event_context,
+            selected_account_name,
+        })
+        .await;
+    }
 }
 
 /// Validate the presented key via cache first, then fall back to LanceDB.
@@ -3942,6 +4045,15 @@ async fn resolve_auth_for_key(
     key: &LlmGatewayKeyRecord,
     record_route_selection: bool,
 ) -> Result<ResolvedCodexRoute, (StatusCode, Json<ErrorResponse>)> {
+    resolve_auth_for_key_excluding(state, key, record_route_selection, &HashSet::new()).await
+}
+
+async fn resolve_auth_for_key_excluding(
+    state: &AppState,
+    key: &LlmGatewayKeyRecord,
+    record_route_selection: bool,
+    excluded_account_names: &HashSet<String>,
+) -> Result<ResolvedCodexRoute, (StatusCode, Json<ErrorResponse>)> {
     let pool = &state.llm_gateway.account_pool;
     let strategy = key.route_strategy.as_deref().unwrap_or("auto");
     let queued_at = Instant::now();
@@ -3965,6 +4077,13 @@ async fn resolve_auth_for_key(
                 }
                 name.to_string()
             };
+
+            if excluded_account_names.contains(&resolved_name) {
+                return Err(auth_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("all configured codex accounts failed: {resolved_name}"),
+                ));
+            }
 
             loop {
                 let candidate = pool
@@ -4100,13 +4219,33 @@ async fn resolve_auth_for_key(
             );
 
             loop {
-                let candidates = if let Some(filter) = auto_account_filter.as_ref() {
+                let candidates_before_exclusion = if let Some(filter) = auto_account_filter.as_ref()
+                {
                     pool.ranked_routable_accounts(Some(filter)).await
                 } else {
                     pool.ranked_routable_accounts(None).await
                 };
+                let had_routable_accounts_before_exclusion =
+                    !candidates_before_exclusion.is_empty();
+                let candidates = candidates_before_exclusion
+                    .into_iter()
+                    .filter(|candidate| !excluded_account_names.contains(&candidate.name))
+                    .collect::<Vec<_>>();
 
                 if candidates.is_empty() {
+                    if !excluded_account_names.is_empty() {
+                        tracing::warn!(
+                            key_id = %key.id,
+                            key_name = %key.name,
+                            had_routable_accounts_before_exclusion,
+                            excluded_account_names = ?excluded_account_names,
+                            "all eligible codex accounts have already failed this request"
+                        );
+                        return Err(auth_error(
+                            StatusCode::BAD_GATEWAY,
+                            "all eligible codex accounts failed for this request",
+                        ));
+                    }
                     if auto_account_filter.is_some() {
                         let configured_subset = subset_resolution
                             .as_ref()
@@ -4284,6 +4423,13 @@ async fn send_upstream_with_retry(
     send_upstream(state, prepared, incoming_headers, &refreshed, selected_account_name).await
 }
 
+fn retryable_codex_account_failure(
+    status: StatusCode,
+    selected_account_name: Option<&str>,
+) -> Option<&str> {
+    selected_account_name.filter(|_| !status.is_success())
+}
+
 /// Build the exact upstream HTTP request to the Codex backend.
 async fn send_upstream(
     state: &AppState,
@@ -4404,10 +4550,33 @@ async fn send_upstream(
             ReqwestHeaderValue::from_str(turn_state)?,
         );
     }
+    for header_name in [
+        "x-codex-installation-id",
+        "x-codex-parent-thread-id",
+        "x-codex-window-id",
+        "x-openai-memgen-request",
+        "x-responsesapi-include-timing-metrics",
+        "traceparent",
+        "tracestate",
+        "baggage",
+    ] {
+        if let Some(value) = request::extract_header_value(incoming_headers, header_name) {
+            headers.insert(
+                reqwest::header::HeaderName::from_static(header_name),
+                ReqwestHeaderValue::from_str(&value)?,
+            );
+        }
+    }
     if let Some(account_id) = auth_snapshot.account_id.as_deref() {
         headers.insert(
             reqwest::header::HeaderName::from_static("chatgpt-account-id"),
             ReqwestHeaderValue::from_str(account_id)?,
+        );
+    }
+    if auth_snapshot.is_fedramp_account {
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-openai-fedramp"),
+            ReqwestHeaderValue::from_static("true"),
         );
     }
     if let Some(session_id) = effective_session_id {
@@ -4466,15 +4635,15 @@ async fn reload_codex_auth_snapshot(
     selected_account_name: Option<&str>,
 ) -> Result<CodexAuthSnapshot> {
     if let Some(account_name) = selected_account_name {
-        if let Some((snapshot, _map_gpt53_codex_to_spark)) = state
-            .llm_gateway
-            .account_pool
-            .get_account(account_name)
-            .await
-        {
-            return Ok(snapshot);
-        }
-        anyhow::bail!("selected Codex account `{account_name}` is unavailable after retry");
+        return token_refresh::refresh_account_access_token_once(
+            state.llm_gateway.account_pool.as_ref(),
+            state.upstream_proxy_registry.as_ref(),
+            account_name,
+        )
+        .await
+        .with_context(|| {
+            format!("failed to refresh selected Codex account `{account_name}` after upstream 401")
+        });
     }
     state.llm_gateway.auth_source.force_reload().await
 }
@@ -4490,6 +4659,108 @@ struct ForwardUpstreamResponseArgs {
     upstream: reqwest::Response,
     event_context: Option<LlmGatewayEventContext>,
     selected_account_name: Option<String>,
+}
+
+async fn capture_upstream_non_success_response(
+    state: &AppState,
+    key_lease: &CachedKeyLease,
+    prepared: &PreparedGatewayRequest,
+    upstream: reqwest::Response,
+    event_context: Option<&LlmGatewayEventContext>,
+    selected_account_name: Option<&str>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let status = upstream.status();
+    let upstream_headers = upstream.headers().clone();
+    let content_type = upstream
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    let body_bytes = match upstream.bytes().await {
+        Ok(body_bytes) => body_bytes,
+        Err(err) => {
+            if let Err(persist_err) = persist_gateway_failure_usage(
+                state.llm_gateway.as_ref(),
+                key_lease,
+                GatewayFailureUsageRequest {
+                    prepared,
+                    status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16() as i32,
+                    usage: missing_usage_breakdown(),
+                    event_context,
+                    selected_account_name,
+                    failure_stage: "read_upstream_response",
+                    error: "Failed to read llm gateway upstream response",
+                    details: Some(json!({
+                        "upstream_status": status.as_u16(),
+                        "content_type": content_type,
+                        "error": err.to_string(),
+                    })),
+                },
+            )
+            .await
+            {
+                tracing::warn!(
+                    key_id = %key_lease.record.id,
+                    "failed to persist codex failure usage after upstream body read error: {persist_err:#}"
+                );
+            }
+            return Err(internal_error("Failed to read llm gateway upstream response", err));
+        },
+    };
+
+    let body_text = String::from_utf8_lossy(&body_bytes);
+    tracing::error!(
+        key_id = %key_lease.record.id,
+        key_name = %key_lease.record.name,
+        account_name = selected_account_name.unwrap_or("legacy"),
+        original_path = %prepared.original_path,
+        upstream_path = %prepared.upstream_path,
+        status = status.as_u16(),
+        content_type = %content_type,
+        model = prepared.model.as_deref().unwrap_or("unknown"),
+        body_len = body_bytes.len(),
+        body_preview = %summarize_upstream_error_body(&body_text),
+        "codex public request returned non-success upstream response"
+    );
+    if let Err(persist_err) = persist_gateway_failure_usage(
+        state.llm_gateway.as_ref(),
+        key_lease,
+        GatewayFailureUsageRequest {
+            prepared,
+            status_code: status.as_u16() as i32,
+            usage: missing_usage_breakdown(),
+            event_context,
+            selected_account_name,
+            failure_stage: "upstream_non_success",
+            error: &format!("upstream returned non-success status {}", status.as_u16()),
+            details: Some(json!({
+                "content_type": content_type.clone(),
+                "upstream_body": body_text.to_string(),
+            })),
+        },
+    )
+    .await
+    {
+        tracing::warn!(
+            key_id = %key_lease.record.id,
+            "failed to persist codex failure usage after non-success upstream response: {persist_err:#}"
+        );
+    }
+
+    let response_bytes = rewrite_json_response_model_alias(
+        &body_bytes,
+        prepared.model.as_deref(),
+        prepared.client_visible_model.as_deref(),
+    )
+    .unwrap_or_else(|| body_bytes.to_vec());
+    let builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CACHE_CONTROL, "no-store");
+    apply_upstream_response_headers(builder, &upstream_headers)
+        .body(Body::from(response_bytes))
+        .map_err(|err| internal_error("Failed to build llm gateway response", err))
 }
 
 /// Adapt the upstream response back into the caller's requested wire format.
@@ -6325,6 +6596,24 @@ mod tests {
 
         assert_eq!(event.status_code, 429);
         assert_eq!(event.last_message_content.as_deref(), Some(payload.as_str()));
+    }
+
+    #[test]
+    fn codex_account_failover_retries_only_account_bound_non_success_responses() {
+        assert_eq!(
+            retryable_codex_account_failure(StatusCode::TOO_MANY_REQUESTS, Some("acct-a")),
+            Some("acct-a")
+        );
+        assert_eq!(
+            retryable_codex_account_failure(StatusCode::UNAUTHORIZED, Some("acct-a")),
+            Some("acct-a")
+        );
+        assert_eq!(
+            retryable_codex_account_failure(StatusCode::INTERNAL_SERVER_ERROR, Some("acct-a")),
+            Some("acct-a")
+        );
+        assert_eq!(retryable_codex_account_failure(StatusCode::OK, Some("acct-a")), None);
+        assert_eq!(retryable_codex_account_failure(StatusCode::TOO_MANY_REQUESTS, None), None);
     }
 
     #[test]
