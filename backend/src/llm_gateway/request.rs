@@ -13,7 +13,9 @@ use static_flow_shared::llm_gateway_store::{
 };
 
 use super::{
-    bad_request, bad_request_with_detail, internal_error, method_not_allowed, not_found,
+    bad_request, bad_request_with_detail,
+    instructions::codex_default_instructions,
+    internal_error, method_not_allowed, not_found,
     types::{
         GatewayHandlerResult, GatewayResponseAdapter, OpenAiChatAdaptedRequest,
         PreparedGatewayRequest,
@@ -1354,6 +1356,8 @@ pub(crate) fn normalize_responses_request(
     }
     if path == "/v1/responses" {
         root.insert("store".to_string(), Value::Bool(false));
+        root.entry("instructions".to_string())
+            .or_insert_with(|| Value::String(codex_default_instructions().to_string()));
     }
     root.entry("tools".to_string())
         .or_insert_with(|| Value::Array(Vec::new()));
@@ -1536,7 +1540,9 @@ mod tests {
     use axum::{body::Body, http::StatusCode};
     use serde_json::json;
 
-    use super::{adapt_openai_chat_completions_request, prepare_gateway_request};
+    use super::{
+        adapt_openai_chat_completions_request, codex_default_instructions, prepare_gateway_request,
+    };
 
     #[test]
     fn adapt_openai_chat_completions_request_rejects_message_without_role() {
@@ -1626,6 +1632,55 @@ mod tests {
         assert_eq!(upstream["input"][0]["content"][0]["type"], "input_text");
         assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
         assert_eq!(upstream["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_injects_default_instructions_for_bare_responses() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(r#"{"model":"gpt-5.3-codex","input":"hello"}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
+        let raw_json =
+            String::from_utf8(prepared.request_body.to_vec()).expect("request body is utf8 json");
+        assert!(raw_json.contains("\\n# Personality\\n"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_injects_default_instructions_for_bare_chat() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{"model":"gpt-5.3-codex","messages":[{"role":"user","content":"hello"}]}"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("chat request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
     }
 
     #[tokio::test]

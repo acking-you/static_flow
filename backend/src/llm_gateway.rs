@@ -6,6 +6,7 @@
 //! so the routing layer only needs to depend on one coherent module.
 
 mod activity;
+mod instructions;
 mod models;
 mod request;
 mod response;

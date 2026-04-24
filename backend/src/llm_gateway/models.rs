@@ -9,7 +9,9 @@ use reqwest::header::{HeaderMap as ReqwestHeaderMap, HeaderValue as ReqwestHeade
 use serde_json::{json, Value};
 
 use super::{
-    codex_user_agent, compute_upstream_url, internal_error,
+    codex_user_agent, compute_upstream_url,
+    instructions::codex_default_instructions,
+    internal_error,
     request::{extract_header_value, extract_query_param, normalize_upstream_base_url},
     resolve_codex_client_version,
     runtime::{
@@ -305,6 +307,11 @@ fn normalize_public_model_catalog_value(
         let (final_slug, was_alias) = map_catalog_slug(&raw_slug, map_gpt53_codex_to_spark);
         if let Some(object) = item.as_object_mut() {
             object.insert("slug".to_string(), Value::String(final_slug.to_string()));
+            object.insert(
+                "base_instructions".to_string(),
+                Value::String(codex_default_instructions().to_string()),
+            );
+            object.remove("model_messages");
             if was_alias
                 && object.get("display_name").and_then(Value::as_str) == Some(raw_slug.as_str())
             {
@@ -371,6 +378,7 @@ mod tests {
     use super::{
         append_client_version_query, gateway_models_owner, parse_public_model_catalog_json,
     };
+    use crate::llm_gateway::instructions::codex_default_instructions;
 
     #[test]
     fn codex_models_are_tagged_with_static_flow_owner() {
@@ -400,7 +408,12 @@ mod tests {
                 {
                     "slug": "gpt-5.5",
                     "display_name": "gpt-5.5",
-                    "supported_in_api": true
+                    "supported_in_api": true,
+                    "base_instructions": "upstream instructions",
+                    "model_messages": {
+                        "instructions_template": "upstream template",
+                        "instructions_variables": null
+                    }
                 }
             ]
         }))
@@ -417,6 +430,35 @@ mod tests {
         assert_eq!(models[0]["display_name"], "gpt-5.3-codex");
         assert_eq!(models[0]["supported_in_api"], true);
         assert_eq!(models[1]["slug"], "gpt-5.5");
+        assert_eq!(models[1]["base_instructions"], json!(codex_default_instructions()));
+        assert!(models[1].get("model_messages").is_none());
+    }
+
+    #[test]
+    fn public_model_catalog_default_instructions_json_round_trips() {
+        let body = serde_json::to_vec(&json!({
+            "models": [
+                {
+                    "slug": "gpt-5.5",
+                    "display_name": "gpt-5.5",
+                    "supported_in_api": true
+                }
+            ]
+        }))
+        .expect("serialize sample models payload");
+
+        let value =
+            parse_public_model_catalog_json(&body, false).expect("catalog json should parse");
+        let encoded = serde_json::to_vec(&value).expect("catalog json should encode");
+        let raw_json = String::from_utf8(encoded.clone()).expect("catalog json is utf8");
+        assert!(raw_json.contains("\\n# Personality\\n"));
+
+        let decoded: serde_json::Value =
+            serde_json::from_slice(&encoded).expect("encoded catalog should decode");
+        assert_eq!(
+            decoded["models"][0]["base_instructions"].as_str(),
+            Some(codex_default_instructions())
+        );
     }
 
     #[test]
