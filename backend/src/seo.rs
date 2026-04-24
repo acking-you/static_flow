@@ -415,11 +415,12 @@ pub async fn seo_article_page(State(state): State<AppState>, Path(id): Path<Stri
         Ok(Some(a)) => a,
         Ok(None) => {
             // Article not found: return real 404 to avoid soft-404 indexing issues.
-            if state.index_html_template.is_empty() {
+            let template = state.load_index_html_template().await;
+            if template.is_empty() {
                 return (StatusCode::NOT_FOUND, "Not Found").into_response();
             }
             let path = format!("/posts/{}", urlencoding::encode(&id));
-            let html = inject_spa_route_seo(&state.index_html_template, &path);
+            let html = inject_spa_route_seo(&template, &path);
             return (StatusCode::NOT_FOUND, Html(html)).into_response();
         },
         Err(err) => {
@@ -428,7 +429,8 @@ pub async fn seo_article_page(State(state): State<AppState>, Path(id): Path<Stri
         },
     };
 
-    let html = inject_article_seo(&state.index_html_template, &article);
+    let template = state.load_index_html_template().await;
+    let html = inject_article_seo(&template, &article);
     Html(html).into_response()
 }
 
@@ -499,7 +501,8 @@ fn rewrite_origin_urls(html: &str, site_base: &str) -> String {
 
 /// GET / — serve homepage with corrected SEO URLs and visible <h1>
 pub async fn seo_homepage(State(state): State<AppState>) -> Response {
-    let mut html = inject_spa_route_seo(&state.index_html_template, "/");
+    let template = state.load_index_html_template().await;
+    let mut html = inject_spa_route_seo(&template, "/");
 
     // Inject visible <h1> after <body> for search engine indexing.
     // Yew replaces <body> on WASM load, so this disappears naturally.

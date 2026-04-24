@@ -14,6 +14,7 @@ use rand::Rng;
 
 use super::{
     accounts::{AccountPool, AccountRateLimitSnapshot, AccountStatus},
+    codex_user_agent, resolve_codex_client_version,
     runtime::CodexAuthSnapshot,
 };
 use crate::{
@@ -191,7 +192,9 @@ async fn refresh_account_entry(
         let account = entry.read().await;
         account.to_auth_snapshot()
     };
-    match fetch_account_usage(proxy_registry, &snapshot).await {
+    let codex_client_version =
+        resolve_codex_client_version(Some(&runtime_config.read().codex_client_version));
+    match fetch_account_usage(proxy_registry, &snapshot, &codex_client_version).await {
         Ok(rl) => {
             pool.update_rate_limit(name, rl).await;
             entry.write().await.status = AccountStatus::Active;
@@ -308,6 +311,7 @@ async fn refresh_account_token(
 async fn fetch_account_usage(
     proxy_registry: &UpstreamProxyRegistry,
     auth: &CodexAuthSnapshot,
+    client_version: &str,
 ) -> Result<AccountRateLimitSnapshot> {
     let client = build_refresh_client(proxy_registry, auth).await?;
     let upstream_base = std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL")
@@ -319,7 +323,7 @@ async fn fetch_account_usage(
     let source_url = compute_usage_url(&upstream_base);
     let mut request = client
         .get(&source_url)
-        .header(reqwest::header::USER_AGENT, "codex_cli_rs/0.116.0")
+        .header(reqwest::header::USER_AGENT, codex_user_agent(client_version))
         .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", auth.access_token))
         .header(reqwest::header::ACCEPT, "application/json")
         .timeout(Duration::from_secs(20));
@@ -365,8 +369,9 @@ fn compute_usage_url(upstream_base: &str) -> String {
 pub(crate) async fn validate_account_usage(
     proxy_registry: &UpstreamProxyRegistry,
     auth: &CodexAuthSnapshot,
+    client_version: &str,
 ) -> Result<AccountRateLimitSnapshot> {
-    fetch_account_usage(proxy_registry, auth).await
+    fetch_account_usage(proxy_registry, auth, client_version).await
 }
 
 /// Build the HTTP client used for token refresh and usage polling.

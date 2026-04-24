@@ -83,6 +83,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/articles", get(handlers::list_articles))
         .route("/api/articles/:id", get(handlers::get_article))
         .route("/api/llm-gateway/access", get(llm_gateway::get_public_access))
+        .route(
+            "/api/llm-gateway/model-catalog.json",
+            get(llm_gateway::get_public_model_catalog),
+        )
         .route("/api/kiro-gateway/access", get(kiro_gateway::get_public_access))
         .route(
             "/api/kiro-gateway/v1/models",
@@ -622,9 +626,8 @@ pub fn create_router(state: AppState) -> Router {
 
     // 3) SPA fallback — serve frontend/dist/ static files; unknown routes get
     //    index.html (200)
-    let frontend_dist_dir =
-        std::env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "../frontend/dist".to_string());
-    let spa_fallback = ServeDir::new(&frontend_dist_dir);
+    let frontend_dist_dir = spa_state.frontend_dist_dir.as_ref().clone();
+    let spa_fallback = ServeDir::new(frontend_dist_dir);
 
     let spa_index_fallback = move |OriginalUri(uri): OriginalUri| {
         let spa_state = spa_state.clone();
@@ -633,8 +636,8 @@ pub fn create_router(state: AppState) -> Router {
                 .path_and_query()
                 .map(|value| value.as_str())
                 .unwrap_or("/");
-            let html =
-                seo::inject_spa_route_seo(spa_state.index_html_template.as_ref(), path_and_query);
+            let template = spa_state.load_index_html_template().await;
+            let html = seo::inject_spa_route_seo(&template, path_and_query);
             Html(html).into_response()
         }
     };

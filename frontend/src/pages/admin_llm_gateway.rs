@@ -38,7 +38,7 @@ use crate::{
         AdminUpstreamProxyConfigView, CreateAdminAccountGroupInput,
         CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
         PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
-        PatchAdminUpstreamProxyConfigInput,
+        PatchAdminUpstreamProxyConfigInput, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
     },
     components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{
@@ -1519,6 +1519,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let ttl_input = use_state(|| "60".to_string());
     let max_request_body_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
     let account_failure_retry_limit_input = use_state(|| "3".to_string());
+    let codex_client_version_input =
+        use_state(|| DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION.to_string());
     let codex_refresh_min_input = use_state(|| "240".to_string());
     let codex_refresh_max_input = use_state(|| "300".to_string());
     let codex_account_jitter_max_input = use_state(|| "10".to_string());
@@ -1783,6 +1785,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
         let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+        let codex_client_version_input = codex_client_version_input.clone();
         let codex_refresh_min_input = codex_refresh_min_input.clone();
         let codex_refresh_max_input = codex_refresh_max_input.clone();
         let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
@@ -1812,6 +1815,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let ttl_input = ttl_input.clone();
             let max_request_body_input = max_request_body_input.clone();
             let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+            let codex_client_version_input = codex_client_version_input.clone();
             let codex_refresh_min_input = codex_refresh_min_input.clone();
             let codex_refresh_max_input = codex_refresh_max_input.clone();
             let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
@@ -1893,6 +1897,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         max_request_body_input.set(cfg.max_request_body_bytes.to_string());
                         account_failure_retry_limit_input
                             .set(cfg.account_failure_retry_limit.to_string());
+                        codex_client_version_input.set(cfg.codex_client_version.clone());
                         codex_refresh_min_input
                             .set(cfg.codex_status_refresh_min_interval_seconds.to_string());
                         codex_refresh_max_input
@@ -1995,6 +2000,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let ttl_input = ttl_input.clone();
         let max_request_body_input = max_request_body_input.clone();
         let account_failure_retry_limit_input = account_failure_retry_limit_input.clone();
+        let codex_client_version_input = codex_client_version_input.clone();
         let codex_refresh_min_input = codex_refresh_min_input.clone();
         let codex_refresh_max_input = codex_refresh_max_input.clone();
         let codex_account_jitter_max_input = codex_account_jitter_max_input.clone();
@@ -2013,6 +2019,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let max_request_body_bytes = (*max_request_body_input).trim().parse::<u64>();
             let account_failure_retry_limit =
                 (*account_failure_retry_limit_input).trim().parse::<u64>();
+            let codex_client_version = (*codex_client_version_input).trim().to_string();
             let codex_status_refresh_min_interval_seconds =
                 (*codex_refresh_min_input).trim().parse::<u64>();
             let codex_status_refresh_max_interval_seconds =
@@ -2047,6 +2054,10 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("账号失败重试次数必须是非负整数".to_string()));
                     return;
                 };
+                if codex_client_version.is_empty() {
+                    load_error.set(Some("Codex client version 不能为空".to_string()));
+                    return;
+                }
                 let Ok(codex_status_refresh_min_interval_seconds) =
                     codex_status_refresh_min_interval_seconds
                 else {
@@ -2101,6 +2112,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     auth_cache_ttl_seconds: ttl,
                     max_request_body_bytes,
                     account_failure_retry_limit,
+                    codex_client_version,
                     codex_status_refresh_min_interval_seconds,
                     codex_status_refresh_max_interval_seconds,
                     codex_status_account_jitter_max_seconds,
@@ -3853,6 +3865,23 @@ pub fn admin_llm_gateway_page() -> Html {
                                 />
                             </label>
                             <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_client_version" }</span>
+                                <input
+                                    type="text"
+                                    spellcheck="false"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono")}
+                                    value={(*codex_client_version_input).clone()}
+                                    oninput={{
+                                        let codex_client_version_input = codex_client_version_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_client_version_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "codex_status_refresh_min_interval_seconds" }</span>
                                 <input
                                     type="number"
@@ -4007,6 +4036,9 @@ pub fn admin_llm_gateway_page() -> Html {
                             </label>
                             <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "text-xs", "text-[var(--muted)]", "md:col-span-2", "xl:col-span-3")}>
                                 <p class={classes!("m-0")}>
+                                    { format!("默认 Codex models catalog 版本：{}。不带 client_version 的 `/v1/models` 请求会回落到这里。", DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION) }
+                                </p>
+                                <p class={classes!("m-0", "mt-1")}>
                                     { "默认轮询窗口：Codex / Kiro 都是 240-300 秒；每个账号请求之间插入 0-10 秒随机抖动。" }
                                 </p>
                                 <p class={classes!("m-0", "mt-1")}>
@@ -4032,6 +4064,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </p>
                                 <p class={classes!("m-0")}>
                                     { format!("当前账号失败重试次数：{}", cfg.account_failure_retry_limit) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!("当前 Codex client version：{}", cfg.codex_client_version) }
                                 </p>
                                 <p class={classes!("m-0")}>
                                     { format!(

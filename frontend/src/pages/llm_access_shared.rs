@@ -1,4 +1,5 @@
 use js_sys::Date;
+use serde::Deserialize;
 use yew::prelude::*;
 
 use crate::api::{LlmGatewayAccessResponse, LlmGatewayPublicKeyView};
@@ -200,18 +201,26 @@ pub fn format_number_i64(n: i64) -> String {
     }
 }
 
-pub fn resolved_base_url(access: &LlmGatewayAccessResponse) -> String {
-    if access.base_url.starts_with("http://") || access.base_url.starts_with("https://") {
-        return access.base_url.clone();
+fn resolved_public_url(path: &str) -> String {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_string();
     }
     let origin = web_sys::window()
         .and_then(|window| window.location().origin().ok())
         .unwrap_or_default();
     if origin.is_empty() {
-        access.base_url.clone()
+        path.to_string()
     } else {
-        format!("{origin}{}", access.gateway_path)
+        format!("{origin}{path}")
     }
+}
+
+pub fn resolved_base_url(access: &LlmGatewayAccessResponse) -> String {
+    resolved_public_url(&access.base_url)
+}
+
+pub fn resolved_model_catalog_url(access: &LlmGatewayAccessResponse) -> String {
+    resolved_public_url(&access.model_catalog_path)
 }
 
 pub fn example_key_secret(access: &LlmGatewayAccessResponse) -> String {
@@ -230,9 +239,10 @@ pub fn example_key_name(access: &LlmGatewayAccessResponse) -> String {
         .unwrap_or_else(|| "公开测试 Key".to_string())
 }
 
-pub fn codex_provider_config(base_url: &str) -> String {
+pub fn codex_provider_config(base_url: &str, default_model: &str) -> String {
     format!(
         r#"model_provider = "staticflow"
+model_catalog_json = "model_catalog.json"
 
 [model_providers.staticflow]
 name = "OpenAI"
@@ -242,9 +252,13 @@ requires_openai_auth = true
 supports_websockets = false
 
 # optional
-model = "gpt-5.4"
+model = "{default_model}"
 model_reasoning_effort = "xhigh""#
     )
+}
+
+pub fn codex_model_catalog_download_command(model_catalog_url: &str) -> String {
+    format!(r#"curl -fsSL "{model_catalog_url}" -o ~/.codex/model_catalog.json"#)
 }
 
 pub fn codex_login_command() -> String {
@@ -262,13 +276,13 @@ pub fn codex_auth_json(secret: &str) -> String {
     )
 }
 
-pub fn chat_curl_example(base_url: &str, secret: &str) -> String {
+pub fn chat_curl_example(base_url: &str, secret: &str, model: &str) -> String {
     format!(
         r#"curl {base_url}/chat/completions \
   -H 'Authorization: Bearer {secret}' \
   -H 'Content-Type: application/json' \
   -d '{{
-    "model": "gpt-5.4",
+    "model": "{model}",
     "messages": [
       {{"role": "system", "content": "You are a concise assistant."}},
       {{"role": "user", "content": "Reply with exactly OK."}}
@@ -278,7 +292,7 @@ pub fn chat_curl_example(base_url: &str, secret: &str) -> String {
     )
 }
 
-pub fn chat_python_example(base_url: &str, secret: &str) -> String {
+pub fn chat_python_example(base_url: &str, secret: &str, model: &str) -> String {
     format!(
         r#"from openai import OpenAI
 
@@ -288,7 +302,7 @@ client = OpenAI(
 )
 
 resp = client.chat.completions.create(
-    model="gpt-5.4",
+    model="{model}",
     messages=[
         {{"role": "system", "content": "You are a concise assistant."}},
         {{"role": "user", "content": "Reply with exactly OK."}},
@@ -321,9 +335,72 @@ pub fn kiro_key_usage_ratio(remaining: i64, limit: u64) -> f64 {
     (used / limit as f64).clamp(0.0, 1.0)
 }
 
+#[derive(Debug, Deserialize)]
+struct PublicCatalogModelInfo {
+    slug: String,
+    #[serde(default)]
+    visibility: Option<String>,
+    #[serde(default)]
+    supported_in_api: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicCatalogModelsResponse {
+    models: Vec<PublicCatalogModelInfo>,
+}
+
+pub fn preferred_model_slug_from_catalog_json(raw: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<PublicCatalogModelsResponse>(raw).ok()?;
+    parsed
+        .models
+        .into_iter()
+        .filter(|model| {
+            model.supported_in_api
+                && model
+                    .visibility
+                    .as_deref()
+                    .map(|value| value.eq_ignore_ascii_case("list"))
+                    .unwrap_or(true)
+        })
+        .max_by_key(preferred_catalog_model_rank)
+        .map(|model| model.slug)
+}
+
+fn preferred_catalog_model_rank(model: &PublicCatalogModelInfo) -> (i32, i32, i32, i32, i32) {
+    if let Some((major, minor, exact_base, variant_rank)) = parse_gpt_model_rank(&model.slug) {
+        return (2, major, minor, exact_base, variant_rank);
+    }
+    (1, 0, 0, 0, 0)
+}
+
+fn parse_gpt_model_rank(slug: &str) -> Option<(i32, i32, i32, i32)> {
+    let rest = slug.strip_prefix("gpt-")?;
+    let version_part = rest.split('-').next()?;
+    let mut numbers = version_part.split('.');
+    let major = numbers.next()?.parse::<i32>().ok()?;
+    let minor = numbers.next()?.parse::<i32>().ok()?;
+    if numbers.next().is_some() {
+        return None;
+    }
+    let exact_base = i32::from(rest == version_part);
+    let variant_rank = if exact_base == 1 {
+        3
+    } else if rest.contains("-mini") {
+        2
+    } else if rest.contains("-codex") {
+        1
+    } else {
+        0
+    };
+    Some((major, minor, exact_base, variant_rank))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::format_kiro_disabled_reason;
+    use super::{
+        codex_model_catalog_download_command, codex_provider_config, format_kiro_disabled_reason,
+        preferred_model_slug_from_catalog_json,
+    };
 
     #[test]
     fn format_kiro_disabled_reason_maps_known_codes() {
@@ -341,5 +418,50 @@ mod tests {
     fn format_kiro_disabled_reason_ignores_empty_values() {
         assert!(format_kiro_disabled_reason(None).is_none());
         assert!(format_kiro_disabled_reason(Some("   ")).is_none());
+    }
+
+    #[test]
+    fn provider_config_includes_relative_model_catalog_path_and_selected_model() {
+        let config = codex_provider_config("http://127.0.0.1:39180/api/llm-gateway/v1", "gpt-5.5");
+
+        assert!(config.contains(r#"model_catalog_json = "model_catalog.json""#));
+        assert!(config.contains(r#"model = "gpt-5.5""#));
+    }
+
+    #[test]
+    fn preferred_model_slug_ignores_hidden_and_unsupported_models() {
+        let raw = r#"{
+          "models": [
+            { "slug": "codex-auto-review", "visibility": "hide", "supported_in_api": true },
+            { "slug": "gpt-5.3-codex-spark", "visibility": "list", "supported_in_api": false },
+            { "slug": "gpt-5.5", "visibility": "list", "supported_in_api": true },
+            { "slug": "gpt-5.4", "visibility": "list", "supported_in_api": true }
+          ]
+        }"#;
+
+        assert_eq!(preferred_model_slug_from_catalog_json(raw), Some("gpt-5.5".to_string()));
+    }
+
+    #[test]
+    fn preferred_model_slug_prefers_latest_base_model() {
+        let raw = r#"{
+          "models": [
+            { "slug": "gpt-5.4", "visibility": "list", "supported_in_api": true },
+            { "slug": "gpt-5.5-mini", "visibility": "list", "supported_in_api": true },
+            { "slug": "gpt-5.5", "visibility": "list", "supported_in_api": true }
+          ]
+        }"#;
+
+        assert_eq!(preferred_model_slug_from_catalog_json(raw), Some("gpt-5.5".to_string()));
+    }
+
+    #[test]
+    fn model_catalog_download_command_targets_codex_home_file() {
+        let command = codex_model_catalog_download_command(
+            "https://ackingliu.top/api/llm-gateway/model-catalog.json",
+        );
+
+        assert!(command.contains("model-catalog.json"));
+        assert!(command.contains("~/.codex/model_catalog.json"));
     }
 }

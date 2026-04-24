@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     env,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -19,7 +20,7 @@ use static_flow_shared::{
         default_kiro_billable_model_multipliers, default_kiro_billable_model_multipliers_json,
         default_kiro_cache_kmodels, default_kiro_cache_kmodels_json, default_kiro_cache_policy,
         default_kiro_cache_policy_json, now_ms, parse_kiro_cache_policy_json, KiroCachePolicy,
-        LlmGatewayAccountGroupRecord, LlmGatewayStore,
+        LlmGatewayAccountGroupRecord, LlmGatewayStore, DEFAULT_CODEX_CLIENT_VERSION,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
@@ -204,6 +205,8 @@ pub struct LlmGatewayRuntimeConfig {
     /// Number of consecutive Codex refresh failures tolerated before marking
     /// one account unavailable.
     pub account_failure_retry_limit: u64,
+    /// Default Codex client version appended to upstream catalog requests.
+    pub codex_client_version: String,
     /// Maximum number of concurrent Kiro upstream requests.
     pub kiro_channel_max_concurrency: u64,
     /// Minimum milliseconds between consecutive Kiro upstream request starts.
@@ -236,6 +239,7 @@ impl Default for LlmGatewayRuntimeConfig {
             auth_cache_ttl_seconds: DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
             max_request_body_bytes: DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
             account_failure_retry_limit: DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
+            codex_client_version: DEFAULT_CODEX_CLIENT_VERSION.to_string(),
             kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
             kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
             codex_status_refresh_min_interval_seconds:
@@ -383,7 +387,7 @@ pub struct AppState {
     pub(crate) behavior_event_tx: mpsc::Sender<NewApiBehaviorEventInput>,
     pub(crate) shutdown_tx: watch::Sender<bool>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
-    pub(crate) index_html_template: Arc<String>,
+    pub(crate) frontend_dist_dir: Arc<PathBuf>,
     pub(crate) runtime_metadata: Arc<RuntimeMetadata>,
     #[cfg(feature = "local-media")]
     pub(crate) media_proxy: Option<Arc<MediaProxyState>>,
@@ -394,7 +398,7 @@ impl AppState {
         content_db_uri: &str,
         comments_db_uri: &str,
         music_db_uri: &str,
-        index_html_template: String,
+        frontend_dist_dir: impl Into<PathBuf>,
     ) -> Result<Self> {
         tracing::info!(
             content_db_uri,
@@ -402,6 +406,7 @@ impl AppState {
             music_db_uri,
             "initializing application state"
         );
+        let frontend_dist_dir = frontend_dist_dir.into();
         let store = Arc::new(StaticFlowDataStore::connect(content_db_uri).await?);
         let comment_store = Arc::new(CommentDataStore::connect(comments_db_uri).await?);
         let music_store = Arc::new(MusicDataStore::connect(music_db_uri).await?);
@@ -436,6 +441,9 @@ impl AppState {
             llm_gateway_runtime_config_record.max_request_body_bytes;
         let llm_gateway_account_failure_retry_limit =
             llm_gateway_runtime_config_record.account_failure_retry_limit;
+        let llm_gateway_codex_client_version = crate::llm_gateway::resolve_codex_client_version(
+            Some(&llm_gateway_runtime_config_record.codex_client_version),
+        );
         let kiro_channel_max_concurrency =
             llm_gateway_runtime_config_record.kiro_channel_max_concurrency;
         let kiro_channel_min_start_interval_ms =
@@ -495,6 +503,7 @@ impl AppState {
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
             account_failure_retry_limit = llm_gateway_account_failure_retry_limit,
+            codex_client_version = %llm_gateway_codex_client_version,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
             codex_status_refresh_min_interval_seconds,
@@ -520,6 +529,7 @@ impl AppState {
             auth_cache_ttl_seconds: llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes: llm_gateway_max_request_body_bytes,
             account_failure_retry_limit: llm_gateway_account_failure_retry_limit,
+            codex_client_version: llm_gateway_codex_client_version.clone(),
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
             codex_status_refresh_min_interval_seconds,
@@ -576,6 +586,7 @@ impl AppState {
             auth_cache_ttl_seconds = llm_gateway_auth_cache_ttl_seconds,
             max_request_body_bytes = llm_gateway_max_request_body_bytes,
             account_failure_retry_limit = llm_gateway_account_failure_retry_limit,
+            codex_client_version = %llm_gateway_codex_client_version,
             kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms,
             codex_status_refresh_min_interval_seconds,
@@ -736,11 +747,15 @@ impl AppState {
             behavior_event_tx,
             shutdown_tx,
             shutdown_rx: app_shutdown_rx,
-            index_html_template: Arc::new(index_html_template),
+            frontend_dist_dir: Arc::new(frontend_dist_dir),
             runtime_metadata,
             #[cfg(feature = "local-media")]
             media_proxy,
         })
+    }
+
+    pub(crate) async fn load_index_html_template(&self) -> String {
+        load_frontend_index_html(self.frontend_dist_dir.as_ref()).await
     }
 
     /// Signal all background tasks to shut down gracefully.
@@ -755,6 +770,20 @@ fn generate_account_group_id(prefix: &str) -> String {
 
 fn migrated_group_name(key_name: &str, key_id: &str) -> String {
     format!("Migrated {} {}", key_name, &key_id[..key_id.len().min(8)])
+}
+
+pub(crate) async fn load_frontend_index_html(frontend_dist_dir: &Path) -> String {
+    let index_html_path = frontend_dist_dir.join("index.html");
+    match tokio::fs::read_to_string(&index_html_path).await {
+        Ok(html) => html,
+        Err(err) => {
+            tracing::warn!(
+                path = %index_html_path.display(),
+                "failed to load frontend index.html: {err}"
+            );
+            String::new()
+        },
+    }
 }
 
 async fn migrate_legacy_key_account_groups(store: &LlmGatewayStore) -> Result<()> {
@@ -1101,6 +1130,8 @@ fn spawn_behavior_event_flusher(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -1135,5 +1166,33 @@ mod tests {
         assert!(err
             .to_string()
             .contains("must be one of `opus`, `sonnet`, `haiku`"));
+    }
+
+    #[tokio::test]
+    async fn load_frontend_index_html_reads_latest_file_contents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index_html_path = dir.path().join("index.html");
+        tokio::fs::write(&index_html_path, "old html")
+            .await
+            .expect("write old html");
+
+        let first = load_frontend_index_html(dir.path()).await;
+
+        tokio::fs::write(&index_html_path, "new html")
+            .await
+            .expect("write new html");
+        let second = load_frontend_index_html(dir.path()).await;
+
+        assert_eq!(first, "old html");
+        assert_eq!(second, "new html");
+    }
+
+    #[tokio::test]
+    async fn load_frontend_index_html_returns_empty_when_file_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let html = load_frontend_index_html(Path::new(dir.path())).await;
+
+        assert!(html.is_empty());
     }
 }

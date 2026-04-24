@@ -129,6 +129,7 @@ pub fn llm_gateway_runtime_config_schema() -> Arc<Schema> {
         // Number of consecutive Codex refresh failures tolerated before
         // marking one account unavailable.
         Field::new("account_failure_retry_limit", DataType::UInt64, false),
+        Field::new("codex_client_version", DataType::Utf8, false),
         // Maximum concurrent Kiro upstream requests allowed.
         Field::new("kiro_channel_max_concurrency", DataType::UInt64, false),
         // Minimum milliseconds between consecutive Kiro upstream request starts.
@@ -359,6 +360,7 @@ pub async fn ensure_runtime_config_table(db: &Connection) -> Result<Table> {
     // limiting.
     ensure_nullable_u64_column(&table, "max_request_body_bytes").await?;
     ensure_nullable_u64_column(&table, "account_failure_retry_limit").await?;
+    ensure_nullable_utf8_column(&table, "codex_client_version").await?;
     ensure_nullable_u64_column(&table, "kiro_channel_max_concurrency").await?;
     ensure_nullable_u64_column(&table, "kiro_channel_min_start_interval_ms").await?;
     ensure_nullable_u64_column(&table, "codex_status_refresh_min_interval_seconds").await?;
@@ -720,12 +722,13 @@ pub fn key_columns() -> [&'static str; 29] {
 }
 
 /// Ordered projection used when reading runtime-config rows back from LanceDB.
-pub fn runtime_config_columns() -> [&'static str; 27] {
+pub fn runtime_config_columns() -> [&'static str; 28] {
     [
         "id",
         "auth_cache_ttl_seconds",
         "max_request_body_bytes",
         "account_failure_retry_limit",
+        "codex_client_version",
         "kiro_channel_max_concurrency",
         "kiro_channel_min_start_interval_ms",
         "codex_status_refresh_min_interval_seconds",

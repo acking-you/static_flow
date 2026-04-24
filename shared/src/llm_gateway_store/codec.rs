@@ -30,7 +30,8 @@ use super::{
         LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
         LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
         LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-        LlmGatewayUsageEventSummaryRecord, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        LlmGatewayUsageEventSummaryRecord, DEFAULT_CODEX_CLIENT_VERSION,
+        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
         DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
@@ -317,6 +318,7 @@ pub fn build_runtime_config_batch(
     let mut auth_cache_ttl_seconds = UInt64Builder::new();
     let mut max_request_body_bytes = UInt64Builder::new(); // max allowed request body size in bytes
     let mut account_failure_retry_limit = UInt64Builder::new();
+    let mut codex_client_version = StringBuilder::new();
     let mut kiro_channel_max_concurrency = UInt64Builder::new();
     let mut kiro_channel_min_start_interval_ms = UInt64Builder::new();
     let mut codex_status_refresh_min_interval_seconds = UInt64Builder::new();
@@ -346,6 +348,7 @@ pub fn build_runtime_config_batch(
         auth_cache_ttl_seconds.append_value(record.auth_cache_ttl_seconds);
         max_request_body_bytes.append_value(record.max_request_body_bytes);
         account_failure_retry_limit.append_value(record.account_failure_retry_limit);
+        codex_client_version.append_value(&record.codex_client_version);
         kiro_channel_max_concurrency.append_value(record.kiro_channel_max_concurrency);
         kiro_channel_min_start_interval_ms.append_value(record.kiro_channel_min_start_interval_ms);
         codex_status_refresh_min_interval_seconds
@@ -387,6 +390,7 @@ pub fn build_runtime_config_batch(
         Arc::new(auth_cache_ttl_seconds.finish()),
         Arc::new(max_request_body_bytes.finish()),
         Arc::new(account_failure_retry_limit.finish()),
+        Arc::new(codex_client_version.finish()),
         Arc::new(kiro_channel_max_concurrency.finish()),
         Arc::new(kiro_channel_min_start_interval_ms.finish()),
         Arc::new(codex_status_refresh_min_interval_seconds.finish()),
@@ -1118,6 +1122,9 @@ pub fn batches_to_runtime_config(
         let account_failure_retry_limit = batch
             .column_by_name("account_failure_retry_limit")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let codex_client_version = batch
+            .column_by_name("codex_client_version")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let kiro_channel_max_concurrency = batch
             .column_by_name("kiro_channel_max_concurrency")
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
@@ -1195,6 +1202,9 @@ pub fn batches_to_runtime_config(
                 account_failure_retry_limit: account_failure_retry_limit
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT),
+                codex_client_version: codex_client_version
+                    .and_then(|column| value_string_opt(column, idx))
+                    .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string()),
                 kiro_channel_max_concurrency: kiro_channel_max_concurrency
                     .and_then(|column| value_u64_opt(column, idx))
                     .unwrap_or(DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),

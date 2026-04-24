@@ -13,6 +13,12 @@ use web_sys::{File, FormData};
 #[cfg(feature = "mock")]
 use crate::models;
 
+pub const DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION: &str = "0.124.0";
+
+fn default_codex_client_version() -> String {
+    DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION.to_string()
+}
+
 // API base URL. Read at compile time from STATICFLOW_API_BASE and fall back
 // to the local development backend when the variable is absent.
 #[cfg(not(feature = "mock"))]
@@ -5604,10 +5610,12 @@ pub struct LlmGatewayPublicKeyView {
 }
 
 /// Public payload returned by `/api/llm-gateway/access`.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct LlmGatewayAccessResponse {
     pub base_url: String,
     pub gateway_path: String,
+    pub model_catalog_path: String,
     pub auth_cache_ttl_seconds: u64,
     pub keys: Vec<LlmGatewayPublicKeyView>,
     pub generated_at: i64,
@@ -6125,6 +6133,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub auth_cache_ttl_seconds: u64,
     pub max_request_body_bytes: u64,
     pub account_failure_retry_limit: u64,
+    #[serde(default = "default_codex_client_version")]
+    pub codex_client_version: String,
     pub codex_status_refresh_min_interval_seconds: u64,
     pub codex_status_refresh_max_interval_seconds: u64,
     pub codex_status_account_jitter_max_seconds: u64,
@@ -6243,6 +6253,7 @@ pub async fn fetch_llm_gateway_access() -> Result<LlmGatewayAccessResponse, Stri
         Ok(LlmGatewayAccessResponse {
             base_url: "http://localhost:3000/api/llm-gateway/v1".to_string(),
             gateway_path: "/api/llm-gateway/v1".to_string(),
+            model_catalog_path: "/api/llm-gateway/model-catalog.json".to_string(),
             auth_cache_ttl_seconds: 60,
             keys: vec![],
             generated_at: 0,
@@ -6264,6 +6275,52 @@ pub async fn fetch_llm_gateway_access() -> Result<LlmGatewayAccessResponse, Stri
         }
         response
             .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+fn build_llm_gateway_model_catalog_url_for_ts(path: Option<&str>, ts: u64) -> String {
+    let path = path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("/api/llm-gateway/model-catalog.json");
+    if path.starts_with("http://") || path.starts_with("https://") || path.starts_with("/api/") {
+        format!("{path}?_ts={ts}")
+    } else {
+        format!("{API_BASE}{path}?_ts={ts}")
+    }
+}
+
+pub fn build_llm_gateway_model_catalog_url(path: Option<&str>) -> String {
+    build_llm_gateway_model_catalog_url_for_ts(path, Date::now() as u64)
+}
+
+pub async fn fetch_llm_gateway_model_catalog_json(
+    model_catalog_path: Option<&str>,
+) -> Result<String, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = model_catalog_path;
+        Ok(r#"{"models":[{"slug":"gpt-5.5","visibility":"list","supported_in_api":true}]}"#
+            .to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = build_llm_gateway_model_catalog_url(model_catalog_path);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .text()
             .await
             .map_err(|e| format!("Parse error: {:?}", e))
     }
@@ -6769,6 +6826,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             auth_cache_ttl_seconds: 60,
             max_request_body_bytes: 8 * 1024 * 1024,
             account_failure_retry_limit: 3,
+            codex_client_version: default_codex_client_version(),
             codex_status_refresh_min_interval_seconds: 240,
             codex_status_refresh_max_interval_seconds: 300,
             codex_status_account_jitter_max_seconds: 10,
@@ -9270,6 +9328,17 @@ mod tests {
     }
 
     #[test]
+    fn build_llm_gateway_model_catalog_url_uses_public_api_prefix() {
+        let url = build_llm_gateway_model_catalog_url_for_ts(
+            Some("/llm-gateway/model-catalog.json"),
+            123,
+        );
+
+        assert!(url.contains("/api/llm-gateway/model-catalog.json"));
+        assert!(url.contains("_ts=123"));
+    }
+
+    #[test]
     fn derive_local_media_api_base_from_http_api_base_uses_backend_origin() {
         let base = derive_local_media_api_base_from_api_base("http://127.0.0.1:39080/api");
         assert_eq!(base, "http://127.0.0.1:39080/admin/local-media/api");
@@ -9385,5 +9454,6 @@ mod tests {
         .expect("llm gateway runtime config should parse");
 
         assert_eq!(config.usage_event_flush_interval_seconds, 15);
+        assert_eq!(config.codex_client_version, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION);
     }
 }

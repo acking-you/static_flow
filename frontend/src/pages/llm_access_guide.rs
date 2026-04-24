@@ -4,11 +4,14 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    api::{fetch_llm_gateway_access, LlmGatewayAccessResponse},
+    api::{
+        fetch_llm_gateway_access, fetch_llm_gateway_model_catalog_json, LlmGatewayAccessResponse,
+    },
     pages::llm_access_shared::{
         chat_curl_example, chat_python_example, codex_auth_json, codex_login_command,
-        codex_provider_config, example_key_name, example_key_secret, resolved_base_url,
-        REMOTE_COMPACT_ARTICLE_ID,
+        codex_model_catalog_download_command, codex_provider_config, example_key_name,
+        example_key_secret, preferred_model_slug_from_catalog_json, resolved_base_url,
+        resolved_model_catalog_url, REMOTE_COMPACT_ARTICLE_ID,
     },
     router::Route,
 };
@@ -65,6 +68,8 @@ fn guide_code_panel(props: &GuideCodePanelProps) -> Html {
 #[function_component(LlmAccessGuidePage)]
 pub fn llm_access_guide_page() -> Html {
     let access = use_state(|| None::<LlmGatewayAccessResponse>);
+    let model_catalog_json = use_state(|| None::<String>);
+    let model_catalog_error = use_state(|| None::<String>);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
     let toast = use_state(|| None::<(String, bool)>);
@@ -72,17 +77,33 @@ pub fn llm_access_guide_page() -> Html {
 
     {
         let access = access.clone();
+        let model_catalog_json = model_catalog_json.clone();
+        let model_catalog_error = model_catalog_error.clone();
         let loading = loading.clone();
         let error = error.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
                 match fetch_llm_gateway_access().await {
                     Ok(data) => {
+                        match fetch_llm_gateway_model_catalog_json(Some(&data.model_catalog_path))
+                            .await
+                        {
+                            Ok(raw) => {
+                                model_catalog_json.set(Some(raw));
+                                model_catalog_error.set(None);
+                            },
+                            Err(err) => {
+                                model_catalog_json.set(None);
+                                model_catalog_error.set(Some(err));
+                            },
+                        }
                         access.set(Some(data));
                         error.set(None);
                     },
                     Err(err) => {
                         access.set(None);
+                        model_catalog_json.set(None);
+                        model_catalog_error.set(None);
                         error.set(Some(err));
                     },
                 }
@@ -123,13 +144,20 @@ pub fn llm_access_guide_page() -> Html {
         }
     } else if let Some(access) = (*access).clone() {
         let base_url = resolved_base_url(&access);
+        let model_catalog_url = resolved_model_catalog_url(&access);
         let example_key = example_key_secret(&access);
         let example_key_name = example_key_name(&access);
-        let provider_config = codex_provider_config(&base_url);
+        let default_model = (*model_catalog_json)
+            .as_deref()
+            .and_then(preferred_model_slug_from_catalog_json)
+            .unwrap_or_else(|| "gpt-5.5".to_string());
+        let provider_config = codex_provider_config(&base_url, &default_model);
+        let model_catalog_download_command =
+            codex_model_catalog_download_command(&model_catalog_url);
         let login_command = codex_login_command();
         let auth_json = codex_auth_json(&example_key);
-        let curl_example = chat_curl_example(&base_url, &example_key);
-        let python_example = chat_python_example(&base_url, &example_key);
+        let curl_example = chat_curl_example(&base_url, &example_key, &default_model);
+        let python_example = chat_python_example(&base_url, &example_key, &default_model);
 
         html! {
             <>
@@ -175,14 +203,41 @@ pub fn llm_access_guide_page() -> Html {
                     </Link<Route>>
                 </div>
 
-                // PLACEHOLDER_STEPS
-
-                // Step 01: Provider config
+                // Step 01: model_catalog.json
                 <section class={classes!("mt-6", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "gap-2")}>
                         <span class={classes!("text-xs", "font-semibold", "uppercase", "tracking-widest", "text-[var(--primary)]")}>{ "Step 01" }</span>
+                        <h2 class={classes!("m-0", "text-lg", "font-bold", "text-[var(--text)]")}>{ "写入 model_catalog.json" }</h2>
+                    </div>
+                    <p class={classes!("mt-3", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                        { "先执行下面这条命令，它会把后端当前可用模型直接写到 ~/.codex/model_catalog.json。" }
+                    </p>
+                    <div class={classes!("mt-4")}>
+                        <GuideCodePanel
+                            eyebrow={"推荐"}
+                            title={"一键下载命令"}
+                            button_label={"复制"}
+                            copy_label={"model_catalog 下载命令"}
+                            code={model_catalog_download_command.clone()}
+                            on_copy={on_copy.clone()}
+                        />
+                    </div>
+                    if let Some(err) = (*model_catalog_error).clone() {
+                        <p class={classes!("mt-3", "mb-0", "text-sm", "text-red-600", "dark:text-red-300")}>
+                            { format!("model_catalog.json 拉取失败：{err}") }
+                        </p>
+                    }
+                </section>
+
+                // Step 02: Provider config
+                <section class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <div class={classes!("flex", "items-center", "gap-2")}>
+                        <span class={classes!("text-xs", "font-semibold", "uppercase", "tracking-widest", "text-[var(--primary)]")}>{ "Step 02" }</span>
                         <h2 class={classes!("m-0", "text-lg", "font-bold", "text-[var(--text)]")}>{ "配置 Provider" }</h2>
                     </div>
+                    <p class={classes!("mt-3", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                        { format!("当前推荐默认模型：{}", default_model) }
+                    </p>
                     <div class={classes!("mt-4")}>
                         <GuideCodePanel
                             eyebrow={"~/.codex/config.toml"}
@@ -195,10 +250,10 @@ pub fn llm_access_guide_page() -> Html {
                     </div>
                 </section>
 
-                // Step 02: Auth
+                // Step 03: Auth
                 <section class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "gap-2")}>
-                        <span class={classes!("text-xs", "font-semibold", "uppercase", "tracking-widest", "text-[var(--primary)]")}>{ "Step 02" }</span>
+                        <span class={classes!("text-xs", "font-semibold", "uppercase", "tracking-widest", "text-[var(--primary)]")}>{ "Step 03" }</span>
                         <h2 class={classes!("m-0", "text-lg", "font-bold", "text-[var(--text)]")}>{ "写入 Key" }</h2>
                     </div>
                     <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-2")}>
@@ -221,10 +276,10 @@ pub fn llm_access_guide_page() -> Html {
                     </div>
                 </section>
 
-                // Step 03: Usage
+                // Step 04: Usage
                 <section class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "gap-2")}>
-                        <span class={classes!("text-xs", "font-semibold", "uppercase", "tracking-widest", "text-[var(--primary)]")}>{ "Step 03" }</span>
+                        <span class={classes!("text-xs", "font-semibold", "uppercase", "tracking-widest", "text-[var(--primary)]")}>{ "Step 04" }</span>
                         <h2 class={classes!("m-0", "text-lg", "font-bold", "text-[var(--text)]")}>{ "开始使用" }</h2>
                     </div>
                     <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-2")}>

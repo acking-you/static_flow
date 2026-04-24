@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
 use axum::{
     body::{Body, Bytes},
-    extract::{Request, State},
+    extract::{OriginalUri, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{Json, Response},
@@ -42,9 +42,9 @@ use static_flow_shared::llm_gateway_store::{
     LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
     LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
     NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
-    NewLlmGatewayTokenRequestInput, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-    LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
-    LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+    NewLlmGatewayTokenRequestInput, DEFAULT_CODEX_CLIENT_VERSION, LLM_GATEWAY_KEY_STATUS_ACTIVE,
+    LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
+    LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
     LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
@@ -58,7 +58,7 @@ pub(crate) use self::{
 };
 use self::{
     accounts::{AccountSettingsPatch, AccountStatus, AccountSummarySnapshot},
-    models::{append_client_version_query, respond_local_models},
+    models::{append_client_version_query, respond_local_models, respond_public_model_catalog},
     request::{
         apply_gpt53_codex_spark_mapping, ensure_supported_gateway_path, external_origin,
         extract_last_message_content, extract_presented_key, normalize_name, normalize_status,
@@ -130,7 +130,7 @@ use crate::{
 
 const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
-const DEFAULT_CODEX_CLI_VERSION: &str = "0.116.0";
+const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
 const FAST_BILLABLE_MULTIPLIER: u64 = 2;
 const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
 const MIN_RUNTIME_CACHE_TTL_SECONDS: u64 = 1;
@@ -188,6 +188,7 @@ fn build_runtime_config_response(
         auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
         max_request_body_bytes: config.max_request_body_bytes,
         account_failure_retry_limit: config.account_failure_retry_limit,
+        codex_client_version: config.codex_client_version.clone(),
         codex_status_refresh_min_interval_seconds: config.codex_status_refresh_min_interval_seconds,
         codex_status_refresh_max_interval_seconds: config.codex_status_refresh_max_interval_seconds,
         codex_status_account_jitter_max_seconds: config.codex_status_account_jitter_max_seconds,
@@ -242,6 +243,25 @@ fn validate_positive_u64(
         return Err(bad_request(&format!("{field_name} must be positive")));
     }
     Ok(())
+}
+
+pub(crate) fn normalize_codex_client_version(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_CODEX_CLIENT_VERSION_LEN {
+        return None;
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+pub(crate) fn resolve_codex_client_version(raw: Option<&str>) -> String {
+    raw.and_then(normalize_codex_client_version)
+        .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string())
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -316,6 +336,7 @@ pub async fn get_public_access(
         .map_err(|err| internal_error("Failed to list public gateway keys", err))?;
     let keys = state.llm_gateway.overlay_key_usage_batch(&base_keys).await;
     let gateway_path = "/api/llm-gateway/v1".to_string();
+    let model_catalog_path = "/api/llm-gateway/model-catalog.json".to_string();
     let base_url = external_origin(&headers)
         .map(|origin| format!("{origin}{gateway_path}"))
         .unwrap_or_else(|| gateway_path.clone());
@@ -329,10 +350,47 @@ pub async fn get_public_access(
     Ok(Json(LlmGatewayAccessResponse {
         base_url,
         gateway_path,
+        model_catalog_path,
         auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
         keys: keys.iter().map(LlmGatewayPublicKeyView::from).collect(),
         generated_at: now_ms(),
     }))
+}
+
+/// Serve a raw `model_catalog.json` payload for Codex clients that want a
+/// local catalog matching the gateway's currently available models.
+pub async fn get_public_model_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let (auth_snapshot, map_gpt53_codex_to_spark) = if let Some((_account_name, snapshot, mapped)) =
+        state
+            .llm_gateway
+            .account_pool
+            .select_best_account(None)
+            .await
+    {
+        (snapshot, mapped)
+    } else {
+        (
+            state
+                .llm_gateway
+                .auth_source
+                .current()
+                .await
+                .map_err(|err| internal_error("Failed to load public model catalog auth", err))?,
+            false,
+        )
+    };
+    respond_public_model_catalog(
+        &state,
+        &auth_snapshot,
+        &headers,
+        uri.query().unwrap_or_default(),
+        map_gpt53_codex_to_spark,
+    )
+    .await
 }
 
 /// Serve the cached Codex account rate-limit snapshot without hitting the
@@ -397,6 +455,11 @@ pub async fn update_admin_runtime_config(
     {
         return Err(bad_request("account_failure_retry_limit is out of range"));
     }
+    let codex_client_version = match request.codex_client_version.as_deref() {
+        Some(value) => normalize_codex_client_version(value)
+            .ok_or_else(|| bad_request("codex_client_version is invalid"))?,
+        None => resolve_codex_client_version(Some(&current.codex_client_version)),
+    };
     let codex_status_refresh_min_interval_seconds = request
         .codex_status_refresh_min_interval_seconds
         .unwrap_or(current.codex_status_refresh_min_interval_seconds);
@@ -513,6 +576,7 @@ pub async fn update_admin_runtime_config(
         auth_cache_ttl_seconds: ttl,
         max_request_body_bytes,
         account_failure_retry_limit,
+        codex_client_version: codex_client_version.clone(),
         kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
         kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
         codex_status_refresh_min_interval_seconds,
@@ -549,6 +613,7 @@ pub async fn update_admin_runtime_config(
             auth_cache_ttl_seconds: ttl,
             max_request_body_bytes,
             account_failure_retry_limit,
+            codex_client_version: codex_client_version.clone(),
             kiro_channel_max_concurrency: current.kiro_channel_max_concurrency,
             kiro_channel_min_start_interval_ms: current.kiro_channel_min_start_interval_ms,
             codex_status_refresh_min_interval_seconds,
@@ -578,6 +643,7 @@ pub async fn update_admin_runtime_config(
         auth_cache_ttl_seconds = ttl,
         max_request_body_bytes,
         account_failure_retry_limit,
+        codex_client_version = %codex_client_version,
         codex_status_refresh_min_interval_seconds,
         codex_status_refresh_max_interval_seconds,
         codex_status_account_jitter_max_seconds,
@@ -1869,15 +1935,21 @@ async fn run_codex_proxy_connectivity_check(
         .map(|value| normalize_upstream_base_url(&value))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_UPSTREAM_BASE_URL.to_string());
+    let codex_client_version = resolve_codex_client_version(Some(
+        &state.llm_gateway_runtime_config.read().codex_client_version,
+    ));
     let url = append_client_version_query(
         &compute_upstream_url(&upstream_base, "/v1/models"),
-        DEFAULT_CODEX_CLI_VERSION,
+        &codex_client_version,
     );
     let client = build_proxy_client(config, PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS)?;
     let mut headers = ReqwestHeaderMap::new();
     headers.insert(header::AUTHORIZATION, bearer_header(&auth_snapshot.access_token)?);
     headers.insert(header::ACCEPT, ReqwestHeaderValue::from_static("application/json"));
-    headers.insert(header::USER_AGENT, ReqwestHeaderValue::from_str(&codex_user_agent())?);
+    headers.insert(
+        header::USER_AGENT,
+        ReqwestHeaderValue::from_str(&codex_user_agent(&codex_client_version))?,
+    );
     headers.insert(
         reqwest::header::HeaderName::from_static("originator"),
         ReqwestHeaderValue::from_static(DEFAULT_WIRE_ORIGINATOR),
@@ -2949,29 +3021,35 @@ pub async fn approve_and_issue_account_contribution_request(
         contribution_request.access_token.clone(),
         contribution_request.account_id.clone(),
     );
-    let usage =
-        match token_refresh::validate_account_usage(state.upstream_proxy_registry.as_ref(), &auth)
-            .await
-        {
-            Ok(usage) => usage,
-            Err(err) => {
-                contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
-                contribution_request.failure_reason = Some(err.to_string());
-                contribution_request.updated_at = now_ms();
-                contribution_request.processed_at = Some(now_ms());
-                state
-                    .llm_gateway_store
-                    .upsert_account_contribution_request(&contribution_request)
-                    .await
-                    .map_err(|upsert_err| {
-                        internal_error(
-                            "Failed to persist llm gateway account contribution request failure",
-                            upsert_err,
-                        )
-                    })?;
-                return Err(bad_request(&format!("account verification failed: {err}")));
-            },
-        };
+    let codex_client_version = resolve_codex_client_version(Some(
+        &state.llm_gateway_runtime_config.read().codex_client_version,
+    ));
+    let usage = match token_refresh::validate_account_usage(
+        state.upstream_proxy_registry.as_ref(),
+        &auth,
+        &codex_client_version,
+    )
+    .await
+    {
+        Ok(usage) => usage,
+        Err(err) => {
+            contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+            contribution_request.failure_reason = Some(err.to_string());
+            contribution_request.updated_at = now_ms();
+            contribution_request.processed_at = Some(now_ms());
+            state
+                .llm_gateway_store
+                .upsert_account_contribution_request(&contribution_request)
+                .await
+                .map_err(|upsert_err| {
+                    internal_error(
+                        "Failed to persist llm gateway account contribution request failure",
+                        upsert_err,
+                    )
+                })?;
+            return Err(bad_request(&format!("account verification failed: {err}")));
+        },
+    };
 
     let imported_account_name = contribution_request
         .imported_account_name
@@ -4223,7 +4301,11 @@ async fn send_upstream(
         request::extract_header_value(incoming_headers, header::USER_AGENT.as_str());
     let incoming_originator = request::extract_header_value(incoming_headers, "originator");
     let incoming_openai_beta = request::extract_header_value(incoming_headers, "openai-beta");
-    let effective_user_agent = incoming_user_agent.unwrap_or_else(codex_user_agent);
+    let default_codex_client_version = resolve_codex_client_version(Some(
+        &state.llm_gateway_runtime_config.read().codex_client_version,
+    ));
+    let effective_user_agent =
+        incoming_user_agent.unwrap_or_else(|| codex_user_agent(&default_codex_client_version));
     headers.insert(
         reqwest::header::ACCEPT,
         ReqwestHeaderValue::from_static(
@@ -5141,9 +5223,11 @@ async fn send_rate_limit_status_request(
     auth_snapshot: &CodexAuthSnapshot,
 ) -> Result<UsageStatusPayload> {
     let (client, _) = runtime.build_upstream_client(auth_snapshot).await?;
+    let codex_client_version =
+        resolve_codex_client_version(Some(&runtime.runtime_config.read().codex_client_version));
     let mut request = client
         .get(source_url)
-        .header(reqwest::header::USER_AGENT, codex_user_agent())
+        .header(reqwest::header::USER_AGENT, codex_user_agent(&codex_client_version))
         .header(reqwest::header::AUTHORIZATION, bearer_header(&auth_snapshot.access_token)?)
         .header(reqwest::header::ACCEPT, "application/json")
         .timeout(Duration::from_secs(20));
@@ -5331,8 +5415,8 @@ fn compute_upstream_url(base: &str, path: &str) -> String {
 }
 
 /// Default user agent used when callers do not provide their own.
-fn codex_user_agent() -> String {
-    format!("{DEFAULT_WIRE_ORIGINATOR}/{DEFAULT_CODEX_CLI_VERSION}")
+fn codex_user_agent(client_version: &str) -> String {
+    format!("{DEFAULT_WIRE_ORIGINATOR}/{client_version}")
 }
 
 /// Generate a user-facing API key secret with a stable prefix.
@@ -5606,10 +5690,16 @@ pub async fn import_account(
 
     // Validate by fetching usage through the existing proxy.
     let auth = runtime::CodexAuthSnapshot::from_tokens(access_token.clone(), account_id.clone());
-    let usage =
-        token_refresh::validate_account_usage(state.upstream_proxy_registry.as_ref(), &auth)
-            .await
-            .map_err(|err| bad_request(&format!("account verification failed: {err}")))?;
+    let codex_client_version = resolve_codex_client_version(Some(
+        &state.llm_gateway_runtime_config.read().codex_client_version,
+    ));
+    let usage = token_refresh::validate_account_usage(
+        state.upstream_proxy_registry.as_ref(),
+        &auth,
+        &codex_client_version,
+    )
+    .await
+    .map_err(|err| bad_request(&format!("account verification failed: {err}")))?;
 
     let account = accounts::CodexAccount {
         name: name.clone(),
@@ -6341,6 +6431,15 @@ mod tests {
         assert_eq!(request.kiro_prefix_cache_entry_ttl_seconds, Some(1800));
         assert_eq!(request.kiro_conversation_anchor_max_entries, Some(128));
         assert_eq!(request.kiro_conversation_anchor_ttl_seconds, Some(3600));
+    }
+
+    #[test]
+    fn codex_client_version_normalization_accepts_trimmed_semver() {
+        assert_eq!(normalize_codex_client_version(" 0.124.0 "), Some("0.124.0".to_string()));
+        assert_eq!(
+            resolve_codex_client_version(Some("invalid version?")),
+            DEFAULT_CODEX_CLIENT_VERSION
+        );
     }
 
     #[test]

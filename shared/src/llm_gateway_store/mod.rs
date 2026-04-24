@@ -65,7 +65,7 @@ pub use self::{
         LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         LlmGatewayUsageEventSummaryRecord, NewLlmGatewayAccountContributionRequestInput,
         NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
-        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        DEFAULT_CODEX_CLIENT_VERSION, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_HAIKU, DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_OPUS,
@@ -2065,6 +2065,36 @@ mod tests {
         assert_eq!(loaded.usage_event_flush_batch_size, 256);
         assert_eq!(loaded.usage_event_flush_interval_seconds, 15);
         assert_eq!(loaded.usage_event_flush_max_buffer_bytes, 8 * 1024 * 1024);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn runtime_config_round_trip_preserves_codex_client_version() {
+        let dir = temp_store_dir("runtime-config-codex-client-version");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect llm gateway store");
+
+        let config = LlmGatewayRuntimeConfigRecord {
+            codex_client_version: "0.124.0".to_string(),
+            updated_at: now_ms(),
+            ..LlmGatewayRuntimeConfigRecord::default()
+        };
+        store
+            .upsert_runtime_config(&config)
+            .await
+            .expect("upsert runtime config");
+
+        let loaded = store
+            .get_runtime_config_or_default()
+            .await
+            .expect("load runtime config");
+        assert_eq!(loaded.codex_client_version, "0.124.0");
+        assert_eq!(
+            LlmGatewayRuntimeConfigRecord::default().codex_client_version,
+            DEFAULT_CODEX_CLIENT_VERSION
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

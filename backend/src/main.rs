@@ -67,28 +67,13 @@ async fn main() -> Result<()> {
     tracing::info!("Comments LanceDB URI: {}", comments_db_uri);
     tracing::info!("Music LanceDB URI: {}", music_db_uri);
 
-    // Load frontend index.html template for SEO injection
     let frontend_dist_dir =
         env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "../frontend/dist".to_string());
-    let index_html_path = format!("{}/index.html", frontend_dist_dir);
-    let index_html_template = match tokio::fs::read_to_string(&index_html_path).await {
-        Ok(html) => {
-            tracing::info!("Loaded SEO template from {}", index_html_path);
-            html
-        },
-        Err(err) => {
-            tracing::warn!(
-                "Failed to load {}: {} — SEO pages will return fallback HTML",
-                index_html_path,
-                err
-            );
-            String::new()
-        },
-    };
+    tracing::info!("Frontend dist dir: {}", frontend_dist_dir);
 
     // Initialize application state
     let app_state =
-        state::AppState::new(&db_uri, &comments_db_uri, &music_db_uri, index_html_template).await?;
+        state::AppState::new(&db_uri, &comments_db_uri, &music_db_uri, frontend_dist_dir).await?;
 
     // Build router
     let app_state_ref = app_state.clone();

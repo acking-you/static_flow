@@ -17,6 +17,7 @@ use crate::handlers::ErrorResponse;
 pub struct LlmGatewayAccessResponse {
     pub base_url: String,
     pub gateway_path: String,
+    pub model_catalog_path: String,
     pub auth_cache_ttl_seconds: u64,
     pub keys: Vec<LlmGatewayPublicKeyView>,
     pub generated_at: i64,
@@ -554,6 +555,8 @@ pub struct LlmGatewayRuntimeConfigResponse {
     /// Number of consecutive Codex refresh failures tolerated before an
     /// account becomes unavailable.
     pub account_failure_retry_limit: u64,
+    /// Default Codex client version used when callers do not provide one.
+    pub codex_client_version: String,
     pub codex_status_refresh_min_interval_seconds: u64,
     pub codex_status_refresh_max_interval_seconds: u64,
     pub codex_status_account_jitter_max_seconds: u64,
@@ -690,6 +693,7 @@ pub struct UpdateLlmGatewayRuntimeConfigRequest {
     /// New consecutive-failure threshold before one Codex account becomes
     /// unavailable.
     pub account_failure_retry_limit: Option<u64>,
+    pub codex_client_version: Option<String>,
     pub codex_status_refresh_min_interval_seconds: Option<u64>,
     pub codex_status_refresh_max_interval_seconds: Option<u64>,
     pub codex_status_account_jitter_max_seconds: Option<u64>,

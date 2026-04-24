@@ -57,6 +57,8 @@ pub const DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
 pub const DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
 /// Default maximum random delay before probing the next Codex account.
 pub const DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
+/// Default Codex client version advertised to upstream requests.
+pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.124.0";
 /// Default randomized Kiro status refresh window lower bound.
 pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
 /// Default randomized Kiro status refresh window upper bound.
@@ -515,6 +517,9 @@ pub struct LlmGatewayRuntimeConfigRecord {
     /// Number of consecutive Codex account refresh failures tolerated before
     /// the account is marked unavailable.
     pub account_failure_retry_limit: u64,
+    /// Default Codex client version appended to upstream catalog requests and
+    /// reflected in the synthetic user-agent when callers do not override it.
+    pub codex_client_version: String,
     /// Maximum number of Kiro upstream requests allowed in flight at once.
     pub kiro_channel_max_concurrency: u64,
     /// Minimum spacing between Kiro upstream request starts.
@@ -579,6 +584,7 @@ impl Default for LlmGatewayRuntimeConfigRecord {
             auth_cache_ttl_seconds: DEFAULT_LLM_GATEWAY_AUTH_CACHE_TTL_SECONDS,
             max_request_body_bytes: DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
             account_failure_retry_limit: DEFAULT_LLM_GATEWAY_ACCOUNT_FAILURE_RETRY_LIMIT,
+            codex_client_version: DEFAULT_CODEX_CLIENT_VERSION.to_string(),
             kiro_channel_max_concurrency: DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY,
             kiro_channel_min_start_interval_ms: DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
             codex_status_refresh_min_interval_seconds:
