@@ -1,354 +1,219 @@
 ---
 name: selfhosted-gateway-seamless-upgrade
-description: Use when upgrading the local StaticFlow backend behind the Pingora gateway with no frontend port change, especially when blue-green backend slots, health-checked cutover, and rollback-safe config switching are required.
+description: Use when upgrading the local StaticFlow backend behind the already-running Pingora gateway on 39180 with blue/green backend slots, especially in the current tmux-supervised production setup where the gateway must stay up and config changes are applied by SIGHUP.
 ---
 
 # Selfhosted Gateway Seamless Upgrade
 
-Use this skill when StaticFlow traffic should stay on one stable gateway port
-while backend instances are upgraded behind it.
+Use this skill for the current StaticFlow production shape:
 
-## Core Rule
+- stable gateway: `127.0.0.1:39180`
+- backend slots: `blue -> 39080`, `green -> 39081`
+- gateway config: `conf/pingora/staticflow-gateway.yaml`
+- process supervision: usually `tmux`, not systemd
 
-The gateway process stays up. Backend versions move by changing the active
-upstream in the gateway config and reloading that config in-process.
+## Non-Negotiable Rules
 
-Do not use Pingora process-level `--upgrade` for backend rollout.
+- Do not stop, kill, restart, or recreate the gateway process during backend
+  rollout.
+- Do not touch the gateway to fix tmux session names, process ancestry, or
+  operational neatness.
+- Do not inspect or use gateway lifecycle helper scripts as the rollout plan.
+  In tmux production they are a distraction; the rollout path is the manual
+  sequence in this skill.
+- The only allowed gateway signal during cutover is:
+  `kill -HUP <gateway-pid>`.
+- If an action would interrupt `39180`, stop and ask the user.
+- Direct checks on `39080` or `39081` only prove the candidate slot works.
+  Cutover is proven only through `39180` and, when public production matters,
+  `https://ackingliu.top`.
+- Keep the old slot alive unless repeated stable-path checks prove the new slot
+  is serving real traffic.
 
-Never stop, restart, or kill the currently serving backend slot until the
-stable frontend path has already switched to the candidate and that switch has
-been verified from the same path real users hit. A healthy candidate slot is
-not itself a cutover.
+Forbidden during normal hot update:
 
-The post-switch verification must be repeated, not single-shot. Require
-multiple consecutive successful requests through the stable gateway path before
-stopping the old slot.
+- `tmux kill-session -t sf-gateway`
+- `kill <gateway-pid>` without `-HUP`
+- `systemctl restart staticflow-gateway...`
+- any gateway stop/start cycle
+- switching traffic because a candidate slot alone is healthy
 
-Treat old-slot cleanup as the last and optional step. A rollout is considered
-successful when the stable frontend is already serving the candidate. If there
-is any ambiguity after cutover, leave the old slot alive and stop there.
+## Required Preflight
 
-The source of truth is the stable frontend path (`39180` and, when applicable,
-the public URL). Direct responses from `39080` or `39081` are only candidate
-checks and never authorize stopping the old slot by themselves.
+Before building or starting anything, identify the live topology with read-only
+commands:
 
-## Preflight
+```bash
+curl -fsS http://127.0.0.1:39180/api/healthz
+env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY \
+  curl -fsS https://ackingliu.top/api/healthz
+ss -ltnp | grep -E ':(39180|39080|39081)\b'
+tmux ls
+tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} pid=#{pane_pid} cmd=#{pane_current_command}'
+awk '/active_upstream:/ {print $2; exit}' conf/pingora/staticflow-gateway.yaml
+```
 
-Before touching any slot, determine the real traffic path and the supervisor
-mode.
+Confirm:
 
-1. Confirm the gateway is the actual stable frontend:
-   - `curl -fsS http://127.0.0.1:39180/api/healthz`
-   - `env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY curl -fsS https://ackingliu.top/api/healthz`
-2. Confirm the returned JSON `port` matches the same active slot from both
-   checks.
-3. Run `./scripts/pingora_gateway.sh status`.
-4. Classify the deployment:
-   - If gateway and backend slot units are registered, it is `systemd`-managed.
-   - If `status` shows healthy gateway traffic but units are `not-found`, the
-     gateway is externally supervised, usually by `tmux`.
-5. Decide whether this skill is actually applicable:
-   - If `http://127.0.0.1:39180/api/healthz` and the public health path both
-     report the same active slot port, continue.
-   - If public traffic is still mapped directly to `39080`, stop here and use
-     the non-gateway playbook instead of touching the live slot.
+- local `39180` health and public health report the same active backend port
+- the reported active port matches `active_upstream` in the config
+- the other slot port is free before starting the candidate
+- the gateway pid is the listener on `39180`
 
-If public traffic is still mapped directly to `39080` instead of the gateway
-port `39180`, switching `active_upstream` will not change the real production
-path. Do not claim the rollout is seamless until that is verified.
-In that situation, do not stop the live `39080` backend under this skill.
+If public health does not go through `39180` to the same active slot, this skill
+does not apply. Stop and ask.
 
-## When To Use
+## Build Rule
 
-- Local self-hosted StaticFlow already has, or should have, a Pingora gateway
-  in front of the backend.
-- The user wants no frontend port change during backend rollout.
-- The rollout should keep the old backend serving until the new backend passes
-  `/api/healthz`.
-- The rollback path should be "switch traffic back to the old slot", not
-  "replace one binary in place".
+Only run one Rust build/check at a time. When a live backend is running, cap
+Cargo parallelism:
 
-## When Not To Use
+```bash
+CARGO_BUILD_JOBS=1 cargo build --profile release-backend -p static-flow-backend --jobs 1
+```
 
-- If there is no gateway in front of the backend yet, bootstrap the gateway
-  first.
-- If the deployment still runs as one standalone backend process on `39080`
-  with direct traffic and no blue-green slots, do not use this skill.
-  Either bootstrap the gateway first or perform a separate explicit
-  minimal-downtime direct restart workflow outside this skill.
+Start the candidate from:
 
-## Default Layout
+```text
+target/release-backend/static-flow-backend
+```
 
-- Gateway config: `conf/pingora/staticflow-gateway.yaml`
-- Gateway script: `scripts/pingora_gateway.sh`
-- Upgrade script: `scripts/backend_gateway_upgrade.sh`
-- Default gateway listen addr: `127.0.0.1:39180`
-- Default backend slots:
-  - `blue -> 127.0.0.1:39080`
-  - `green -> 127.0.0.1:39081`
+Do not overwrite `bin/static-flow-backend` before cutover.
 
-The gateway port is the stable frontend. The backend port is the thing that
-changes.
+## Candidate Slot
 
-## Supervisor Modes
+Choose the inactive slot:
 
-### `systemd`-managed
+- if active is `green`, candidate is `blue` on `39080`
+- if active is `blue`, candidate is `green` on `39081`
 
-Use the existing scripts directly:
+Start the candidate in tmux with the freshly built binary. Use the existing
+session naming convention if one is already present; common names are
+`sf-backend-blue` and `sf-backend-green`.
 
-- `./scripts/pingora_gateway.sh switch <blue|green>`
-- `./scripts/backend_gateway_upgrade.sh`
+Example for blue:
 
-These paths assume gateway and slot units are registered. The script currently
-hard-requires registered units before reload and switch.
+```bash
+tmux new-session -d -s sf-backend-blue \
+  'cd /home/ts_user/rust_pro/static_flow && BACKEND_BIN=/home/ts_user/rust_pro/static_flow/target/release-backend/static-flow-backend DB_ROOT=/mnt/wsl/data4tb/static-flow-data PORT=39080 STATICFLOW_LOG_SERVICE=backend-blue-39080 ./scripts/start_backend_selfhosted.sh --port 39080'
+```
 
-### External supervisor, usually `tmux`
+Example for green:
 
-Do not call `./scripts/pingora_gateway.sh switch` or rely on
-`./scripts/backend_gateway_upgrade.sh` as-is. Those paths currently route
-through `systemctl reload` and will fail even if the live gateway is healthy.
+```bash
+tmux new-session -d -s sf-backend-green \
+  'cd /home/ts_user/rust_pro/static_flow && BACKEND_BIN=/home/ts_user/rust_pro/static_flow/target/release-backend/static-flow-backend DB_ROOT=/mnt/wsl/data4tb/static-flow-data PORT=39081 STATICFLOW_LOG_SERVICE=backend-green-39081 ./scripts/start_backend_selfhosted.sh --port 39081'
+```
 
-For this mode:
+Candidate checks before cutover:
 
-- start the inactive backend slot manually, usually with `tmux`
-- edit `active_upstream` in `conf/pingora/staticflow-gateway.yaml`
-- send `SIGHUP` directly to the running gateway pid
-- verify local and public health
-- rollback by restoring the previous config and sending `SIGHUP` again
+```bash
+curl -fsS http://127.0.0.1:<candidate-port>/api/healthz
+curl -fsS 'http://127.0.0.1:<candidate-port>/api/articles?limit=1'
+curl -fsS 'http://127.0.0.1:<candidate-port>/api/llm-gateway/status'
+```
 
-## Bootstrap Workflow
+For feature-specific changes, add the exact endpoint that proves the fix.
 
-Run this once when the gateway is not already up:
+## Cutover
 
-1. Make sure the currently active backend slot is already serving traffic.
-2. Check the gateway config:
-   - `./scripts/pingora_gateway.sh check`
-3. Start the gateway:
-   - `./scripts/pingora_gateway.sh start`
-4. Verify through the gateway, not the backend directly:
-   - `curl -fsS http://127.0.0.1:39180/api/healthz`
-5. Confirm the returned JSON `port` matches the active backend slot.
+Cutover is config edit plus in-process reload.
 
-## Upgrade Workflow
+1. Back up the config:
 
-### Common build rule
+   ```bash
+   cp conf/pingora/staticflow-gateway.yaml tmp/staticflow-gateway.$(date +%Y%m%d-%H%M%S).yaml.bak
+   ```
 
-Build the candidate backend artifact first, but do not overwrite
-`bin/static-flow-backend` before the cutover:
+2. Change only the `active_upstream` line to the candidate slot.
 
-- `cargo build --profile release-backend -p static-flow-backend`
+3. Re-read the config and confirm it now names the candidate:
 
-Use the fresh candidate via `BACKEND_BIN=target/release-backend/static-flow-backend`
-when starting the inactive slot. This avoids in-place overwrite failures while
-the old binary is still serving traffic.
+   ```bash
+   awk '/active_upstream:/ {print $2; exit}' conf/pingora/staticflow-gateway.yaml
+   ```
 
-Run normal quality gates before deployment:
+4. Find the running gateway pid from the `39180` listener:
 
-- format only touched Rust files with `rustfmt`
-- `cargo check --workspace`
-- `cargo clippy -p static-flow-backend -p static-flow-frontend -- -D warnings`
+   ```bash
+   ss -ltnp | grep ':39180 '
+   ```
 
-If gateway code or gateway scripts changed, refresh the gateway binary first:
+5. Reload the already-running gateway:
 
-- `FORCE_BUILD_GATEWAY=1 ./scripts/pingora_gateway.sh check`
+   ```bash
+   kill -HUP <gateway-pid>
+   ```
 
-### `systemd` workflow
+Do not replace step 5 with restart.
 
-1. Run the rollout:
-   - `./scripts/backend_gateway_upgrade.sh`
-2. The rollout script is expected to:
-   - build the candidate backend into `target/release-backend/static-flow-backend`
-   - start the inactive slot
-   - wait for `http://127.0.0.1:<candidate-port>/api/healthz`
-   - switch the gateway to the new slot
-   - verify `http://127.0.0.1:39180/api/healthz` now reports the new port
-   - if public production is in scope, verify the public health path also reports the new port
-   - stop the old backend pid only after every required post-switch check succeeds
+## Stable-Path Verification
 
-### External-supervisor workflow, usually `tmux`
-
-1. Determine the active slot from `./scripts/pingora_gateway.sh status` and
-   choose the other slot as the candidate.
-2. Confirm the inactive slot port is free:
-   - `ss -ltnp | rg '39080|39081'`
-3. Start the candidate slot under `tmux`, passing the freshly built artifact by
-   `BACKEND_BIN`, for example:
-   - `tmux new-session -d -s staticflow-backend-blue "cd /path/to/static_flow && export BACKEND_BIN=/path/to/static_flow/target/release-backend/static-flow-backend && exec ./scripts/start_backend_selfhosted_slot.sh blue"`
-4. Verify the candidate slot directly before any switch:
-   - `curl -fsS http://127.0.0.1:<candidate-port>/api/healthz`
-   - `curl -fsS 'http://127.0.0.1:<candidate-port>/api/articles?limit=1'`
-   - `curl -fsS 'http://127.0.0.1:<candidate-port>/api/llm-gateway/status'`
-5. Back up the gateway config and change `active_upstream` to the candidate
-   slot.
-6. Reload the running gateway in-process:
-   - `kill -HUP <gateway-pid>`
-7. Verify the stable gateway path now points to the candidate:
-   - `curl -fsS http://127.0.0.1:39180/api/healthz`
-   - `curl -fsS 'http://127.0.0.1:39180/api/articles?limit=1'`
-   - `curl -fsS 'http://127.0.0.1:39180/api/llm-gateway/status'`
-   - `env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY curl -fsS https://ackingliu.top/api/healthz`
-8. Repeat step 7 until both paths have passed at least 3 consecutive checks and
-   each health response reports the candidate slot port. If the health payload
-   also exposes `pid`, prefer seeing the same candidate pid across those
-   repeated checks. A passing direct check on `39081` does not count toward this
-   gate.
-9. Only after the repeated checks above succeed, stop the old slot
-   supervisor.
-10. After a successful cutover, sync `bin/static-flow-backend` to the new
-    artifact using a new inode, not an in-place overwrite.
-
-If either check in step 7 still reports the old slot, do not stop anything.
-Keep the old slot serving, fix the route, and verify again.
-
-A practical pattern is 3 back-to-back probes with a short delay, for example:
+After `SIGHUP`, verify through the stable path. Repeat until local and public
+health pass at least 3 consecutive times and each response reports the candidate
+port.
 
 ```bash
 for i in 1 2 3; do
   curl -fsS http://127.0.0.1:39180/api/healthz
+  curl -fsS 'http://127.0.0.1:39180/api/articles?limit=1'
+  curl -fsS 'http://127.0.0.1:39180/api/llm-gateway/status'
   env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY \
     curl -fsS https://ackingliu.top/api/healthz
   sleep 1
 done
 ```
 
-Do not stop the old slot after only one successful response.
+Only after these stable-path checks pass should you say the rollout is live.
+If they do not stay on the candidate port, keep the old slot alive and roll
+back.
 
-## Gateway Operations
+## Rollback
 
-Use `scripts/pingora_gateway.sh` for all gateway lifecycle actions:
+Rollback is restore config plus `SIGHUP`.
 
-- `check`
-  - parse and validate gateway YAML
-- `start`
-  - start one long-lived gateway process under shell supervision
-- `reload`
-  - send `SIGHUP` so the gateway reloads config in-process
-- `switch <blue|green>`
-  - update `active_upstream`, reload config, verify the gateway now serves the
-    expected backend port
-- `status`
-  - show current pid, listen addr, and active slot
-- `stop`
-  - stop the gateway process
+1. Restore the backed-up gateway config.
+2. Confirm `active_upstream` names the old slot.
+3. Send `kill -HUP <gateway-pid>` to the same running gateway process.
+4. Verify `http://127.0.0.1:39180/api/healthz` reports the old slot port.
 
-Do not edit the pid file manually. Do not run multiple gateway operations in
-parallel.
+Do not restart the gateway to roll back.
 
-If the gateway is externally supervised, reuse the script for `check`,
-`status`, and health inspection, but do not assume `reload` and `switch` will
-work.
+## Cleanup
 
-## Manual Reload and Rollback
+Cleanup is optional and happens after cutover proof, not during cutover.
 
-For an externally supervised gateway, the safe manual fallback is:
+- Stop only the old backend slot supervisor, never the gateway.
+- Stop the old slot only after repeated stable-path checks prove traffic is on
+  the new slot.
+- If any check is ambiguous, leave the old slot running.
+- After cleanup, confirm only the old backend port stopped listening.
+- Then, if needed, sync the release artifact with a new inode:
 
-1. `cp conf/pingora/staticflow-gateway.yaml tmp/<timestamp>.gateway.yaml.bak`
-2. edit `active_upstream` to the candidate slot
-3. `./scripts/pingora_gateway.sh check`
-4. `kill -HUP <gateway-pid>`
-5. wait for `http://127.0.0.1:39180/api/healthz` to report the candidate port
+  ```bash
+  install -m 755 target/release-backend/static-flow-backend bin/static-flow-backend.new
+  mv -f bin/static-flow-backend.new bin/static-flow-backend
+  ```
 
-If step 5 fails:
+## Common Distraction Traps
 
-1. restore the backup config
-2. `kill -HUP <gateway-pid>` again
-3. verify `http://127.0.0.1:39180/api/healthz` reports the old slot port
-4. leave the old slot serving and stop there
-
-The rollback path is "restore config and reload", not "restart everything and
-hope".
-
-## Environment Overrides
-
-- `CONF_FILE`
-  - alternate gateway YAML, useful for isolated test ports
-- `GATEWAY_URL`
-  - alternate gateway base URL for post-switch verification
-- `FORCE_BUILD_GATEWAY=1`
-  - rebuild the gateway binary even if one already exists
-- `STATICFLOW_LOG_DIR`
-  - override runtime log root
-
-## Verification
-
-Always verify from the stable gateway port after switching:
-
-1. `./scripts/pingora_gateway.sh status`
-2. `curl -fsS http://127.0.0.1:39180/api/healthz`
-3. `curl -fsS 'http://127.0.0.1:39180/api/articles?limit=1'`
-4. `curl -fsS 'http://127.0.0.1:39180/api/llm-gateway/status'`
-5. If this is public production, also verify:
-   - `env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY curl -fsS https://ackingliu.top/api/healthz`
-6. Confirm:
-   - `status == "ok"`
-   - `port` matches the new backend slot
-   - the old backend port is no longer the active route
-7. Repeat the stable health check at least 3 times before cleanup and make sure
-   the candidate route stays stable across those checks.
-8. Treat passing stable-path verification as the cutover gate. Do not use
-   `39080`, `39081`, or `bin/static-flow-backend` inode state as the cleanup
-   gate.
-
-Useful log roots:
-
-- `tmp/runtime-logs/gateway/`
-- `tmp/runtime-logs/backend-blue-39080/`
-- `tmp/runtime-logs/backend-canary-39081/`
-
-For `tmux`-managed slots, also inspect:
-
-- `tmux capture-pane -pt staticflow-backend-blue:0 | tail -n 120`
-- `tmux capture-pane -pt staticflow-gateway:0 | tail -n 120`
-
-## Binary Path Pitfalls
-
-- `scripts/start_backend_selfhosted.sh` prefers `BACKEND_BIN`, then
-  `bin/static-flow-backend`, then `target/release-backend/static-flow-backend`.
-- During blue-green rollout, do not overwrite `bin/static-flow-backend` before
-  the candidate slot is up and healthy. Start the inactive slot from
-  `target/release-backend/static-flow-backend` through `BACKEND_BIN`.
-- If `cp target/release-backend/static-flow-backend bin/static-flow-backend`
-  fails with `Text file busy`, do not force it. The usual causes are:
-  - the old process is still executing `bin/static-flow-backend`
-  - `bin/static-flow-backend` and `target/release-backend/static-flow-backend`
-    are hard-linked to the same inode
-- Safe update pattern after cutover:
-  - `install -m 755 target/release-backend/static-flow-backend bin/static-flow-backend.new`
-  - `mv -f bin/static-flow-backend.new bin/static-flow-backend`
-
-## Cleanup Rules
-
-- After a successful switch, stopping the old slot is a separate cleanup phase,
-  not part of the cutover proof.
-- Only enter cleanup after the stable frontend path has already served the
-  candidate successfully for multiple consecutive checks.
-- After cleanup, confirm the old slot port no longer listens.
-- "Successful switch" means the stable frontend health path already reports the
-  candidate slot. A healthy canary on `39081` is not enough.
-- The stable frontend health path must report the candidate for multiple
-  consecutive requests before old-slot cleanup.
-- If health checks pass but stable-path functional probes fail, do not clean up
-  the old slot.
-- If there is any doubt about which slot the stable frontend is serving, keep
-  the old slot alive.
-- Treat `tmux ls` plus `ss -ltnp` as the source of truth.
-- A surviving `tmux` server process may keep the original `new-session` argv in
-  `ps`, which can still mention `green` even after the `green` session is gone.
-  Do not mistake that for a live backend slot.
-- Do not kill unrelated development backends on other ports such as `39102` or
-  `39121` unless they are actually occupying the blue/green slot ports.
+- A gateway process not being under the expected tmux session name is not a
+  rollout problem. Do not restart it.
+- A helper script exposing `restart`, `reload`, or `switch` subcommands is not
+  permission to use them in tmux production.
+- `ps` can show stale tmux server argv mentioning an old session. Treat `tmux
+  ls`, `tmux list-panes`, and `ss -ltnp` as the runtime truth.
+- A candidate slot being healthy does not authorize stopping the old slot.
+- A single successful `39180` response is not enough for cleanup.
 
 ## Stop Conditions
 
-- If gateway config validation fails, stop before switching traffic.
-- If the candidate backend never becomes healthy, leave the old slot serving.
-- If gateway post-switch verification fails, switch back to the old slot before
-  declaring success.
-- If repeated gateway-frontdoor probes do not stay on the candidate slot, keep
-  the old slot alive.
-- If the stable frontend still points at the old slot, do not stop the old
-  backend under any circumstance.
-- If stable-path health succeeds but `articles` or `llm-gateway` stable-path
-  probes fail after switch, keep the old slot alive or roll back before cleanup.
-- If the gateway is not the active frontend yet, do not claim the rollout is
-  seamless.
+Stop and ask the user if:
+
+- gateway pid cannot be identified from the `39180` listener
+- local and public health disagree about the active slot
+- the inactive slot is not actually free
+- the candidate does not pass direct health and feature checks
+- `SIGHUP` does not move `39180` to the candidate slot
+- stable-path verification is not repeatedly successful
+- any proposed action would stop, restart, or recreate the gateway process
