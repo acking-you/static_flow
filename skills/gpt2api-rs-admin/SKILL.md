@@ -59,6 +59,23 @@ cargo run -- serve \
   --admin-token "$ADMIN_TOKEN"
 ```
 
+Production/local-public runs should use the release binary, not `cargo run`.
+When the StaticFlow backend is live on this host, build with `--jobs 1` and
+start from `target/release/gpt2api-rs`.
+
+Email notifications reuse StaticFlow's account config file:
+
+```text
+backend/.local/email_accounts.json
+```
+
+or an explicit path from `GPT2API_EMAIL_ACCOUNTS_FILE` / `EMAIL_ACCOUNTS_FILE`.
+The file format is the same as `backend/email_accounts.example.json`; gpt2api-rs
+uses `public_mailbox` for SMTP credentials and display name. Also set
+`GPT2API_PUBLIC_BASE_URL` or `SITE_BASE_URL` so completion emails link to
+`/gpt2api/share/<token>`. `GPT2API_SMTP_*` environment variables still override
+the file values when necessary.
+
 Health check:
 
 ```bash
