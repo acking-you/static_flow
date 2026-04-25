@@ -3,6 +3,7 @@ use std::{
     convert::Infallible,
     hash::{Hash, Hasher},
     net::IpAddr,
+    path::{Path as StdPath, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -10,10 +11,10 @@ use async_stream::stream;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
-        Json, Response,
+        Html, IntoResponse, Json, Response,
     },
 };
 use parking_lot::RwLock;
@@ -260,6 +261,24 @@ pub async fn local_media_feature_disabled_api() -> (StatusCode, Json<ErrorRespon
             code: StatusCode::NOT_FOUND.as_u16(),
         }),
     )
+}
+
+pub async fn serve_gpt2api_frontend(
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let index_path = gpt2api_frontend_index_path(state.frontend_dist_dir.as_ref());
+    let html = tokio::fs::read_to_string(&index_path)
+        .await
+        .map_err(|err| internal_error("Failed to load gpt2api frontend", err))?;
+    let mut response = Html(html).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+fn gpt2api_frontend_index_path(frontend_dist_dir: &StdPath) -> PathBuf {
+    frontend_dist_dir.join("static/gpt2api/index.html")
 }
 
 #[derive(Debug, Serialize)]
@@ -5565,12 +5584,14 @@ pub async fn admin_article_request_ai_stream(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use axum::http::{HeaderMap, HeaderValue};
 
     use super::{
         apply_api_behavior_config_update, apply_compaction_runtime_config_update,
-        apply_view_analytics_config_update, is_local_host_header, normalize_public_nickname_input,
-        parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
+        apply_view_analytics_config_update, gpt2api_frontend_index_path, is_local_host_header,
+        normalize_public_nickname_input, parse_raw_markdown_lang, UpdateApiBehaviorConfigRequest,
         UpdateCompactionRuntimeConfigRequest, UpdateViewAnalyticsConfigRequest,
     };
     use crate::{
@@ -5585,6 +5606,12 @@ mod tests {
         headers.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.1, 198.51.100.2"));
 
         assert_eq!(extract_client_ip(&headers), "198.51.100.1");
+    }
+
+    #[test]
+    fn gpt2api_frontend_index_path_points_to_static_entry() {
+        let path = gpt2api_frontend_index_path(PathBuf::from("/tmp/frontend/dist").as_path());
+        assert_eq!(path, PathBuf::from("/tmp/frontend/dist/static/gpt2api/index.html"));
     }
 
     #[test]

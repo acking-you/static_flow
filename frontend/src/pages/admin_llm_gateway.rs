@@ -122,6 +122,31 @@ fn key_credit_display(key_item: &AdminLlmGatewayKeyView) -> String {
     }
 }
 
+fn gateway_key_matches_query(key_item: &AdminLlmGatewayKeyView, query_lower: &str) -> bool {
+    [
+        key_item.name.to_lowercase(),
+        key_item.id.to_lowercase(),
+        key_item.provider_type.to_lowercase(),
+        key_item.status.to_lowercase(),
+    ]
+    .iter()
+    .any(|value| value.contains(query_lower))
+}
+
+fn filter_gateway_keys_for_query(
+    keys: &[AdminLlmGatewayKeyView],
+    query: &str,
+) -> Vec<AdminLlmGatewayKeyView> {
+    let query_lower = query.trim().to_lowercase();
+    if query_lower.is_empty() {
+        return keys.to_vec();
+    }
+    keys.iter()
+        .filter(|key_item| gateway_key_matches_query(key_item, &query_lower))
+        .cloned()
+        .collect()
+}
+
 fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]) -> Vec<String> {
     let valid_names = accounts
         .iter()
@@ -1490,6 +1515,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_loading = use_state(|| false);
     let usage_error = use_state(|| None::<String>);
     let usage_key_filter = use_state(String::new);
+    let usage_key_search = use_state(String::new);
     let token_requests = use_state(Vec::<AdminLlmGatewayTokenRequestView>::new);
     let token_request_total = use_state(|| 0_usize);
     let token_request_page = use_state(|| 1_usize);
@@ -2513,18 +2539,33 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    let on_usage_key_filter_change = {
+    let on_usage_key_pick = {
         let usage_key_filter = usage_key_filter.clone();
+        let usage_key_search = usage_key_search.clone();
         let usage_page = usage_page.clone();
         let reload_usage = reload_usage.clone();
+        Callback::from(move |selected_key_id: String| {
+            if selected_key_id.is_empty() {
+                usage_key_search.set(String::new());
+            }
+            usage_key_filter.set(selected_key_id.clone());
+            usage_page.set(1);
+            reload_usage.emit((Some(1), Some(selected_key_id)));
+        })
+    };
+
+    let on_usage_key_filter_change = {
+        let on_usage_key_pick = on_usage_key_pick.clone();
         Callback::from(move |event: Event| {
             if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                let selected_key_id = target.value();
-                usage_key_filter.set(selected_key_id.clone());
-                usage_page.set(1);
-                reload_usage.emit((Some(1), Some(selected_key_id)));
+                on_usage_key_pick.emit(target.value());
             }
         })
+    };
+
+    let on_usage_key_search_change = {
+        let usage_key_search = usage_key_search.clone();
+        Callback::from(move |value: String| usage_key_search.set(value))
     };
 
     let on_usage_page_change = {
@@ -3611,31 +3652,24 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    // Client-side filters for Keys and Account Groups tabs. Matches are
-    // case-insensitive. `use_memo` avoids re-filtering on unrelated parent
-    // re-renders. These are pre-computed at component top-level because the
-    // html! macro does not permit `let` bindings inside conditional branches.
+    // Client-side filters for Keys, Account Groups, and the Usage key picker.
+    // Matches are case-insensitive. `use_memo` avoids re-filtering on unrelated
+    // parent re-renders. These are pre-computed at component top-level because
+    // the html! macro does not permit `let` bindings inside conditional branches.
     let keys_query_lower = (*keys_search).trim().to_lowercase();
     let filtered_keys: Vec<AdminLlmGatewayKeyView> = {
         let q = keys_query_lower.clone();
         use_memo(((*keys).clone(), q.clone()), move |(items, q)| {
-            if q.is_empty() {
-                items.clone()
-            } else {
-                items
-                    .iter()
-                    .filter(|k| {
-                        let hay = [
-                            k.name.to_lowercase(),
-                            k.id.to_lowercase(),
-                            k.provider_type.to_lowercase(),
-                            k.status.to_lowercase(),
-                        ];
-                        hay.iter().any(|v| v.contains(q))
-                    })
-                    .cloned()
-                    .collect()
-            }
+            filter_gateway_keys_for_query(items, q)
+        })
+        .as_ref()
+        .clone()
+    };
+    let usage_key_query_lower = (*usage_key_search).trim().to_lowercase();
+    let filtered_usage_keys: Vec<AdminLlmGatewayKeyView> = {
+        let q = usage_key_query_lower.clone();
+        use_memo(((*keys).clone(), q.clone()), move |(items, q)| {
+            filter_gateway_keys_for_query(items, q)
         })
         .as_ref()
         .clone()
@@ -5042,21 +5076,48 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
 
-                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(0,1fr)_auto_auto]", "items-end")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_auto_auto]", "items-end")}>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
+                            <div class={classes!("mt-1")}>
+                                <SearchBox
+                                    value={(*usage_key_search).clone()}
+                                    on_change={on_usage_key_search_change.clone()}
+                                    placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
+                                />
+                            </div>
+                        </label>
                         <label class={classes!("text-sm")}>
                             <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
                             <select
-                                key={format!("usage-filter-{}", (*usage_key_filter).clone())}
+                                key={format!("usage-filter-{}-{}", (*usage_key_filter).clone(), usage_key_query_lower)}
                                 class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
                                 onchange={on_usage_key_filter_change}
                             >
                                 <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部" }</option>
-                                { for keys.iter().map(|key_item| html! {
+                                if !(*usage_key_filter).is_empty()
+                                    && !filtered_usage_keys
+                                        .iter()
+                                        .any(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
+                                {
+                                    if let Some(selected_key) = keys
+                                        .iter()
+                                        .find(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
+                                    {
+                                        <option
+                                            value={selected_key.id.clone()}
+                                            selected=true
+                                        >
+                                            { format!("{} · {} (当前)", selected_key.name, selected_key.id) }
+                                        </option>
+                                    }
+                                }
+                                { for filtered_usage_keys.iter().map(|key_item| html! {
                                     <option
                                         value={key_item.id.clone()}
                                         selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
                                     >
-                                        { key_item.name.clone() }
+                                        { format!("{} · {}", key_item.name, key_item.id) }
                                     </option>
                                 }) }
                             </select>
@@ -5068,6 +5129,44 @@ pub fn admin_llm_gateway_page() -> Html {
                             { format!("第 {} 页", *usage_page) }
                         </span>
                     </div>
+
+                    if !usage_key_query_lower.is_empty() {
+                        <div class={classes!("mt-2", "flex", "items-center", "gap-2", "flex-wrap", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                            <span>{ format!("匹配 {}/{}", filtered_usage_keys.len(), keys.len()) }</span>
+                            if filtered_usage_keys.is_empty() {
+                                <span>{ "没有匹配的 key" }</span>
+                            } else {
+                                { for filtered_usage_keys.iter().take(8).map(|key_item| {
+                                    let key_id = key_item.id.clone();
+                                    let active = (*usage_key_filter).as_str() == key_item.id.as_str();
+                                    let on_usage_key_pick = on_usage_key_pick.clone();
+                                    html! {
+                                        <button
+                                            type="button"
+                                            class={classes!(
+                                                "rounded-full",
+                                                "border",
+                                                "px-2.5",
+                                                "py-1",
+                                                "text-xs",
+                                                "font-semibold",
+                                                if active { "border-emerald-500/50" } else { "border-[var(--border)]" },
+                                                if active { "bg-emerald-500/12" } else { "bg-[var(--surface-alt)]" },
+                                                if active { "text-emerald-700" } else { "text-[var(--text)]" },
+                                                if active { "dark:text-emerald-200" } else { "dark:text-[var(--text)]" },
+                                            )}
+                                            onclick={Callback::from(move |_| on_usage_key_pick.emit(key_id.clone()))}
+                                        >
+                                            { format!("{} · {}", key_item.name, key_item.id) }
+                                        </button>
+                                    }
+                                }) }
+                                if filtered_usage_keys.len() > 8 {
+                                    <span>{ format!("另有 {} 个匹配项", filtered_usage_keys.len() - 8) }</span>
+                                }
+                            }
+                        </div>
+                    }
 
                     if *usage_loading {
                         <div class={classes!("mt-3", "inline-flex", "items-center", "gap-2", "text-xs", "text-[var(--muted)]")}>
@@ -5858,5 +5957,44 @@ mod tests {
         };
 
         assert_eq!(usage_last_message_table_preview(&event), "short text");
+    }
+
+    fn test_key(id: &str, name: &str, provider_type: &str, status: &str) -> AdminLlmGatewayKeyView {
+        AdminLlmGatewayKeyView {
+            id: id.to_string(),
+            name: name.to_string(),
+            provider_type: provider_type.to_string(),
+            status: status.to_string(),
+            ..AdminLlmGatewayKeyView::default()
+        }
+    }
+
+    #[test]
+    fn usage_key_search_matches_name_id_provider_and_status() {
+        let keys = vec![
+            test_key("sfk-alpha", "Default Codex", "codex", "active"),
+            test_key("sfk-beta", "Kiro Pool", "kiro", "disabled"),
+        ];
+
+        let by_name = filter_gateway_keys_for_query(&keys, "default");
+        let by_id = filter_gateway_keys_for_query(&keys, "BETA");
+        let by_provider = filter_gateway_keys_for_query(&keys, "kiro");
+        let by_status = filter_gateway_keys_for_query(&keys, "disabled");
+
+        assert_eq!(by_name, vec![keys[0].clone()]);
+        assert_eq!(by_id, vec![keys[1].clone()]);
+        assert_eq!(by_provider, vec![keys[1].clone()]);
+        assert_eq!(by_status, vec![keys[1].clone()]);
+    }
+
+    #[test]
+    fn usage_key_search_trims_query_and_returns_all_for_blank() {
+        let keys = vec![
+            test_key("sfk-alpha", "Default Codex", "codex", "active"),
+            test_key("sfk-beta", "Kiro Pool", "kiro", "disabled"),
+        ];
+
+        assert_eq!(filter_gateway_keys_for_query(&keys, "   "), keys);
+        assert_eq!(filter_gateway_keys_for_query(&keys, "  codex  "), vec![keys[0].clone()]);
     }
 }

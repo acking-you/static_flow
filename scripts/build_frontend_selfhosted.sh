@@ -65,6 +65,8 @@ if [[ "$SKIP_NPM" != "true" ]]; then
 fi
 
 log "Building frontend for self-hosted mode (API_BASE=/api)..."
+log "Building standalone GPT2API frontend..."
+"$ROOT_DIR/scripts/build_gpt2api_frontend.sh"
 
 cd "$FRONTEND_DIR"
 TRUNK_ARGS=(build --release)

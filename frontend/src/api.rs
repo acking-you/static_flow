@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::{Request, RequestBuilder};
 use js_sys::Date;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+#[cfg(not(feature = "mock"))]
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use static_flow_shared::{Article, ArticleListItem};
 #[cfg(not(feature = "mock"))]
 use wasm_bindgen::JsValue;
-#[cfg(not(feature = "mock"))]
-use web_sys::{File, FormData};
 
 #[cfg(feature = "mock")]
 use crate::models;
@@ -27,7 +27,7 @@ pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
     None => "http://localhost:3000/api",
 };
 
-#[cfg(not(feature = "mock"))]
+#[cfg(any(not(feature = "mock"), test))]
 const LOCAL_MEDIA_API_BASE_OVERRIDE: Option<&str> = option_env!("STATICFLOW_LOCAL_MEDIA_API_BASE");
 
 #[cfg(feature = "mock")]
@@ -81,7 +81,7 @@ fn api_delete(url: &str) -> RequestBuilder {
     with_behavior_headers(Request::delete(url))
 }
 
-#[cfg(not(feature = "mock"))]
+#[cfg(any(not(feature = "mock"), test))]
 fn local_media_api_base() -> String {
     if let Some(override_base) = LOCAL_MEDIA_API_BASE_OVERRIDE {
         let trimmed = override_base.trim_end_matches('/');
@@ -93,7 +93,7 @@ fn local_media_api_base() -> String {
     derive_local_media_api_base_from_api_base(API_BASE)
 }
 
-#[cfg(not(feature = "mock"))]
+#[cfg(any(not(feature = "mock"), test))]
 fn derive_local_media_api_base_from_api_base(api_base: &str) -> String {
     let trimmed = api_base.trim();
     if trimmed.is_empty() {
@@ -117,7 +117,7 @@ fn resolve_local_media_asset_url(url: String) -> String {
     resolve_local_media_asset_url_for_base(&local_media_api_base(), &url)
 }
 
-#[cfg(not(feature = "mock"))]
+#[cfg(any(not(feature = "mock"), test))]
 fn derive_local_media_origin(base: &str) -> Option<String> {
     if !(base.starts_with("http://") || base.starts_with("https://")) {
         return None;
@@ -134,7 +134,7 @@ fn derive_local_media_origin(base: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-#[cfg(not(feature = "mock"))]
+#[cfg(any(not(feature = "mock"), test))]
 fn resolve_local_media_asset_url_for_base(local_media_api_base: &str, url: &str) -> String {
     if url.starts_with("http://") || url.starts_with("https://") {
         return url.to_string();
@@ -697,7 +697,7 @@ pub struct LocalMediaPlaybackJobResponse {
     pub error: Option<String>,
 }
 
-#[cfg(feature = "local-media")]
+#[cfg(all(feature = "local-media", not(feature = "mock")))]
 #[derive(Debug, Serialize)]
 struct LocalMediaPlaybackOpenRequest<'a> {
     file: &'a str,
@@ -830,13 +830,13 @@ pub async fn fetch_admin_local_media_job_status(
     }
 }
 
-#[cfg(feature = "local-media")]
+#[cfg(all(feature = "local-media", not(feature = "mock")))]
 #[derive(Debug, Deserialize)]
 struct LocalMediaApiErrorResponse {
     error: String,
 }
 
-#[cfg(feature = "local-media")]
+#[cfg(all(feature = "local-media", not(feature = "mock")))]
 async fn local_media_api_error(response: gloo_net::http::Response, fallback: &str) -> String {
     let status = response.status();
     match response.json::<LocalMediaApiErrorResponse>().await {
@@ -845,7 +845,7 @@ async fn local_media_api_error(response: gloo_net::http::Response, fallback: &st
     }
 }
 
-#[cfg(feature = "local-media")]
+#[cfg(all(feature = "local-media", any(not(feature = "mock"), test)))]
 pub fn build_admin_local_media_upload_tasks_url() -> String {
     format!("{}/uploads/tasks", local_media_api_base())
 }
@@ -2012,7 +2012,7 @@ pub struct AdminCommentAiStreamEvent {
     pub chunk: Option<AdminCommentAiRunChunk>,
 }
 
-#[cfg(not(feature = "mock"))]
+#[cfg(any(not(feature = "mock"), test))]
 fn admin_base() -> String {
     API_BASE
         .strip_suffix("/api")
@@ -2282,40 +2282,6 @@ impl Default for AdminGpt2ApiRsImageEditRequest {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Gpt2ApiPublicKeyInfo {
-    pub id: Option<String>,
-    pub name: String,
-    pub status: String,
-    pub quota_total_calls: i64,
-    pub quota_used_calls: i64,
-    #[serde(default)]
-    pub route_strategy: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Gpt2ApiPublicVerifyResponse {
-    pub ok: bool,
-    #[serde(default)]
-    pub version: Option<String>,
-    pub key: Gpt2ApiPublicKeyInfo,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Gpt2ApiImageData {
-    #[serde(default)]
-    pub b64_json: Option<String>,
-    #[serde(default)]
-    pub revised_prompt: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Gpt2ApiImageResponse {
-    pub created: i64,
-    #[serde(default)]
-    pub data: Vec<Gpt2ApiImageData>,
-}
-
 #[cfg(not(feature = "mock"))]
 async fn parse_admin_gpt2api_rs_response<T>(response: gloo_net::http::Response) -> Result<T, String>
 where
@@ -2418,48 +2384,6 @@ where
         .await
         .map_err(|e| format!("Network error: {:?}", e))?;
     parse_admin_gpt2api_rs_response(response).await
-}
-
-#[cfg(not(feature = "mock"))]
-fn gpt2api_public_base() -> String {
-    format!("{}/gpt2api", API_BASE.trim_end_matches('/'))
-}
-
-#[cfg(not(feature = "mock"))]
-async fn parse_gpt2api_public_response<T>(response: gloo_net::http::Response) -> Result<T, String>
-where
-    T: DeserializeOwned,
-{
-    if !response.ok() {
-        let text = response.text().await.unwrap_or_default();
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(message) = value.get("error").and_then(serde_json::Value::as_str) {
-                return Err(message.to_string());
-            }
-        }
-        return Err(if text.trim().is_empty() { "请求失败".to_string() } else { text });
-    }
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {:?}", e))
-}
-
-#[cfg(not(feature = "mock"))]
-async fn post_public_gpt2api_json<B, T>(path: &str, auth_key: &str, body: &B) -> Result<T, String>
-where
-    B: Serialize,
-    T: DeserializeOwned,
-{
-    let url = format!("{}{path}", gpt2api_public_base());
-    let response = api_post(&url)
-        .header("authorization", &format!("Bearer {}", auth_key.trim()))
-        .json(body)
-        .map_err(|e| format!("Serialize error: {:?}", e))?
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {:?}", e))?;
-    parse_gpt2api_public_response(response).await
 }
 
 pub async fn fetch_admin_gpt2api_rs_config() -> Result<AdminGpt2ApiRsConfigEnvelope, String> {
@@ -2734,17 +2658,18 @@ pub async fn create_admin_gpt2api_rs_key(
 ) -> Result<AdminGpt2ApiRsKeyView, String> {
     #[cfg(feature = "mock")]
     {
-        let mut key = AdminGpt2ApiRsKeyView::default();
-        key.id = "mock-key".to_string();
-        key.name = request.name.clone();
-        key.status = request
-            .status
-            .clone()
-            .unwrap_or_else(|| "active".to_string());
-        key.quota_total_calls = request.quota_total_calls;
-        key.route_strategy = request.route_strategy.clone();
-        key.secret_plaintext = Some("sk-mock-secret".to_string());
-        Ok(key)
+        Ok(AdminGpt2ApiRsKeyView {
+            id: "mock-key".to_string(),
+            name: request.name.clone(),
+            status: request
+                .status
+                .clone()
+                .unwrap_or_else(|| "active".to_string()),
+            quota_total_calls: request.quota_total_calls,
+            route_strategy: request.route_strategy.clone(),
+            secret_plaintext: Some("sk-mock-secret".to_string()),
+            ..Default::default()
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2759,19 +2684,20 @@ pub async fn update_admin_gpt2api_rs_key(
 ) -> Result<AdminGpt2ApiRsKeyView, String> {
     #[cfg(feature = "mock")]
     {
-        let mut key = AdminGpt2ApiRsKeyView::default();
-        key.id = key_id.to_string();
-        key.name = request.name.clone().unwrap_or_default();
-        key.status = request
-            .status
-            .clone()
-            .unwrap_or_else(|| "active".to_string());
-        key.quota_total_calls = request.quota_total_calls.unwrap_or_default();
-        key.route_strategy = request
-            .route_strategy
-            .clone()
-            .unwrap_or_else(|| "auto".to_string());
-        Ok(key)
+        Ok(AdminGpt2ApiRsKeyView {
+            id: key_id.to_string(),
+            name: request.name.clone().unwrap_or_default(),
+            status: request
+                .status
+                .clone()
+                .unwrap_or_else(|| "active".to_string()),
+            quota_total_calls: request.quota_total_calls.unwrap_or_default(),
+            route_strategy: request
+                .route_strategy
+                .clone()
+                .unwrap_or_else(|| "auto".to_string()),
+            ..Default::default()
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2783,10 +2709,11 @@ pub async fn update_admin_gpt2api_rs_key(
 pub async fn rotate_admin_gpt2api_rs_key(key_id: &str) -> Result<AdminGpt2ApiRsKeyView, String> {
     #[cfg(feature = "mock")]
     {
-        let mut key = AdminGpt2ApiRsKeyView::default();
-        key.id = key_id.to_string();
-        key.secret_plaintext = Some("sk-mock-rotated".to_string());
-        Ok(key)
+        Ok(AdminGpt2ApiRsKeyView {
+            id: key_id.to_string(),
+            secret_plaintext: Some("sk-mock-rotated".to_string()),
+            ..Default::default()
+        })
     }
 
     #[cfg(not(feature = "mock"))]
@@ -2885,86 +2812,6 @@ pub async fn admin_gpt2api_rs_responses(
     #[cfg(not(feature = "mock"))]
     {
         post_admin_gpt2api_rs("/responses", request).await
-    }
-}
-
-pub async fn verify_public_gpt2api_key(
-    auth_key: &str,
-) -> Result<Gpt2ApiPublicVerifyResponse, String> {
-    #[cfg(feature = "mock")]
-    {
-        let _ = auth_key;
-        Ok(Gpt2ApiPublicVerifyResponse {
-            ok: true,
-            version: Some("mock".to_string()),
-            key: Gpt2ApiPublicKeyInfo {
-                id: Some("mock".to_string()),
-                name: "demo".to_string(),
-                status: "active".to_string(),
-                quota_total_calls: 100,
-                quota_used_calls: 0,
-                route_strategy: Some("auto".to_string()),
-            },
-        })
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        post_public_gpt2api_json("/auth/verify", auth_key, &serde_json::json!({})).await
-    }
-}
-
-pub async fn generate_public_gpt2api_images(
-    auth_key: &str,
-    request: &AdminGpt2ApiRsImageGenerationRequest,
-) -> Result<Gpt2ApiImageResponse, String> {
-    #[cfg(feature = "mock")]
-    {
-        let _ = (auth_key, request);
-        Ok(Gpt2ApiImageResponse::default())
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        post_public_gpt2api_json("/images/generations", auth_key, request).await
-    }
-}
-
-pub async fn edit_public_gpt2api_images(
-    auth_key: &str,
-    prompt: &str,
-    model: &str,
-    n: usize,
-    files: &[File],
-) -> Result<Gpt2ApiImageResponse, String> {
-    #[cfg(feature = "mock")]
-    {
-        let _ = (auth_key, prompt, model, n, files);
-        Ok(Gpt2ApiImageResponse::default())
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        let url = format!("{}/images/edits", gpt2api_public_base());
-        let form = FormData::new().map_err(|err| format!("{err:?}"))?;
-        form.append_with_str("prompt", prompt)
-            .map_err(|err| format!("{err:?}"))?;
-        form.append_with_str("model", model)
-            .map_err(|err| format!("{err:?}"))?;
-        form.append_with_str("n", &n.to_string())
-            .map_err(|err| format!("{err:?}"))?;
-        for file in files {
-            form.append_with_blob_and_filename("image", file.as_ref(), &file.name())
-                .map_err(|err| format!("{err:?}"))?;
-        }
-        let response = api_post(&url)
-            .header("authorization", &format!("Bearer {}", auth_key.trim()))
-            .body(JsValue::from(form))
-            .map_err(|e| format!("Serialize error: {:?}", e))?
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        parse_gpt2api_public_response(response).await
     }
 }
 
@@ -6280,6 +6127,7 @@ pub async fn fetch_llm_gateway_access() -> Result<LlmGatewayAccessResponse, Stri
     }
 }
 
+#[cfg(any(not(feature = "mock"), test))]
 fn build_llm_gateway_model_catalog_url_for_ts(path: Option<&str>, ts: u64) -> String {
     let path = path
         .map(str::trim)
@@ -6292,6 +6140,7 @@ fn build_llm_gateway_model_catalog_url_for_ts(path: Option<&str>, ts: u64) -> St
     }
 }
 
+#[cfg(not(feature = "mock"))]
 pub fn build_llm_gateway_model_catalog_url(path: Option<&str>) -> String {
     build_llm_gateway_model_catalog_url_for_ts(path, Date::now() as u64)
 }
@@ -8171,6 +8020,7 @@ pub async fn import_admin_llm_gateway_account(
 ) -> Result<AccountSummaryView, String> {
     #[cfg(feature = "mock")]
     {
+        let _ = (id_token, access_token, refresh_token);
         Ok(AccountSummaryView {
             name: name.to_string(),
             status: "active".to_string(),
@@ -8227,6 +8077,7 @@ pub async fn import_admin_llm_gateway_account(
 pub async fn delete_admin_llm_gateway_account(name: &str) -> Result<(), String> {
     #[cfg(feature = "mock")]
     {
+        let _ = name;
         Ok(())
     }
 
@@ -8510,6 +8361,7 @@ pub struct AdminKiroAccountStatusesQuery {
     pub offset: Option<usize>,
 }
 
+#[cfg(any(not(feature = "mock"), test))]
 fn build_admin_kiro_account_statuses_url(query: &AdminKiroAccountStatusesQuery) -> String {
     let mut url = format!("{}/admin/kiro-gateway/accounts/statuses", admin_base());
     let mut params = Vec::new();
@@ -9370,6 +9222,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "mock"))]
     fn build_admin_local_media_raw_playback_uses_raw_mode_and_encoded_url() {
         let response = build_admin_local_media_raw_playback("未归类/demo clip.mp4");
         assert_eq!(response.status, LocalMediaPlaybackStatus::Ready);

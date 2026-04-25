@@ -624,6 +624,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/robots.txt", get(seo::robots_txt))
         .with_state(state);
 
+    let gpt2api_frontend_router = Router::new()
+        .route("/gpt2api", get(handlers::serve_gpt2api_frontend))
+        .route("/gpt2api/*path", get(handlers::serve_gpt2api_frontend))
+        .route("/static_flow/gpt2api", get(handlers::serve_gpt2api_frontend))
+        .route("/static_flow/gpt2api/*path", get(handlers::serve_gpt2api_frontend))
+        .with_state(spa_state.clone());
+
     // 3) SPA fallback — serve frontend/dist/ static files; unknown routes get
     //    index.html (200)
     let frontend_dist_dir = spa_state.frontend_dist_dir.as_ref().clone();
@@ -645,6 +652,7 @@ pub fn create_router(state: AppState) -> Router {
     // Merge: API first, then SEO, then static files, then SPA index fallback
     api_router
         .merge(seo_router)
+        .merge(gpt2api_frontend_router)
         .fallback_service(spa_fallback.fallback(get(spa_index_fallback)))
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(

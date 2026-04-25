@@ -154,27 +154,6 @@ pub enum Route {
     AdminGpt2ApiRs,
 
     #[cfg(not(feature = "mock"))]
-    #[at("/gpt2api/login")]
-    Gpt2ApiLogin,
-    #[cfg(feature = "mock")]
-    #[at("/static_flow/gpt2api/login")]
-    Gpt2ApiLogin,
-
-    #[cfg(not(feature = "mock"))]
-    #[at("/gpt2api/image")]
-    Gpt2ApiImage,
-    #[cfg(feature = "mock")]
-    #[at("/static_flow/gpt2api/image")]
-    Gpt2ApiImage,
-
-    #[cfg(not(feature = "mock"))]
-    #[at("/gpt2api/chat")]
-    Gpt2ApiChat,
-    #[cfg(feature = "mock")]
-    #[at("/static_flow/gpt2api/chat")]
-    Gpt2ApiChat,
-
-    #[cfg(not(feature = "mock"))]
     #[at("/admin/comments/runs/:task_id")]
     AdminCommentRuns { task_id: String },
     #[cfg(feature = "mock")]
@@ -292,9 +271,6 @@ fn switch(route: Route) -> Html {
             html! { <pages::admin_kiro_account_status::AdminKiroAccountStatusPage /> }
         },
         Route::AdminGpt2ApiRs => html! { <pages::admin_gpt2api_rs::AdminGpt2ApiRsPage /> },
-        Route::Gpt2ApiLogin => html! { <pages::gpt2api_login::Gpt2ApiLoginPage /> },
-        Route::Gpt2ApiImage => html! { <pages::gpt2api_image::Gpt2ApiImagePage /> },
-        Route::Gpt2ApiChat => html! { <pages::gpt2api_chat::Gpt2ApiChatPage /> },
         Route::AdminCommentRuns {
             task_id,
         } => {

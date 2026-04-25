@@ -7,7 +7,10 @@ tailwindcss.exe
 node_modules/
 pnpm-lock.yaml
 yarn.lock
+/static/gpt2api/
+/gpt2api-app/node_modules/
+/gpt2api-app/dist/
+/gpt2api-app/tsconfig.tsbuildinfo
 
 # trunk serve dev output (separate from dist/ used by self-hosted)
 dist-dev/
-
