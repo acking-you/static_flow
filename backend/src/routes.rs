@@ -402,6 +402,10 @@ pub fn create_router(state: AppState) -> Router {
             post(gpt2api_rs::public_responses),
         )
         .route(
+            "/api/gpt2api/*path",
+            any(gpt2api_rs::proxy_public_product_api),
+        )
+        .route(
             "/admin/kiro-gateway/account-groups",
             get(kiro_gateway::list_admin_account_groups)
                 .post(kiro_gateway::create_admin_account_group),

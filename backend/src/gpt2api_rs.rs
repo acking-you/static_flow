@@ -7,9 +7,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    body::Body,
-    extract::{Multipart, Path as AxumPath, Query, State},
-    http::{header, HeaderMap, Method, StatusCode},
+    body::{to_bytes, Body},
+    extract::{Multipart, OriginalUri, Path as AxumPath, Query, State},
+    http::{header, HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     Json,
 };
@@ -26,6 +26,7 @@ use crate::{
 const DEFAULT_CONFIG_PATH: &str = "conf/gpt2api-rs.json";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 const MAX_TIMEOUT_SECONDS: u64 = 300;
+const MAX_PUBLIC_PROXY_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 type HandlerResult<T> = Result<T, (StatusCode, Json<ErrorResponse>)>;
 
@@ -719,6 +720,35 @@ pub async fn public_responses(
     .await
 }
 
+pub async fn proxy_public_product_api(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    OriginalUri(original_uri): OriginalUri,
+    body: Body,
+) -> HandlerResult<Response> {
+    let config = state.gpt2api_rs.snapshot();
+    let url = configured_url_for_public_proxy(&config, &original_uri).map_err(bad_request)?;
+    let body = to_bytes(body, MAX_PUBLIC_PROXY_BODY_BYTES)
+        .await
+        .map_err(|err| bad_request(format!("invalid gpt2api request body: {err}")))?;
+    let mut request = state
+        .gpt2api_rs
+        .client
+        .request(method, url)
+        .timeout(Duration::from_secs(config.timeout_seconds))
+        .body(body);
+    for header_name in
+        [header::ACCEPT, header::AUTHORIZATION, header::CONTENT_TYPE, header::CACHE_CONTROL]
+    {
+        if let Some(value) = headers.get(&header_name) {
+            request = request.header(header_name, value.clone());
+        }
+    }
+    let response = request.send().await.map_err(bad_gateway)?;
+    proxy_raw_response(response).await
+}
+
 fn config_envelope(state: &Gpt2ApiRsState) -> AdminGpt2ApiRsConfigEnvelope {
     let config = state.snapshot();
     AdminGpt2ApiRsConfigEnvelope {
@@ -726,6 +756,20 @@ fn config_envelope(state: &Gpt2ApiRsState) -> AdminGpt2ApiRsConfigEnvelope {
         configured: is_configured(&config),
         config,
     }
+}
+
+async fn proxy_raw_response(response: reqwest::Response) -> HandlerResult<Response> {
+    let status = StatusCode::from_u16(response.status().as_u16())
+        .map_err(|err| internal_error(format!("invalid upstream status: {err}")))?;
+    let mut builder = Response::builder().status(status);
+    for header_name in [header::CONTENT_TYPE, header::CACHE_CONTROL, header::CONTENT_DISPOSITION] {
+        if let Some(value) = response.headers().get(&header_name) {
+            builder = builder.header(header_name, value.clone());
+        }
+    }
+    builder
+        .body(Body::from_stream(response.bytes_stream()))
+        .map_err(internal_error)
 }
 
 async fn proxy_json_request(
@@ -854,6 +898,18 @@ fn configured_url(config: &Gpt2ApiRsConfig, path: &str) -> Result<String> {
         anyhow::bail!("gpt2api-rs relative path must start with `/`");
     }
     Ok(format!("{base}{path}"))
+}
+
+fn configured_url_for_public_proxy(config: &Gpt2ApiRsConfig, original_uri: &Uri) -> Result<String> {
+    let raw = original_uri
+        .path_and_query()
+        .map(|path| path.as_str())
+        .unwrap_or("/api/gpt2api");
+    let Some(upstream) = raw.strip_prefix("/api/gpt2api") else {
+        anyhow::bail!("gpt2api proxy path must start with /api/gpt2api");
+    };
+    let upstream = if upstream.is_empty() { "/" } else { upstream };
+    configured_url(config, upstream)
 }
 
 fn configured_token(config: &Gpt2ApiRsConfig, scope: TokenScope) -> Result<String> {
@@ -1018,6 +1074,24 @@ mod tests {
         assert_eq!(config.admin_token, "admin");
         assert_eq!(config.api_key, "key");
         assert_eq!(config.timeout_seconds, MAX_TIMEOUT_SECONDS);
+    }
+
+    #[test]
+    fn configured_url_for_public_proxy_strips_staticflow_api_prefix() {
+        let config = Gpt2ApiRsConfig {
+            base_url: "http://127.0.0.1:18787".to_string(),
+            ..Gpt2ApiRsConfig::default()
+        };
+        let original_uri = OriginalUri(
+            "/api/gpt2api/sessions/session-1?limit=20"
+                .parse()
+                .expect("valid uri"),
+        );
+
+        let url =
+            configured_url_for_public_proxy(&config, &original_uri).expect("url should be built");
+
+        assert_eq!(url, "http://127.0.0.1:18787/sessions/session-1?limit=20");
     }
 
     #[tokio::test]
