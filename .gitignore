@@ -84,6 +84,7 @@ tmp/
 backend/.local/
 .worktrees/
 conf/pingora/staticflow-gateway.yaml
+conf/gpt2api-rs.json
 
 # Local agent entry files (symlinked to external path)
 AGENTS.md
