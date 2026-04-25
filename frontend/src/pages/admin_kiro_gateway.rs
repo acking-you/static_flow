@@ -1401,6 +1401,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let kiro_request_validation_enabled =
         use_state(|| props.key_item.kiro_request_validation_enabled);
     let kiro_cache_estimation_enabled = use_state(|| props.key_item.kiro_cache_estimation_enabled);
+    let kiro_zero_cache_debug_enabled = use_state(|| props.key_item.kiro_zero_cache_debug_enabled);
     let policy_override_enabled = use_state(|| initial_override_enabled);
     let key_policy_form = use_state(|| initial_effective_policy_form.clone());
     let key_policy_effective_baseline = use_state(|| initial_effective_policy_form.clone());
@@ -1428,6 +1429,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
+        let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let policy_override_enabled = policy_override_enabled.clone();
         let key_policy_form = key_policy_form.clone();
         let key_policy_effective_baseline = key_policy_effective_baseline.clone();
@@ -1456,6 +1458,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
             kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
+            kiro_zero_cache_debug_enabled.set(key_item.kiro_zero_cache_debug_enabled);
             policy_override_enabled.set(initial_override_enabled);
             key_policy_form.set(initial_effective_policy_form.clone());
             key_policy_effective_baseline.set(initial_effective_policy_form.clone());
@@ -1489,6 +1492,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
+        let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let policy_override_enabled = policy_override_enabled.clone();
         let key_policy_form = key_policy_form.clone();
         let billable_multiplier_override_enabled = billable_multiplier_override_enabled.clone();
@@ -1514,6 +1518,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let model_name_map_value = (*model_name_map).clone();
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
+            let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
             let policy_override_enabled_value = *policy_override_enabled;
             let key_policy_form_value = (*key_policy_form).clone();
             let billable_multiplier_override_enabled_value = *billable_multiplier_override_enabled;
@@ -1585,6 +1590,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     request_min_start_interval_ms: None,
                     kiro_request_validation_enabled: Some(kiro_request_validation_enabled_value),
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
+                    kiro_zero_cache_debug_enabled: Some(kiro_zero_cache_debug_enabled_value),
                     kiro_cache_policy_override_json: policy_override_json
                         .as_ref()
                         .map(|value| value.as_deref()),
@@ -1622,6 +1628,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let account_group_id = account_group_id.clone();
         let model_name_map = model_name_map.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
+        let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -1635,6 +1642,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let account_group_id_value = (*account_group_id).clone();
             let model_name_map_value = (*model_name_map).clone();
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
+            let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -1665,6 +1673,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     request_min_start_interval_ms: None,
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
+                    kiro_zero_cache_debug_enabled: Some(kiro_zero_cache_debug_enabled_value),
                     kiro_cache_policy_override_json: None,
                     kiro_billable_model_multipliers_override_json: None,
                     request_max_concurrency_unlimited: false,
@@ -2012,6 +2021,26 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         <strong>{ "Cache Token 估算" }</strong>
                         <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
                             { "开启时，这个 key 对外返回的 Anthropic usage 会暴露保守估算的 cache_read_input_tokens，同时 usage event 也会记入估算后的 cached / uncached split。关闭后这两处都会回到 cache=0。" }
+                        </span>
+                    </span>
+                </label>
+                <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
+                    <input
+                        type="checkbox"
+                        checked={*kiro_zero_cache_debug_enabled}
+                        onchange={{
+                            let kiro_zero_cache_debug_enabled =
+                                kiro_zero_cache_debug_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                kiro_zero_cache_debug_enabled.set(input.checked());
+                            })
+                        }}
+                    />
+                    <span>
+                        <strong>{ "0 Cache 诊断" }</strong>
+                        <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                            { "开启后，这个 key 的成功请求如果最终 cache_read_input_tokens 为 0，会把完整 client/upstream request 写入 usage event 详情，并在 0-cache 日志里带上完整请求数据。关闭时仍会记录 0-cache 元信息日志，但不会保存完整请求体。" }
                         </span>
                     </span>
                 </label>

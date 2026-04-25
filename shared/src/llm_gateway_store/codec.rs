@@ -85,6 +85,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
     let mut request_min_start_interval_ms = UInt64Builder::new();
     let mut kiro_request_validation_enabled = BooleanBuilder::new();
     let mut kiro_cache_estimation_enabled = BooleanBuilder::new();
+    let mut kiro_zero_cache_debug_enabled = BooleanBuilder::new();
     let mut kiro_cache_policy_override_json = StringBuilder::new();
     let mut kiro_billable_model_multipliers_override_json = StringBuilder::new();
 
@@ -125,6 +126,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         );
         kiro_request_validation_enabled.append_value(record.kiro_request_validation_enabled);
         kiro_cache_estimation_enabled.append_value(record.kiro_cache_estimation_enabled);
+        kiro_zero_cache_debug_enabled.append_value(record.kiro_zero_cache_debug_enabled);
         append_optional_str(
             &mut kiro_cache_policy_override_json,
             record.kiro_cache_policy_override_json.as_deref(),
@@ -165,6 +167,7 @@ pub fn build_keys_batch(records: &[LlmGatewayKeyRecord]) -> Result<RecordBatch> 
         Arc::new(request_min_start_interval_ms.finish()),
         Arc::new(kiro_request_validation_enabled.finish()),
         Arc::new(kiro_cache_estimation_enabled.finish()),
+        Arc::new(kiro_zero_cache_debug_enabled.finish()),
         Arc::new(kiro_cache_policy_override_json.finish()),
         Arc::new(kiro_billable_model_multipliers_override_json.finish()),
     ])
@@ -737,6 +740,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
         let kiro_cache_estimation_enabled = batch
             .column_by_name("kiro_cache_estimation_enabled")
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
+        let kiro_zero_cache_debug_enabled = batch
+            .column_by_name("kiro_zero_cache_debug_enabled")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
         let kiro_cache_policy_override_json = batch
             .column_by_name("kiro_cache_policy_override_json")
             .and_then(|column| column.as_any().downcast_ref::<StringArray>());
@@ -802,6 +808,9 @@ pub fn batches_to_keys(batches: &[RecordBatch]) -> Result<Vec<LlmGatewayKeyRecor
                 kiro_cache_estimation_enabled: kiro_cache_estimation_enabled
                     .and_then(|column| value_bool_opt(column, idx))
                     .unwrap_or(true),
+                kiro_zero_cache_debug_enabled: kiro_zero_cache_debug_enabled
+                    .and_then(|column| value_bool_opt(column, idx))
+                    .unwrap_or(false),
                 kiro_cache_policy_override_json: kiro_cache_policy_override_json
                     .and_then(|column| value_string_opt(column, idx)),
                 kiro_billable_model_multipliers_override_json:

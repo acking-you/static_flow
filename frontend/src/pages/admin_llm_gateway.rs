@@ -569,6 +569,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     request_min_start_interval_ms: request_min_start_interval_ms_value,
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: None,
+                    kiro_zero_cache_debug_enabled: None,
                     kiro_cache_policy_override_json: None,
                     kiro_billable_model_multipliers_override_json: None,
                     request_max_concurrency_unlimited: request_max_concurrency_value.is_none(),

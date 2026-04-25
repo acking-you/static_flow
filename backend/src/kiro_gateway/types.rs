@@ -135,6 +135,7 @@ pub struct AdminKiroKeyView {
     pub model_name_map: Option<BTreeMap<String, String>>,
     pub kiro_request_validation_enabled: bool,
     pub kiro_cache_estimation_enabled: bool,
+    pub kiro_zero_cache_debug_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kiro_cache_policy_override_json: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,6 +178,7 @@ impl AdminKiroKeyView {
             model_name_map: value.model_name_map.clone(),
             kiro_request_validation_enabled: value.kiro_request_validation_enabled,
             kiro_cache_estimation_enabled: value.kiro_cache_estimation_enabled,
+            kiro_zero_cache_debug_enabled: value.kiro_zero_cache_debug_enabled,
             kiro_cache_policy_override_json: value.kiro_cache_policy_override_json.clone(),
             kiro_billable_model_multipliers_override_json: value
                 .kiro_billable_model_multipliers_override_json
@@ -404,6 +406,8 @@ pub struct PatchKiroKeyRequest {
     pub kiro_request_validation_enabled: Option<bool>,
     #[serde(default)]
     pub kiro_cache_estimation_enabled: Option<bool>,
+    #[serde(default)]
+    pub kiro_zero_cache_debug_enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable_string")]
     pub kiro_cache_policy_override_json: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable_string")]
@@ -685,6 +689,18 @@ mod tests {
             set.kiro_cache_policy_override_json,
             Some(Some("{\"high_credit_diagnostic_threshold\":1.6}".to_string()))
         );
+    }
+
+    #[test]
+    fn patch_kiro_key_request_accepts_zero_cache_debug_toggle() {
+        let absent: PatchKiroKeyRequest =
+            serde_json::from_value(json!({})).expect("parse absent request");
+        let enabled: PatchKiroKeyRequest =
+            serde_json::from_value(json!({"kiro_zero_cache_debug_enabled": true}))
+                .expect("parse enabled request");
+
+        assert_eq!(absent.kiro_zero_cache_debug_enabled, None);
+        assert_eq!(enabled.kiro_zero_cache_debug_enabled, Some(true));
     }
 
     #[test]

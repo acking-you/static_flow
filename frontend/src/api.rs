@@ -5638,6 +5638,8 @@ pub struct AdminLlmGatewayKeyView {
     #[serde(default = "default_true")]
     pub kiro_cache_estimation_enabled: bool,
     #[serde(default)]
+    pub kiro_zero_cache_debug_enabled: bool,
+    #[serde(default)]
     pub kiro_cache_policy_override_json: Option<String>,
     #[serde(default)]
     pub kiro_billable_model_multipliers_override_json: Option<String>,
@@ -7397,6 +7399,7 @@ pub async fn create_admin_llm_gateway_key(
             request_min_start_interval_ms,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_zero_cache_debug_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
@@ -7449,6 +7452,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub request_min_start_interval_ms: Option<u64>,
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
+    pub kiro_zero_cache_debug_enabled: Option<bool>,
     pub kiro_cache_policy_override_json: Option<Option<&'a str>>,
     pub kiro_billable_model_multipliers_override_json: Option<Option<&'a str>>,
     pub request_max_concurrency_unlimited: bool,
@@ -7476,6 +7480,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
+            request.kiro_zero_cache_debug_enabled,
             request.kiro_cache_policy_override_json,
             request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
@@ -7568,6 +7573,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "kiro_cache_estimation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_cache_estimation_enabled),
+            );
+        }
+        if let Some(kiro_zero_cache_debug_enabled) = request.kiro_zero_cache_debug_enabled {
+            body.insert(
+                "kiro_zero_cache_debug_enabled".to_string(),
+                serde_json::Value::Bool(kiro_zero_cache_debug_enabled),
             );
         }
         if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
@@ -8670,6 +8681,7 @@ pub async fn create_admin_kiro_key(
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
+            kiro_zero_cache_debug_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
@@ -8724,6 +8736,7 @@ pub async fn patch_admin_kiro_key(
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
+            request.kiro_zero_cache_debug_enabled,
             request.kiro_cache_policy_override_json,
             request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
@@ -8804,6 +8817,12 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "kiro_cache_estimation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_cache_estimation_enabled),
+            );
+        }
+        if let Some(kiro_zero_cache_debug_enabled) = request.kiro_zero_cache_debug_enabled {
+            body.insert(
+                "kiro_zero_cache_debug_enabled".to_string(),
+                serde_json::Value::Bool(kiro_zero_cache_debug_enabled),
             );
         }
         if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {

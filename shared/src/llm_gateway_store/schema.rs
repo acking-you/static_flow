@@ -67,6 +67,7 @@ pub fn llm_gateway_keys_schema() -> Arc<Schema> {
         Field::new("request_min_start_interval_ms", DataType::UInt64, true),
         Field::new("kiro_request_validation_enabled", DataType::Boolean, true),
         Field::new("kiro_cache_estimation_enabled", DataType::Boolean, true),
+        Field::new("kiro_zero_cache_debug_enabled", DataType::Boolean, true),
         Field::new("kiro_cache_policy_override_json", DataType::Utf8, true),
         Field::new("kiro_billable_model_multipliers_override_json", DataType::Utf8, true),
     ]))
@@ -294,6 +295,7 @@ pub async fn ensure_keys_table(db: &Connection) -> Result<Table> {
     ensure_nullable_u64_column(&table, "request_min_start_interval_ms").await?;
     ensure_nullable_bool_column(&table, "kiro_request_validation_enabled").await?;
     ensure_nullable_bool_column(&table, "kiro_cache_estimation_enabled").await?;
+    ensure_nullable_bool_column(&table, "kiro_zero_cache_debug_enabled").await?;
     ensure_nullable_utf8_column(&table, "kiro_cache_policy_override_json").await?;
     ensure_nullable_utf8_column(&table, "kiro_billable_model_multipliers_override_json").await?;
     ensure_scalar_index(&table, "id").await?;
@@ -687,7 +689,7 @@ async fn ensure_nullable_ts_column(table: &Table, column: &str) -> Result<()> {
 }
 
 /// Ordered projection used when reading key rows back from LanceDB.
-pub fn key_columns() -> [&'static str; 29] {
+pub fn key_columns() -> [&'static str; 30] {
     [
         "id",
         "name",
@@ -716,6 +718,7 @@ pub fn key_columns() -> [&'static str; 29] {
         "request_min_start_interval_ms",
         "kiro_request_validation_enabled",
         "kiro_cache_estimation_enabled",
+        "kiro_zero_cache_debug_enabled",
         "kiro_cache_policy_override_json",
         "kiro_billable_model_multipliers_override_json",
     ]

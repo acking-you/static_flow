@@ -239,6 +239,9 @@ pub struct LlmGatewayKeyRecord {
     /// Whether Kiro requests using this key should expose conservative cache
     /// estimation in Anthropic-compatible usage fields.
     pub kiro_cache_estimation_enabled: bool,
+    /// Whether successful Kiro requests with zero cache-read tokens should
+    /// persist full request bodies for short-term diagnostics.
+    pub kiro_zero_cache_debug_enabled: bool,
     /// Optional per-key override for the global Kiro cache policy JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Optional per-key override for the global Kiro billable-token model
