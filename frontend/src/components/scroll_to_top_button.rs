@@ -32,7 +32,7 @@ pub fn scroll_to_top_button() -> Html {
 
             window
                 .add_event_listener_with_callback("scroll", closure.as_ref().unchecked_ref())
-                .unwrap();
+                .expect("scroll event listener registration should not fail");
 
             let cleanup = move || {
                 let _ = window.remove_event_listener_with_callback(

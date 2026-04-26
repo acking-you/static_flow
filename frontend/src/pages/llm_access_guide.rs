@@ -271,8 +271,12 @@ mod tests {
         assert!(commands.contains("codex features enable tool_search"));
         assert!(!commands.contains("unknown_feature"));
         assert!(
-            commands.find("codex features enable memories").unwrap()
-                < commands.find("codex features enable tool_search").unwrap()
+            commands
+                .find("codex features enable memories")
+                .expect("memory command should be present")
+                < commands
+                    .find("codex features enable tool_search")
+                    .expect("tool search command should be present")
         );
     }
 

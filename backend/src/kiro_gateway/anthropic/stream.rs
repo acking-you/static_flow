@@ -1495,11 +1495,12 @@ mod tests {
         });
 
         assert!(text_start_index.is_some());
-        assert!(pos_text_delta.is_some());
-        assert!(pos_text_stop.is_some());
-        assert!(pos_tool_start.is_some());
-        assert!(pos_text_delta.unwrap() < pos_text_stop.unwrap());
-        assert!(pos_text_stop.unwrap() < pos_tool_start.unwrap());
+        let pos_text_delta =
+            pos_text_delta.expect("text delta should be emitted before tool start");
+        let pos_text_stop = pos_text_stop.expect("text block stop should be emitted");
+        let pos_tool_start = pos_tool_start.expect("tool block start should be emitted");
+        assert!(pos_text_delta < pos_text_stop);
+        assert!(pos_text_stop < pos_tool_start);
         assert!(events.iter().any(|event| {
             event.event == "content_block_delta"
                 && event.data["delta"]["type"] == "text_delta"
@@ -1538,9 +1539,10 @@ mod tests {
             event.event == "content_block_start"
                 && event.data["content_block"]["type"] == "tool_use"
         });
-        assert!(pos_thinking_stop.is_some());
-        assert!(pos_tool_start.is_some());
-        assert!(pos_thinking_stop.unwrap() < pos_tool_start.unwrap());
+        let pos_thinking_stop =
+            pos_thinking_stop.expect("thinking block stop should be emitted before tool start");
+        let pos_tool_start = pos_tool_start.expect("tool block start should be emitted");
+        assert!(pos_thinking_stop < pos_tool_start);
     }
 
     #[test]

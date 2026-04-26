@@ -27,7 +27,10 @@ pub fn mini_player() -> Html {
     }
 
     let show = ctx.minimized;
-    let song = ctx.current_song.as_ref().unwrap();
+    let song = ctx
+        .current_song
+        .as_ref()
+        .expect("guarded by is_none check above");
 
     let cover_url = api::song_cover_url(song.cover_image.as_deref());
     let title = song.title.clone();

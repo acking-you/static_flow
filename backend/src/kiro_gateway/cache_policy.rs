@@ -132,7 +132,8 @@ mod tests {
             r#"{"small_input_high_credit_boost":{"target_input_tokens":80000},"high_credit_diagnostic_threshold":1.6}"#,
         ));
 
-        let effective = resolve_effective_kiro_cache_policy(&runtime, &key).unwrap();
+        let effective = resolve_effective_kiro_cache_policy(&runtime, &key)
+            .expect("partial cache policy override should resolve");
 
         assert_eq!(effective.small_input_high_credit_boost.target_input_tokens, 80_000);
         assert_eq!(effective.small_input_high_credit_boost.credit_start, 1.0);
@@ -145,7 +146,8 @@ mod tests {
     fn should_capture_full_kiro_request_bodies_uses_effective_threshold() {
         let runtime = sample_runtime();
         let key = sample_key(Some(r#"{"high_credit_diagnostic_threshold":1.2}"#));
-        let effective = resolve_effective_kiro_cache_policy(&runtime, &key).unwrap();
+        let effective = resolve_effective_kiro_cache_policy(&runtime, &key)
+            .expect("threshold cache policy override should resolve");
 
         assert!(should_capture_full_kiro_request_bodies(&effective, Some(1.3)));
         assert!(!should_capture_full_kiro_request_bodies(&effective, Some(1.1)));
@@ -156,7 +158,8 @@ mod tests {
         let runtime = sample_runtime();
         let key = sample_key(Some(r#"{"anthropic_cache_creation_input_ratio":0.25}"#));
 
-        let effective = resolve_effective_kiro_cache_policy(&runtime, &key).unwrap();
+        let effective = resolve_effective_kiro_cache_policy(&runtime, &key)
+            .expect("cache creation ratio override should resolve");
 
         assert!((effective.anthropic_cache_creation_input_ratio - 0.25).abs() < f64::EPSILON);
     }

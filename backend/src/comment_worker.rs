@@ -884,14 +884,14 @@ mod tests {
     #[test]
     fn parse_runner_output_extracts_single_json_object() {
         let raw = r#"{"final_reply_markdown":"hello"}"#;
-        let parsed = parse_runner_output(raw).unwrap();
+        let parsed = parse_runner_output(raw).expect("single JSON object should parse");
         assert_eq!(parsed, "hello");
     }
 
     #[test]
     fn parse_runner_output_extracts_last_json_object() {
         let raw = r#"{"final_reply_markdown":"first"}{"final_reply_markdown":"second"}"#;
-        let parsed = parse_runner_output(raw).unwrap();
+        let parsed = parse_runner_output(raw).expect("last JSON object should parse");
         assert_eq!(parsed, "second");
     }
 
@@ -899,14 +899,14 @@ mod tests {
     fn parse_runner_output_extracts_from_jsonl() {
         let raw = r#"{"event":"thinking"}
 {"final_reply_markdown":"line-jsonl-answer"}"#;
-        let parsed = parse_runner_output(raw).unwrap();
+        let parsed = parse_runner_output(raw).expect("JSONL final reply should parse");
         assert_eq!(parsed, "line-jsonl-answer");
     }
 
     #[test]
     fn parse_runner_output_handles_smart_quotes() {
         let raw = "{“final_reply_markdown”:“你好，测试”}";
-        let parsed = parse_runner_output(raw).unwrap();
+        let parsed = parse_runner_output(raw).expect("smart-quoted JSON should parse");
         assert_eq!(parsed, "你好，测试");
     }
 
@@ -914,7 +914,7 @@ mod tests {
     fn parse_runner_output_extracts_from_codex_stream_item_text_json_string() {
         let raw = r#"{"type":"item.completed","item":{"id":"item_69","type":"agent_message","text":"{\"final_reply_markdown\":\"stream-final\"}"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
-        let parsed = parse_runner_output(raw).unwrap();
+        let parsed = parse_runner_output(raw).expect("stream item final reply should parse");
         assert_eq!(parsed, "stream-final");
     }
 
@@ -922,7 +922,7 @@ mod tests {
     fn parse_runner_output_extracts_from_escaped_final_reply_text_without_outer_json() {
         let raw = r#"stream-chunk text: {\"final_reply_markdown\":\"escaped-final\"}
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
-        let parsed = parse_runner_output(raw).unwrap();
+        let parsed = parse_runner_output(raw).expect("escaped final reply should parse");
         assert_eq!(parsed, "escaped-final");
     }
 
@@ -944,7 +944,8 @@ mod tests {
     fn parse_runner_output_with_fallback_prefers_stdout() {
         let stdout = r#"{"final_reply_markdown":"stdout-final"}"#;
         let stderr = r#"{"final_reply_markdown":"stderr-final"}"#;
-        let parsed = parse_runner_output_with_fallback(stdout, stderr).unwrap();
+        let parsed = parse_runner_output_with_fallback(stdout, stderr)
+            .expect("stdout final reply should parse");
         assert_eq!(parsed.0, "stdout-final");
         assert_eq!(parsed.1, RunnerReplySource::Stdout);
     }
@@ -954,7 +955,8 @@ mod tests {
         let stdout = "";
         let stderr = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\"final_reply_markdown\":\"stderr-stream-final\"}"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#;
-        let parsed = parse_runner_output_with_fallback(stdout, stderr).unwrap();
+        let parsed = parse_runner_output_with_fallback(stdout, stderr)
+            .expect("stderr final reply should parse");
         assert_eq!(parsed.0, "stderr-stream-final");
         assert_eq!(parsed.1, RunnerReplySource::Stderr);
     }

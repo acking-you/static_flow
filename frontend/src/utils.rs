@@ -3,6 +3,29 @@ use url::Url;
 
 use crate::api::API_BASE;
 
+/// Build a reusable ammonia sanitizer that preserves the HTML features
+/// produced by `pulldown_cmark` (math blocks, syntax-highlighted code,
+/// tables, task lists, footnotes, strikethrough, images).
+fn html_sanitizer() -> ammonia::Builder<'static> {
+    let mut builder = ammonia::Builder::default();
+
+    builder.add_tags(&["input", "section", "tfoot"]);
+    builder.add_tag_attributes("div", &["class"]);
+    builder.add_tag_attributes("span", &["class"]);
+    builder.add_tag_attributes("code", &["class"]);
+    builder.add_tag_attributes("pre", &["class"]);
+    builder.add_tag_attributes("img", &["loading"]);
+    builder.add_tag_attributes("input", &["type", "checked", "disabled"]);
+    builder.add_generic_attributes(&["id"]);
+
+    builder
+}
+
+/// Sanitize raw HTML through ammonia to prevent XSS.
+fn sanitize_html(raw: &str) -> String {
+    html_sanitizer().clean(raw).to_string()
+}
+
 
 /// Convert image path to API endpoint if it's a relative path
 pub fn image_url(path: &str) -> String {
@@ -66,7 +89,7 @@ pub fn markdown_to_html(content: &str) -> String {
 
     let mut html_output = String::new();
     html::push_html(&mut html_output, transformed_parser);
-    html_output
+    sanitize_html(&html_output)
 }
 
 fn normalize_standalone_break_markers(content: &str) -> String {
@@ -626,5 +649,26 @@ $$
         let markdown = "```text\nline1\n<br/>\nline2\n```";
         let html = markdown_to_html(markdown);
         assert!(html.contains("&lt;br/&gt;"));
+    }
+
+    #[test]
+    fn markdown_html_sanitizer_preserves_safe_markdown_output_attributes() {
+        let markdown = r#"
+[site](https://example.com)
+
+<table><tr><td colspan="2">wide</td></tr></table>
+<img src="/api/images/a.png" width="640" height="480" loading="lazy">
+<script>alert(1)</script>
+"#;
+
+        let html = markdown_to_html(markdown);
+
+        assert!(html.contains("href=\"https://example.com\""));
+        assert!(html.contains("rel=\"noopener noreferrer\""));
+        assert!(html.contains("colspan=\"2\""));
+        assert!(html.contains("width=\"640\""));
+        assert!(html.contains("height=\"480\""));
+        assert!(html.contains("loading=\"lazy\""));
+        assert!(!html.contains("<script"));
     }
 }

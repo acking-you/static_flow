@@ -16,7 +16,10 @@ use lancedb::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
+use crate::{
+    lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field},
+    task_status::TaskStatus,
+};
 
 pub const WISH_STATUS_PENDING: &str = "pending";
 pub const WISH_STATUS_APPROVED: &str = "approved";
@@ -439,27 +442,12 @@ impl MusicWishStore {
 }
 
 fn validate_wish_transition(current: &str, next: &str) -> Result<()> {
-    if current == next {
-        anyhow::bail!("invalid wish transition: {current} -> {next}");
-    }
-    let ok = matches!(
-        (current, next),
-        (WISH_STATUS_PENDING, WISH_STATUS_APPROVED | WISH_STATUS_RUNNING | WISH_STATUS_REJECTED)
-            | (WISH_STATUS_APPROVED, WISH_STATUS_RUNNING | WISH_STATUS_REJECTED)
-            | (WISH_STATUS_RUNNING, WISH_STATUS_DONE | WISH_STATUS_FAILED)
-            | (
-                WISH_STATUS_FAILED,
-                WISH_STATUS_APPROVED
-                    | WISH_STATUS_RUNNING
-                    | WISH_STATUS_REJECTED
-                    | WISH_STATUS_DONE
-            )
-    );
-    if ok {
-        Ok(())
-    } else {
-        anyhow::bail!("invalid wish transition: {current} -> {next}")
-    }
+    let current = TaskStatus::parse(current)
+        .ok_or_else(|| anyhow::anyhow!("unknown wish status: {current}"))?;
+    let next =
+        TaskStatus::parse(next).ok_or_else(|| anyhow::anyhow!("unknown wish status: {next}"))?;
+    crate::task_status::validate_task_transition(current, next, true)
+        .map_err(|e| anyhow::anyhow!("invalid wish transition: {e}"))
 }
 
 async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> Result<Table> {

@@ -3,6 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Shared task lifecycle status for wish / request / comment workflows.
+pub mod task_status;
+
 /// Request/trace id helpers shared by backend and gateway.
 pub mod request_ids;
 

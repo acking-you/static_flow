@@ -16,7 +16,10 @@ use lancedb::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
+use crate::{
+    lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field},
+    task_status::TaskStatus,
+};
 
 pub const COMMENT_STATUS_PENDING: &str = "pending";
 pub const COMMENT_STATUS_APPROVED: &str = "approved";
@@ -833,28 +836,12 @@ impl CommentDataStore {
 }
 
 fn validate_transition(current_status: &str, next_status: &str) -> Result<()> {
-    if current_status == next_status {
-        anyhow::bail!("invalid comment task transition: {current_status} -> {next_status}");
-    }
-
-    let is_valid = matches!(
-        (current_status, next_status),
-        (
-            COMMENT_STATUS_PENDING,
-            COMMENT_STATUS_APPROVED | COMMENT_STATUS_RUNNING | COMMENT_STATUS_REJECTED
-        ) | (COMMENT_STATUS_APPROVED, COMMENT_STATUS_RUNNING | COMMENT_STATUS_REJECTED)
-            | (COMMENT_STATUS_RUNNING, COMMENT_STATUS_DONE | COMMENT_STATUS_FAILED)
-            | (
-                COMMENT_STATUS_FAILED,
-                COMMENT_STATUS_APPROVED | COMMENT_STATUS_RUNNING | COMMENT_STATUS_REJECTED
-            )
-    );
-
-    if is_valid {
-        Ok(())
-    } else {
-        anyhow::bail!("invalid comment task transition: {current_status} -> {next_status}")
-    }
+    let current = TaskStatus::parse(current_status)
+        .ok_or_else(|| anyhow::anyhow!("unknown comment status: {current_status}"))?;
+    let next = TaskStatus::parse(next_status)
+        .ok_or_else(|| anyhow::anyhow!("unknown comment status: {next_status}"))?;
+    crate::task_status::validate_task_transition(current, next, false)
+        .map_err(|e| anyhow::anyhow!("invalid comment task transition: {e}"))
 }
 
 fn now_ms() -> i64 {

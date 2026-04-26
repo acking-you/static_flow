@@ -2841,7 +2841,11 @@ mod tests {
 
         let result = convert_request(&req).expect("conversion should succeed");
         assert_eq!(result.tool_name_map.len(), 1);
-        let (short_name, original_name) = result.tool_name_map.iter().next().unwrap();
+        let (short_name, original_name) = result
+            .tool_name_map
+            .iter()
+            .next()
+            .expect("normalized tool name should be recorded");
         assert_eq!(original_name, long_name);
         assert!(short_name.len() <= TOOL_NAME_MAX_LEN);
 
@@ -2891,7 +2895,11 @@ mod tests {
         ]);
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let (mapped_name, original) = result.tool_name_map.iter().next().unwrap();
+        let (mapped_name, original) = result
+            .tool_name_map
+            .iter()
+            .next()
+            .expect("normalized tool name should be recorded");
         assert_eq!(original, original_name);
         assert!(!mapped_name.contains(':'));
 

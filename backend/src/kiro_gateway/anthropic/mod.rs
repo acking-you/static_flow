@@ -2201,7 +2201,7 @@ async fn handle_stream_request(
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
-        .unwrap()
+        .expect("hardcoded SSE response headers are valid")
 }
 
 // Buffers all Kiro events, then flushes them as SSE in one burst.
@@ -2279,7 +2279,7 @@ async fn handle_stream_request_buffered(
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
-        .unwrap()
+        .expect("hardcoded SSE response headers are valid")
 }
 
 // Reads the full Kiro response body, decodes all events, assembles a
@@ -4102,7 +4102,7 @@ mod tests {
                 ..KiroCachePolicyOverride::default()
             }),
         )
-        .unwrap();
+        .expect("boost target policy override should merge");
 
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
@@ -4132,7 +4132,7 @@ mod tests {
                 ..KiroCachePolicyOverride::default()
             }),
         )
-        .unwrap();
+        .expect("prefix tree band policy override should merge");
 
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",

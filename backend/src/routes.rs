@@ -52,7 +52,7 @@ pub fn create_router(state: AppState) -> Router {
                     .allow_origin(
                         "https://acking-you.github.io"
                             .parse::<HeaderValue>()
-                            .unwrap(),
+                            .expect("hardcoded CORS origin is valid"),
                     )
                     .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
                     .allow_headers(Any)
@@ -751,7 +751,8 @@ mod tests {
 
     #[test]
     fn parse_allowed_origins_parses_comma_separated_values() {
-        let origins = parse_allowed_origins(Some("https://a.com, https://b.com")).unwrap();
+        let origins = parse_allowed_origins(Some("https://a.com, https://b.com"))
+            .expect("valid comma-separated origins should parse");
         assert_eq!(origins.len(), 2);
     }
 

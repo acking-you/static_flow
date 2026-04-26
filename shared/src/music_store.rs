@@ -1609,7 +1609,7 @@ impl MusicDataStore {
             .context("failed to check play dedupe key")?
             == 0;
 
-        let tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let tz = chrono::FixedOffset::east_opt(8 * 3600).expect("UTC+8 offset is valid");
         let now_local = Utc::now().with_timezone(&tz);
         let day_bucket = now_local.format("%Y-%m-%d").to_string();
 

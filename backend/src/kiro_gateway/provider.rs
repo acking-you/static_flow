@@ -2358,7 +2358,13 @@ mod tests {
         assert_eq!(value["skipped_account_count"], 1);
         assert_eq!(value["account_attempt_count"], 1);
         assert_eq!(value["selected_account"], "acct-b");
-        assert_eq!(value["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            value["attempts"]
+                .as_array()
+                .expect("attempts should be serialized as an array")
+                .len(),
+            2
+        );
     }
 
     fn call_context(profile_arn: Option<&str>) -> CallContext {
@@ -2478,7 +2484,7 @@ mod tests {
         let auths = vec![auth("alpha"), auth("beta")];
         let err = filter_auths_for_key_route(&store, &auths, &key(Some("auto"), None, vec![]))
             .await
-            .unwrap_err();
+            .expect_err("empty auto subset should reject routing");
         assert_eq!(err.to_string(), "no configured auto accounts are available");
         let _ = fs::remove_dir_all(dir);
     }
@@ -2522,7 +2528,7 @@ mod tests {
             &key(Some("fixed"), Some("missing"), vec![]),
         )
         .await
-        .unwrap_err();
+        .expect_err("missing fixed route account should reject routing");
         assert!(err
             .to_string()
             .contains("fixed route account `missing` is not available"));

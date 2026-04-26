@@ -794,12 +794,12 @@ pub async fn get_article_raw_markdown(
         ));
     };
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(raw))
-        .unwrap())
+        .map_err(|e| internal_error("Failed to build response", e))
 }
 
 pub async fn get_interactive_page_entry(
@@ -3241,12 +3241,12 @@ pub async fn serve_image(
         },
     };
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, image.mime_type)
         .header(header::CACHE_CONTROL, "public, max-age=31536000")
         .body(Body::from(image.bytes))
-        .unwrap())
+        .map_err(|e| internal_error("Failed to build response", e))
 }
 
 async fn ensure_article_exists(
@@ -4220,7 +4220,7 @@ pub async fn stream_song_audio(
             let (start, end) = parsed;
             let chunk = data[start..=end].to_vec();
             let content_range = format!("bytes {start}-{end}/{total_len}");
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, content_type)
                 .header(header::ACCEPT_RANGES, "bytes")
@@ -4228,18 +4228,18 @@ pub async fn stream_song_audio(
                 .header(header::CONTENT_RANGE, content_range)
                 .header(header::CACHE_CONTROL, "public, max-age=86400")
                 .body(Body::from(chunk))
-                .unwrap());
+                .map_err(|e| internal_error("Failed to build response", e));
         }
     }
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, total_len.to_string())
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(Body::from(data))
-        .unwrap())
+        .map_err(|e| internal_error("Failed to build response", e))
 }
 
 fn parse_range_header(range_str: &str, total: usize) -> Option<(usize, usize)> {

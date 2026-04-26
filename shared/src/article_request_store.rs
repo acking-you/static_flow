@@ -16,7 +16,10 @@ use lancedb::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
+use crate::{
+    lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field},
+    task_status::TaskStatus,
+};
 
 pub const REQUEST_STATUS_PENDING: &str = "pending";
 pub const REQUEST_STATUS_APPROVED: &str = "approved";
@@ -448,29 +451,12 @@ impl ArticleRequestStore {
 }
 
 fn validate_request_transition(current: &str, next: &str) -> Result<()> {
-    if current == next {
-        anyhow::bail!("invalid request transition: {current} -> {next}");
-    }
-    let ok = matches!(
-        (current, next),
-        (
-            REQUEST_STATUS_PENDING,
-            REQUEST_STATUS_APPROVED | REQUEST_STATUS_RUNNING | REQUEST_STATUS_REJECTED
-        ) | (REQUEST_STATUS_APPROVED, REQUEST_STATUS_RUNNING | REQUEST_STATUS_REJECTED)
-            | (REQUEST_STATUS_RUNNING, REQUEST_STATUS_DONE | REQUEST_STATUS_FAILED)
-            | (
-                REQUEST_STATUS_FAILED,
-                REQUEST_STATUS_APPROVED
-                    | REQUEST_STATUS_RUNNING
-                    | REQUEST_STATUS_REJECTED
-                    | REQUEST_STATUS_DONE
-            )
-    );
-    if ok {
-        Ok(())
-    } else {
-        anyhow::bail!("invalid request transition: {current} -> {next}")
-    }
+    let current = TaskStatus::parse(current)
+        .ok_or_else(|| anyhow::anyhow!("unknown request status: {current}"))?;
+    let next =
+        TaskStatus::parse(next).ok_or_else(|| anyhow::anyhow!("unknown request status: {next}"))?;
+    crate::task_status::validate_task_transition(current, next, true)
+        .map_err(|e| anyhow::anyhow!("invalid request transition: {e}"))
 }
 
 async fn ensure_table(db: &Connection, name: &str, schema: Arc<Schema>) -> Result<Table> {

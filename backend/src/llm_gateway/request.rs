@@ -1630,8 +1630,10 @@ mod tests {
             ]
         });
 
-        let err = adapt_openai_chat_completions_request(obj.as_object().unwrap())
-            .expect_err("request without message role should be rejected");
+        let err = adapt_openai_chat_completions_request(
+            obj.as_object().expect("sample request should be an object"),
+        )
+        .expect_err("request without message role should be rejected");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(err.1 .0.error.contains("role"));
     }
@@ -1652,8 +1654,10 @@ mod tests {
             ]
         });
 
-        let err = adapt_openai_chat_completions_request(obj.as_object().unwrap())
-            .expect_err("user message without supported content should be rejected");
+        let err = adapt_openai_chat_completions_request(
+            obj.as_object().expect("sample request should be an object"),
+        )
+        .expect_err("user message without supported content should be rejected");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(err.1 .0.error.contains("content"));
     }

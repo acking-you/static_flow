@@ -76,6 +76,7 @@ tabs_in_doc_comments = "deny"
 todo = "deny"
 undocumented_unsafe_blocks = "deny"
 unimplemented = "deny"
+unwrap_used = "warn"
 
 [workspace.lints.rustdoc]
 bare_urls = "deny"
