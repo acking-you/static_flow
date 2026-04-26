@@ -2097,6 +2097,56 @@ fn maybe_raw_request_body_text(raw: &Bytes) -> Option<String> {
     (!raw.is_empty()).then(|| String::from_utf8_lossy(raw).to_string())
 }
 
+fn elapsed_ms_u64(started_at: Instant) -> u64 {
+    started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
+fn elapsed_ms_i32(started_at: Instant) -> i32 {
+    started_at.elapsed().as_millis().min(i32::MAX as u128) as i32
+}
+
+fn clamp_u64_ms_to_i32(value: u64) -> i32 {
+    value.min(i32::MAX as u64) as i32
+}
+
+fn codex_routing_diagnostics_json(
+    route_total_ms: u64,
+    selected_account_name: Option<&str>,
+    failover_count: u64,
+    failed_account_names: &HashSet<String>,
+) -> Option<String> {
+    let mut failed_accounts = failed_account_names.iter().cloned().collect::<Vec<_>>();
+    failed_accounts.sort();
+    serde_json::to_string(&json!({
+        "request_kind": "codex",
+        "route_total_ms": route_total_ms,
+        "account_attempt_count": failover_count.saturating_add(1),
+        "failover_count": failover_count,
+        "selected_account": selected_account_name,
+        "failed_accounts": failed_accounts,
+    }))
+    .ok()
+}
+
+fn update_codex_route_metrics(
+    event_context: &mut Option<LlmGatewayEventContext>,
+    route_total_ms: u64,
+    selected_account_name: Option<&str>,
+    failover_count: u64,
+    failed_account_names: &HashSet<String>,
+) {
+    let Some(context) = event_context.as_mut() else {
+        return;
+    };
+    context.routing_wait_ms = Some(clamp_u64_ms_to_i32(route_total_ms));
+    context.routing_diagnostics_json = codex_routing_diagnostics_json(
+        route_total_ms,
+        selected_account_name,
+        failover_count,
+        failed_account_names,
+    );
+}
+
 fn default_gateway_event_context(prepared: &PreparedGatewayRequest) -> LlmGatewayEventContext {
     LlmGatewayEventContext {
         request_method: prepared.method.as_str().to_string(),
@@ -2105,6 +2155,17 @@ fn default_gateway_event_context(prepared: &PreparedGatewayRequest) -> LlmGatewa
         ip_region: "Unknown".to_string(),
         request_headers_json: "{}".to_string(),
         started_at: Instant::now(),
+        routing_wait_ms: None,
+        upstream_headers_ms: None,
+        post_headers_body_ms: None,
+        request_body_bytes: None,
+        request_body_read_ms: None,
+        request_json_parse_ms: None,
+        pre_handler_ms: None,
+        first_sse_write_ms: None,
+        stream_finish_ms: None,
+        routing_diagnostics_json: None,
+        upstream_headers_at: None,
     }
 }
 
@@ -2147,17 +2208,20 @@ fn build_gateway_usage_event_record(
         request_method: args.context.request_method.clone(),
         request_url: args.context.request_url.clone(),
         latency_ms: args.latency_ms,
-        routing_wait_ms: None,
-        upstream_headers_ms: None,
-        post_headers_body_ms: None,
-        request_body_bytes: None,
-        request_body_read_ms: None,
-        request_json_parse_ms: None,
-        pre_handler_ms: None,
-        first_sse_write_ms: None,
-        stream_finish_ms: None,
+        routing_wait_ms: args.context.routing_wait_ms,
+        upstream_headers_ms: args.context.upstream_headers_ms,
+        post_headers_body_ms: args
+            .context
+            .post_headers_body_ms
+            .or_else(|| args.context.upstream_headers_at.map(elapsed_ms_i32)),
+        request_body_bytes: args.context.request_body_bytes,
+        request_body_read_ms: args.context.request_body_read_ms,
+        request_json_parse_ms: args.context.request_json_parse_ms,
+        pre_handler_ms: args.context.pre_handler_ms,
+        first_sse_write_ms: args.context.first_sse_write_ms,
+        stream_finish_ms: args.context.stream_finish_ms.or(Some(args.latency_ms)),
         quota_failover_count: 0,
-        routing_diagnostics_json: None,
+        routing_diagnostics_json: args.context.routing_diagnostics_json.clone(),
         endpoint: args.prepared.upstream_path.clone(),
         model: args.prepared.model.clone(),
         status_code: args.status_code,
@@ -3580,6 +3644,17 @@ pub async fn capture_gateway_event_context_middleware(
         ip_region,
         request_headers_json,
         started_at: Instant::now(),
+        routing_wait_ms: None,
+        upstream_headers_ms: None,
+        post_headers_body_ms: None,
+        request_body_bytes: None,
+        request_body_read_ms: None,
+        request_json_parse_ms: None,
+        pre_handler_ms: None,
+        first_sse_write_ms: None,
+        stream_finish_ms: None,
+        routing_diagnostics_json: None,
+        upstream_headers_at: None,
     });
 
     next.run(request).await
@@ -3593,7 +3668,10 @@ pub async fn proxy_gateway_request(
     request: Request,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     let (parts, body) = request.into_parts();
-    let event_context = parts.extensions.get::<LlmGatewayEventContext>().cloned();
+    let mut event_context = parts.extensions.get::<LlmGatewayEventContext>().cloned();
+    if let Some(context) = event_context.as_mut() {
+        context.pre_handler_ms = Some(elapsed_ms_i32(context.started_at));
+    }
     let path = parts.uri.path().to_string();
     let query = parts
         .uri
@@ -3637,9 +3715,19 @@ pub async fn proxy_gateway_request(
     let raw_request_body = if is_models_path {
         Bytes::new()
     } else {
+        let body_read_started = Instant::now();
         match read_gateway_request_body(body, max_request_body_bytes).await {
-            Ok(bytes) => bytes,
+            Ok(bytes) => {
+                if let Some(context) = event_context.as_mut() {
+                    context.request_body_read_ms = Some(elapsed_ms_i32(body_read_started));
+                    context.request_body_bytes = Some(bytes.len() as u64);
+                }
+                bytes
+            },
             Err(err) => {
+                if let Some(context) = event_context.as_mut() {
+                    context.request_body_read_ms = Some(elapsed_ms_i32(body_read_started));
+                }
                 let prepared = build_failure_prepared_gateway_request(
                     &gateway_path,
                     &query,
@@ -3681,6 +3769,10 @@ pub async fn proxy_gateway_request(
     );
 
     let record_route_selection = !is_models_path;
+    let mut route_wait_ms = 0_u64;
+    let mut codex_failover_count = 0_u64;
+    let mut failed_account_names = HashSet::new();
+    let route_started = Instant::now();
     let mut resolved_route = match resolve_auth_for_key(
         &state,
         &key_lease.record,
@@ -3688,8 +3780,26 @@ pub async fn proxy_gateway_request(
     )
     .await
     {
-        Ok(resolved) => resolved,
+        Ok(resolved) => {
+            route_wait_ms = route_wait_ms.saturating_add(elapsed_ms_u64(route_started));
+            update_codex_route_metrics(
+                &mut event_context,
+                route_wait_ms,
+                resolved.selected_account_name.as_deref(),
+                codex_failover_count,
+                &failed_account_names,
+            );
+            resolved
+        },
         Err(err) => {
+            route_wait_ms = route_wait_ms.saturating_add(elapsed_ms_u64(route_started));
+            update_codex_route_metrics(
+                &mut event_context,
+                route_wait_ms,
+                None,
+                codex_failover_count,
+                &failed_account_names,
+            );
             if !is_models_path {
                 if let Err(persist_err) = persist_gateway_failure_usage(
                     state.llm_gateway.as_ref(),
@@ -3766,7 +3876,15 @@ pub async fn proxy_gateway_request(
             return Err(response);
         },
     };
+    update_codex_route_metrics(
+        &mut event_context,
+        route_wait_ms,
+        resolved_route.selected_account_name.as_deref(),
+        codex_failover_count,
+        &failed_account_names,
+    );
 
+    let request_json_parse_started = Instant::now();
     let prepared = match normalize_gateway_request_from_bytes(
         &gateway_path,
         &query,
@@ -3775,8 +3893,16 @@ pub async fn proxy_gateway_request(
         raw_request_body,
         max_request_body_bytes,
     ) {
-        Ok(prepared) => prepared,
+        Ok(prepared) => {
+            if let Some(context) = event_context.as_mut() {
+                context.request_json_parse_ms = Some(elapsed_ms_i32(request_json_parse_started));
+            }
+            prepared
+        },
         Err(err) => {
+            if let Some(context) = event_context.as_mut() {
+                context.request_json_parse_ms = Some(elapsed_ms_i32(request_json_parse_started));
+            }
             tracing::error!(
                 key_id = %key_lease.record.id,
                 key_name = %key_lease.record.name,
@@ -3842,7 +3968,6 @@ pub async fn proxy_gateway_request(
         .llm_gateway
         .start_request_activity(&key_lease.record.id);
 
-    let mut failed_account_names = HashSet::new();
     loop {
         let attempted_account_name = resolved_route.selected_account_name.clone();
         let response = match send_upstream_with_retry(
@@ -3893,6 +4018,7 @@ pub async fn proxy_gateway_request(
                     account_request_limit_lease, ..
                 } = resolved_route;
                 drop(account_request_limit_lease);
+                let route_started = Instant::now();
                 resolved_route = match resolve_auth_for_key_excluding(
                     &state,
                     &key_lease.record,
@@ -3901,7 +4027,18 @@ pub async fn proxy_gateway_request(
                 )
                 .await
                 {
-                    Ok(next_route) => next_route,
+                    Ok(next_route) => {
+                        route_wait_ms = route_wait_ms.saturating_add(elapsed_ms_u64(route_started));
+                        codex_failover_count = codex_failover_count.saturating_add(1);
+                        update_codex_route_metrics(
+                            &mut event_context,
+                            route_wait_ms,
+                            next_route.selected_account_name.as_deref(),
+                            codex_failover_count,
+                            &failed_account_names,
+                        );
+                        next_route
+                    },
                     Err(_) => {
                         return Err(internal_error("Failed to proxy llm gateway request", err));
                     },
@@ -3909,6 +4046,11 @@ pub async fn proxy_gateway_request(
                 continue;
             },
         };
+        if let Some(context) = event_context.as_mut() {
+            context.upstream_headers_ms = Some(clamp_u64_ms_to_i32(response.upstream_headers_ms));
+            context.upstream_headers_at = Some(response.upstream_headers_at);
+        }
+        let response = response.response;
 
         if let Some(failed_account_name) =
             retryable_codex_account_failure(response.status(), attempted_account_name.as_deref())
@@ -3938,6 +4080,7 @@ pub async fn proxy_gateway_request(
                         account_request_limit_lease, ..
                     } = resolved_route;
                     drop(account_request_limit_lease);
+                    let route_started = Instant::now();
                     resolved_route = match resolve_auth_for_key_excluding(
                         &state,
                         &key_lease.record,
@@ -3946,7 +4089,19 @@ pub async fn proxy_gateway_request(
                     )
                     .await
                     {
-                        Ok(next_route) => next_route,
+                        Ok(next_route) => {
+                            route_wait_ms =
+                                route_wait_ms.saturating_add(elapsed_ms_u64(route_started));
+                            codex_failover_count = codex_failover_count.saturating_add(1);
+                            update_codex_route_metrics(
+                                &mut event_context,
+                                route_wait_ms,
+                                next_route.selected_account_name.as_deref(),
+                                codex_failover_count,
+                                &failed_account_names,
+                            );
+                            next_route
+                        },
                         Err(_) => return Err(err),
                     };
                     continue;
@@ -3964,6 +4119,7 @@ pub async fn proxy_gateway_request(
                 account_request_limit_lease, ..
             } = resolved_route;
             drop(account_request_limit_lease);
+            let route_started = Instant::now();
             resolved_route = match resolve_auth_for_key_excluding(
                 &state,
                 &key_lease.record,
@@ -3972,7 +4128,18 @@ pub async fn proxy_gateway_request(
             )
             .await
             {
-                Ok(next_route) => next_route,
+                Ok(next_route) => {
+                    route_wait_ms = route_wait_ms.saturating_add(elapsed_ms_u64(route_started));
+                    codex_failover_count = codex_failover_count.saturating_add(1);
+                    update_codex_route_metrics(
+                        &mut event_context,
+                        route_wait_ms,
+                        next_route.selected_account_name.as_deref(),
+                        codex_failover_count,
+                        &failed_account_names,
+                    );
+                    next_route
+                },
                 Err(_) => return Ok(retry_response),
             };
             continue;
@@ -3983,6 +4150,13 @@ pub async fn proxy_gateway_request(
             selected_account_name,
             ..
         } = resolved_route;
+        update_codex_route_metrics(
+            &mut event_context,
+            route_wait_ms,
+            selected_account_name.as_deref(),
+            codex_failover_count,
+            &failed_account_names,
+        );
         return forward_upstream_response(ForwardUpstreamResponseArgs {
             state,
             key_lease,
@@ -4410,6 +4584,12 @@ async fn current_cache_ttl(state: &AppState) -> u64 {
 
 // === Upstream transport ===
 
+struct CodexUpstreamResponse {
+    response: reqwest::Response,
+    upstream_headers_ms: u64,
+    upstream_headers_at: Instant,
+}
+
 /// Retry once with a forced auth reload if the upstream rejects stale
 /// credentials.
 async fn send_upstream_with_retry(
@@ -4418,11 +4598,11 @@ async fn send_upstream_with_retry(
     incoming_headers: &HeaderMap,
     auth_snapshot: &CodexAuthSnapshot,
     selected_account_name: Option<&str>,
-) -> Result<reqwest::Response> {
+) -> Result<CodexUpstreamResponse> {
     let first =
         send_upstream(state, prepared, incoming_headers, auth_snapshot, selected_account_name)
             .await?;
-    if first.status() != StatusCode::UNAUTHORIZED {
+    if first.response.status() != StatusCode::UNAUTHORIZED {
         return Ok(first);
     }
 
@@ -4449,7 +4629,7 @@ async fn send_upstream(
     incoming_headers: &HeaderMap,
     auth_snapshot: &CodexAuthSnapshot,
     selected_account_name: Option<&str>,
-) -> Result<reqwest::Response> {
+) -> Result<CodexUpstreamResponse> {
     // Upstream headers are rebuilt from scratch instead of forwarding the
     // inbound request wholesale. This keeps reverse-proxy routing headers such
     // as `host`, `x-forwarded-for`, `x-forwarded-host`, `x-forwarded-proto`,
@@ -4619,8 +4799,13 @@ async fn send_upstream(
         request_builder = request_builder.body(prepared.request_body.clone());
     }
 
+    let upstream_started = Instant::now();
     match request_builder.send().await {
-        Ok(response) => Ok(response),
+        Ok(response) => Ok(CodexUpstreamResponse {
+            response,
+            upstream_headers_ms: elapsed_ms_u64(upstream_started),
+            upstream_headers_at: Instant::now(),
+        }),
         Err(err) => {
             let invalidated = state
                 .upstream_proxy_registry
@@ -4786,7 +4971,7 @@ async fn forward_upstream_response(
         request_limit_lease,
         prepared,
         upstream,
-        event_context,
+        mut event_context,
         selected_account_name,
     } = args;
     let status = upstream.status();
@@ -4998,6 +5183,10 @@ async fn forward_upstream_response(
                     ));
                 },
             };
+            if let Some(context) = event_context.as_mut() {
+                context.post_headers_body_ms = context.upstream_headers_at.map(elapsed_ms_i32);
+                context.stream_finish_ms = Some(elapsed_ms_i32(context.started_at));
+            }
             persist_gateway_usage(
                 state.llm_gateway.as_ref(),
                 key_lease.as_ref(),
@@ -5024,6 +5213,7 @@ async fn forward_upstream_response(
         let body_stream = stream! {
             let _account_request_limit_lease = stream_account_request_limit_lease;
             let _request_limit_lease = stream_request_limit_lease;
+            let mut stream_event_context = stream_event_context;
             let mut collector = SseUsageCollector::default();
             let mut chat_metadata = types::ChatStreamMetadata::default();
             let mut events = upstream
@@ -5054,6 +5244,12 @@ async fn forward_upstream_response(
                         collector.observe_event(&event);
                         match stream_response_adapter {
                             GatewayResponseAdapter::Responses => {
+                                if let Some(context) = stream_event_context.as_mut() {
+                                    if context.first_sse_write_ms.is_none() {
+                                        context.first_sse_write_ms =
+                                            Some(elapsed_ms_i32(context.started_at));
+                                    }
+                                }
                                 yield Ok::<Bytes, std::io::Error>(encode_sse_event_with_model_alias(
                                     &event,
                                     stream_prepared.model.as_deref(),
@@ -5068,12 +5264,23 @@ async fn forward_upstream_response(
                                     stream_prepared.model.as_deref(),
                                     stream_prepared.client_visible_model.as_deref(),
                                 ) {
+                                    if let Some(context) = stream_event_context.as_mut() {
+                                        if context.first_sse_write_ms.is_none() {
+                                            context.first_sse_write_ms =
+                                                Some(elapsed_ms_i32(context.started_at));
+                                        }
+                                    }
                                     yield Ok::<Bytes, std::io::Error>(encode_json_sse_chunk(&chunk));
                                 }
                             }
                         }
                     }
                     Err(err) => {
+                        if let Some(context) = stream_event_context.as_mut() {
+                            context.post_headers_body_ms =
+                                context.upstream_headers_at.map(elapsed_ms_i32);
+                            context.stream_finish_ms = Some(elapsed_ms_i32(context.started_at));
+                        }
                         if let Err(persist_err) = persist_gateway_failure_usage(
                             gateway.as_ref(),
                             stream_key_lease.as_ref(),
@@ -5101,6 +5308,10 @@ async fn forward_upstream_response(
                 }
             }
             let usage = collector.usage.unwrap_or_else(missing_usage_breakdown);
+            if let Some(context) = stream_event_context.as_mut() {
+                context.post_headers_body_ms = context.upstream_headers_at.map(elapsed_ms_i32);
+                context.stream_finish_ms = Some(elapsed_ms_i32(context.started_at));
+            }
             if let Err(err) = persist_gateway_usage(
                 gateway.as_ref(),
                 stream_key_lease.as_ref(),
@@ -5163,7 +5374,13 @@ async fn forward_upstream_response(
     }
 
     let body_bytes = match upstream.bytes().await {
-        Ok(body_bytes) => body_bytes,
+        Ok(body_bytes) => {
+            if let Some(context) = event_context.as_mut() {
+                context.post_headers_body_ms = context.upstream_headers_at.map(elapsed_ms_i32);
+                context.stream_finish_ms = Some(elapsed_ms_i32(context.started_at));
+            }
+            body_bytes
+        },
         Err(err) => {
             if let Err(persist_err) = persist_gateway_failure_usage(
                 state.llm_gateway.as_ref(),
@@ -6360,6 +6577,17 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             started_at: Instant::now(),
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            routing_diagnostics_json: None,
+            upstream_headers_at: None,
         }
     }
 
@@ -6668,6 +6896,45 @@ mod tests {
         assert_eq!(event.client_request_body_json, None);
         assert_eq!(event.upstream_request_body_json, None);
         assert_eq!(event.full_request_json, None);
+    }
+
+    #[test]
+    fn build_codex_usage_event_preserves_gateway_latency_metrics() {
+        let key = sample_public_lookup_key();
+        let prepared = sample_prepared_gateway_request();
+        let mut context = sample_gateway_event_context();
+        context.routing_wait_ms = Some(11);
+        context.upstream_headers_ms = Some(29);
+        context.post_headers_body_ms = Some(41);
+        context.request_body_bytes = Some(512);
+        context.request_body_read_ms = Some(3);
+        context.request_json_parse_ms = Some(5);
+        context.pre_handler_ms = Some(2);
+        context.first_sse_write_ms = Some(37);
+        context.stream_finish_ms = Some(83);
+        context.routing_diagnostics_json = Some(r#"{"route_total_ms":11}"#.to_string());
+
+        let event = build_gateway_usage_event_record(GatewayUsageEventBuild {
+            current: &key,
+            prepared: &prepared,
+            context: &context,
+            latency_ms: 90,
+            status_code: 200,
+            usage: UsageBreakdown::default(),
+            last_message_content: Some("hello".to_string()),
+            selected_account_name: Some("acct-a"),
+        });
+
+        assert_eq!(event.routing_wait_ms, Some(11));
+        assert_eq!(event.upstream_headers_ms, Some(29));
+        assert_eq!(event.post_headers_body_ms, Some(41));
+        assert_eq!(event.request_body_bytes, Some(512));
+        assert_eq!(event.request_body_read_ms, Some(3));
+        assert_eq!(event.request_json_parse_ms, Some(5));
+        assert_eq!(event.pre_handler_ms, Some(2));
+        assert_eq!(event.first_sse_write_ms, Some(37));
+        assert_eq!(event.stream_finish_ms, Some(83));
+        assert_eq!(event.routing_diagnostics_json.as_deref(), Some(r#"{"route_total_ms":11}"#));
     }
 
     #[test]

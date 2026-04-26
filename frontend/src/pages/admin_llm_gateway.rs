@@ -116,6 +116,42 @@ fn format_optional_latency_ms(latency_ms: Option<i32>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn format_optional_latency_ms_or_na(latency_ms: Option<i32>, applicable: bool) -> String {
+    if applicable {
+        format_optional_latency_ms(latency_ms)
+    } else {
+        "n/a".to_string()
+    }
+}
+
+fn usage_account_label(account_name: &Option<String>, request_url: &str, endpoint: &str) -> String {
+    if let Some(account_name) = account_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return account_name.to_string();
+    }
+    if request_url.contains("/kiro-gateway") || endpoint.contains("generateAssistantResponse") {
+        "not captured".to_string()
+    } else {
+        "legacy auth".to_string()
+    }
+}
+
+fn routing_total_ms_from_diagnostics(raw: Option<&str>) -> Option<i32> {
+    let route_total_ms = serde_json::from_str::<serde_json::Value>(raw?).ok()?;
+    let route_total_ms = route_total_ms.get("route_total_ms")?.as_u64()?;
+    Some(route_total_ms.min(i32::MAX as u64) as i32)
+}
+
+fn effective_routing_wait_ms(
+    routing_wait_ms: Option<i32>,
+    routing_diagnostics_json: Option<&str>,
+) -> Option<i32> {
+    routing_wait_ms.or_else(|| routing_total_ms_from_diagnostics(routing_diagnostics_json))
+}
+
 fn format_optional_bytes(bytes: Option<u64>) -> String {
     let Some(bytes) = bytes else {
         return "-".to_string();
@@ -172,6 +208,7 @@ fn format_latency_breakdown(parts: LatencyBreakdown) -> String {
             parts.post_headers_body_ms,
         )
     });
+    let sse_applicable = parts.first_sse_write_ms.is_some();
     format!(
         "total {} · ingress {} body {} parse {} pre-handler {} · route {} · upstream headers {} · \
          post-headers body {} · first SSE {} · stream finish {} · other {} · quota failover {}",
@@ -183,7 +220,7 @@ fn format_latency_breakdown(parts: LatencyBreakdown) -> String {
         format_optional_latency_ms(parts.routing_wait_ms),
         format_optional_latency_ms(parts.upstream_headers_ms),
         format_optional_latency_ms(parts.post_headers_body_ms),
-        format_optional_latency_ms(parts.first_sse_write_ms),
+        format_optional_latency_ms_or_na(parts.first_sse_write_ms, sse_applicable),
         format_optional_latency_ms(parts.stream_finish_ms),
         format_optional_latency_ms(other_latency_ms),
         parts.quota_failover_count
@@ -208,6 +245,7 @@ fn routing_diagnostics_summary(raw: &str) -> Vec<(String, String)> {
     for (label, key) in [
         ("Attempts", "account_attempt_count"),
         ("Skipped", "skipped_account_count"),
+        ("Codex failover", "failover_count"),
         ("Quota failover", "quota_failover_count"),
         ("Rate-limit failover", "rate_limit_failover_count"),
         ("Retry next", "retry_next_count"),
@@ -3458,6 +3496,12 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     } else {
         (*selected_usage_event).clone().map(|event| {
+        let account_label =
+            usage_account_label(&event.account_name, &event.request_url, &event.endpoint);
+        let detail_routing_wait_ms = effective_routing_wait_ms(
+            event.routing_wait_ms,
+            event.routing_diagnostics_json.as_deref(),
+        );
         let request_detail_summary = format!(
             "{} {} · {} / {} · key {} · account {} · status {} · model {} · route {} · latency {}",
             event.request_method,
@@ -3465,15 +3509,13 @@ pub fn admin_llm_gateway_page() -> Html {
             event.client_ip,
             event.ip_region,
             event.key_name,
-            event.account_name
-                .clone()
-                .unwrap_or_else(|| "legacy auth".to_string()),
+            account_label,
             event.status_code,
             event.model.clone().unwrap_or_else(|| "-".to_string()),
             event.endpoint,
             format_latency_breakdown(LatencyBreakdown {
                 latency_ms: event.latency_ms,
-                routing_wait_ms: event.routing_wait_ms,
+                routing_wait_ms: detail_routing_wait_ms,
                 upstream_headers_ms: event.upstream_headers_ms,
                 post_headers_body_ms: event.post_headers_body_ms,
                 request_body_bytes: event.request_body_bytes,
@@ -3503,11 +3545,14 @@ pub fn admin_llm_gateway_page() -> Html {
         let detail_other_latency_ms = event.other_latency_ms.or_else(|| {
             compute_other_latency_ms(
                 event.latency_ms,
-                event.routing_wait_ms,
+                detail_routing_wait_ms,
                 event.upstream_headers_ms,
                 event.post_headers_body_ms,
             )
         });
+        let detail_sse_applicable = event.first_sse_write_ms.is_some();
+        let detail_first_sse_label =
+            format_optional_latency_ms_or_na(event.first_sse_write_ms, detail_sse_applicable);
         let client_request_json_for_copy = event
             .client_request_body_json
             .as_deref()
@@ -3607,7 +3652,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Account" }</div>
-                            <div class={classes!("mt-1", "text-sm")}>{ event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string()) }</div>
+                            <div class={classes!("mt-1", "text-sm")}>{ usage_account_label(&event.account_name, &event.request_url, &event.endpoint) }</div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Status / Model" }</div>
@@ -3621,14 +3666,14 @@ pub fn admin_llm_gateway_page() -> Html {
                             <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Latency" }</div>
                             <div class={classes!("mt-1", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
                             <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                <span>{ format!("route {}", format_optional_latency_ms(event.routing_wait_ms)) }</span>
+                                <span>{ format!("route {}", format_optional_latency_ms(detail_routing_wait_ms)) }</span>
                                 <span>{ format!("upstream headers {}", format_optional_latency_ms(event.upstream_headers_ms)) }</span>
                                 <span>{ format!("post-headers body {}", format_optional_latency_ms(event.post_headers_body_ms)) }</span>
                                 <span>{ format!("request body {}", format_optional_bytes(event.request_body_bytes)) }</span>
                                 <span>{ format!("body read {}", format_optional_latency_ms(event.request_body_read_ms)) }</span>
                                 <span>{ format!("json parse {}", format_optional_latency_ms(event.request_json_parse_ms)) }</span>
                                 <span>{ format!("pre-handler {}", format_optional_latency_ms(event.pre_handler_ms)) }</span>
-                                <span>{ format!("first SSE {}", format_optional_latency_ms(event.first_sse_write_ms)) }</span>
+                                <span>{ format!("first SSE {}", detail_first_sse_label.clone()) }</span>
                                 <span>{ format!("stream finish {}", format_optional_latency_ms(event.stream_finish_ms)) }</span>
                                 <span>{ format!("other {}", format_optional_latency_ms(detail_other_latency_ms)) }</span>
                                 <span>{ format!("quota failover {}", event.quota_failover_count) }</span>
@@ -5457,16 +5502,25 @@ pub fn admin_llm_gateway_page() -> Html {
                                         let event_id_for_detail = event.id.clone();
                                         let event_id_for_message = event.id.clone();
                                         let header_preview = "按需加载".to_string();
-                                        let account_label = event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string());
+                                        let account_label = usage_account_label(
+                                            &event.account_name,
+                                            &event.request_url,
+                                            &event.endpoint,
+                                        );
                                         let last_message_preview = usage_last_message_table_preview(event);
+                                        let row_routing_wait_ms = effective_routing_wait_ms(
+                                            event.routing_wait_ms,
+                                            event.routing_diagnostics_json.as_deref(),
+                                        );
                                         let other_latency_ms = event.other_latency_ms.or_else(|| {
                                             compute_other_latency_ms(
                                                 event.latency_ms,
-                                                event.routing_wait_ms,
+                                                row_routing_wait_ms,
                                                 event.upstream_headers_ms,
                                                 event.post_headers_body_ms,
                                             )
                                         });
+                                        let sse_applicable = event.first_sse_write_ms.is_some();
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
@@ -5509,14 +5563,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         { format_latency_ms(event.latency_ms) }
                                                     </span>
                                                     <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                        <span>{ format!("route {}", format_optional_latency_ms(event.routing_wait_ms)) }</span>
+                                                        <span>{ format!("route {}", format_optional_latency_ms(row_routing_wait_ms)) }</span>
                                                         <span>{ format!("upstream headers {}", format_optional_latency_ms(event.upstream_headers_ms)) }</span>
                                                         <span>{ format!("post-headers body {}", format_optional_latency_ms(event.post_headers_body_ms)) }</span>
                                                         <span>{ format!("request body {}", format_optional_bytes(event.request_body_bytes)) }</span>
                                                         <span>{ format!("body read {}", format_optional_latency_ms(event.request_body_read_ms)) }</span>
                                                         <span>{ format!("json parse {}", format_optional_latency_ms(event.request_json_parse_ms)) }</span>
                                                         <span>{ format!("pre-handler {}", format_optional_latency_ms(event.pre_handler_ms)) }</span>
-                                                        <span>{ format!("first SSE {}", format_optional_latency_ms(event.first_sse_write_ms)) }</span>
+                                                        <span>{ format!("first SSE {}", format_optional_latency_ms_or_na(event.first_sse_write_ms, sse_applicable)) }</span>
                                                         <span>{ format!("stream finish {}", format_optional_latency_ms(event.stream_finish_ms)) }</span>
                                                         <span>{ format!("other {}", format_optional_latency_ms(other_latency_ms)) }</span>
                                                         <span>{ format!("quota failover {}", event.quota_failover_count) }</span>
@@ -6180,6 +6234,71 @@ mod tests {
         };
 
         assert_eq!(usage_last_message_table_preview(&event), "short text");
+    }
+
+    #[test]
+    fn kiro_usage_account_label_distinguishes_uncaptured_account_from_legacy_auth() {
+        assert_eq!(
+            usage_account_label(
+                &None,
+                "https://ackingliu.top/api/kiro-gateway/v1/messages",
+                "/generateAssistantResponse",
+            ),
+            "not captured"
+        );
+        assert_eq!(
+            usage_account_label(
+                &None,
+                "https://ackingliu.top/api/llm-gateway/v1/responses",
+                "/v1/responses"
+            ),
+            "legacy auth"
+        );
+    }
+
+    #[test]
+    fn latency_breakdown_marks_first_sse_not_applicable_when_stream_never_started() {
+        let summary = format_latency_breakdown(LatencyBreakdown {
+            latency_ms: 502,
+            routing_wait_ms: Some(12),
+            upstream_headers_ms: Some(34),
+            post_headers_body_ms: None,
+            request_body_bytes: Some(512),
+            request_body_read_ms: Some(1),
+            request_json_parse_ms: Some(0),
+            pre_handler_ms: Some(2),
+            first_sse_write_ms: None,
+            stream_finish_ms: Some(502),
+            other_latency_ms: None,
+            quota_failover_count: 0,
+        });
+
+        assert!(summary.contains("route 12 ms"));
+        assert!(summary.contains("first SSE n/a"));
+    }
+
+    #[test]
+    fn effective_route_latency_uses_routing_diagnostics_when_column_is_missing() {
+        assert_eq!(effective_routing_wait_ms(None, Some(r#"{"route_total_ms":321}"#)), Some(321));
+        assert_eq!(
+            effective_routing_wait_ms(Some(12), Some(r#"{"route_total_ms":321}"#)),
+            Some(12)
+        );
+        assert_eq!(effective_routing_wait_ms(None, Some("not-json")), None);
+    }
+
+    #[test]
+    fn routing_diagnostics_summary_includes_codex_failover_count() {
+        let rows = routing_diagnostics_summary(
+            r#"{"route_total_ms":12,"account_attempt_count":2,"failover_count":1}"#,
+        );
+
+        assert!(rows
+            .iter()
+            .any(|(label, value)| label == "Route total" && value == "12 ms"));
+        assert!(rows
+            .iter()
+            .any(|(label, value)| label == "Codex failover" && value == "1"));
     }
 
     fn test_key(id: &str, name: &str, provider_type: &str, status: &str) -> AdminLlmGatewayKeyView {

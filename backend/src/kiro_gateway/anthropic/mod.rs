@@ -1057,7 +1057,7 @@ pub(super) async fn map_provider_error(
         );
     let (status, _, _) = classify_provider_error(&err_text, request_contains_images);
     let diagnostic_event_context =
-        provider_failure_event_context(ctx.diagnostic.event_context, err.request_body.as_deref());
+        provider_failure_event_context(ctx.diagnostic.event_context, &err);
     let diagnostic_payload = build_failure_diagnostic_payload(
         DiagnosticRequestContext {
             event_context: &diagnostic_event_context,
@@ -1089,10 +1089,27 @@ pub(super) async fn map_provider_error(
 
 fn provider_failure_event_context(
     event_context: &KiroEventContext,
-    upstream_request_body_json: Option<&str>,
+    err: &ProviderCallError,
 ) -> KiroEventContext {
     let mut diagnostic_event_context = event_context.clone();
-    if let Some(request_body) = upstream_request_body_json {
+    if let Some(account_name) = &err.account_name {
+        diagnostic_event_context.account_name = Some(account_name.clone());
+    }
+    if let Some(routing_wait_ms) = err.routing_wait_ms {
+        diagnostic_event_context.routing_wait_ms = Some(clamp_u64_ms_to_i32(routing_wait_ms));
+    }
+    if let Some(upstream_headers_ms) = err.upstream_headers_ms {
+        diagnostic_event_context.upstream_headers_ms =
+            Some(clamp_u64_ms_to_i32(upstream_headers_ms));
+        diagnostic_event_context.upstream_headers_at = Some(Instant::now());
+    }
+    if err.quota_failover_count > 0 {
+        diagnostic_event_context.quota_failover_count = err.quota_failover_count;
+    }
+    if err.routing_diagnostics_json.is_some() {
+        diagnostic_event_context.routing_diagnostics_json = err.routing_diagnostics_json.clone();
+    }
+    if let Some(request_body) = err.request_body.as_deref() {
         diagnostic_event_context.upstream_request_body_json = Some(request_body.to_string());
     }
     diagnostic_event_context
@@ -3619,9 +3636,9 @@ mod tests {
     }
 
     #[test]
-    fn provider_failure_event_context_uses_provider_request_body_snapshot() {
+    fn provider_failure_event_context_uses_provider_error_observability() {
         let event_context = crate::kiro_gateway::KiroEventContext {
-            account_name: Some("acct-a".to_string()),
+            account_name: None,
             request_method: "POST".to_string(),
             request_url: "/api/kiro-gateway/v1/messages".to_string(),
             endpoint: "/generateAssistantResponse".to_string(),
@@ -3653,12 +3670,23 @@ mod tests {
             session_source_value_preview: Some("conv-1".to_string()),
             started_at: std::time::Instant::now(),
         };
+        let error = ProviderCallError::new(
+            anyhow::anyhow!("kiro upstream rejected request"),
+            Some(r#"{"conversationState":{"conversationId":"from-provider"}}"#.to_string()),
+        )
+        .with_attempt_observability("acct-b", 12, Some(34))
+        .with_routing_observability(Some(r#"{"route_total_ms":12}"#.to_string()), 3);
 
-        let diagnostic = provider_failure_event_context(
-            &event_context,
-            Some(r#"{"conversationState":{"conversationId":"from-provider"}}"#),
+        let diagnostic = provider_failure_event_context(&event_context, &error);
+
+        assert_eq!(diagnostic.account_name.as_deref(), Some("acct-b"));
+        assert_eq!(diagnostic.routing_wait_ms, Some(12));
+        assert_eq!(diagnostic.upstream_headers_ms, Some(34));
+        assert_eq!(
+            diagnostic.routing_diagnostics_json.as_deref(),
+            Some(r#"{"route_total_ms":12}"#)
         );
-
+        assert_eq!(diagnostic.quota_failover_count, 3);
         assert_eq!(
             diagnostic.upstream_request_body_json.as_deref(),
             Some(r#"{"conversationState":{"conversationId":"from-provider"}}"#)

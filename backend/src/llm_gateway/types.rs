@@ -880,6 +880,17 @@ pub(crate) struct LlmGatewayEventContext {
     pub ip_region: String,
     pub request_headers_json: String,
     pub started_at: Instant,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub routing_diagnostics_json: Option<String>,
+    pub upstream_headers_at: Option<Instant>,
 }
 
 /// Response adaptation mode selected by the incoming OpenAI-compatible
