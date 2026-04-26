@@ -419,6 +419,7 @@ figure img,
 }
 
 .image-preview-button {
+  position: relative;
   display: block;
   width: 100%;
   border: 0;
@@ -427,9 +428,15 @@ figure img,
 }
 
 .image-preview-button img {
+  opacity: 0;
   transition:
+    opacity 180ms ease,
     transform 220ms ease,
     filter 220ms ease;
+}
+
+.image-frame.loaded img {
+  opacity: 1;
 }
 
 .image-frame:hover img {
@@ -474,6 +481,80 @@ figure img,
   display: grid;
   place-items: center;
   color: #68705f;
+}
+
+.image-loading-surface,
+.image-loading-overlay,
+.skeleton-bubble,
+.skeleton-image {
+  position: relative;
+  overflow: hidden;
+}
+
+.image-loading-surface::before,
+.image-loading-overlay::before,
+.skeleton-bubble::before,
+.skeleton-image::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.58),
+    rgba(255, 255, 255, 0)
+  );
+  transform: translateX(-100%);
+  animation: shimmer 1.35s ease-in-out infinite;
+}
+
+.image-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  color: #5d665c;
+  background: #dde3d7;
+}
+
+.loading-stream {
+  display: grid;
+  align-content: end;
+}
+
+.skeleton-bubble {
+  width: min(520px, 100%);
+  min-height: 126px;
+  background: #eef1ea;
+  border-color: #e3e7de;
+  box-shadow: none;
+}
+
+.skeleton-bubble.narrow {
+  width: min(340px, 86%);
+  min-height: 48px;
+}
+
+.skeleton-bubble span {
+  display: block;
+  height: 10px;
+  margin: 8px 0;
+  border-radius: 999px;
+  background: #dce2d7;
+}
+
+.skeleton-bubble span:nth-child(2) {
+  width: 72%;
+}
+
+.skeleton-image {
+  width: min(230px, 100%);
+  aspect-ratio: 1;
+  margin-top: 12px;
+  border-radius: 8px;
+  background: #dce2d7;
 }
 
 figcaption {
@@ -800,6 +881,7 @@ button:disabled {
   display: grid;
   justify-content: end;
   background: rgba(17, 19, 23, 0.28);
+  animation: overlay-in 140ms ease-out;
 }
 
 .usage-panel {
@@ -811,6 +893,7 @@ button:disabled {
   background: var(--surface);
   box-shadow: -20px 0 42px rgba(17, 19, 23, 0.18);
   padding: 18px;
+  animation: drawer-in 180ms ease-out;
 }
 
 .usage-panel-header,
@@ -833,7 +916,7 @@ button:disabled {
 
 .usage-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin: 16px 0 10px;
 }
@@ -1014,6 +1097,30 @@ button:disabled {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+  }
+  to {
+    transform: translateX(0);
   }
 }
 

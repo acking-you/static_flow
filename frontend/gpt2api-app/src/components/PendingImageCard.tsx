@@ -80,7 +80,7 @@ export function PendingImageCard({ task, queue, events, onCancel }: PendingImage
           events.slice(-4).map((event) => <p key={event.id}>{event.event_kind}</p>)
         )}
       </div>
-      {task.error_message && <p className="error-line">{task.error_message}</p>}
+      {task.error_message && <p className="error-line">{displayTaskError(task.error_message)}</p>}
       {cancellable && (
         <button type="button" className="cancel-button" onClick={() => onCancel(task.id)}>
           <X size={15} />
@@ -131,6 +131,19 @@ function progressForPhase(phase: string) {
     default:
       return 22;
   }
+}
+
+function displayTaskError(message: string) {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes("conversation body read failed") ||
+    normalized.includes("edit conversation body read failed") ||
+    normalized.includes("conversation request failed") ||
+    normalized.includes("conversation poll body read failed")
+  ) {
+    return "Image response stream was interrupted before completion. Please send again.";
+  }
+  return message;
 }
 
 function formatDuration(ms: number) {

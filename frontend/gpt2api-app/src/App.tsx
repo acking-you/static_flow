@@ -58,6 +58,7 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [mode, setMode] = useState<ComposerMode>("image");
   const [busy, setBusy] = useState(false);
@@ -101,8 +102,9 @@ export default function App() {
     if (!apiKey || !selectedId || shareToken) return;
     const controller = new AbortController();
     const sessionId = selectedId;
-    void refreshDetail(sessionId, { signal: controller.signal }).catch((err) => {
+    void refreshDetail(sessionId, { signal: controller.signal, showLoading: true }).catch((err) => {
       if (!controller.signal.aborted && !isAbortError(err)) {
+        setDetailLoading(false);
         setError(err instanceof Error ? err.message : String(err));
       }
     });
@@ -202,7 +204,7 @@ export default function App() {
       setApiKey(key);
       const sessionItems = (await listSessions(key)).items;
       setSessions(sessionItems);
-      if (sessionItems[0]) setSelectedId(sessionItems[0].id);
+      activateSession(sessionItems[0]?.id || "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -217,13 +219,24 @@ export default function App() {
     return items;
   }
 
-  async function refreshDetail(sessionId: string, options: { signal?: AbortSignal } = {}) {
+  async function refreshDetail(sessionId: string, options: { signal?: AbortSignal; showLoading?: boolean } = {}) {
     const requestSeq = ++detailRequestSeq.current;
+    if (options.showLoading) {
+      setDetailLoading(true);
+    }
     let value: SessionDetail;
     try {
       value = await getSession(apiKey, sessionId, options);
     } catch (err) {
-      if (options.signal?.aborted || isAbortError(err)) return null;
+      if (options.signal?.aborted || isAbortError(err)) {
+        if (options.showLoading && requestSeq === detailRequestSeq.current) {
+          setDetailLoading(false);
+        }
+        return null;
+      }
+      if (options.showLoading && requestSeq === detailRequestSeq.current) {
+        setDetailLoading(false);
+      }
       throw err;
     }
     if (
@@ -234,7 +247,17 @@ export default function App() {
       return null;
     }
     setDetail(value);
+    setDetailLoading(false);
     return value;
+  }
+
+  function activateSession(sessionId: string, initialDetail: SessionDetail | null = null) {
+    detailRequestSeq.current += 1;
+    selectedIdRef.current = sessionId;
+    setSelectedId(sessionId);
+    setDetail(initialDetail);
+    setDetailLoading(Boolean(sessionId) && !initialDetail);
+    setError("");
   }
 
   function handleSse(raw: string, sessionId: string) {
@@ -265,9 +288,7 @@ export default function App() {
   }
 
   function newChat() {
-    setSelectedId("");
-    setDetail(null);
-    setError("");
+    activateSession("");
   }
 
   async function send(payload: { text: string; model: string; n: number; size: ImageSize; file?: File | null }) {
@@ -283,10 +304,10 @@ export default function App() {
         const created = await createSession(apiKey, title);
         session = created.session;
         sessionId = created.session.id;
-        setSelectedId(sessionId);
-        setDetail({ session: created.session, messages: [], tasks: [], artifacts: [] });
+        const createdDetail = { session: created.session, messages: [], tasks: [], artifacts: [] };
+        activateSession(sessionId, createdDetail);
         setSessions((current) => [created.session, ...current.filter((item) => item.id !== created.session.id)]);
-        currentDetail = { session: created.session, messages: [], tasks: [], artifacts: [] };
+        currentDetail = createdDetail;
       } else if (session && shouldRetitleSession(session, currentDetail)) {
         const renamed = await patchSession(apiKey, sessionId, { title });
         session = renamed.session;
@@ -340,8 +361,7 @@ export default function App() {
       const nextSessions = sessions.filter((item) => item.id !== session.id);
       setSessions(nextSessions);
       if (selectedId === session.id) {
-        setSelectedId(nextSessions[0]?.id || "");
-        setDetail(null);
+        activateSession(nextSessions[0]?.id || "");
       }
       await refreshSessions();
     } catch (err) {
@@ -439,9 +459,7 @@ export default function App() {
         onSearch={setSearch}
         onSelect={(session) => {
           if (session.id === selectedId) return;
-          setSelectedId(session.id);
-          setDetail(null);
-          setError("");
+          activateSession(session.id);
         }}
         onDelete={(session) => void removeSession(session)}
         onNew={() => void newChat()}
@@ -463,6 +481,8 @@ export default function App() {
         {error && <p className="error-line top-error">{error}</p>}
         <MessageStream
           detail={detail}
+          loading={detailLoading}
+          hasSelection={Boolean(selectedId)}
           artifactUrls={artifactUrls}
           queues={queues}
           events={events}
@@ -505,6 +525,8 @@ export default function App() {
 
 function MessageStream({
   detail,
+  loading,
+  hasSelection,
   artifactUrls,
   queues,
   events,
@@ -512,6 +534,8 @@ function MessageStream({
   onCancel,
 }: {
   detail: SessionDetail | null;
+  loading: boolean;
+  hasSelection: boolean;
   artifactUrls: Record<string, string>;
   queues: Record<string, QueueSnapshot>;
   events: Record<string, TaskEventRecord[]>;
@@ -536,7 +560,14 @@ function MessageStream({
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight, behavior: "smooth" });
   }, [activityKey]);
 
-  if (!detail) return <div className="empty-state">Start a new image session with a prompt.</div>;
+  if (!detail && loading) return <ConversationSkeleton />;
+  if (!detail) {
+    return (
+      <div className="empty-state">
+        {hasSelection ? "Loading conversation..." : "Start a new image session with a prompt."}
+      </div>
+    );
+  }
   return (
     <div ref={streamRef} className="message-stream">
       {detail.messages.map((message) => {
@@ -546,7 +577,7 @@ function MessageStream({
         return (
           <article key={message.id} className={`message ${message.role}`}>
             <div className="message-bubble">
-              {parsed.blocks.map((block, index) => <p key={index}>{block.text}</p>)}
+              {parsed.blocks.map((block, index) => <p key={index}>{displayBlockText(block.text)}</p>)}
               {task && <TaskCreditBadge task={task} />}
               {task && task.status !== "succeeded" && (
                 <PendingImageCard task={task} queue={queues[task.id]} events={events[task.id] || []} onCancel={onCancel} />
@@ -562,7 +593,7 @@ function MessageStream({
                           onPreview={onPreview}
                         />
                       ) : (
-                        <div className="image-placeholder"><ImageIcon size={22} /></div>
+                        <ImageLoadingPlaceholder />
                       )}
                       <figcaption>{artifact.revised_prompt || "Generated image"}</figcaption>
                     </figure>
@@ -586,12 +617,14 @@ function GeneratedImage({
   url: string;
   onPreview: (url: string, caption: string, downloadName: string) => void;
 }) {
+  const [loaded, setLoaded] = useState(false);
   const caption = artifact.revised_prompt || "Generated image";
   const name = downloadNameForArtifact(artifact);
   return (
-    <div className="image-frame">
+    <div className={`image-frame ${loaded ? "loaded" : "loading"}`}>
       <button type="button" className="image-preview-button" onClick={() => onPreview(url, caption, name)}>
-        <img src={url} alt={caption} />
+        {!loaded && <ImageLoadingOverlay />}
+        <img src={url} alt={caption} onLoad={() => setLoaded(true)} />
       </button>
       <div className="image-actions">
         <button type="button" onClick={() => onPreview(url, caption, name)} title="Preview image">
@@ -601,6 +634,39 @@ function GeneratedImage({
           <Download size={15} />
         </a>
       </div>
+    </div>
+  );
+}
+
+function ImageLoadingPlaceholder() {
+  return (
+    <div className="image-placeholder image-loading-surface">
+      <Loader2 className="spin" size={22} />
+    </div>
+  );
+}
+
+function ImageLoadingOverlay() {
+  return (
+    <div className="image-loading-overlay">
+      <Loader2 className="spin" size={22} />
+    </div>
+  );
+}
+
+function ConversationSkeleton() {
+  return (
+    <div className="message-stream loading-stream" aria-busy="true">
+      <article className="message user">
+        <div className="message-bubble skeleton-bubble narrow" />
+      </article>
+      <article className="message">
+        <div className="message-bubble skeleton-bubble">
+          <span />
+          <span />
+          <div className="skeleton-image" />
+        </div>
+      </article>
     </div>
   );
 }
@@ -646,9 +712,17 @@ function UsagePanel({
   const percent = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
   const offset = data?.offset ?? 0;
   const limit = data?.limit ?? 50;
+  const events = (data?.events || []).filter((event) => (event.billable_credits || event.billable_images || 0) > 0);
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
   return (
-    <div className="usage-overlay" role="dialog" aria-modal="true">
-      <section className="usage-panel">
+    <div className="usage-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <section className="usage-panel" onClick={(event) => event.stopPropagation()}>
         <header className="usage-panel-header">
           <div>
             <span className="eyebrow">Account credits</span>
@@ -662,7 +736,6 @@ function UsagePanel({
           <UsageSummary label="Used" value={String(used)} />
           <UsageSummary label="Remaining" value={String(remaining)} />
           <UsageSummary label="Total" value={String(total)} />
-          <UsageSummary label="Ledger total" value={String(data?.billable_credit_total ?? 0)} />
         </div>
         <div className="usage-meter" aria-label={`${percent}% used`}>
           <span style={{ width: `${percent}%` }} />
@@ -676,7 +749,7 @@ function UsagePanel({
               onKeyDown={(event) => {
                 if (event.key === "Enter") onSearch();
               }}
-              placeholder="Search prompt, task, endpoint"
+              placeholder="Search charged events"
             />
           </div>
           <button type="button" className="secondary-button" onClick={onSearch}>Search</button>
@@ -686,10 +759,10 @@ function UsagePanel({
         </div>
         {error && <p className="error-line">{error}</p>}
         <div className="usage-event-list">
-          {(data?.events || []).length === 0 && !busy ? (
-            <div className="usage-empty">No usage events for this filter.</div>
+          {events.length === 0 && !busy ? (
+            <div className="usage-empty">No charged events for this filter.</div>
           ) : (
-            (data?.events || []).map((event) => <UsageEventRow event={event} key={event.event_id} />)
+            events.map((event) => <UsageEventRow event={event} key={event.event_id} />)
           )}
         </div>
         <footer className="usage-pagination">
@@ -738,10 +811,8 @@ function UsageEventRow({ event }: { event: UsageEventRecord }) {
       </div>
       <p>{prompt || "No prompt captured"}</p>
       <div className="usage-event-meta">
-        <span>{event.mode || event.endpoint}</span>
         <span>{event.image_size || "-"}</span>
         <span>{`${event.generated_n}/${event.requested_n} images`}</span>
-        <span>{`status ${event.status_code}`}</span>
         {event.context_credit_surcharge > 0 && <span>{`context +${event.context_credit_surcharge}`}</span>}
       </div>
     </article>
@@ -858,6 +929,21 @@ function parseMessage(raw: string): { blocks: { type: string; text: string }[] }
   } catch {
     return { blocks: [{ type: "text", text: raw }] };
   }
+}
+
+function displayBlockText(text: string) {
+  if (isTransientImageTransportMessage(text)) {
+    return "Image response stream was interrupted before completion. Please send again.";
+  }
+  return text;
+}
+
+function isTransientImageTransportMessage(text: string) {
+  const normalized = text.toLowerCase();
+  return normalized.includes("conversation body read failed")
+    || normalized.includes("edit conversation body read failed")
+    || normalized.includes("conversation request failed")
+    || normalized.includes("conversation poll body read failed");
 }
 
 function estimateSessionCreditContext(detail: SessionDetail | null) {
