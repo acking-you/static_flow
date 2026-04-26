@@ -9,6 +9,7 @@
 //! sleeps through cooldown windows before giving up.
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -288,9 +289,8 @@ enum ProviderAttemptError {
     Fatal(ProviderCallError),
     /// Monthly quota exhausted (HTTP 402); mark account and move on.
     QuotaExhausted(ProviderCallError),
-    /// Upstream 5-minute credit window hit (HTTP 429); apply cooldown then move
-    /// on.
-    RateLimited { error: ProviderCallError, cooldown: Duration },
+    /// Upstream response requires an account cooldown; apply it then move on.
+    RateLimited { error: ProviderCallError, cooldown: Duration, proxy_cooldown_key: Option<String> },
 }
 
 #[derive(Clone, Copy)]
@@ -377,6 +377,38 @@ impl KiroProvider {
         Ok(entry)
     }
 
+    async fn proxy_cooldown_keys_for_auths(
+        &self,
+        auths: &[KiroAuthRecord],
+    ) -> HashMap<String, String> {
+        let mut keys = HashMap::new();
+        for auth in auths {
+            match self
+                .runtime
+                .upstream_proxy_registry
+                .resolve_proxy_for_selection(
+                    LLM_GATEWAY_PROVIDER_KIRO,
+                    Some(&auth.proxy_selection()),
+                )
+                .await
+            {
+                Ok(resolved_proxy) => {
+                    if let Some(key) = proxy_cooldown_key(&resolved_proxy) {
+                        keys.insert(auth.name.clone(), key);
+                    }
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        account_name = %auth.name,
+                        error = %err,
+                        "failed to resolve kiro proxy for cooldown-aware ordering"
+                    );
+                },
+            }
+        }
+        keys
+    }
+
     // Outer loop: retries the full account rotation when all accounts are
     // cooling down. Breaks out on success, fatal error, or full exhaustion.
     async fn call_api_inner(
@@ -407,10 +439,12 @@ impl KiroProvider {
             let mut saw_local_limit = false;
             let mut blocked_accounts = Vec::new();
 
+            let proxy_cooldown_keys = self.proxy_cooldown_keys_for_auths(&auths).await;
             let ordered_auths = selection_ordered_accounts(
                 &auths,
                 &snapshot,
                 self.runtime.request_scheduler.as_ref(),
+                &proxy_cooldown_keys,
             );
             // Iterate accounts in fairness order so ready identities rotate
             // instead of repeatedly draining the current balance leader.
@@ -661,6 +695,7 @@ impl KiroProvider {
                     Err(ProviderAttemptError::RateLimited {
                         error,
                         cooldown,
+                        proxy_cooldown_key,
                     }) => {
                         diagnostics.rate_limit_failover_count =
                             diagnostics.rate_limit_failover_count.saturating_add(1);
@@ -681,12 +716,19 @@ impl KiroProvider {
                             cooldown,
                             error.to_string(),
                         );
+                        if let Some(proxy_key) = proxy_cooldown_key {
+                            self.runtime.request_scheduler.mark_proxy_cooldown(
+                                &proxy_key,
+                                cooldown,
+                                error.to_string(),
+                            );
+                        }
                         tracing::warn!(
                             account_name = %auth.name,
                             routing_identity = %routing_identity,
                             error = %error,
                             cooldown_ms = cooldown.as_millis() as u64,
-                            "kiro account hit upstream 5-minute credit window; moving to next account"
+                            "kiro account entered upstream cooldown; moving to next account"
                         );
                         last_error = Some(error);
                     },
@@ -842,10 +884,12 @@ impl KiroProvider {
             let mut saw_local_limit = false;
             let mut blocked_accounts = Vec::new();
 
+            let proxy_cooldown_keys = self.proxy_cooldown_keys_for_auths(&auths).await;
             let ordered_auths = selection_ordered_accounts(
                 &auths,
                 &snapshot,
                 self.runtime.request_scheduler.as_ref(),
+                &proxy_cooldown_keys,
             );
             for auth in ordered_auths {
                 let status_was_cached = snapshot.accounts.contains_key(&auth.name);
@@ -1092,6 +1136,7 @@ impl KiroProvider {
                     Err(ProviderAttemptError::RateLimited {
                         error,
                         cooldown,
+                        proxy_cooldown_key,
                     }) => {
                         diagnostics.rate_limit_failover_count =
                             diagnostics.rate_limit_failover_count.saturating_add(1);
@@ -1112,12 +1157,19 @@ impl KiroProvider {
                             cooldown,
                             error.to_string(),
                         );
+                        if let Some(proxy_key) = proxy_cooldown_key {
+                            self.runtime.request_scheduler.mark_proxy_cooldown(
+                                &proxy_key,
+                                cooldown,
+                                error.to_string(),
+                            );
+                        }
                         tracing::warn!(
                             account_name = %auth.name,
                             routing_identity = %routing_identity,
                             error = %error,
                             cooldown_ms = cooldown.as_millis() as u64,
-                            "kiro account hit upstream 5-minute credit window for mcp; moving to next account"
+                            "kiro account entered upstream cooldown for mcp; moving to next account"
                         );
                         last_error = Some(error);
                     },
@@ -1473,6 +1525,34 @@ impl KiroProvider {
                             Some(upstream_headers_ms),
                         ),
                         cooldown,
+                        proxy_cooldown_key: None,
+                    });
+                }
+            }
+            if status.as_u16() == 400 {
+                if let Some(cooldown) = transient_invalid_model_cooldown(&body) {
+                    log_upstream_response(
+                        &log_ctx,
+                        status,
+                        &body,
+                        UpstreamLogLevel::Warn,
+                        "kiro upstream request returned transient invalid-model response",
+                        Some(cooldown),
+                    );
+                    return Err(ProviderAttemptError::RateLimited {
+                        error: ProviderCallError::new(
+                            anyhow!(
+                                "kiro upstream transient invalid-model response: {status} {body}"
+                            ),
+                            Some(request_body.clone()),
+                        )
+                        .with_attempt_observability(
+                            ctx.auth.name.as_str(),
+                            queue_wait_ms,
+                            Some(upstream_headers_ms),
+                        ),
+                        cooldown,
+                        proxy_cooldown_key: proxy_cooldown_key(&resolved_proxy),
                     });
                 }
             }
@@ -1756,6 +1836,35 @@ impl KiroProvider {
                             Some(upstream_headers_ms),
                         ),
                         cooldown,
+                        proxy_cooldown_key: None,
+                    });
+                }
+            }
+            if status.as_u16() == 400 {
+                if let Some(cooldown) = transient_invalid_model_cooldown(&body) {
+                    log_upstream_response(
+                        &log_ctx,
+                        status,
+                        &body,
+                        UpstreamLogLevel::Warn,
+                        "kiro upstream mcp request returned transient invalid-model response",
+                        Some(cooldown),
+                    );
+                    return Err(ProviderAttemptError::RateLimited {
+                        error: ProviderCallError::new(
+                            anyhow!(
+                                "kiro upstream mcp transient invalid-model response: {status} \
+                                 {body}"
+                            ),
+                            Some(request_body.to_string()),
+                        )
+                        .with_attempt_observability(
+                            ctx.auth.name.as_str(),
+                            queue_wait_ms,
+                            Some(upstream_headers_ms),
+                        ),
+                        cooldown,
+                        proxy_cooldown_key: proxy_cooldown_key(&resolved_proxy),
                     });
                 }
             }
@@ -1967,6 +2076,16 @@ fn log_upstream_response(
     }
 }
 
+fn proxy_cooldown_key(resolved_proxy: &ResolvedUpstreamProxy) -> Option<String> {
+    if let Some(config_id) = resolved_proxy.proxy_config_id.as_deref() {
+        return Some(format!("config:{config_id}"));
+    }
+    resolved_proxy
+        .proxy_url
+        .as_deref()
+        .map(|proxy_url| format!("url:{proxy_url}"))
+}
+
 fn build_headers(ctx: &CallContext) -> Result<HeaderMap> {
     let machine_id = machine_id::generate_from_auth(&ctx.auth)
         .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
@@ -2114,20 +2233,26 @@ fn selection_ordered_accounts(
     auths: &[KiroAuthRecord],
     snapshot: &KiroStatusCacheSnapshot,
     scheduler: &super::scheduler::KiroRequestScheduler,
+    proxy_cooldown_keys: &HashMap<String, String>,
 ) -> Vec<KiroAuthRecord> {
     #[derive(Clone)]
     struct Candidate {
         auth: KiroAuthRecord,
+        proxy_in_cooldown: bool,
         last_started_at: Option<Instant>,
         remaining: f64,
     }
 
     let last_started_snapshot = scheduler.last_started_snapshot();
+    let proxy_cooldowns = scheduler.proxy_cooldown_snapshot();
     let mut sorted = auths
         .iter()
         .cloned()
         .map(|auth| {
             let routing_identity = routing_identity_for_account(&auth, snapshot);
+            let proxy_in_cooldown = proxy_cooldown_keys
+                .get(&auth.name)
+                .is_some_and(|proxy_key| proxy_cooldowns.contains_key(proxy_key));
             let remaining = snapshot
                 .accounts
                 .get(&auth.name)
@@ -2135,6 +2260,7 @@ fn selection_ordered_accounts(
                 .map(|balance| balance.remaining)
                 .unwrap_or(-1.0);
             Candidate {
+                proxy_in_cooldown,
                 last_started_at: last_started_snapshot.get(&routing_identity).copied(),
                 auth,
                 remaining,
@@ -2145,6 +2271,11 @@ fn selection_ordered_accounts(
         // Sorting must only depend on immutable data. Reading scheduler state
         // inside the comparator makes the ordering change mid-sort under
         // concurrent traffic, which Rust correctly treats as undefined input.
+        match (a.proxy_in_cooldown, b.proxy_in_cooldown) {
+            (false, true) => return std::cmp::Ordering::Less,
+            (true, false) => return std::cmp::Ordering::Greater,
+            _ => {},
+        }
         match (a.last_started_at, b.last_started_at) {
             (None, Some(_)) => return std::cmp::Ordering::Less,
             (Some(_), None) => return std::cmp::Ordering::Greater,
@@ -2188,48 +2319,47 @@ fn accounts_for_routing_identity(
 }
 
 fn is_monthly_request_limit(body: &str) -> bool {
-    if body.contains("MONTHLY_REQUEST_COUNT") {
-        return true;
-    }
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("reason")
-                .and_then(|item| item.as_str())
-                .map(ToString::to_string)
-                .or_else(|| {
-                    value
-                        .pointer("/error/reason")
-                        .and_then(|item| item.as_str())
-                        .map(ToString::to_string)
-                })
-        })
-        .is_some_and(|value| value == "MONTHLY_REQUEST_COUNT")
+    body.contains("MONTHLY_REQUEST_COUNT")
+        || kiro_error_reason(body).as_deref() == Some("MONTHLY_REQUEST_COUNT")
 }
 
 fn daily_request_limit_cooldown(body: &str) -> Option<Duration> {
     if body.contains("5-minute credit limit exceeded") {
         return Some(Duration::from_secs(5 * 60));
     }
+    if kiro_error_reason(body).as_deref() == Some("DAILY_REQUEST_COUNT") {
+        return Some(Duration::from_secs(5 * 60));
+    }
+    None
+}
+
+fn transient_invalid_model_cooldown(body: &str) -> Option<Duration> {
+    if !body.contains("Invalid model") {
+        return None;
+    }
+    if kiro_error_reason(body).as_deref() == Some("INVALID_MODEL_ID") {
+        return Some(Duration::from_secs(60));
+    }
+    None
+}
+
+fn kiro_error_reason(body: &str) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
-    let reason = value
+    value
         .get("reason")
         .and_then(|item| item.as_str())
         .or_else(|| {
             value
                 .pointer("/error/reason")
                 .and_then(|item| item.as_str())
-        });
-    if reason == Some("DAILY_REQUEST_COUNT") {
-        return Some(Duration::from_secs(5 * 60));
-    }
-    None
+        })
+        .map(str::to_string)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         fs,
         path::PathBuf,
         sync::{
@@ -2414,7 +2544,8 @@ mod tests {
         };
 
         let scheduler = super::super::scheduler::KiroRequestScheduler::new();
-        let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
+        let ordered =
+            selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref(), &HashMap::new());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["beta", "gamma", "alpha"]);
     }
@@ -2429,8 +2560,65 @@ mod tests {
         };
 
         let scheduler = super::super::scheduler::KiroRequestScheduler::new();
-        let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
+        let ordered =
+            selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref(), &HashMap::new());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn selection_ordered_deprioritizes_accounts_on_cooled_proxy() {
+        let auths = vec![auth("alpha"), auth("beta"), auth("gamma")];
+        let (na, sa) = snapshot_with_balance("alpha", 90.0);
+        let (nb, sb) = snapshot_with_balance("beta", 30.0);
+        let (nc, sc) = snapshot_with_balance("gamma", 20.0);
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [(na, sa), (nb, sb), (nc, sc)].into_iter().collect(),
+            ..Default::default()
+        };
+        let scheduler = super::super::scheduler::KiroRequestScheduler::new();
+        scheduler.mark_proxy_cooldown(
+            "config:proxy-a",
+            Duration::from_secs(60),
+            "transient invalid model",
+        );
+        let proxy_cooldown_keys = HashMap::from([
+            ("alpha".to_string(), "config:proxy-a".to_string()),
+            ("beta".to_string(), "config:proxy-b".to_string()),
+            ("gamma".to_string(), "config:proxy-c".to_string()),
+        ]);
+
+        let ordered =
+            selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref(), &proxy_cooldown_keys);
+        let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
+
+        assert_eq!(names, vec!["beta", "gamma", "alpha"]);
+    }
+
+    #[test]
+    fn selection_ordered_keeps_cooled_proxy_accounts_as_fallback() {
+        let auths = vec![auth("alpha"), auth("beta")];
+        let (na, sa) = snapshot_with_balance("alpha", 90.0);
+        let (nb, sb) = snapshot_with_balance("beta", 30.0);
+        let snapshot = KiroStatusCacheSnapshot {
+            accounts: [(na, sa), (nb, sb)].into_iter().collect(),
+            ..Default::default()
+        };
+        let scheduler = super::super::scheduler::KiroRequestScheduler::new();
+        scheduler.mark_proxy_cooldown(
+            "config:proxy-a",
+            Duration::from_secs(60),
+            "transient invalid model",
+        );
+        let proxy_cooldown_keys = HashMap::from([
+            ("alpha".to_string(), "config:proxy-a".to_string()),
+            ("beta".to_string(), "config:proxy-a".to_string()),
+        ]);
+
+        let ordered =
+            selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref(), &proxy_cooldown_keys);
+        let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
+
         assert_eq!(names, vec!["alpha", "beta"]);
     }
 
@@ -2558,7 +2746,8 @@ mod tests {
             .expect("gamma should acquire");
         drop(gamma);
 
-        let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
+        let ordered =
+            selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref(), &HashMap::new());
         let names: Vec<&str> = ordered.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, vec!["beta", "alpha", "gamma"]);
     }
@@ -2599,7 +2788,12 @@ mod tests {
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             for _ in 0..512 {
-                let ordered = selection_ordered_accounts(&auths, &snapshot, scheduler.as_ref());
+                let ordered = selection_ordered_accounts(
+                    &auths,
+                    &snapshot,
+                    scheduler.as_ref(),
+                    &HashMap::new(),
+                );
                 assert_eq!(ordered.len(), auths.len());
             }
         }));
@@ -2676,6 +2870,20 @@ mod tests {
     fn daily_request_limit_ignores_other_reasons() {
         let body = r#"{"message":"too many requests","reason":"OTHER_LIMIT"}"#;
         assert_eq!(daily_request_limit_cooldown(body), None);
+    }
+
+    #[test]
+    fn transient_invalid_model_id_uses_short_cooldown() {
+        let body = r#"{"message":"Invalid model. Please select a different model to continue.","reason":"INVALID_MODEL_ID"}"#;
+
+        assert_eq!(transient_invalid_model_cooldown(body), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn transient_invalid_model_id_requires_matching_reason() {
+        let body = r#"{"message":"Invalid model. Please select a different model to continue.","reason":"OTHER_REASON"}"#;
+
+        assert_eq!(transient_invalid_model_cooldown(body), None);
     }
 
     #[test]

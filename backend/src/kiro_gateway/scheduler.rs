@@ -1,4 +1,5 @@
-//! Account-scoped request scheduler with per-account cooldown tracking.
+//! Account-scoped request scheduler with per-account and proxy cooldown
+//! tracking.
 //!
 //! [`KiroRequestScheduler`] keeps local concurrency and pacing state per Kiro
 //! account instead of globally. The provider can therefore skip a throttled
@@ -49,6 +50,7 @@ pub(crate) struct AccountLocalThrottle {
 pub(crate) struct KiroRequestScheduler {
     states: Arc<Mutex<HashMap<String, AccountSchedulerState>>>,
     cooldowns: Arc<Mutex<HashMap<String, AccountCooldownEntry>>>,
+    proxy_cooldowns: Arc<Mutex<HashMap<String, AccountCooldownEntry>>>,
     last_started_at: Arc<Mutex<HashMap<String, Instant>>>,
     notify: Arc<Notify>,
 }
@@ -67,6 +69,7 @@ impl KiroRequestScheduler {
         Arc::new(Self {
             states: Arc::new(Mutex::new(HashMap::new())),
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            proxy_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             last_started_at: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(Notify::new()),
         })
@@ -198,6 +201,48 @@ impl KiroRequestScheduler {
             .values()
             .map(|entry| entry.until.saturating_duration_since(now))
             .min()
+    }
+
+    /// Return all active proxy cooldowns, pruning expired entries first.
+    pub(crate) fn proxy_cooldown_snapshot(&self) -> HashMap<String, AccountCooldown> {
+        let now = Instant::now();
+        let mut cooldowns = self.proxy_cooldowns.lock();
+        cooldowns.retain(|_, entry| entry.until > now);
+        cooldowns
+            .iter()
+            .map(|(proxy_key, entry)| {
+                (proxy_key.clone(), AccountCooldown {
+                    remaining: entry.until.saturating_duration_since(now),
+                    reason: entry.reason.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Record an upstream-imposed cooldown for one proxy. Provider selection
+    /// deprioritizes accounts using this proxy while still keeping them as a
+    /// fallback if every better option is unavailable.
+    pub(crate) fn mark_proxy_cooldown(
+        &self,
+        proxy_key: &str,
+        duration: Duration,
+        reason: impl Into<String>,
+    ) {
+        let reason = reason.into();
+        let until = Instant::now() + duration;
+        self.proxy_cooldowns
+            .lock()
+            .insert(proxy_key.to_string(), AccountCooldownEntry {
+                until,
+                reason: reason.clone(),
+            });
+        tracing::warn!(
+            proxy_key,
+            cooldown_ms = duration.as_millis() as u64,
+            reason,
+            "marked kiro upstream proxy in cooldown window"
+        );
+        self.notify.notify_waiters();
     }
 
     pub(crate) fn last_started_snapshot(&self) -> HashMap<String, Instant> {
